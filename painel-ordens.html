@@ -296,6 +296,10 @@
     font-size:11px; font-weight:750; letter-spacing:.07em; text-transform:uppercase;
     color:var(--ink-faint); margin:0 0 12px;
   }
+  .divider-nova{height:1px;background:var(--line);margin:18px 0;}
+  .rascunho-badge{background:#EDEFF2;color:#6B7280;}
+  .copy-btn{border:none;background:var(--surface-2);color:var(--ink-soft);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;margin-left:8px;}
+  .copy-btn:hover{background:#fff;color:var(--ink);}
 
   .slot-banner{
     border-radius:9px; padding:13px 14px; font-size:13.5px; line-height:1.5;
@@ -510,13 +514,28 @@
 let config = null;          // { serviceTypes:[], users:[], mensagemPadrao:'' }
 let orders = [];
 let codes = [];
+let clientes = [];
 let currentUser = null;     // { id, nome, nivel }
 let currentTab = 'nova';
 let agendaYear, agendaMonth;
 
-const STATUS = { AGUARDANDO:'aguardando', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue' };
+const STATUS = { AGUARDANDO:'aguardando', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
 const LOJAS = ['Vilaça Marechal Center', 'Vilaça João Beraldo', 'Vilaça Jardim Norte'];
+const LOJA_ABREV = {
+  'Vilaça Marechal Center': 'MC',
+  'Vilaça João Beraldo': 'JB',
+  'Vilaça Jardim Norte': 'JN'
+};
 const COLOR_PALETTE = ['#C97A2B','#3D7DD8','#2E7D53','#B23A3A','#6E45A8','#1B8F9E','#C23B77','#7A8C1F'];
+
+const DEFAULT_TEMPLATE_ANIVERSARIO =
+`Olá {cliente}! 🎉
+
+A equipe deseja um Feliz Aniversário para você!
+
+Que seu dia seja repleto de alegria e realizações.
+
+MENSAGEM ENVIADA AUTOMATICAMENTE, NÃO RESPONDA!`;
 
 const DEFAULT_TEMPLATE =
 `Olá,
@@ -578,6 +597,14 @@ function showToast(msg){
   clearTimeout(t._timer);
   t._timer = setTimeout(()=>t.classList.remove('show'), 2800);
 }
+async function copyToClipboard(text){
+  try{
+    await navigator.clipboard.writeText(text);
+    showToast('Copiado: ' + text);
+  }catch(e){
+    showToast('Não foi possível copiar automaticamente — selecione e copie manualmente.');
+  }
+}
 function onlyDigits(s){ return (s||'').replace(/\D/g,''); }
 function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -621,6 +648,19 @@ async function storageSet(key, value, shared){
   }catch(e){ console.error('storage set failed', key, e); return false; }
 }
 
+/**
+ * Envia uma foto (data URL) para a pasta "FOTOS" do Google Drive, via Edge Function do Supabase.
+ * Retorna { fileId, url } em caso de sucesso, ou lança erro (o chamador deve tratar com fallback).
+ */
+async function uploadFotoParaDrive(dataUrl, filename){
+  const { data, error } = await supabaseClient.functions.invoke('upload-foto-drive', {
+    body: { dataUrl, filename }
+  });
+  if(error) throw error;
+  if(!data || !data.url) throw new Error('Resposta inválida do upload para o Drive');
+  return data;
+}
+
 async function loadAll(){
   config = await storageGet('config', true);
   if(!config){
@@ -634,19 +674,84 @@ async function loadAll(){
       ],
       mensagemPadrao: DEFAULT_TEMPLATE,
       mensagemPronto: DEFAULT_TEMPLATE_PRONTO,
-      mensagemEntregue: DEFAULT_TEMPLATE_ENTREGUE
+      mensagemEntregue: DEFAULT_TEMPLATE_ENTREGUE,
+      mensagemAniversario: DEFAULT_TEMPLATE_ANIVERSARIO,
+      paymentTypes: [
+        { id: uid('pt'), nome: 'Dinheiro' },
+        { id: uid('pt'), nome: 'Cartão de Crédito' },
+        { id: uid('pt'), nome: 'Cartão de Débito' },
+        { id: uid('pt'), nome: 'PIX' }
+      ],
+      viaSequences: {}
     };
     await storageSet('config', config, true);
   }
   if(!config.mensagemPadrao) config.mensagemPadrao = DEFAULT_TEMPLATE;
   if(!config.mensagemPronto) config.mensagemPronto = DEFAULT_TEMPLATE_PRONTO;
   if(!config.mensagemEntregue) config.mensagemEntregue = DEFAULT_TEMPLATE_ENTREGUE;
+  if(!config.mensagemAniversario) config.mensagemAniversario = DEFAULT_TEMPLATE_ANIVERSARIO;
+  if(!config.paymentTypes) config.paymentTypes = [
+    { id: uid('pt'), nome: 'Dinheiro' },
+    { id: uid('pt'), nome: 'Cartão de Crédito' },
+    { id: uid('pt'), nome: 'Cartão de Débito' },
+    { id: uid('pt'), nome: 'PIX' }
+  ];
+  if(!config.viaSequences) config.viaSequences = {};
   orders = await storageGet('orders', true) || [];
   codes = await storageGet('codes', true) || [];
+  clientes = await storageGet('clientes', true) || [];
 }
 async function saveConfig(){ await storageSet('config', config, true); }
 async function saveOrders(){ await storageSet('orders', orders, true); }
 async function saveCodes(){ await storageSet('codes', codes, true); }
+async function saveClientes(){ await storageSet('clientes', clientes, true); }
+
+/* ============================================================
+   CLIENTES (cadastro / mala direta de aniversário)
+   ============================================================ */
+function onlyDigitsCpf(s){ return (s||'').replace(/\D/g,''); }
+
+function findClienteIndex(telefone, cpf){
+  const tel = onlyDigits(telefone);
+  const doc = onlyDigitsCpf(cpf);
+  return clientes.findIndex(c=>
+    (tel && onlyDigits(c.telefone) === tel) ||
+    (doc && onlyDigitsCpf(c.cpf) === doc)
+  );
+}
+
+/**
+ * Creates/updates a lightweight client record whenever an order is saved with client data.
+ * Matches by phone first, then CPF, so the same person isn't duplicated across orders.
+ */
+async function upsertClienteFromOrder(data){
+  if(!data.cliente && !data.telefone) return;
+  const idx = findClienteIndex(data.telefone, data.cpf);
+  const patch = {
+    nome: data.cliente || '',
+    telefone: data.telefone || '',
+    email: data.email || '',
+    endereco: data.endereco || '',
+    dataNascimento: data.dataNascimento || '',
+    cpf: data.cpf || ''
+  };
+  if(idx === -1){
+    clientes.unshift({ id: uid('cli'), ...patch, criadoEm: Date.now() });
+  } else {
+    const existing = clientes[idx];
+    clientes[idx] = {
+      ...existing,
+      nome: patch.nome || existing.nome,
+      telefone: patch.telefone || existing.telefone,
+      email: patch.email || existing.email,
+      endereco: patch.endereco || existing.endereco,
+      dataNascimento: patch.dataNascimento || existing.dataNascimento,
+      cpf: patch.cpf || existing.cpf
+    };
+  }
+  await saveClientes();
+}
+
 
 /* ============================================================
    MENSAGEM PADRÃO
@@ -687,14 +792,17 @@ function sendWhatsApp(order){
 function sendEmail(order){
   const subject = `Ordem de serviço - ${order.cliente}`;
   const body = buildMessage(order);
-  const to = order.email || '';
+  openEmailComposeModal(order.email || '', subject, body, 'Este cliente não tem e-mail cadastrado. Edite a ordem para adicionar um, ou copie a mensagem abaixo para enviar manualmente.');
+}
+
+function openEmailComposeModal(to, subject, body, semEmailAviso){
   const mailtoUrl = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
   openModal(`
     <h3>Enviar por e-mail</h3>
     ${to
       ? `<p>Para: <b>${escapeHtml(to)}</b></p>`
-      : `<p style="color:var(--danger);">Este cliente não tem e-mail cadastrado. Edite a ordem para adicionar um, ou copie a mensagem abaixo para enviar manualmente.</p>`
+      : `<p style="color:var(--danger);">${escapeHtml(semEmailAviso || 'Este cliente não tem e-mail cadastrado.')}</p>`
     }
     <div class="field"><label>Assunto</label><input id="mailSubjectPreview" value="${escapeHtml(subject)}" readonly></div>
     <div class="field"><label>Mensagem</label><textarea id="mailBodyPreview" readonly style="min-height:170px;">${escapeHtml(body)}</textarea></div>
@@ -721,6 +829,28 @@ function sendEmail(order){
     }
   });
   document.getElementById('mailClose').addEventListener('click', closeModal);
+}
+
+/* ============================================================
+   MALA DIRETA DE ANIVERSÁRIO (clientes)
+   ============================================================ */
+function buildAniversarioMessage(nomeCliente){
+  return (config.mensagemAniversario || DEFAULT_TEMPLATE_ANIVERSARIO).replaceAll('{cliente}', nomeCliente || '');
+}
+function sendWhatsAppCliente(cliente){
+  if(!cliente) return;
+  if(!cliente.telefone){ showToast('Este cliente não tem telefone cadastrado.'); return; }
+  const msg = encodeURIComponent(buildAniversarioMessage(cliente.nome));
+  const url = `https://wa.me/55${onlyDigits(cliente.telefone)}?text=${msg}`;
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+function sendEmailCliente(cliente){
+  if(!cliente) return;
+  const subject = `Feliz Aniversário, ${cliente.nome}!`;
+  const body = buildAniversarioMessage(cliente.nome);
+  openEmailComposeModal(cliente.email || '', subject, body, 'Este cliente não tem e-mail cadastrado. Edite o cadastro para adicionar um, ou copie a mensagem abaixo para enviar manualmente.');
 }
 
 /* ============================================================
@@ -805,9 +935,19 @@ function mountFotos(container, holder, persisted, readOnly){
           try{
             const dataUrl = await compressImage(file);
             const fotoId = uid('foto');
-            photoCache[fotoId] = dataUrl;
-            await storageSet('foto:' + fotoId, dataUrl, true);
-            holder.fotos.push({ id: fotoId, nome: file.name, criadoEm: Date.now() });
+            let driveResult = null;
+            try{
+              driveResult = await uploadFotoParaDrive(dataUrl, fotoId + '_' + file.name);
+            }catch(driveErr){
+              console.error('Falha ao enviar foto para o Google Drive, salvando localmente:', driveErr);
+            }
+            if(driveResult && driveResult.url){
+              holder.fotos.push({ id: fotoId, nome: file.name, criadoEm: Date.now(), driveUrl: driveResult.url, driveFileId: driveResult.fileId });
+            }else{
+              photoCache[fotoId] = dataUrl;
+              await storageSet('foto:' + fotoId, dataUrl, true);
+              holder.fotos.push({ id: fotoId, nome: file.name, criadoEm: Date.now() });
+            }
           }catch(e){ showToast('Não foi possível processar uma das fotos.'); }
         }
         inputEl.value = '';
@@ -828,12 +968,17 @@ function mountFotos(container, holder, persisted, readOnly){
     }
     grid.innerHTML = holder.fotos.map(f=>`
       <div class="foto-thumb" data-fid="${f.id}">
-        <img data-fotoimg="${f.id}" src="${photoCache[f.id] || ''}" alt="${escapeHtml(f.nome)}">
+        <img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl || photoCache[f.id] || '')}" alt="${escapeHtml(f.nome)}">
         ${readOnly ? '' : `<button type="button" class="foto-del" data-fotodel="${f.id}" title="Remover foto">✕</button>`}
       </div>
     `).join('');
     grid.querySelectorAll('img[data-fotoimg]').forEach(img=>{
       const fid = img.dataset.fotoimg;
+      const fObj = holder.fotos.find(x=>x.id===fid);
+      if(fObj && fObj.driveUrl){
+        img.addEventListener('click', ()=>{ if(img.src) openPhotoModal(img.src); });
+        return;
+      }
       if(!photoCache[fid]){
         getPhotoDataUrl(fid).then(url=>{ if(url){ img.src = url; } });
       }
@@ -858,16 +1003,96 @@ function mountFotosInline(container, fotosArray){
   if(!fotosArray || fotosArray.length===0){ container.innerHTML=''; return; }
   container.innerHTML = fotosArray.map(f=>`
     <div class="foto-thumb" data-fid="${f.id}">
-      <img data-fotoimg="${f.id}" src="${photoCache[f.id] || ''}" alt="${escapeHtml(f.nome)}">
+      <img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl || photoCache[f.id] || '')}" alt="${escapeHtml(f.nome)}">
     </div>
   `).join('');
   container.querySelectorAll('img[data-fotoimg]').forEach(img=>{
     const fid = img.dataset.fotoimg;
+    const fObj = fotosArray.find(x=>x.id===fid);
+    if(fObj && fObj.driveUrl){
+      img.addEventListener('click', ()=>{ if(img.src) openPhotoModal(img.src); });
+      return;
+    }
     if(!photoCache[fid]){
       getPhotoDataUrl(fid).then(url=>{ if(url){ img.src = url; } });
     }
     img.addEventListener('click', ()=>{ if(img.src) openPhotoModal(img.src); });
   });
+}
+
+/**
+ * Mounts a "valor total + formas de pagamento" widget bound to `holder` ({valorTotal, pagamentos:[{formaId,valor}]}).
+ * Supports more than one payment method per order (ex: parte no cartão, parte no PIX).
+ */
+function mountPagamentos(container, holder){
+  if(!holder.pagamentos) holder.pagamentos = [];
+
+  function draw(){
+    container.innerHTML = `
+      <div class="section-label" style="margin-top:14px;">Pagamento</div>
+      <div class="grid-2">
+        <div class="field"><label>Valor total (R$)</label><input type="number" step="0.01" min="0" id="pagValorTotal" placeholder="0,00" value="${holder.valorTotal!==undefined && holder.valorTotal!==null ? holder.valorTotal : ''}"></div>
+      </div>
+      <div id="pagRows"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">+ Adicionar forma de pagamento</button>
+      <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+    `;
+    drawRows();
+    container.querySelector('#pagValorTotal').addEventListener('input', (e)=>{
+      holder.valorTotal = e.target.value === '' ? null : parseFloat(e.target.value);
+      updateHint();
+    });
+    container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
+      const primeiraForma = (config.paymentTypes && config.paymentTypes[0]) ? config.paymentTypes[0].id : '';
+      holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
+      drawRows();
+    });
+  }
+
+  function drawRows(){
+    const wrap = container.querySelector('#pagRows');
+    wrap.innerHTML = holder.pagamentos.map((p,i)=>`
+      <div class="grid-2" style="margin-bottom:6px;">
+        <select data-pagform="${i}">${(config.paymentTypes||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}</select>
+        <div style="display:flex; gap:6px;">
+          <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
+          <button type="button" class="icon-btn" data-pagdel="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagform)].formaId = sel.value; });
+    });
+    wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
+      inp.addEventListener('input', ()=>{
+        holder.pagamentos[Number(inp.dataset.pagvalor)].valor = inp.value === '' ? '' : parseFloat(inp.value);
+        updateHint();
+      });
+    });
+    wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        holder.pagamentos.splice(Number(b.dataset.pagdel),1);
+        drawRows();
+        updateHint();
+      });
+    });
+    updateHint();
+  }
+
+  function updateHint(){
+    const hint = container.querySelector('#pagSomaHint');
+    if(!hint) return;
+    if(holder.pagamentos.length === 0){ hint.textContent = ''; return; }
+    const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
+    const total = Number(holder.valorTotal)||0;
+    if(Math.abs(soma - total) > 0.009){
+      hint.innerHTML = `<span style="color:var(--danger);">Soma dos pagamentos (R$ ${soma.toFixed(2)}) diferente do valor total (R$ ${total.toFixed(2)}).</span>`;
+    }else{
+      hint.innerHTML = `<span style="color:var(--ok);">Soma dos pagamentos confere com o valor total (R$ ${total.toFixed(2)}).</span>`;
+    }
+  }
+
+  draw();
 }
 
 /* ============================================================
@@ -1160,6 +1385,9 @@ function tabsForLevel(){
   }
   t.push({ id:'painel', label:'Painel', icon:'📋' });
   t.push({ id:'agenda', label:'Agenda', icon:'🗓️' });
+  if(currentUser.nivel!=='oficina'){
+    t.push({ id:'clientes', label:'Clientes', icon:'👤' });
+  }
   if(currentUser.nivel==='oficina' || currentUser.nivel==='diretoria'){
     t.push({ id:'codigo', label:'Código', icon:'🔑' });
   }
@@ -1203,6 +1431,7 @@ function renderView(){
   if(currentTab==='nova') renderNovaOrdem(main);
   else if(currentTab==='painel') renderPainel(main);
   else if(currentTab==='agenda') renderAgenda(main);
+  else if(currentTab==='clientes') renderClientes(main);
   else if(currentTab==='codigo') renderGerarCodigo(main);
   else if(currentTab==='config') renderConfig(main);
 }
@@ -1264,17 +1493,24 @@ function renderNovaOrdem(main){
       </div>
     </div>
     <div class="ticket">
+      <div class="section-label">Cliente</div>
       <div class="grid-2">
         <div class="field"><label>Nome do cliente</label><input id="f_cliente" placeholder="Nome completo"></div>
         <div class="field"><label>Telefone</label><input id="f_telefone" placeholder="(00) 00000-0000"></div>
         <div class="field"><label>E-mail do cliente</label><input type="email" id="f_email" placeholder="cliente@email.com"></div>
-        <div class="field"><label>Número da via</label><input id="f_via" placeholder="Ex: 1"></div>
-        <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="f_nota" placeholder="Ex: 12345"></div>
-        <div class="field"><label>Nome da vendedora</label><input id="f_vendedora" placeholder="Nome" value="${currentUser.nivel==='vendedora'?escapeHtml(currentUser.nome):''}"></div>
-        <div class="field">
-          <label>Loja</label>
+        <div class="field"><label>CPF</label><input id="f_cpf" placeholder="000.000.000-00"></div>
+        <div class="field"><label>Data de nascimento</label><input type="date" id="f_nascimento"></div>
+        <div class="field"><label>Endereço</label><input id="f_endereco" placeholder="Rua, número, bairro"></div>
+      </div>
+      <div class="divider-nova"></div>
+      <div class="section-label">Ordem</div>
+      <div class="grid-2">
+        <div class="field"><label>Loja</label>
           <select id="f_loja"><option value="">Selecione</option>${lojaOptionsHtml('')}</select>
         </div>
+        <div class="field"><label>Número da via <span class="muted">(preenchido ao escolher a loja)</span></label><input id="f_via" placeholder="Selecione a loja"></div>
+        <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="f_nota" placeholder="Ex: 12345"></div>
+        <div class="field"><label>Nome da vendedora</label><input id="f_vendedora" placeholder="Nome" value="${currentUser.nivel==='vendedora'?escapeHtml(currentUser.nome):''}"></div>
         <div class="field">
           <label>Tipo de serviço</label>
           <select id="f_servico"><option value="">Selecione</option>${servicoOptionsHtml('')}</select>
@@ -1288,10 +1524,12 @@ function renderNovaOrdem(main){
           <input id="f_codigo" placeholder="Digite o código fornecido pela oficina/diretoria" style="text-transform:uppercase;">
         </div>
       </div>
+      <div id="pagamentoContainerNova"></div>
       <div id="fotoContainerNova"></div>
       <div id="obsContainerNova"></div>
-      <div style="margin-top:18px; display:flex; gap:10px;">
+      <div style="margin-top:18px; display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-accent" id="btnSalvarOrdem">Lançar ordem</button>
+        <button class="btn btn-ghost" id="btnSalvarRascunho">💾 Salvar rascunho</button>
         <button class="btn btn-ghost" id="btnLimparOrdem">Limpar</button>
       </div>
     </div>
@@ -1303,10 +1541,26 @@ function renderNovaOrdem(main){
   const tempObsHolder = { observacoes: [] };
   mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
 
+  const tempPagHolder = { valorTotal: null, pagamentos: [] };
+  mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
+
   const servicoSel = document.getElementById('f_servico');
   const dataInp = document.getElementById('f_data');
+  const lojaSel = document.getElementById('f_loja');
+  const viaInp = document.getElementById('f_via');
   const banner = document.getElementById('slotBanner');
   const codeArea = document.getElementById('codeArea');
+
+  lojaSel.addEventListener('change', async ()=>{
+    const loja = lojaSel.value;
+    if(!loja){ return; }
+    const abrev = LOJA_ABREV[loja] || loja.slice(0,2).toUpperCase();
+    const atual = config.viaSequences[loja] || 0;
+    const proximo = atual + 1;
+    config.viaSequences[loja] = proximo;
+    await saveConfig();
+    viaInp.value = `${abrev}-${proximo}`;
+  });
 
   function updateBanner(){
     const sid = servicoSel.value;
@@ -1331,14 +1585,59 @@ function renderNovaOrdem(main){
 
   document.getElementById('btnLimparOrdem').addEventListener('click', ()=>renderView());
 
+  function collectClienteFields(){
+    return {
+      cliente: document.getElementById('f_cliente').value.trim(),
+      telefone: document.getElementById('f_telefone').value.trim(),
+      email: document.getElementById('f_email').value.trim(),
+      cpf: document.getElementById('f_cpf').value.trim(),
+      dataNascimento: document.getElementById('f_nascimento').value,
+      endereco: document.getElementById('f_endereco').value.trim(),
+    };
+  }
+
+  document.getElementById('btnSalvarRascunho').addEventListener('click', async ()=>{
+    const cli = collectClienteFields();
+    if(!cli.cliente){
+      showToast('Informe ao menos o nome do cliente para salvar o rascunho.');
+      return;
+    }
+    const loja = lojaSel.value;
+    const sid = servicoSel.value;
+    const st = config.serviceTypes.find(s=>s.id===sid);
+    const rascunho = {
+      id: uid('ord'),
+      ...cli,
+      via: viaInp.value.trim(),
+      numeroNota: document.getElementById('f_nota').value.trim(),
+      vendedora: document.getElementById('f_vendedora').value.trim(),
+      loja,
+      serviceTypeId: sid,
+      serviceTypeName: st ? st.nome : '',
+      data: dataInp.value,
+      status: STATUS.RASCUNHO,
+      encaixe: false, autorizadoPor: null,
+      valorTotal: tempPagHolder.valorTotal,
+      pagamentos: tempPagHolder.pagamentos,
+      observacoes: tempObsHolder.observacoes,
+      fotos: tempFotoHolder.fotos,
+      criadoEm: Date.now()
+    };
+    orders.unshift(rascunho);
+    await saveOrders();
+    if(cli.cliente){ await upsertClienteFromOrder(cli); }
+    showToast('Rascunho salvo.');
+    currentTab = 'painel';
+    renderTabs(); renderView();
+  });
+
   document.getElementById('btnSalvarOrdem').addEventListener('click', async ()=>{
-    const cliente = document.getElementById('f_cliente').value.trim();
-    const telefone = document.getElementById('f_telefone').value.trim();
-    const email = document.getElementById('f_email').value.trim();
-    const via = document.getElementById('f_via').value.trim();
+    const cli = collectClienteFields();
+    const { cliente, telefone, email, cpf, dataNascimento, endereco } = cli;
+    const via = viaInp.value.trim();
     const numeroNota = document.getElementById('f_nota').value.trim();
     const vendedora = document.getElementById('f_vendedora').value.trim();
-    const loja = document.getElementById('f_loja').value;
+    const loja = lojaSel.value;
     const sid = servicoSel.value;
     const dt = dataInp.value;
 
@@ -1356,6 +1655,9 @@ function renderNovaOrdem(main){
         showToast('Informe o código de autorização para concluir o encaixe.');
         return;
       }
+      // Recarrega os códigos direto do banco: quem gerou o código pode estar em outro
+      // dispositivo/sessão, então a lista em memória aqui pode estar desatualizada.
+      codes = await storageGet('codes', true) || [];
       const codeObj = codes.find(c=>c.codigo === codigoDigitado && !c.usado);
       if(!codeObj){
         showToast('Código inválido ou já utilizado.');
@@ -1371,18 +1673,21 @@ function renderNovaOrdem(main){
     const st = config.serviceTypes.find(s=>s.id===sid);
     const novaOrdem = {
       id: uid('ord'),
-      cliente, telefone, email, via, numeroNota, vendedora, loja,
+      cliente, telefone, email, cpf, dataNascimento, endereco, via, numeroNota, vendedora, loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
       data: dt,
       status: STATUS.AGUARDANDO,
       encaixe, autorizadoPor,
+      valorTotal: tempPagHolder.valorTotal,
+      pagamentos: tempPagHolder.pagamentos,
       observacoes: tempObsHolder.observacoes,
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
     };
     orders.unshift(novaOrdem);
     await saveOrders();
+    await upsertClienteFromOrder(cli);
     showToast(encaixe ? 'Ordem lançada como encaixe autorizado.' : 'Ordem lançada com sucesso.');
     currentTab = 'painel';
     renderTabs(); renderView();
@@ -1430,6 +1735,11 @@ function openEditModalCompleto(order){
       <div class="field"><label>E-mail</label><input type="email" id="e_email" value="${escapeHtml(order.email||'')}"></div>
     </div>
     <div class="grid-2">
+      <div class="field"><label>CPF</label><input id="e_cpf" value="${escapeHtml(order.cpf||'')}" placeholder="000.000.000-00"></div>
+      <div class="field"><label>Data de nascimento</label><input type="date" id="e_nascimento" value="${order.dataNascimento||''}"></div>
+    </div>
+    <div class="field"><label>Endereço</label><input id="e_endereco" value="${escapeHtml(order.endereco||'')}" placeholder="Rua, número, bairro"></div>
+    <div class="grid-2">
       <div class="field"><label>Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
       <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="e_nota" value="${escapeHtml(order.numeroNota||'')}" placeholder="Ex: 12345"></div>
     </div>
@@ -1439,6 +1749,7 @@ function openEditModalCompleto(order){
     </div>
     <div class="field"><label>Status</label>
       <select id="e_status">
+        <option value="rascunho" ${order.status==='rascunho'?'selected':''}>Rascunho</option>
         <option value="aguardando" ${order.status==='aguardando'?'selected':''}>Aguardando</option>
         <option value="pronto" ${order.status==='pronto'?'selected':''}>Pronto</option>
         <option value="entregue" ${order.status==='entregue'?'selected':''}>Entregue</option>
@@ -1458,6 +1769,7 @@ function openEditModalCompleto(order){
         <input id="e_codigo" placeholder="Código da oficina/diretoria" style="text-transform:uppercase;">
       </div>
     </div>
+    <div id="pagamentoContainerEdit"></div>
     <div id="fotoContainerEdit"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
@@ -1467,6 +1779,7 @@ function openEditModalCompleto(order){
   `);
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, false);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
+  mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
 
   const servicoSel = document.getElementById('e_servico');
   const dataInp = document.getElementById('e_data');
@@ -1487,6 +1800,10 @@ function openEditModalCompleto(order){
   function updateBanner(){
     banner.innerHTML = '';
     codeArea.style.display = 'none';
+    if(statusSel.value === 'rascunho'){
+      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div>Rascunho não ocupa vaga — nenhuma verificação necessária enquanto estiver como rascunho.</div></div>`;
+      return;
+    }
     if(!servicoSel.value || !dataInp.value) return;
     if(sameAsOriginal()){
       banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div>Mesma vaga já ocupada por esta ordem — nenhuma verificação adicional necessária.</div></div>`;
@@ -1505,6 +1822,7 @@ function openEditModalCompleto(order){
   }
   servicoSel.addEventListener('change', updateBanner);
   dataInp.addEventListener('change', updateBanner);
+  statusSel.addEventListener('change', updateBanner);
   updateBanner();
 
   document.getElementById('editCancel').addEventListener('click', closeModal);
@@ -1512,6 +1830,9 @@ function openEditModalCompleto(order){
     const cliente = document.getElementById('e_cliente').value.trim();
     const telefone = document.getElementById('e_telefone').value.trim();
     const email = document.getElementById('e_email').value.trim();
+    const cpf = document.getElementById('e_cpf').value.trim();
+    const dataNascimento = document.getElementById('e_nascimento').value;
+    const endereco = document.getElementById('e_endereco').value.trim();
     const via = document.getElementById('e_via').value.trim();
     const numeroNota = document.getElementById('e_nota').value.trim();
     const vendedora = document.getElementById('e_vendedora').value.trim();
@@ -1520,8 +1841,12 @@ function openEditModalCompleto(order){
     const sid = servicoSel.value;
     const dt = dataInp.value;
 
-    if(!cliente || !telefone || !vendedora || !loja || !sid || !dt){
+    if(status !== 'rascunho' && (!cliente || !telefone || !vendedora || !loja || !sid || !dt)){
       showToast('Preencha todos os campos obrigatórios.');
+      return;
+    }
+    if(status === 'rascunho' && !cliente){
+      showToast('Informe ao menos o nome do cliente.');
       return;
     }
     let recebidoPor = order.recebidoPor || null;
@@ -1538,7 +1863,7 @@ function openEditModalCompleto(order){
     let encaixe = order.encaixe;
     let autorizadoPor = order.autorizadoPor;
 
-    if(!sameAsOriginal()){
+    if(status !== 'rascunho' && !sameAsOriginal()){
       const res = checkSlot(sid, dt, order.id);
       if(!res.ok){
         const codigoDigitado = document.getElementById('e_codigo').value.trim().toUpperCase();
@@ -1546,6 +1871,8 @@ function openEditModalCompleto(order){
           showToast('Informe o código de autorização para concluir a alteração.');
           return;
         }
+        // Recarrega os códigos direto do banco (quem gerou pode estar em outra sessão/dispositivo).
+        codes = await storageGet('codes', true) || [];
         const codeObj = codes.find(c=>c.codigo === codigoDigitado && !c.usado);
         if(!codeObj){
           showToast('Código inválido ou já utilizado.');
@@ -1564,11 +1891,12 @@ function openEditModalCompleto(order){
 
     const st = config.serviceTypes.find(s=>s.id===sid);
     Object.assign(order, {
-      cliente, telefone, email, via, numeroNota, vendedora, loja, status,
+      cliente, telefone, email, cpf, dataNascimento, endereco, via, numeroNota, vendedora, loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
       encaixe, autorizadoPor, recebidoPor, recebidoEm
     });
     await saveOrders();
+    await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, endereco });
     closeModal();
     showToast('Ordem atualizada.');
     renderView();
@@ -1593,6 +1921,7 @@ function renderPainel(main){
       <select id="filtroLoja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
       <select id="filtroStatus">
         <option value="">Todos os status (exceto entregues)</option>
+        <option value="rascunho">Rascunho</option>
         <option value="aguardando">Aguardando</option>
         <option value="pronto">Pronto</option>
         <option value="entregue">Entregue</option>
@@ -1649,10 +1978,13 @@ function renderPainel(main){
   function renderTable(){
     renderProntosCard();
     let list = [...orders];
+    if(currentUser.nivel==='oficina'){
+      list = list.filter(o=>o.status!=='rascunho');
+    }
     if(fStatus.value){
       list = list.filter(o=>o.status===fStatus.value);
     } else {
-      list = list.filter(o=>o.status!=='entregue');
+      list = list.filter(o=>o.status!=='entregue' && o.status!=='rascunho');
     }
     if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
     if(fLoja.value) list = list.filter(o=>o.loja===fLoja.value);
@@ -1718,9 +2050,10 @@ function renderPainel(main){
 
   function rowHtml(o){
     const pendObs = (o.observacoes||[]).some(ob=>!ob.ciente && ob.notificarPara && ob.notificarPara.length>0);
+    const isRascunho = o.status === 'rascunho';
     return `
       <tr>
-        <td><b>${escapeHtml(o.cliente)}</b>${o.encaixe ? `<div class="badge badge-encaixe" style="margin-top:4px;" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</div>` : ''}${pendObs ? `<div class="badge badge-flag" style="margin-top:4px;">⚠ Observação pendente</div>` : ''}${o.numeroNota ? `<div class="muted" style="margin-top:4px;">Nota ${escapeHtml(o.numeroNota)}</div>` : ''}${o.status==='entregue' ? `<div class="muted" style="margin-top:4px;">Recebido por ${escapeHtml(o.recebidoPor||'—')}</div>` : ''}</td>
+        <td><b>${escapeHtml(o.cliente)}</b>${isRascunho ? `<div class="badge rascunho-badge" style="margin-top:4px;">📝 Rascunho</div>` : ''}${o.encaixe ? `<div class="badge badge-encaixe" style="margin-top:4px;" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</div>` : ''}${pendObs ? `<div class="badge badge-flag" style="margin-top:4px;">⚠ Observação pendente</div>` : ''}${o.numeroNota ? `<div class="muted" style="margin-top:4px;">Nota ${escapeHtml(o.numeroNota)}</div>` : ''}${o.status==='entregue' ? `<div class="muted" style="margin-top:4px;">Recebido por ${escapeHtml(o.recebidoPor||'—')}</div>` : ''}</td>
         <td>${escapeHtml(o.telefone)}</td>
         <td>${escapeHtml(o.via)}</td>
         <td>${escapeHtml(o.vendedora)}</td>
@@ -1728,14 +2061,16 @@ function renderPainel(main){
         <td>${escapeHtml(o.serviceTypeName)}</td>
         <td>${fmtDate(o.data)}</td>
         <td>
-          ${currentUser.nivel==='oficina'
-            ? `<span class="badge" style="background:${statusBg(o.status)}; color:${statusFg(o.status)};">${statusLabel(o.status)}</span>`
-            : `<select class="status-select" data-id="${o.id}">
-                <option value="aguardando" ${o.status==='aguardando'?'selected':''}>Aguardando</option>
-                <option value="pronto" ${o.status==='pronto'?'selected':''}>Pronto</option>
-                <option value="entregue" ${o.status==='entregue'?'selected':''}>Entregue</option>
-                <option value="cancelado" ${o.status==='cancelado'?'selected':''}>Cancelado</option>
-              </select>`
+          ${isRascunho
+            ? `<span class="badge rascunho-badge">📝 Rascunho</span>`
+            : currentUser.nivel==='oficina'
+              ? `<span class="badge" style="background:${statusBg(o.status)}; color:${statusFg(o.status)};">${statusLabel(o.status)}</span>`
+              : `<select class="status-select" data-id="${o.id}">
+                  <option value="aguardando" ${o.status==='aguardando'?'selected':''}>Aguardando</option>
+                  <option value="pronto" ${o.status==='pronto'?'selected':''}>Pronto</option>
+                  <option value="entregue" ${o.status==='entregue'?'selected':''}>Entregue</option>
+                  <option value="cancelado" ${o.status==='cancelado'?'selected':''}>Cancelado</option>
+                </select>`
           }
         </td>
         <td style="white-space:nowrap;">
@@ -1890,6 +2225,190 @@ function openDayModal(iso){
 }
 
 /* ============================================================
+   CLIENTES (cadastro + mala direta de aniversário)
+   ============================================================ */
+function renderClientes(main){
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">Clientes</h1>
+        <p class="page-sub">Cadastro para acompanhamento, edição e mala direta de aniversário.</p>
+      </div>
+      <button class="btn btn-accent" id="btnNovoCliente">+ Novo cliente</button>
+    </div>
+
+    <div id="aniversarioCard"></div>
+
+    <div class="filters">
+      <input type="text" id="clienteBusca" placeholder="Buscar por nome, telefone ou CPF...">
+    </div>
+    <div class="card" style="padding:14px 18px; overflow-x:auto;">
+      <div id="clientesTableWrap"></div>
+    </div>
+  `;
+
+  function renderAniversarioCard(){
+    const card = document.getElementById('aniversarioCard');
+    const hoje = new Date();
+    const mes = hoje.getMonth()+1, dia = hoje.getDate();
+    const aniversariantes = clientes.filter(c=>{
+      if(!c.dataNascimento) return false;
+      const partes = c.dataNascimento.split('-').map(Number);
+      const m = partes[1], d = partes[2];
+      return m===mes && d===dia;
+    });
+    if(aniversariantes.length===0){
+      card.innerHTML = `
+        <div class="card" style="margin-bottom:16px;">
+          <div class="section-label">🎂 Aniversariantes de hoje</div>
+          <div class="muted">Nenhum aniversariante hoje.</div>
+        </div>`;
+      return;
+    }
+    card.innerHTML = `
+      <div class="card" style="border-color:var(--encaixe); background:var(--encaixe-soft); margin-bottom:16px;">
+        <div class="section-label" style="color:var(--encaixe); margin-bottom:10px;">🎂 Aniversariantes de hoje (${aniversariantes.length})</div>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          ${aniversariantes.map(c=>`
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:9px 12px; flex-wrap:wrap;">
+              <div style="font-size:13px;"><b>${escapeHtml(c.nome)}</b><span class="muted"> · ${escapeHtml(c.telefone||'sem telefone')}</span></div>
+              <div style="display:flex; gap:6px;">
+                <button class="icon-btn" data-aniverswa="${c.id}" title="Enviar WhatsApp">💬</button>
+                <button class="icon-btn" data-aniversmail="${c.id}" title="Enviar e-mail">✉️</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    card.querySelectorAll('[data-aniverswa]').forEach(b=>{
+      b.addEventListener('click', ()=> sendWhatsAppCliente(clientes.find(x=>x.id===b.dataset.aniverswa)) );
+    });
+    card.querySelectorAll('[data-aniversmail]').forEach(b=>{
+      b.addEventListener('click', ()=> sendEmailCliente(clientes.find(x=>x.id===b.dataset.aniversmail)) );
+    });
+  }
+  renderAniversarioCard();
+
+  const buscaInp = document.getElementById('clienteBusca');
+
+  function renderTable(){
+    let list = [...clientes];
+    const q = buscaInp.value.trim().toLowerCase();
+    if(q){
+      const qDigits = onlyDigits(q);
+      const qCpf = onlyDigitsCpf(q);
+      list = list.filter(c=>
+        (c.nome||'').toLowerCase().includes(q) ||
+        (qDigits && onlyDigits(c.telefone).includes(qDigits)) ||
+        (qCpf && onlyDigitsCpf(c.cpf).includes(qCpf))
+      );
+    }
+    list.sort((a,b)=> (a.nome||'').localeCompare(b.nome||''));
+
+    const wrap = document.getElementById('clientesTableWrap');
+    if(list.length===0){
+      wrap.innerHTML = `<div class="empty">Nenhum cliente encontrado.</div>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table>
+        <thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>CPF</th><th>Nascimento</th><th>Ações</th></tr></thead>
+        <tbody>
+          ${list.map(c=>`
+            <tr>
+              <td><b>${escapeHtml(c.nome)}</b>${c.endereco?`<div class="muted" style="margin-top:2px;">${escapeHtml(c.endereco)}</div>`:''}</td>
+              <td>${escapeHtml(c.telefone||'—')}</td>
+              <td>${escapeHtml(c.email||'—')}</td>
+              <td>${escapeHtml(c.cpf||'—')}</td>
+              <td>${c.dataNascimento?fmtDate(c.dataNascimento):'—'}</td>
+              <td style="white-space:nowrap;">
+                <button class="icon-btn" data-editcli="${c.id}" title="Editar">✎</button>
+                <button class="icon-btn" data-delcli="${c.id}" title="Excluir">🗑</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+    wrap.querySelectorAll('[data-editcli]').forEach(b=>{
+      b.addEventListener('click', ()=> openClienteModal(clientes.find(x=>x.id===b.dataset.editcli)) );
+    });
+    wrap.querySelectorAll('[data-delcli]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const clienteId = b.dataset.delcli;
+        openModal(`
+          <h3>Excluir cliente</h3>
+          <p>Tem certeza que deseja excluir este cliente do cadastro? Essa ação não pode ser desfeita.</p>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" id="cliDelCancel">Cancelar</button>
+            <button class="btn btn-danger" id="cliDelConfirm">Excluir</button>
+          </div>
+        `);
+        document.getElementById('cliDelCancel').addEventListener('click', closeModal);
+        document.getElementById('cliDelConfirm').addEventListener('click', async ()=>{
+          clientes = clientes.filter(x=>x.id!==clienteId);
+          await saveClientes();
+          closeModal();
+          renderAniversarioCard();
+          renderTable();
+          showToast('Cliente excluído.');
+        });
+      });
+    });
+  }
+  buscaInp.addEventListener('input', renderTable);
+  renderTable();
+
+  document.getElementById('btnNovoCliente').addEventListener('click', ()=> openClienteModal(null) );
+
+  function openClienteModal(cliente){
+    const editing = !!cliente;
+    const c = cliente || { nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', endereco:'' };
+    openModal(`
+      <h3>${editing?'Editar cliente':'Novo cliente'}</h3>
+      <div class="field"><label>Nome</label><input id="cli_nome" value="${escapeHtml(c.nome)}"></div>
+      <div class="grid-2">
+        <div class="field"><label>Telefone</label><input id="cli_telefone" value="${escapeHtml(c.telefone)}"></div>
+        <div class="field"><label>E-mail</label><input type="email" id="cli_email" value="${escapeHtml(c.email)}"></div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>CPF</label><input id="cli_cpf" value="${escapeHtml(c.cpf)}"></div>
+        <div class="field"><label>Data de nascimento</label><input type="date" id="cli_nascimento" value="${c.dataNascimento||''}"></div>
+      </div>
+      <div class="field"><label>Endereço</label><input id="cli_endereco" value="${escapeHtml(c.endereco)}"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cliCancel">Cancelar</button>
+        <button class="btn btn-accent" id="cliSave">Salvar</button>
+      </div>
+    `);
+    document.getElementById('cliCancel').addEventListener('click', closeModal);
+    document.getElementById('cliSave').addEventListener('click', async ()=>{
+      const nome = document.getElementById('cli_nome').value.trim();
+      if(!nome){ showToast('Informe o nome do cliente.'); return; }
+      const patch = {
+        nome,
+        telefone: document.getElementById('cli_telefone').value.trim(),
+        email: document.getElementById('cli_email').value.trim(),
+        cpf: document.getElementById('cli_cpf').value.trim(),
+        dataNascimento: document.getElementById('cli_nascimento').value,
+        endereco: document.getElementById('cli_endereco').value.trim(),
+      };
+      if(editing){
+        Object.assign(cliente, patch);
+      } else {
+        clientes.unshift({ id: uid('cli'), ...patch, criadoEm: Date.now() });
+      }
+      await saveClientes();
+      closeModal();
+      renderAniversarioCard();
+      renderTable();
+      showToast(editing ? 'Cliente atualizado.' : 'Cliente cadastrado.');
+    });
+  }
+}
+
+/* ============================================================
    GERAR CÓDIGO (oficina / diretoria)
    ============================================================ */
 function renderGerarCodigo(main){
@@ -1925,9 +2444,10 @@ function renderGerarCodigo(main){
     document.getElementById('codeResult').innerHTML = `
       <div class="slot-banner slot-ok" style="align-items:center;">
         <span class="dot"></span>
-        <div>Código gerado: <span class="code-chip">${codigo}</span> — repasse para a vendedora concluir o lançamento.</div>
+        <div>Código gerado: <span class="code-chip">${codigo}</span><button type="button" class="copy-btn" id="btnCopyCodeNovo">📋 Copiar</button> — repasse para a vendedora concluir o lançamento.</div>
       </div>
     `;
+    document.getElementById('btnCopyCodeNovo').addEventListener('click', ()=> copyToClipboard(codigo));
     renderCodeHistory();
   });
 
@@ -1938,6 +2458,7 @@ function renderGerarCodigo(main){
       <div class="code-list-item">
         <div>
           <span class="cl-code">${c.codigo}</span>
+          <button type="button" class="copy-btn" data-copyhist="${c.codigo}">📋 Copiar</button>
           <span class="muted" style="margin-left:10px;">autorizado por ${escapeHtml(c.autorizadoPor)}</span>
         </div>
         <div class="badge" style="background:${c.usado ? 'var(--danger-soft)' : 'var(--ok-soft)'}; color:${c.usado ? 'var(--danger)' : 'var(--ok)'};">
@@ -1945,8 +2466,15 @@ function renderGerarCodigo(main){
         </div>
       </div>
     `).join('');
+    wrap.querySelectorAll('[data-copyhist]').forEach(b=>{
+      b.addEventListener('click', ()=> copyToClipboard(b.dataset.copyhist));
+    });
   }
   renderCodeHistory();
+  (async ()=>{
+    codes = await storageGet('codes', true) || codes;
+    renderCodeHistory();
+  })();
 }
 
 /* ============================================================
@@ -1973,6 +2501,16 @@ function renderConfig(main){
       <div style="margin-top:14px; display:flex; gap:10px;">
         <button class="btn btn-ghost btn-sm" id="btnAddServico">+ Adicionar tipo de serviço</button>
         <button class="btn btn-accent btn-sm" id="btnSalvarServicos">Salvar alterações</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Formas de pagamento</div>
+      <p class="muted" style="margin:-4px 0 14px;">Essas opções aparecem no campo de pagamento das ordens de serviço.</p>
+      <div id="paymentRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px;">
+        <div class="field" style="flex:1; margin-bottom:0;"><input id="pt_nome" placeholder="Nome da forma de pagamento"></div>
+        <button class="btn btn-accent btn-sm" id="btnAddPaymentType">+ Adicionar</button>
       </div>
     </div>
 
@@ -2027,6 +2565,17 @@ function renderConfig(main){
 
       <button class="btn btn-accent btn-sm" id="btnSalvarMensagens">Salvar mensagens</button>
     </div>
+
+    <div class="card">
+      <div class="section-label">Mensagem de aniversário</div>
+      <p class="muted" style="margin:-4px 0 14px;">Usada na aba Clientes para enviar parabéns aos aniversariantes do dia. Marcador disponível: {cliente}.</p>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <label style="font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint);">Mensagem</label>
+        <button class="btn btn-ghost btn-sm" id="btnRestaurarAniversario">Restaurar padrão</button>
+      </div>
+      <textarea id="c_mensagemAniversario" class="plain-input">${escapeHtml(config.mensagemAniversario)}</textarea>
+      <button class="btn btn-accent btn-sm" style="margin-top:12px;" id="btnSalvarAniversario">Salvar mensagem</button>
+    </div>
   `;
 
   function renderServiceRows(){
@@ -2066,6 +2615,37 @@ function renderConfig(main){
     await saveConfig();
     showToast('Parâmetros de serviço salvos.');
     renderServiceRows();
+  });
+
+  function renderPaymentRows(){
+    const wrap = document.getElementById('paymentRows');
+    if(!config.paymentTypes) config.paymentTypes = [];
+    if(config.paymentTypes.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma forma de pagamento cadastrada.</div>`; return; }
+    wrap.innerHTML = config.paymentTypes.map((pt,i)=>`
+      <div class="code-list-item">
+        <div>${escapeHtml(pt.nome)}</div>
+        <button class="icon-btn" data-delpayment="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-delpayment]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        config.paymentTypes.splice(Number(b.dataset.delpayment),1);
+        await saveConfig();
+        renderPaymentRows();
+        showToast('Forma de pagamento removida.');
+      });
+    });
+  }
+  renderPaymentRows();
+
+  document.getElementById('btnAddPaymentType').addEventListener('click', async ()=>{
+    const nome = document.getElementById('pt_nome').value.trim();
+    if(!nome){ showToast('Informe o nome da forma de pagamento.'); return; }
+    config.paymentTypes.push({ id: uid('pt'), nome });
+    await saveConfig();
+    document.getElementById('pt_nome').value = '';
+    renderPaymentRows();
+    showToast('Forma de pagamento adicionada.');
   });
 
   function renderUserRows(){
@@ -2120,6 +2700,14 @@ function renderConfig(main){
   });
   document.getElementById('btnRestaurarEntregue').addEventListener('click', ()=>{
     document.getElementById('c_mensagemEntregue').value = DEFAULT_TEMPLATE_ENTREGUE;
+  });
+  document.getElementById('btnSalvarAniversario').addEventListener('click', async ()=>{
+    config.mensagemAniversario = document.getElementById('c_mensagemAniversario').value;
+    await saveConfig();
+    showToast('Mensagem de aniversário salva.');
+  });
+  document.getElementById('btnRestaurarAniversario').addEventListener('click', ()=>{
+    document.getElementById('c_mensagemAniversario').value = DEFAULT_TEMPLATE_ANIVERSARIO;
   });
 }
 
