@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acompanhar Ordem de Serviço</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#EEF1F4; --surface:#FFFFFF; --ink:#1B2430; --ink-soft:#5B6472; --ink-faint:#8B93A1;
+    --line:#DBE0E6; --accent:#C97A2B;
+    --wait:#B4780F; --wait-soft:#FCEEDD;
+    --ok:#2E7D53; --ok-soft:#E1F3E8;
+    --danger:#B23A3A; --danger-soft:#FBE4E4;
+    --delivered:#2A5FA8; --delivered-soft:#E3ECFA;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); min-height:100vh;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .card{
+    width:100%; max-width:420px; background:var(--surface); border-radius:16px;
+    padding:28px 24px; box-shadow:0 12px 32px -18px rgba(20,30,45,0.25);
+  }
+  .brand{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:10px; text-align:center; }
+  h1{ font-size:19px; margin:0 0 4px; text-align:center; }
+  .sub{ text-align:center; color:var(--ink-soft); font-size:13px; margin-bottom:22px; }
+
+  .stepper{ display:flex; justify-content:space-between; margin-bottom:24px; position:relative; }
+  .stepper::before{ content:''; position:absolute; top:14px; left:24px; right:24px; height:2px; background:var(--line); z-index:0; }
+  .step{ position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; gap:6px; flex:1; }
+  .step .dot{ width:28px; height:28px; border-radius:50%; background:var(--line); color:#fff; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:700; }
+  .step.done .dot{ background:var(--ok); }
+  .step.current .dot{ background:var(--accent); }
+  .step .label{ font-size:10.5px; color:var(--ink-faint); font-weight:600; text-align:center; }
+  .step.done .label, .step.current .label{ color:var(--ink); }
+
+  .status-banner{ text-align:center; padding:13px; border-radius:10px; margin-bottom:20px; font-weight:750; font-size:14px; }
+  .status-banner.aguardando{ background:var(--wait-soft); color:var(--wait); }
+  .status-banner.pronto{ background:var(--ok-soft); color:var(--ok); }
+  .status-banner.entregue{ background:var(--delivered-soft); color:var(--delivered); }
+  .status-banner.cancelado{ background:var(--danger-soft); color:var(--danger); }
+
+  .details{ font-size:13.5px; }
+  .details div{ display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .details div:last-child{ border-bottom:none; }
+  .details .k{ color:var(--ink-soft); flex-shrink:0; }
+  .details .v{ font-weight:650; text-align:right; }
+
+  .badge-encaixe{
+    display:block; text-align:center; background:#EEE6F7; color:#6E45A8; font-size:11px; font-weight:700;
+    padding:6px 10px; border-radius:20px; margin-top:14px;
+  }
+  .loading, .error{ text-align:center; color:var(--ink-soft); font-size:14px; padding:30px 0; }
+  .refresh-note{ text-align:center; font-size:11px; color:var(--ink-faint); margin-top:18px; line-height:1.5; }
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="brand">Gestão e Controle</div>
+    <div class="loading" id="loading">Carregando…</div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+
+  const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  function escapeHtml(s){
+    return (s === null || s === undefined ? "" : String(s)).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+  function fmtDate(s){
+    if(!s) return "—";
+    const partes = s.split("-");
+    if(partes.length !== 3) return s;
+    return `${partes[2]}/${partes[1]}/${partes[0]}`;
+  }
+  function getOrderId(){
+    const params = new URLSearchParams(window.location.search);
+    return params.get("id");
+  }
+  function statusLabel(s){
+    return s==="aguardando" ? "Aguardando" : s==="pronto" ? "Pronto para retirada" : s==="entregue" ? "Entregue" : "Cancelado";
+  }
+  function stepperHtml(status){
+    const steps = [
+      { key:"aguardando", label:"Recebido" },
+      { key:"pronto", label:"Pronto" },
+      { key:"entregue", label:"Entregue" },
+    ];
+    const order = ["aguardando","pronto","entregue"];
+    const currentIdx = order.indexOf(status);
+    return `<div class="stepper">${steps.map((s,i)=>{
+      let cls = "";
+      if(i < currentIdx) cls = "done";
+      else if(i === currentIdx) cls = "current";
+      return `<div class="step ${cls}"><div class="dot">${i < currentIdx ? "✓" : (i+1)}</div><div class="label">${s.label}</div></div>`;
+    }).join("")}</div>`;
+  }
+
+  function showError(msg){
+    document.getElementById("card").innerHTML = `
+      <div class="brand">Gestão e Controle</div>
+      <div class="error">${escapeHtml(msg)}</div>
+    `;
+  }
+
+  function render(o){
+    const isFinal = o.status === "entregue" || o.status === "cancelado";
+    document.getElementById("card").innerHTML = `
+      <div class="brand">Gestão e Controle</div>
+      <h1>Olá, ${escapeHtml(o.cliente)}!</h1>
+      <div class="sub">Acompanhamento da sua ordem de serviço</div>
+      <div class="status-banner ${escapeHtml(o.status)}">${statusLabel(o.status)}</div>
+      ${o.status !== "cancelado" ? stepperHtml(o.status) : ""}
+      <div class="details">
+        <div><span class="k">Loja</span><span class="v">${escapeHtml(o.loja)}</span></div>
+        <div><span class="k">Serviço</span><span class="v">${escapeHtml(o.servico)}</span></div>
+        <div><span class="k">Data prevista</span><span class="v">${fmtDate(o.data)}</span></div>
+        ${o.numeroNota ? `<div><span class="k">Nota</span><span class="v">${escapeHtml(o.numeroNota)}</span></div>` : ""}
+        ${o.status === "entregue" && o.recebidoPor ? `<div><span class="k">Recebido por</span><span class="v">${escapeHtml(o.recebidoPor)}</span></div>` : ""}
+      </div>
+      ${o.encaixe ? `<div class="badge-encaixe">Encaixe autorizado</div>` : ""}
+      <div class="refresh-note">${isFinal ? "Esta ordem já foi concluída." : "Esta página se atualiza automaticamente — não precisa recarregar."}</div>
+    `;
+  }
+
+  async function loadStatus(){
+    const id = getOrderId();
+    if(!id){
+      showError("Link inválido — nenhuma ordem informada.");
+      return;
+    }
+    try{
+      const { data, error } = await supabaseClient.functions.invoke("get-order-status", { body: { id } });
+      if(error) throw error;
+      if(!data || data.error) throw new Error((data && data.error) || "Ordem não encontrada.");
+      render(data);
+    }catch(e){
+      showError("Não foi possível carregar essa ordem agora. Verifique o link ou tente novamente mais tarde.");
+    }
+  }
+
+  loadStatus();
+  setInterval(loadStatus, 45000);
+})();
+</script>
+</body>
+</html>
