@@ -688,7 +688,8 @@ async function loadAll(){
         { id: uid('pt'), nome: 'Cartão de Débito' },
         { id: uid('pt'), nome: 'PIX' }
       ],
-      viaSequences: {}
+      viaSequences: {},
+      funcionarios: []
     };
     await storageSet('config', config, true);
   }
@@ -703,6 +704,7 @@ async function loadAll(){
     { id: uid('pt'), nome: 'PIX' }
   ];
   if(!config.viaSequences) config.viaSequences = {};
+  if(!config.funcionarios) config.funcionarios = [];
   orders = await storageGet('orders', true) || [];
   codes = await storageGet('codes', true) || [];
   clientes = await storageGet('clientes', true) || [];
@@ -1523,7 +1525,7 @@ function mountObservacoes(container, orderLike, persisted){
     const obsFotoHolder = editing || { fotos: [] };
     formEl.style.display = 'block';
     formEl.innerHTML = `
-      <div class="field"><label>Nome</label><input id="obsNomeInp" value="${editing?escapeHtml(editing.nome):''}"></div>
+      <div class="field"><label>Nome</label><select id="obsNomeInp">${funcionarioOptionsTodosHtml(editing?editing.nome:'')}</select></div>
       <div class="field"><label>Descrição</label><textarea id="obsDescInp" style="min-height:80px;">${editing?escapeHtml(editing.descricao):''}</textarea></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnToggleNotif">🔔 Notificar</button>
       <div id="notifyBoxInner" style="display:none; margin-top:10px;">
@@ -1700,6 +1702,22 @@ function lojaOptionsHtml(selected){
 function servicoOptionsHtml(selected){
   return config.serviceTypes.map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
 }
+/** Monta as <option> de funcionários de uma área específica ('vendedora' ou 'oficina'). */
+function funcionarioOptionsHtml(area, selected){
+  const lista = (config.funcionarios||[]).filter(f=>f.area===area);
+  const vazio = lista.length===0 ? `<option value="" disabled>Nenhum(a) ${area==='vendedora'?'vendedora':'ourives'} cadastrado(a)</option>` : '';
+  const naoEstaNaLista = selected && !lista.some(f=>f.nome===selected);
+  const extra = naoEstaNaLista ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : '';
+  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
+}
+/** Monta as <option> de TODOS os funcionários (vendedoras e ourives juntos), com a área indicada. */
+function funcionarioOptionsTodosHtml(selected){
+  const lista = config.funcionarios||[];
+  const vazio = lista.length===0 ? `<option value="" disabled>Nenhum funcionário cadastrado</option>` : '';
+  const naoEstaNaLista = selected && !lista.some(f=>f.nome===selected);
+  const extra = naoEstaNaLista ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : '';
+  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?'selected':''}>${escapeHtml(f.nome)} (${f.area==='vendedora'?'Vendedora':'Oficina'})</option>`).join('');
+}
 
 /* ============================================================
    NOTIFICAR CLIENTE (modal pós-lançamento / pós-edição)
@@ -1743,7 +1761,7 @@ function renderNovaOrdem(main){
         </div>
         <div class="field"><label>Número da via <span class="muted">(preenchido ao escolher a loja)</span></label><input id="f_via" placeholder="Selecione a loja"></div>
         <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="f_nota" placeholder="Ex: 12345"></div>
-        <div class="field"><label>Nome da vendedora</label><input id="f_vendedora" placeholder="Nome" value="${currentUser.nivel==='vendedora'?escapeHtml(currentUser.nome):''}"></div>
+        <div class="field"><label>Nome da vendedora</label><select id="f_vendedora">${funcionarioOptionsHtml('vendedora', currentUser.nivel==='vendedora'?currentUser.nome:'')}</select></div>
         <div class="field">
           <label>Tipo de serviço</label>
           <select id="f_servico"><option value="">Selecione</option>${servicoOptionsHtml('')}</select>
@@ -1978,7 +1996,7 @@ function openEditModalCompleto(order){
       <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="e_nota" value="${escapeHtml(order.numeroNota||'')}" placeholder="Ex: 12345"></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Vendedora</label><input id="e_vendedora" value="${escapeHtml(order.vendedora)}"></div>
+      <div class="field"><label>Vendedora</label><select id="e_vendedora">${funcionarioOptionsHtml('vendedora', order.vendedora)}</select></div>
       <div class="field"><label>Loja</label><select id="e_loja">${lojaOptionsHtml(order.loja)}</select></div>
     </div>
     <div class="field"><label>Status</label>
@@ -2677,7 +2695,7 @@ function renderGerarCodigo(main){
     <div class="card">
       <div class="section-label">Novo código</div>
       <div class="grid-2">
-        <div class="field"><label>Quem autorizou</label><input id="c_autorizador" placeholder="Nome de quem está autorizando"></div>
+        <div class="field"><label>Quem autorizou</label><select id="c_autorizador">${funcionarioOptionsHtml('oficina', '')}</select></div>
         <div style="display:flex; align-items:flex-end;"><button class="btn btn-accent btn-block" id="btnGerarCodigo">Gerar código</button></div>
       </div>
       <div id="codeResult"></div>
@@ -2756,6 +2774,20 @@ function renderConfig(main){
       <div style="margin-top:14px; display:flex; gap:10px;">
         <button class="btn btn-ghost btn-sm" id="btnAddServico">+ Adicionar tipo de serviço</button>
         <button class="btn btn-accent btn-sm" id="btnSalvarServicos">Salvar alterações</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Funcionários</div>
+      <p class="muted" style="margin:-4px 0 14px;">Cadastre por área — vendedoras aparecem nos campos de venda, ourives aparecem nos campos da oficina. Isso permite selecionar em vez de digitar o nome toda vez.</p>
+      <div id="funcionarioRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
+        <select id="func_area" style="min-width:140px;">
+          <option value="vendedora">Vendedora</option>
+          <option value="oficina">Oficina (ourives)</option>
+        </select>
+        <button class="btn btn-accent btn-sm" id="btnAddFuncionario">+ Adicionar</button>
       </div>
     </div>
 
@@ -2870,6 +2902,38 @@ function renderConfig(main){
     await saveConfig();
     showToast('Parâmetros de serviço salvos.');
     renderServiceRows();
+  });
+
+  function renderFuncionarioRows(){
+    const wrap = document.getElementById('funcionarioRows');
+    if(!config.funcionarios) config.funcionarios = [];
+    if(config.funcionarios.length===0){ wrap.innerHTML = `<div class="empty">Nenhum funcionário cadastrado.</div>`; return; }
+    wrap.innerHTML = config.funcionarios.map((f,i)=>`
+      <div class="code-list-item">
+        <div><b>${escapeHtml(f.nome)}</b> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">${f.area==='vendedora'?'Vendedora':'Oficina'}</span></div>
+        <button class="icon-btn" data-delfuncionario="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-delfuncionario]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        config.funcionarios.splice(Number(b.dataset.delfuncionario),1);
+        await saveConfig();
+        renderFuncionarioRows();
+        showToast('Funcionário removido.');
+      });
+    });
+  }
+  renderFuncionarioRows();
+
+  document.getElementById('btnAddFuncionario').addEventListener('click', async ()=>{
+    const nome = document.getElementById('func_nome').value.trim();
+    const area = document.getElementById('func_area').value;
+    if(!nome){ showToast('Informe o nome do funcionário.'); return; }
+    config.funcionarios.push({ id: uid('func'), nome, area });
+    await saveConfig();
+    document.getElementById('func_nome').value = '';
+    renderFuncionarioRows();
+    showToast('Funcionário cadastrado.');
   });
 
   function renderPaymentRows(){
