@@ -609,7 +609,7 @@ function onlyDigits(s){ return (s||'').replace(/\D/g,''); }
 function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-function statusLabel(s){ return s==='aguardando'?'Aguardando':s==='pronto'?'Pronto':s==='entregue'?'Entregue':'Cancelado'; }
+function statusLabel(s){ return s==='aguardando'?'Aguardando':s==='pronto'?'Pronto':s==='entregue'?'Entregue':s==='rascunho'?'Rascunho':'Cancelado'; }
 function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function serviceColor(id){
   const i = config.serviceTypes.findIndex(s=>s.id===id);
@@ -774,6 +774,84 @@ function buildMessage(order){
     .replaceAll('{nota}', order.numeroNota || '')
     .replaceAll('{notaLinha}', notaLinha);
 }
+/**
+ * Abre uma janela com um documento formatado da ordem de serviço, pronto para impressão
+ * (ou salvar como PDF pelo próprio diálogo de impressão do navegador).
+ */
+function printOrder(order){
+  const paymentTypesMap = {};
+  (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
+  const pagamentosRows = (order.pagamentos||[]).filter(p=>p.formaId).map(p=>`
+    <tr><td>${escapeHtml(paymentTypesMap[p.formaId]||'—')}</td><td style="text-align:right;">R$ ${Number(p.valor||0).toFixed(2)}</td></tr>
+  `).join('');
+  const obsHtml = (order.observacoes||[]).length
+    ? order.observacoes.map(o=>`<div style="margin-bottom:6px;"><b>${escapeHtml(o.nome)}:</b> ${escapeHtml(o.descricao)}</div>`).join('')
+    : '<div class="muted">Nenhuma observação.</div>';
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Ordem de Serviço - ${escapeHtml(order.cliente)}</title>
+<style>
+  body{ font-family: Arial, Helvetica, sans-serif; padding: 28px; color:#1B2430; max-width:640px; margin:0 auto; }
+  h1{ font-size:19px; margin:0 0 4px; }
+  .sub{ color:#5B6472; font-size:12.5px; margin-bottom:18px; }
+  .section-title{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#8B93A1; border-bottom:1px solid #DBE0E6; padding-bottom:4px; margin:18px 0 8px; }
+  table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  td{ padding:4px 0; vertical-align:top; }
+  .label{ color:#5B6472; width:150px; }
+  .muted{ color:#8B93A1; font-size:12.5px; }
+  .assinatura{ margin-top:46px; border-top:1px solid #1B2430; width:280px; }
+  @media print{ body{ padding: 0; } }
+</style>
+</head>
+<body>
+  <h1>Ordem de Serviço</h1>
+  <div class="sub">Loja ${escapeHtml(order.loja)} · Via nº ${escapeHtml(order.via||'—')} · Agendado para ${fmtDate(order.data)}</div>
+
+  <div class="section-title">Cliente</div>
+  <table>
+    <tr><td class="label">Nome</td><td>${escapeHtml(order.cliente)}</td></tr>
+    <tr><td class="label">Telefone</td><td>${escapeHtml(order.telefone||'—')}</td></tr>
+    ${order.email ? `<tr><td class="label">E-mail</td><td>${escapeHtml(order.email)}</td></tr>` : ''}
+    ${order.cpf ? `<tr><td class="label">CPF</td><td>${escapeHtml(order.cpf)}</td></tr>` : ''}
+    ${order.endereco ? `<tr><td class="label">Endereço</td><td>${escapeHtml(order.endereco)}</td></tr>` : ''}
+  </table>
+
+  <div class="section-title">Serviço</div>
+  <table>
+    <tr><td class="label">Tipo de serviço</td><td>${escapeHtml(order.serviceTypeName||'—')}</td></tr>
+    <tr><td class="label">Vendedora</td><td>${escapeHtml(order.vendedora||'—')}</td></tr>
+    <tr><td class="label">Status</td><td>${statusLabel(order.status)}${order.encaixe ? ' (Encaixe)' : ''}</td></tr>
+    ${order.numeroNota ? `<tr><td class="label">Nº da nota</td><td>${escapeHtml(order.numeroNota)}</td></tr>` : ''}
+    ${order.status==='entregue' ? `<tr><td class="label">Recebido por</td><td>${escapeHtml(order.recebidoPor||'—')}</td></tr>` : ''}
+  </table>
+
+  ${(pagamentosRows || order.valorTotal) ? `
+  <div class="section-title">Pagamento</div>
+  <table>
+    ${order.valorTotal ? `<tr><td class="label">Valor total</td><td>R$ ${Number(order.valorTotal).toFixed(2)}</td></tr>` : ''}
+    ${pagamentosRows}
+  </table>` : ''}
+
+  <div class="section-title">Observações</div>
+  ${obsHtml}
+
+  <div class="assinatura"></div>
+  <div class="muted" style="margin-top:4px;">Assinatura do cliente</div>
+</body>
+</html>`;
+
+  const printWin = window.open('', '_blank', 'width=800,height=900');
+  if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
+  printWin.document.open();
+  printWin.document.write(html);
+  printWin.document.close();
+  printWin.focus();
+  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+}
+
 function sendWhatsApp(order){
   const msg = encodeURIComponent(buildMessage(order));
   const url = `https://wa.me/55${onlyDigits(order.telefone)}?text=${msg}`;
@@ -1717,11 +1795,13 @@ function openEditModalOficina(order){
     <div id="fotoContainerEditOficina"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
+      <button class="btn btn-ghost" id="printBtnOficina">🖨️ Imprimir</button>
       <button class="btn btn-ghost" id="editCancel">Fechar</button>
     </div>
   `);
   mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
+  document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
 }
 
@@ -1773,6 +1853,7 @@ function openEditModalCompleto(order){
     <div id="fotoContainerEdit"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
+      <button class="btn btn-ghost" id="printBtnCompleto">🖨️ Imprimir</button>
       <button class="btn btn-ghost" id="editCancel">Cancelar</button>
       <button class="btn btn-accent" id="editSave">Salvar alterações</button>
     </div>
@@ -1780,6 +1861,7 @@ function openEditModalCompleto(order){
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, false);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
+  document.getElementById('printBtnCompleto').addEventListener('click', ()=> printOrder(order) );
 
   const servicoSel = document.getElementById('e_servico');
   const dataInp = document.getElementById('e_data');
@@ -2046,6 +2128,9 @@ function renderPainel(main){
     wrap.querySelectorAll('[data-edit]').forEach(b=>{
       b.addEventListener('click', ()=> openEditModal(b.dataset.edit) );
     });
+    wrap.querySelectorAll('[data-print]').forEach(b=>{
+      b.addEventListener('click', ()=> printOrder(orders.find(x=>x.id===b.dataset.print)) );
+    });
   }
 
   function rowHtml(o){
@@ -2075,6 +2160,7 @@ function renderPainel(main){
         </td>
         <td style="white-space:nowrap;">
           <button class="icon-btn" data-edit="${o.id}" title="Editar ordem">✎</button>
+          <button class="icon-btn" data-print="${o.id}" title="Imprimir ordem">🖨️</button>
           ${currentUser.nivel!=='oficina' ? `
           <button class="icon-btn" data-wa="${o.id}" title="Enviar WhatsApp">💬</button>
           <button class="icon-btn" data-mail="${o.id}" title="Enviar e-mail">✉️</button>

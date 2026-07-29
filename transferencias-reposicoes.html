@@ -640,6 +640,127 @@
     return {loja, produtos, titleRight, sub: subParts.join(" · ")};
   }
 
+  function itemsTablePrintHtml(items, arrKey){
+    const fields = ITEM_FIELDS[arrKey];
+    if(!items || items.length === 0) return '<div class="print-muted">Nenhum item lançado.</div>';
+    const headerLabels = { produto:"Produto", metal:"Metal", quantidade:"Qtd", fator:"Fator", qtdLoja:"Qtd loja", qtdEcommerce:"Qtd e-commerce" };
+    const headers = fields.map(fc => headerLabels[fc.f] || fc.f);
+    const rows = items.map(it => `<tr>${fields.map(fc=>`<td>${escapeHtml(it[fc.f] !== undefined && it[fc.f] !== "" ? it[fc.f] : "—")}</td>`).join("")}</tr>`).join("");
+    return `<table class="print-table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function vistoPrintLine(label, visto, nome, data){
+    if(!visto) return `<div class="print-visto">${escapeHtml(label)}: <span class="print-muted">pendente</span></div>`;
+    const partes = [];
+    if(nome) partes.push(escapeHtml(nome));
+    if(data) partes.push(data);
+    return `<div class="print-visto">${escapeHtml(label)}: <b>OK</b>${partes.length ? " — " + partes.join(" · ") : ""}</div>`;
+  }
+
+  /**
+   * Abre uma janela com um documento formatado do registro (transferência ou reposição),
+   * pronto para impressão (ou salvar como PDF pelo diálogo de impressão do navegador).
+   */
+  function printRegistro(r){
+    const { status, label } = getStatus(r);
+    const isTransf = state.tab === "transferencias";
+    let bodyHtml = "";
+
+    if(isTransf){
+      bodyHtml += `
+        <div class="print-section-title">Movimentação</div>
+        <table class="print-kv">
+          <tr><td>Data</td><td>${escapeHtml(r.data||"—")}</td></tr>
+          <tr><td>Solicitante</td><td>${escapeHtml(r.solicitante||"—")}${r.lojaSolicitante ? " (" + escapeHtml(r.lojaSolicitante) + ")" : ""}</td></tr>
+          <tr><td>Onde tem o produto</td><td>${escapeHtml(r.lojaOrigem||"—")}</td></tr>
+          <tr><td>Para onde vai</td><td>${escapeHtml(r.lojaDestino||"—")}</td></tr>
+          <tr><td>Tipo</td><td>${escapeHtml(r.tipoTransf||"—")}</td></tr>
+        </table>
+
+        <div class="print-section-title">Itens</div>
+        ${itemsTablePrintHtml(r.transferItens, "transferItens")}
+
+        <div class="print-section-title">Vistos</div>
+        ${vistoPrintLine("Saída — " + (r.lojaOrigem||"?"), r.vistoSaida, r.nomeSaida, r.dataSaida)}
+        ${r.tipoTransf === "SAÍDA" ? vistoPrintLine("Baixa no estoque — " + (r.lojaOrigem||"?"), r.vistoBaixaEstoque, r.nomeBaixaEstoque, r.dataBaixaEstoque) : ""}
+        ${vistoPrintLine("Entrada — " + (r.lojaDestino||"?"), r.vistoEntrada, r.nomeEntrada, r.dataEntrada)}
+        ${r.tipoTransf === "SAÍDA" ? vistoPrintLine("Entrada no estoque — " + (r.lojaDestino||"?"), r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque) : ""}
+        ${r.tipoTransf === "TROCA" ? vistoPrintLine("Saída (retorno) — " + (r.lojaDestino||"?"), r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida) : ""}
+        ${r.tipoTransf === "TROCA" ? vistoPrintLine("Entrada (retorno) — " + (r.lojaOrigem||"?"), r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada) : ""}
+        ${vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)}
+      `;
+    } else {
+      bodyHtml += `
+        <div class="print-section-title">Loja</div>
+        <table class="print-kv">
+          <tr><td>Data</td><td>${escapeHtml(r.data||"—")}</td></tr>
+          <tr><td>Solicitante</td><td>${escapeHtml(r.solicitante||"—")}</td></tr>
+          <tr><td>Loja</td><td>${escapeHtml(r.loja||"—")}</td></tr>
+        </table>
+
+        <div class="print-section-title">Pedido (o que está faltando)</div>
+        ${itemsTablePrintHtml(r.pedidoItens, "pedidoItens")}
+
+        <div class="print-section-title">Venda / Nota Fiscal</div>
+        ${itemsTablePrintHtml(r.vendaItens, "vendaItens")}
+
+        <div class="print-section-title">Quantidade Disponibilizada</div>
+        ${itemsTablePrintHtml(r.disponibilizadoItens, "disponibilizadoItens")}
+
+        <div class="print-section-title">Recebimento</div>
+        ${itemsTablePrintHtml(r.recebimentoItens, "recebimentoItens")}
+
+        <div class="print-section-title">Aprovações</div>
+        ${vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)}
+        ${vistoPrintLine("Administrativo", r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo)}
+        ${vistoPrintLine("Recebimento na loja", r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja)}
+        ${vistoPrintLine("Sistema", r.vistoSistema, r.nomeSistema, r.dataSistema)}
+
+        ${r.justificativa ? `
+        <div class="print-section-title">Correção</div>
+        <div>${escapeHtml(r.justificativa)}</div>
+        ${vistoPrintLine("Diretoria (correção)", r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao)}
+        ` : ""}
+      `;
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>${isTransf ? "Transferência" : "Reposição"} — ${escapeHtml(r.data||"")}</title>
+<style>
+  body{ font-family: Arial, Helvetica, sans-serif; padding: 28px; color:#211F1A; max-width:680px; margin:0 auto; }
+  h1{ font-size:19px; margin:0 0 4px; }
+  .print-sub{ color:#726C5F; font-size:12.5px; margin-bottom:10px; }
+  .print-status{ display:inline-block; padding:4px 12px; border-radius:20px; font-size:11.5px; font-weight:700; margin-bottom:18px; }
+  .print-section-title{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#726C5F; border-bottom:1px solid #DEDACD; padding-bottom:4px; margin:18px 0 8px; }
+  .print-table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:6px; }
+  .print-table th, .print-table td{ border:1px solid #DEDACD; padding:5px 8px; text-align:left; }
+  .print-kv td{ padding:4px 0; font-size:13.5px; }
+  .print-kv td:first-child{ color:#726C5F; width:170px; }
+  .print-visto{ font-size:13px; margin-bottom:4px; }
+  .print-muted{ color:#9B9585; font-size:12.5px; }
+  @media print{ body{ padding:0; } }
+</style>
+</head>
+<body>
+  <h1>${isTransf ? "Transferência entre lojas" : "Reposição de mercadoria"}</h1>
+  <div class="print-sub">Registro de ${escapeHtml(r.data||"—")}</div>
+  ${bodyHtml}
+  ${label ? `<div class="print-section-title">Situação</div><div>${escapeHtml(label)}</div>` : ""}
+</body>
+</html>`;
+
+    const printWin = window.open("", "_blank", "width=800,height=900");
+    if(!printWin){ return; }
+    printWin.document.open();
+    printWin.document.write(html);
+    printWin.document.close();
+    printWin.focus();
+    setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  }
+
   function renderCard(r){
     const {status, label} = getStatus(r);
     const cls = statusClass(status);
@@ -806,7 +927,7 @@
         ${vistosHtml}
       </div>
 
-      <div class="row-actions"><button class="btn-cancel" type="button" data-action="cancel-edit">↩ Sair</button><button class="btn-edit" type="button" data-action="toggle-edit">✎ Editar</button><button class="btn-del" type="button" data-action="delete">🗑 Excluir</button></div>
+      <div class="row-actions"><button class="btn-cancel" type="button" data-action="print-registro">🖨️ Imprimir</button><button class="btn-cancel" type="button" data-action="cancel-edit">↩ Sair</button><button class="btn-edit" type="button" data-action="toggle-edit">✎ Editar</button><button class="btn-del" type="button" data-action="delete">🗑 Excluir</button></div>
     `;
   }
 
@@ -867,7 +988,7 @@
         ${vistoRowHtml(r, "vistoDiretoriaCorrecao", "nomeDiretoriaCorrecao", "dataDiretoriaCorrecao", "Visto da diretoria na correção", "vdc")}
       </div>
 
-      <div class="row-actions"><button class="btn-cancel" type="button" data-action="cancel-edit">↩ Sair</button><button class="btn-edit" type="button" data-action="toggle-edit">✎ Editar</button><button class="btn-del" type="button" data-action="delete">🗑 Excluir</button></div>
+      <div class="row-actions"><button class="btn-cancel" type="button" data-action="print-registro">🖨️ Imprimir</button><button class="btn-cancel" type="button" data-action="cancel-edit">↩ Sair</button><button class="btn-edit" type="button" data-action="toggle-edit">✎ Editar</button><button class="btn-del" type="button" data-action="delete">🗑 Excluir</button></div>
     `;
   }
 
@@ -1027,6 +1148,11 @@
         }
         rebuildBody(r);
       });
+    }
+
+    const printBtn = body.querySelector('[data-action="print-registro"]');
+    if(printBtn){
+      printBtn.addEventListener("click", ()=> printRegistro(r) );
     }
 
     const cancelBtn = body.querySelector('[data-action="cancel-edit"]');
