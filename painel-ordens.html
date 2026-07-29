@@ -737,7 +737,13 @@ async function upsertClienteFromOrder(data){
     nome: data.cliente || '',
     telefone: data.telefone || '',
     email: data.email || '',
+    cep: data.cep || '',
     endereco: data.endereco || '',
+    numero: data.numero || '',
+    complemento: data.complemento || '',
+    bairro: data.bairro || '',
+    cidade: data.cidade || '',
+    estado: data.estado || '',
     dataNascimento: data.dataNascimento || '',
     cpf: data.cpf || ''
   };
@@ -750,12 +756,113 @@ async function upsertClienteFromOrder(data){
       nome: patch.nome || existing.nome,
       telefone: patch.telefone || existing.telefone,
       email: patch.email || existing.email,
+      cep: patch.cep || existing.cep,
       endereco: patch.endereco || existing.endereco,
+      numero: patch.numero || existing.numero,
+      complemento: patch.complemento || existing.complemento,
+      bairro: patch.bairro || existing.bairro,
+      cidade: patch.cidade || existing.cidade,
+      estado: patch.estado || existing.estado,
       dataNascimento: patch.dataNascimento || existing.dataNascimento,
       cpf: patch.cpf || existing.cpf
     };
   }
   await saveClientes();
+}
+
+/** Monta o endereço completo (rua, número, complemento, bairro, cidade/UF) a partir dos campos separados. */
+function enderecoCompleto(c){
+  if(!c) return '';
+  const linha1 = [c.endereco, c.numero].filter(Boolean).join(', ') + (c.complemento ? ` - ${c.complemento}` : '');
+  const linha2 = [c.bairro, [c.cidade, c.estado].filter(Boolean).join('/')].filter(Boolean).join(' - ');
+  return [linha1.trim(), linha2].filter(Boolean).join(' — ');
+}
+
+/**
+ * Monta o HTML dos campos de cliente (CPF primeiro, endereço em partes), reutilizado
+ * na Nova Ordem, na Edição de Ordem e no cadastro de Cliente. `c` pode ter `cliente` ou `nome`.
+ */
+function clienteFieldsHtml(prefix, c){
+  c = c || {};
+  const nome = c.cliente !== undefined ? c.cliente : (c.nome || '');
+  return `
+    <div class="grid-2">
+      <div class="field"><label>CPF</label><input id="${prefix}_cpf" placeholder="000.000.000-00" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field"><label>Nome do cliente</label><input id="${prefix}_cliente" placeholder="Nome completo" value="${escapeHtml(nome)}"></div>
+      <div class="field"><label>Telefone</label><input id="${prefix}_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>E-mail do cliente</label><input type="email" id="${prefix}_email" placeholder="cliente@email.com" value="${escapeHtml(c.email||'')}"></div>
+      <div class="field"><label>Data de nascimento</label><input type="date" id="${prefix}_nascimento" value="${c.dataNascimento||''}"></div>
+      <div class="field"><label>CEP</label><input id="${prefix}_cep" placeholder="00000-000" value="${escapeHtml(c.cep||'')}"></div>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div class="field"><label>Endereço</label><input id="${prefix}_endereco" placeholder="Rua / Avenida" value="${escapeHtml(c.endereco||'')}"></div>
+      <div class="field"><label>Número</label><input id="${prefix}_numero" placeholder="Nº" value="${escapeHtml(c.numero||'')}"></div>
+      <div class="field"><label>Complemento</label><input id="${prefix}_complemento" placeholder="Apto, bloco…" value="${escapeHtml(c.complemento||'')}"></div>
+      <div class="field"><label>Bairro</label><input id="${prefix}_bairro" placeholder="Bairro" value="${escapeHtml(c.bairro||'')}"></div>
+      <div class="field"><label>Cidade</label><input id="${prefix}_cidade" placeholder="Cidade" value="${escapeHtml(c.cidade||'')}"></div>
+      <div class="field"><label>Estado</label><input id="${prefix}_estado" placeholder="UF" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
+    </div>
+  `;
+}
+
+/** Busca endereço pelo CEP usando o ViaCEP (gratuito, sem chave). Retorna null se não achar. */
+async function buscarEnderecoPorCep(cep){
+  const cepDigits = onlyDigits(cep);
+  if(cepDigits.length !== 8) return null;
+  try{
+    const res = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+    const data = await res.json();
+    if(data.erro) return null;
+    return { endereco: data.logradouro || '', bairro: data.bairro || '', cidade: data.localidade || '', estado: data.uf || '' };
+  }catch(e){ return null; }
+}
+
+/**
+ * Liga os campos de cliente de um formulário: busca automática de endereço pelo CEP,
+ * e (opcionalmente) busca automática dos dados do cliente pelo CPF já cadastrado.
+ */
+function wireClienteFields(prefix, opts){
+  opts = opts || {};
+  const cepInp = document.getElementById(prefix+'_cep');
+  if(cepInp){
+    cepInp.addEventListener('blur', async ()=>{
+      const cepDigits = onlyDigits(cepInp.value);
+      if(cepDigits.length !== 8) return;
+      const endereco = await buscarEnderecoPorCep(cepDigits);
+      if(!endereco){ showToast('CEP não encontrado.'); return; }
+      const enderecoInp = document.getElementById(prefix+'_endereco');
+      const bairroInp = document.getElementById(prefix+'_bairro');
+      const cidadeInp = document.getElementById(prefix+'_cidade');
+      const estadoInp = document.getElementById(prefix+'_estado');
+      if(enderecoInp) enderecoInp.value = endereco.endereco;
+      if(bairroInp) bairroInp.value = endereco.bairro;
+      if(cidadeInp) cidadeInp.value = endereco.cidade;
+      if(estadoInp) estadoInp.value = endereco.estado;
+      showToast('Endereço preenchido — falta só número e complemento.');
+    });
+  }
+  if(opts.buscarClientePorCpf){
+    const cpfInp = document.getElementById(prefix+'_cpf');
+    if(cpfInp){
+      cpfInp.addEventListener('blur', ()=>{
+        const cpfDigits = onlyDigitsCpf(cpfInp.value);
+        if(cpfDigits.length !== 11) return;
+        const found = clientes.find(c=> onlyDigitsCpf(c.cpf) === cpfDigits);
+        if(!found) return;
+        const map = {
+          cliente: found.nome, telefone: found.telefone, email: found.email,
+          nascimento: found.dataNascimento, cep: found.cep, endereco: found.endereco,
+          numero: found.numero, complemento: found.complemento, bairro: found.bairro,
+          cidade: found.cidade, estado: found.estado
+        };
+        Object.keys(map).forEach(campo=>{
+          const el = document.getElementById(prefix+'_'+campo);
+          if(el && !el.value && map[campo]) el.value = map[campo];
+        });
+        showToast('Cliente já cadastrado — dados preenchidos automaticamente.');
+      });
+    }
+  }
 }
 
 
@@ -769,7 +876,8 @@ function buildMessage(order){
   else tpl = config.mensagemPadrao || DEFAULT_TEMPLATE;
   const notaLinha = order.numeroNota ? `Número da nota: ${order.numeroNota}\n` : '';
   const linkAcompanhamento = `${window.location.origin}/acompanhar.html?id=${order.id}`;
-  return tpl
+  const jaTinhaMarcador = tpl.includes('{linkAcompanhamento}');
+  let msg = tpl
     .replaceAll('{status}', statusLabel(order.status))
     .replaceAll('{cliente}', order.cliente || '')
     .replaceAll('{via}', order.via || '')
@@ -781,6 +889,11 @@ function buildMessage(order){
     .replaceAll('{nota}', order.numeroNota || '')
     .replaceAll('{notaLinha}', notaLinha)
     .replaceAll('{linkAcompanhamento}', linkAcompanhamento);
+  // Se a mensagem foi personalizada antes desse recurso existir (sem o marcador), acrescenta o link no final mesmo assim.
+  if(!jaTinhaMarcador){
+    msg += `\n\nAcompanhe o status da sua ordem a qualquer momento:\n${linkAcompanhamento}`;
+  }
+  return msg;
 }
 /**
  * Abre uma janela com um documento formatado da ordem de serviço, pronto para impressão
@@ -824,7 +937,7 @@ function printOrder(order){
     <tr><td class="label">Telefone</td><td>${escapeHtml(order.telefone||'—')}</td></tr>
     ${order.email ? `<tr><td class="label">E-mail</td><td>${escapeHtml(order.email)}</td></tr>` : ''}
     ${order.cpf ? `<tr><td class="label">CPF</td><td>${escapeHtml(order.cpf)}</td></tr>` : ''}
-    ${order.endereco ? `<tr><td class="label">Endereço</td><td>${escapeHtml(order.endereco)}</td></tr>` : ''}
+    ${enderecoCompleto(order) ? `<tr><td class="label">Endereço</td><td>${escapeHtml(enderecoCompleto(order))}</td></tr>` : ''}
   </table>
 
   <div class="section-title">Serviço</div>
@@ -947,7 +1060,11 @@ function openEmailComposeModal(to, subject, body, semEmailAviso){
 function buildAniversarioMessage(nomeCliente){
   return (config.mensagemAniversario || DEFAULT_TEMPLATE_ANIVERSARIO).replaceAll('{cliente}', nomeCliente || '');
 }
-function sendWhatsAppCliente(cliente){
+async function marcarAniversarioEnviado(cliente){
+  cliente.ultimoAniversarioEnviado = new Date().getFullYear();
+  await saveClientes();
+}
+async function sendWhatsAppCliente(cliente){
   if(!cliente) return;
   if(!cliente.telefone){ showToast('Este cliente não tem telefone cadastrado.'); return; }
   const msg = encodeURIComponent(buildAniversarioMessage(cliente.nome));
@@ -955,6 +1072,7 @@ function sendWhatsAppCliente(cliente){
   const a = document.createElement('a');
   a.href = url; a.target = '_blank'; a.rel = 'noopener';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  await marcarAniversarioEnviado(cliente);
 }
 async function sendEmailCliente(cliente){
   if(!cliente) return;
@@ -968,6 +1086,7 @@ async function sendEmailCliente(cliente){
   try{
     await sendEmailViaGmail(cliente.email, subject, body);
     showToast('E-mail enviado para ' + cliente.email + '.');
+    await marcarAniversarioEnviado(cliente);
   }catch(e){
     console.error('Falha ao enviar e-mail automaticamente:', e);
     openEmailComposeModal(cliente.email, subject, body, 'Não foi possível enviar automaticamente agora. Copie a mensagem abaixo para enviar manualmente.');
@@ -1615,14 +1734,7 @@ function renderNovaOrdem(main){
     </div>
     <div class="ticket">
       <div class="section-label">Cliente</div>
-      <div class="grid-2">
-        <div class="field"><label>Nome do cliente</label><input id="f_cliente" placeholder="Nome completo"></div>
-        <div class="field"><label>Telefone</label><input id="f_telefone" placeholder="(00) 00000-0000"></div>
-        <div class="field"><label>E-mail do cliente</label><input type="email" id="f_email" placeholder="cliente@email.com"></div>
-        <div class="field"><label>CPF</label><input id="f_cpf" placeholder="000.000.000-00"></div>
-        <div class="field"><label>Data de nascimento</label><input type="date" id="f_nascimento"></div>
-        <div class="field"><label>Endereço</label><input id="f_endereco" placeholder="Rua, número, bairro"></div>
-      </div>
+      ${clienteFieldsHtml('f', {})}
       <div class="divider-nova"></div>
       <div class="section-label">Ordem</div>
       <div class="grid-2">
@@ -1664,6 +1776,7 @@ function renderNovaOrdem(main){
 
   const tempPagHolder = { valorTotal: null, pagamentos: [] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
+  wireClienteFields('f', { buscarClientePorCpf: true });
 
   const servicoSel = document.getElementById('f_servico');
   const dataInp = document.getElementById('f_data');
@@ -1713,7 +1826,13 @@ function renderNovaOrdem(main){
       email: document.getElementById('f_email').value.trim(),
       cpf: document.getElementById('f_cpf').value.trim(),
       dataNascimento: document.getElementById('f_nascimento').value,
+      cep: document.getElementById('f_cep').value.trim(),
       endereco: document.getElementById('f_endereco').value.trim(),
+      numero: document.getElementById('f_numero').value.trim(),
+      complemento: document.getElementById('f_complemento').value.trim(),
+      bairro: document.getElementById('f_bairro').value.trim(),
+      cidade: document.getElementById('f_cidade').value.trim(),
+      estado: document.getElementById('f_estado').value.trim(),
     };
   }
 
@@ -1754,7 +1873,7 @@ function renderNovaOrdem(main){
 
   document.getElementById('btnSalvarOrdem').addEventListener('click', async ()=>{
     const cli = collectClienteFields();
-    const { cliente, telefone, email, cpf, dataNascimento, endereco } = cli;
+    const { cliente, telefone } = cli;
     const via = viaInp.value.trim();
     const numeroNota = document.getElementById('f_nota').value.trim();
     const vendedora = document.getElementById('f_vendedora').value.trim();
@@ -1794,7 +1913,8 @@ function renderNovaOrdem(main){
     const st = config.serviceTypes.find(s=>s.id===sid);
     const novaOrdem = {
       id: uid('ord'),
-      cliente, telefone, email, cpf, dataNascimento, endereco, via, numeroNota, vendedora, loja,
+      ...cli,
+      via, numeroNota, vendedora, loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
       data: dt,
@@ -1852,16 +1972,7 @@ function openEditModalCompleto(order){
   openModal(`
     <h3>Editar ordem de serviço</h3>
     <p>Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.</p>
-    <div class="field"><label>Nome do cliente</label><input id="e_cliente" value="${escapeHtml(order.cliente)}"></div>
-    <div class="grid-2">
-      <div class="field"><label>Telefone</label><input id="e_telefone" value="${escapeHtml(order.telefone)}"></div>
-      <div class="field"><label>E-mail</label><input type="email" id="e_email" value="${escapeHtml(order.email||'')}"></div>
-    </div>
-    <div class="grid-2">
-      <div class="field"><label>CPF</label><input id="e_cpf" value="${escapeHtml(order.cpf||'')}" placeholder="000.000.000-00"></div>
-      <div class="field"><label>Data de nascimento</label><input type="date" id="e_nascimento" value="${order.dataNascimento||''}"></div>
-    </div>
-    <div class="field"><label>Endereço</label><input id="e_endereco" value="${escapeHtml(order.endereco||'')}" placeholder="Rua, número, bairro"></div>
+    ${clienteFieldsHtml('e', order)}
     <div class="grid-2">
       <div class="field"><label>Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
       <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="e_nota" value="${escapeHtml(order.numeroNota||'')}" placeholder="Ex: 12345"></div>
@@ -1904,6 +2015,7 @@ function openEditModalCompleto(order){
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, false);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
+  wireClienteFields('e', { buscarClientePorCpf: true });
   document.getElementById('printBtnCompleto').addEventListener('click', ()=> printOrder(order) );
 
   const servicoSel = document.getElementById('e_servico');
@@ -1957,7 +2069,13 @@ function openEditModalCompleto(order){
     const email = document.getElementById('e_email').value.trim();
     const cpf = document.getElementById('e_cpf').value.trim();
     const dataNascimento = document.getElementById('e_nascimento').value;
+    const cep = document.getElementById('e_cep').value.trim();
     const endereco = document.getElementById('e_endereco').value.trim();
+    const numero = document.getElementById('e_numero').value.trim();
+    const complemento = document.getElementById('e_complemento').value.trim();
+    const bairro = document.getElementById('e_bairro').value.trim();
+    const cidade = document.getElementById('e_cidade').value.trim();
+    const estado = document.getElementById('e_estado').value.trim();
     const via = document.getElementById('e_via').value.trim();
     const numeroNota = document.getElementById('e_nota').value.trim();
     const vendedora = document.getElementById('e_vendedora').value.trim();
@@ -2016,12 +2134,13 @@ function openEditModalCompleto(order){
 
     const st = config.serviceTypes.find(s=>s.id===sid);
     Object.assign(order, {
-      cliente, telefone, email, cpf, dataNascimento, endereco, via, numeroNota, vendedora, loja, status,
+      cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
+      via, numeroNota, vendedora, loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
       encaixe, autorizadoPor, recebidoPor, recebidoEm
     });
     await saveOrders();
-    await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, endereco });
+    await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado });
     closeModal();
     showToast('Ordem atualizada.');
     renderView();
@@ -2398,23 +2517,32 @@ function renderClientes(main){
       <div class="card" style="border-color:var(--encaixe); background:var(--encaixe-soft); margin-bottom:16px;">
         <div class="section-label" style="color:var(--encaixe); margin-bottom:10px;">🎂 Aniversariantes de hoje (${aniversariantes.length})</div>
         <div style="display:flex; flex-direction:column; gap:8px;">
-          ${aniversariantes.map(c=>`
+          ${aniversariantes.map(c=>{
+            const jaEnviado = c.ultimoAniversarioEnviado === hoje.getFullYear();
+            return `
             <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:9px 12px; flex-wrap:wrap;">
               <div style="font-size:13px;"><b>${escapeHtml(c.nome)}</b><span class="muted"> · ${escapeHtml(c.telefone||'sem telefone')}</span></div>
-              <div style="display:flex; gap:6px;">
+              <div style="display:flex; gap:6px; align-items:center;">
+                ${jaEnviado ? `<span class="badge" style="background:var(--ok-soft); color:var(--ok);">✓ Enviado</span>` : ''}
                 <button class="icon-btn" data-aniverswa="${c.id}" title="Enviar WhatsApp">💬</button>
                 <button class="icon-btn" data-aniversmail="${c.id}" title="Enviar e-mail">✉️</button>
               </div>
             </div>
-          `).join('')}
+          `;}).join('')}
         </div>
       </div>
     `;
     card.querySelectorAll('[data-aniverswa]').forEach(b=>{
-      b.addEventListener('click', ()=> sendWhatsAppCliente(clientes.find(x=>x.id===b.dataset.aniverswa)) );
+      b.addEventListener('click', async ()=>{
+        await sendWhatsAppCliente(clientes.find(x=>x.id===b.dataset.aniverswa));
+        renderAniversarioCard();
+      });
     });
     card.querySelectorAll('[data-aniversmail]').forEach(b=>{
-      b.addEventListener('click', ()=> sendEmailCliente(clientes.find(x=>x.id===b.dataset.aniversmail)) );
+      b.addEventListener('click', async ()=>{
+        await sendEmailCliente(clientes.find(x=>x.id===b.dataset.aniversmail));
+        renderAniversarioCard();
+      });
     });
   }
   renderAniversarioCard();
@@ -2446,7 +2574,7 @@ function renderClientes(main){
         <tbody>
           ${list.map(c=>`
             <tr>
-              <td><b>${escapeHtml(c.nome)}</b>${c.endereco?`<div class="muted" style="margin-top:2px;">${escapeHtml(c.endereco)}</div>`:''}</td>
+              <td><b>${escapeHtml(c.nome)}</b>${enderecoCompleto(c)?`<div class="muted" style="margin-top:2px;">${escapeHtml(enderecoCompleto(c))}</div>`:''}</td>
               <td>${escapeHtml(c.telefone||'—')}</td>
               <td>${escapeHtml(c.email||'—')}</td>
               <td>${escapeHtml(c.cpf||'—')}</td>
@@ -2493,27 +2621,19 @@ function renderClientes(main){
 
   function openClienteModal(cliente){
     const editing = !!cliente;
-    const c = cliente || { nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', endereco:'' };
+    const c = cliente || { nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' };
     openModal(`
       <h3>${editing?'Editar cliente':'Novo cliente'}</h3>
-      <div class="field"><label>Nome</label><input id="cli_nome" value="${escapeHtml(c.nome)}"></div>
-      <div class="grid-2">
-        <div class="field"><label>Telefone</label><input id="cli_telefone" value="${escapeHtml(c.telefone)}"></div>
-        <div class="field"><label>E-mail</label><input type="email" id="cli_email" value="${escapeHtml(c.email)}"></div>
-      </div>
-      <div class="grid-2">
-        <div class="field"><label>CPF</label><input id="cli_cpf" value="${escapeHtml(c.cpf)}"></div>
-        <div class="field"><label>Data de nascimento</label><input type="date" id="cli_nascimento" value="${c.dataNascimento||''}"></div>
-      </div>
-      <div class="field"><label>Endereço</label><input id="cli_endereco" value="${escapeHtml(c.endereco)}"></div>
+      ${clienteFieldsHtml('cli', c)}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cliCancel">Cancelar</button>
         <button class="btn btn-accent" id="cliSave">Salvar</button>
       </div>
     `);
+    wireClienteFields('cli', {});
     document.getElementById('cliCancel').addEventListener('click', closeModal);
     document.getElementById('cliSave').addEventListener('click', async ()=>{
-      const nome = document.getElementById('cli_nome').value.trim();
+      const nome = document.getElementById('cli_cliente').value.trim();
       if(!nome){ showToast('Informe o nome do cliente.'); return; }
       const patch = {
         nome,
@@ -2521,7 +2641,13 @@ function renderClientes(main){
         email: document.getElementById('cli_email').value.trim(),
         cpf: document.getElementById('cli_cpf').value.trim(),
         dataNascimento: document.getElementById('cli_nascimento').value,
+        cep: document.getElementById('cli_cep').value.trim(),
         endereco: document.getElementById('cli_endereco').value.trim(),
+        numero: document.getElementById('cli_numero').value.trim(),
+        complemento: document.getElementById('cli_complemento').value.trim(),
+        bairro: document.getElementById('cli_bairro').value.trim(),
+        cidade: document.getElementById('cli_cidade').value.trim(),
+        estado: document.getElementById('cli_estado').value.trim(),
       };
       if(editing){
         Object.assign(cliente, patch);
