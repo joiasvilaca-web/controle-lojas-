@@ -520,12 +520,11 @@ let currentTab = 'nova';
 let agendaYear, agendaMonth;
 
 const STATUS = { AGUARDANDO:'aguardando', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
-const LOJAS = ['Vilaça Marechal Center', 'Vilaça João Beraldo', 'Vilaça Jardim Norte'];
-const LOJA_ABREV = {
-  'Vilaça Marechal Center': 'MC',
-  'Vilaça João Beraldo': 'JB',
-  'Vilaça Jardim Norte': 'JN'
-};
+function lojaNomes(){ return (config.lojas||[]).map(l=>l.nome); }
+function lojaAbreviacao(nome){
+  const l = (config.lojas||[]).find(x=>x.nome===nome);
+  return l ? l.abreviacao : (nome||'').slice(0,2).toUpperCase();
+}
 const COLOR_PALETTE = ['#C97A2B','#3D7DD8','#2E7D53','#B23A3A','#6E45A8','#1B8F9E','#C23B77','#7A8C1F'];
 
 const DEFAULT_TEMPLATE_ANIVERSARIO =
@@ -668,6 +667,11 @@ async function uploadFotoParaDrive(dataUrl, filename){
 }
 
 async function loadAll(){
+  const lojasPadrao = [
+    { id: uid('loja'), nome: 'Vilaça Marechal Center', abreviacao: 'MC', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
+    { id: uid('loja'), nome: 'Vilaça João Beraldo', abreviacao: 'JB', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
+    { id: uid('loja'), nome: 'Vilaça Jardim Norte', abreviacao: 'JN', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
+  ];
   config = await storageGet('config', true);
   if(!config){
     config = {
@@ -689,7 +693,8 @@ async function loadAll(){
         { id: uid('pt'), nome: 'PIX' }
       ],
       viaSequences: {},
-      funcionarios: []
+      funcionarios: [],
+      lojas: lojasPadrao
     };
     await storageSet('config', config, true);
   }
@@ -705,6 +710,7 @@ async function loadAll(){
   ];
   if(!config.viaSequences) config.viaSequences = {};
   if(!config.funcionarios) config.funcionarios = [];
+  if(!config.lojas || config.lojas.length===0) config.lojas = lojasPadrao;
   orders = await storageGet('orders', true) || [];
   codes = await storageGet('codes', true) || [];
   clientes = await storageGet('clientes', true) || [];
@@ -773,6 +779,77 @@ async function upsertClienteFromOrder(data){
 }
 
 /** Monta o endereço completo (rua, número, complemento, bairro, cidade/UF) a partir dos campos separados. */
+/** Monta o HTML dos campos completos de cadastro de uma loja/empresa. */
+function lojaFieldsHtml(prefix, l){
+  l = l || {};
+  return `
+    <div class="grid-2">
+      <div class="field"><label>Nome da loja/empresa</label><input id="${prefix}_nome" placeholder="Ex: Vilaça Centro" value="${escapeHtml(l.nome||'')}"></div>
+      <div class="field"><label>Abreviação (2 letras)</label><input id="${prefix}_abreviacao" placeholder="Ex: VC" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((l.abreviacao||'').toUpperCase())}"></div>
+      <div class="field"><label>CNPJ</label><input id="${prefix}_cnpj" placeholder="00.000.000/0000-00" value="${escapeHtml(l.cnpj||'')}"></div>
+      <div class="field"><label>Inscrição Estadual</label><input id="${prefix}_inscricaoEstadual" placeholder="IE" value="${escapeHtml(l.inscricaoEstadual||'')}"></div>
+      <div class="field"><label>Telefone</label><input id="${prefix}_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(l.telefone||'')}"></div>
+      <div class="field"><label>E-mail</label><input type="email" id="${prefix}_email" placeholder="loja@email.com" value="${escapeHtml(l.email||'')}"></div>
+      <div class="field"><label>CEP</label><input id="${prefix}_cep" placeholder="00000-000" value="${escapeHtml(l.cep||'')}"></div>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div class="field"><label>Endereço</label><input id="${prefix}_endereco" placeholder="Rua / Avenida" value="${escapeHtml(l.endereco||'')}"></div>
+      <div class="field"><label>Número</label><input id="${prefix}_numero" placeholder="Nº" value="${escapeHtml(l.numero||'')}"></div>
+      <div class="field"><label>Complemento</label><input id="${prefix}_complemento" placeholder="Sala, loja…" value="${escapeHtml(l.complemento||'')}"></div>
+      <div class="field"><label>Bairro</label><input id="${prefix}_bairro" placeholder="Bairro" value="${escapeHtml(l.bairro||'')}"></div>
+      <div class="field"><label>Cidade</label><input id="${prefix}_cidade" placeholder="Cidade" value="${escapeHtml(l.cidade||'')}"></div>
+      <div class="field"><label>Estado</label><input id="${prefix}_estado" placeholder="UF" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((l.estado||'').toUpperCase())}"></div>
+    </div>
+  `;
+}
+
+/** Abre o modal de cadastro/edição de uma loja. Passe `null` para cadastrar uma nova. */
+function openLojaModal(loja){
+  const editing = !!loja;
+  openModal(`
+    <h3>${editing?'Editar loja':'Nova loja'}</h3>
+    ${lojaFieldsHtml('loja', loja || {})}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="lojaCancel">Cancelar</button>
+      <button class="btn btn-accent" id="lojaSave">Salvar</button>
+    </div>
+  `);
+  wireClienteFields('loja', {});
+  document.getElementById('lojaCancel').addEventListener('click', closeModal);
+  document.getElementById('lojaSave').addEventListener('click', async ()=>{
+    const nome = document.getElementById('loja_nome').value.trim();
+    const abreviacao = document.getElementById('loja_abreviacao').value.trim().toUpperCase();
+    if(!nome){ showToast('Informe o nome da loja.'); return; }
+    if(abreviacao.length !== 2){ showToast('A abreviação precisa ter exatamente 2 letras.'); return; }
+    const duplicada = (config.lojas||[]).some(x => x.abreviacao === abreviacao && (!editing || x.id !== loja.id));
+    if(duplicada){ showToast('Já existe outra loja com essa abreviação.'); return; }
+    const patch = {
+      nome, abreviacao,
+      cnpj: document.getElementById('loja_cnpj').value.trim(),
+      inscricaoEstadual: document.getElementById('loja_inscricaoEstadual').value.trim(),
+      telefone: document.getElementById('loja_telefone').value.trim(),
+      email: document.getElementById('loja_email').value.trim(),
+      cep: document.getElementById('loja_cep').value.trim(),
+      endereco: document.getElementById('loja_endereco').value.trim(),
+      numero: document.getElementById('loja_numero').value.trim(),
+      complemento: document.getElementById('loja_complemento').value.trim(),
+      bairro: document.getElementById('loja_bairro').value.trim(),
+      cidade: document.getElementById('loja_cidade').value.trim(),
+      estado: document.getElementById('loja_estado').value.trim(),
+    };
+    if(!config.lojas) config.lojas = [];
+    if(editing){
+      Object.assign(loja, patch);
+    }else{
+      config.lojas.push({ id: uid('loja'), ...patch });
+    }
+    await saveConfig();
+    closeModal();
+    renderView();
+    showToast(editing ? 'Loja atualizada.' : 'Loja cadastrada.');
+  });
+}
+
 function enderecoCompleto(c){
   if(!c) return '';
   const linha1 = [c.endereco, c.numero].filter(Boolean).join(', ') + (c.complemento ? ` - ${c.complemento}` : '');
@@ -1697,7 +1774,7 @@ function checkSlot(serviceTypeId, dateStr, excludeOrderId){
 }
 
 function lojaOptionsHtml(selected){
-  return LOJAS.map(l=>`<option value="${l}" ${selected===l?'selected':''}>${l}</option>`).join('');
+  return lojaNomes().map(l=>`<option value="${l}" ${selected===l?'selected':''}>${l}</option>`).join('');
 }
 function servicoOptionsHtml(selected){
   return config.serviceTypes.map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
@@ -1806,7 +1883,7 @@ function renderNovaOrdem(main){
   lojaSel.addEventListener('change', async ()=>{
     const loja = lojaSel.value;
     if(!loja){ return; }
-    const abrev = LOJA_ABREV[loja] || loja.slice(0,2).toUpperCase();
+    const abrev = lojaAbreviacao(loja);
     const atual = config.viaSequences[loja] || 0;
     const proximo = atual + 1;
     config.viaSequences[loja] = proximo;
@@ -2778,6 +2855,15 @@ function renderConfig(main){
     </div>
 
     <div class="card">
+      <div class="section-label">Lojas</div>
+      <p class="muted" style="margin:-4px 0 14px;">Cadastro completo de cada loja/empresa. A abreviação (2 letras) é usada para gerar o número da via automaticamente.</p>
+      <div id="lojaRows"></div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-accent btn-sm" id="btnNovaLoja">+ Nova loja</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-label">Funcionários</div>
       <p class="muted" style="margin:-4px 0 14px;">Cadastre por área — vendedoras aparecem nos campos de venda, ourives aparecem nos campos da oficina. Isso permite selecionar em vez de digitar o nome toda vez.</p>
       <div id="funcionarioRows"></div>
@@ -2903,6 +2989,35 @@ function renderConfig(main){
     showToast('Parâmetros de serviço salvos.');
     renderServiceRows();
   });
+
+  function renderLojaRows(){
+    const wrap = document.getElementById('lojaRows');
+    if(!config.lojas) config.lojas = [];
+    if(config.lojas.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma loja cadastrada.</div>`; return; }
+    wrap.innerHTML = config.lojas.map((l,i)=>`
+      <div class="code-list-item">
+        <div><span class="code-chip" style="font-size:11.5px; padding:4px 10px;">${escapeHtml(l.abreviacao)}</span> <b style="margin-left:8px;">${escapeHtml(l.nome)}</b>${l.cnpj?`<div class="muted" style="margin-top:2px;">${escapeHtml(l.cnpj)}</div>`:''}</div>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-editloja="${i}" title="Editar">✎</button>
+          <button class="icon-btn" data-delloja="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-editloja]').forEach(b=>{
+      b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.editloja)]) );
+    });
+    wrap.querySelectorAll('[data-delloja]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        if(config.lojas.length<=1){ showToast('É necessário manter ao menos uma loja cadastrada.'); return; }
+        config.lojas.splice(Number(b.dataset.delloja),1);
+        await saveConfig();
+        renderLojaRows();
+        showToast('Loja removida.');
+      });
+    });
+  }
+  renderLojaRows();
+  document.getElementById('btnNovaLoja').addEventListener('click', ()=> openLojaModal(null) );
 
   function renderFuncionarioRows(){
     const wrap = document.getElementById('funcionarioRows');
