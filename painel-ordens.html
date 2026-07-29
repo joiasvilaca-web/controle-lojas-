@@ -867,10 +867,34 @@ function sendWhatsApp(order){
  * <a href="mailto:..."> click (more reliable than window.open), but also lets the person
  * copy the ready-made message so it works even when no mail client is configured.
  */
-function sendEmail(order){
+/**
+ * Envia um e-mail de verdade, pela conta vilacajoias3@gmail.com, via Edge Function do Supabase
+ * (usa a API do Gmail nos bastidores). Lança erro se falhar — o chamador deve tratar com fallback.
+ */
+async function sendEmailViaGmail(to, subject, body){
+  const { data, error } = await supabaseClient.functions.invoke('send-email-gmail', {
+    body: { to, subject, body }
+  });
+  if(error) throw error;
+  if(!data || !data.success) throw new Error((data && data.error) || 'Falha ao enviar e-mail');
+  return data;
+}
+
+async function sendEmail(order){
   const subject = `Ordem de serviço - ${order.cliente}`;
   const body = buildMessage(order);
-  openEmailComposeModal(order.email || '', subject, body, 'Este cliente não tem e-mail cadastrado. Edite a ordem para adicionar um, ou copie a mensagem abaixo para enviar manualmente.');
+  if(!order.email){
+    showToast('Este cliente não tem e-mail cadastrado.');
+    return;
+  }
+  showToast('Enviando e-mail...');
+  try{
+    await sendEmailViaGmail(order.email, subject, body);
+    showToast('E-mail enviado para ' + order.email + '.');
+  }catch(e){
+    console.error('Falha ao enviar e-mail automaticamente:', e);
+    openEmailComposeModal(order.email, subject, body, 'Não foi possível enviar automaticamente agora. Copie a mensagem abaixo para enviar manualmente.');
+  }
 }
 
 function openEmailComposeModal(to, subject, body, semEmailAviso){
@@ -924,11 +948,22 @@ function sendWhatsAppCliente(cliente){
   a.href = url; a.target = '_blank'; a.rel = 'noopener';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
-function sendEmailCliente(cliente){
+async function sendEmailCliente(cliente){
   if(!cliente) return;
   const subject = `Feliz Aniversário, ${cliente.nome}!`;
   const body = buildAniversarioMessage(cliente.nome);
-  openEmailComposeModal(cliente.email || '', subject, body, 'Este cliente não tem e-mail cadastrado. Edite o cadastro para adicionar um, ou copie a mensagem abaixo para enviar manualmente.');
+  if(!cliente.email){
+    showToast('Este cliente não tem e-mail cadastrado.');
+    return;
+  }
+  showToast('Enviando e-mail...');
+  try{
+    await sendEmailViaGmail(cliente.email, subject, body);
+    showToast('E-mail enviado para ' + cliente.email + '.');
+  }catch(e){
+    console.error('Falha ao enviar e-mail automaticamente:', e);
+    openEmailComposeModal(cliente.email, subject, body, 'Não foi possível enviar automaticamente agora. Copie a mensagem abaixo para enviar manualmente.');
+  }
 }
 
 /* ============================================================
