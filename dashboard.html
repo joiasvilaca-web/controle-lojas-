@@ -122,10 +122,14 @@
   let transfConfig = null;
   let transferencias = [];
   let reposicoes = [];
+  let vendas = [];
 
   function escapeHtml(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   function fmtDate(s){ if(!s) return "—"; const p=s.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
   function fmtMoeda(v){ return "R$ " + (Number(v)||0).toFixed(2).replace(".", ","); }
+  function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
+  function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
+  function semPagamentoLancado(o){ return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
 
   /* ================= LOGIN ================= */
   document.getElementById("btnLogin").addEventListener("click", doLogin);
@@ -175,6 +179,10 @@
         const { data: rData } = await supabaseClient.from("reposicao_controle").select("id,payload").order("created_at",{ascending:true});
         reposicoes = (rData||[]).map(r=>r.payload);
       }catch(e){ reposicoes = []; }
+      try{
+        const { data: vData } = await supabaseClient.from("vendas_pdv").select("id,payload").order("created_at",{ascending:true});
+        vendas = (vData||[]).map(r=>r.payload);
+      }catch(e){ vendas = []; }
     }
   }
 
@@ -263,6 +271,45 @@
   /* ================= RENDER ================= */
   let filtrosOrdens = { loja:"", status:"", servico:"", dataIni:"", dataFim:"", busca:"" };
   let filtrosTransf = { loja:"", tipo:"", status:"", dataIni:"", dataFim:"" };
+  let filtrosVendas = { loja:"", dataIni:"", dataFim:"", busca:"", semPagamento:false };
+  let filtrosPagamentos = { modulo:"", loja:"", dataIni:"", dataFim:"", semPagamento:false };
+
+  function filtrarVendas(){
+    return vendas.filter(v=>{
+      if(filtrosVendas.loja && v.loja!==filtrosVendas.loja) return false;
+      if(filtrosVendas.dataIni && v.data < filtrosVendas.dataIni) return false;
+      if(filtrosVendas.dataFim && v.data > filtrosVendas.dataFim) return false;
+      if(filtrosVendas.busca){
+        const q = filtrosVendas.busca.toLowerCase();
+        if(!(v.cliente||"").toLowerCase().includes(q) && !(v.vendedora||"").toLowerCase().includes(q)) return false;
+      }
+      if(filtrosVendas.semPagamento && !semPagamentoLancado(v)) return false;
+      return true;
+    });
+  }
+
+  /** Lista combinada de O.S. + Vendas com um formato comum, usada na seção de Pagamentos. */
+  function itensPagamentoCombinados(){
+    const dasOrdens = ordensVisiveis().map(o=>({
+      modulo:"O.S.", loja:o.loja, data:o.data, cliente:o.cliente,
+      valorTotal:o.valorTotal, pagamentos:o.pagamentos, momentoPagamento:o.momentoPagamento
+    }));
+    const dasVendas = vendas.map(v=>({
+      modulo:"Vendas", loja:v.loja, data:v.data, cliente:v.cliente||v.vendedora,
+      valorTotal:v.valorTotal, pagamentos:v.pagamentos, momentoPagamento:v.momentoPagamento
+    }));
+    return [...dasOrdens, ...dasVendas];
+  }
+  function filtrarPagamentos(){
+    return itensPagamentoCombinados().filter(x=>{
+      if(filtrosPagamentos.modulo && x.modulo!==filtrosPagamentos.modulo) return false;
+      if(filtrosPagamentos.loja && x.loja!==filtrosPagamentos.loja) return false;
+      if(filtrosPagamentos.dataIni && x.data < filtrosPagamentos.dataIni) return false;
+      if(filtrosPagamentos.dataFim && x.data > filtrosPagamentos.dataFim) return false;
+      if(filtrosPagamentos.semPagamento && !semPagamentoLancado(x)) return false;
+      return true;
+    });
+  }
 
   function ordensVisiveis(){
     // rascunho nunca conta como "lançado" no dashboard
@@ -302,15 +349,19 @@
     const mostraTransf = currentUser.nivel !== "oficina";
 
     main.innerHTML = `
-      ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições.</div>` : ""}
+      ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições/Vendas.</div>` : ""}
       ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento) nem o Fator (F).</div>` : ""}
 
+      ${mostraFinanceiro ? `<div class="section" id="secPagamentos"></div>` : ""}
       <div class="section" id="secOrdens"></div>
+      ${mostraTransf ? `<div class="section" id="secVendas"></div>` : ""}
       ${mostraTransf ? `<div class="section" id="secTransf"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secFator"></div>` : ""}
     `;
 
+    if(mostraFinanceiro) renderSecaoPagamentos();
     renderSecaoOrdens(mostraFinanceiro);
+    if(mostraTransf) renderSecaoVendas(mostraFinanceiro);
     if(mostraTransf) renderSecaoTransf();
     if(mostraFinanceiro) renderSecaoFator();
   }
@@ -384,6 +435,78 @@
     document.getElementById("btnLimparFiltroFator").addEventListener("click", ()=>{
       filtrosFator = { loja:"", dataIni:"", dataFim:"" };
       renderSecaoFator();
+    });
+
+    atualizar();
+  }
+
+  function renderSecaoPagamentos(){
+    const el = document.getElementById("secPagamentos");
+    const lojas = (ordersConfig && ordersConfig.lojas) || [];
+
+    el.innerHTML = `
+      <h2 class="section-title">💳 Recebido / A receber (O.S. + Vendas)</h2>
+      <p class="section-sub">Visão financeira combinada dos dois módulos que lançam pagamento.</p>
+      <div class="kpis" id="kpisPagamentos"></div>
+      <div class="filters">
+        <select id="pgModulo"><option value="">Todos os módulos</option><option value="O.S.">O.S.</option><option value="Vendas">Vendas</option></select>
+        <select id="pgLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
+        <input type="date" id="pgDataIni" title="De">
+        <input type="date" id="pgDataFim" title="Até">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:700; color:var(--danger);">
+          <input type="checkbox" id="pgSemPagamento"> Só sem pagamento
+        </label>
+        <button class="btn btn-ghost" id="btnLimparFiltroPagamentos">Limpar</button>
+      </div>
+      <div class="card"><div id="tabelaPagamentos"></div></div>
+    `;
+
+    function atualizar(){
+      const lista = filtrarPagamentos();
+      const recebido = lista.reduce((acc,x)=> acc + valorRecebidoDe(x), 0);
+      const aReceber = lista.reduce((acc,x)=> acc + valorAReceberDe(x), 0);
+      const semPag = lista.filter(x=>semPagamentoLancado(x)).length;
+
+      document.getElementById("kpisPagamentos").innerHTML = `
+        <div class="kpi"><div class="num">${lista.length}</div><div class="lbl">Lançamentos</div></div>
+        <div class="kpi ok"><div class="num">${fmtMoeda(recebido)}</div><div class="lbl">Recebido</div></div>
+        <div class="kpi danger"><div class="num">${fmtMoeda(aReceber)}</div><div class="lbl">A receber</div></div>
+        <div class="kpi danger"><div class="num">${semPag}</div><div class="lbl">Sem pagamento lançado</div></div>
+      `;
+
+      const wrap = document.getElementById("tabelaPagamentos");
+      if(lista.length===0){ wrap.innerHTML = `<div class="empty">Nenhum lançamento encontrado com esses filtros.</div>`; return; }
+      const ordenada = [...lista].sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+      wrap.innerHTML = `
+        <table>
+          <thead><tr><th>Módulo</th><th>Data</th><th>Loja</th><th>Cliente/Vendedora</th><th>Recebido</th><th>A receber</th></tr></thead>
+          <tbody>
+            ${ordenada.slice(0,200).map(x=>{
+              const semPagItem = semPagamentoLancado(x);
+              return `
+              <tr>
+                <td>${escapeHtml(x.modulo)}</td>
+                <td>${fmtDate(x.data)}</td>
+                <td>${escapeHtml(x.loja||"—")}</td>
+                <td>${escapeHtml(x.cliente||"—")}${semPagItem ? `<div style="margin-top:3px; color:var(--danger); font-weight:750; font-size:10.5px;">⚠ Sem pagamento lançado</div>` : ""}</td>
+                <td>${fmtMoeda(valorRecebidoDe(x))}</td>
+                <td>${valorAReceberDe(x)>0 ? `<b style="color:var(--danger);">${fmtMoeda(valorAReceberDe(x))}</b>` : fmtMoeda(0)}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+        ${ordenada.length>200?`<div class="empty">Mostrando os 200 mais recentes de ${ordenada.length}.</div>`:""}
+      `;
+    }
+
+    document.getElementById("pgModulo").addEventListener("change", e=>{ filtrosPagamentos.modulo=e.target.value; atualizar(); });
+    document.getElementById("pgLoja").addEventListener("change", e=>{ filtrosPagamentos.loja=e.target.value; atualizar(); });
+    document.getElementById("pgDataIni").addEventListener("change", e=>{ filtrosPagamentos.dataIni=e.target.value; atualizar(); });
+    document.getElementById("pgDataFim").addEventListener("change", e=>{ filtrosPagamentos.dataFim=e.target.value; atualizar(); });
+    document.getElementById("pgSemPagamento").addEventListener("change", e=>{ filtrosPagamentos.semPagamento=e.target.checked; atualizar(); });
+    document.getElementById("btnLimparFiltroPagamentos").addEventListener("click", ()=>{
+      filtrosPagamentos = { modulo:"", loja:"", dataIni:"", dataFim:"", semPagamento:false };
+      renderSecaoPagamentos();
     });
 
     atualizar();
@@ -467,6 +590,74 @@
     document.getElementById("btnLimparFiltroOrdens").addEventListener("click", ()=>{
       filtrosOrdens = { loja:"", status:"", servico:"", dataIni:"", dataFim:"", busca:"" };
       renderSecaoOrdens(mostraFinanceiro);
+    });
+
+    atualizar();
+  }
+
+  function renderSecaoVendas(mostraFinanceiro){
+    const el = document.getElementById("secVendas");
+    const lojas = (ordersConfig && ordersConfig.lojas) || [];
+
+    el.innerHTML = `
+      <h2 class="section-title">🛒 Vendas (PDV)</h2>
+      <p class="section-sub">Dados do módulo de Vendas.</p>
+      <div class="kpis" id="kpisVendas"></div>
+      <div class="filters">
+        <select id="vLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
+        <input type="date" id="vDataIni" title="De">
+        <input type="date" id="vDataFim" title="Até">
+        <input type="text" id="vBusca" placeholder="Buscar cliente/vendedora...">
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:700; color:var(--danger);">
+          <input type="checkbox" id="vSemPagamento"> Só sem pagamento
+        </label>
+        <button class="btn btn-ghost" id="btnLimparFiltroVendas">Limpar</button>
+      </div>
+      <div class="card"><div id="tabelaVendas"></div></div>
+    `;
+
+    function atualizar(){
+      const lista = filtrarVendas();
+      const total = lista.length;
+      const recebido = lista.reduce((acc,v)=> acc + valorRecebidoDe(v), 0);
+      const aReceber = lista.reduce((acc,v)=> acc + valorAReceberDe(v), 0);
+
+      document.getElementById("kpisVendas").innerHTML = `
+        <div class="kpi"><div class="num">${total}</div><div class="lbl">Vendas</div></div>
+        ${mostraFinanceiro ? `<div class="kpi ok"><div class="num">${fmtMoeda(recebido)}</div><div class="lbl">Recebido</div></div>` : ""}
+        ${mostraFinanceiro ? `<div class="kpi danger"><div class="num">${fmtMoeda(aReceber)}</div><div class="lbl">A receber</div></div>` : ""}
+      `;
+
+      const wrap = document.getElementById("tabelaVendas");
+      if(lista.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma venda encontrada com esses filtros.</div>`; return; }
+      const ordenada = [...lista].sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+      wrap.innerHTML = `
+        <table>
+          <thead><tr><th>Data</th><th>Loja</th><th>Vendedora</th><th>Cliente</th>${mostraFinanceiro?"<th>Recebido</th><th>A receber</th>":""}</tr></thead>
+          <tbody>
+            ${ordenada.slice(0,200).map(v=>`
+              <tr>
+                <td>${fmtDate(v.data)}</td>
+                <td>${escapeHtml(v.loja||"—")}</td>
+                <td>${escapeHtml(v.vendedora||"—")}</td>
+                <td>${escapeHtml(v.cliente||"—")}${semPagamentoLancado(v) ? `<div style="margin-top:3px; color:var(--danger); font-weight:750; font-size:10.5px;">⚠ Sem pagamento lançado</div>` : ""}</td>
+                ${mostraFinanceiro?`<td>${fmtMoeda(valorRecebidoDe(v))}</td><td>${valorAReceberDe(v)>0?`<b style="color:var(--danger);">${fmtMoeda(valorAReceberDe(v))}</b>`:fmtMoeda(0)}</td>`:""}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${ordenada.length>200?`<div class="empty">Mostrando as 200 mais recentes de ${ordenada.length}.</div>`:""}
+      `;
+    }
+
+    document.getElementById("vLoja").addEventListener("change", e=>{ filtrosVendas.loja=e.target.value; atualizar(); });
+    document.getElementById("vDataIni").addEventListener("change", e=>{ filtrosVendas.dataIni=e.target.value; atualizar(); });
+    document.getElementById("vDataFim").addEventListener("change", e=>{ filtrosVendas.dataFim=e.target.value; atualizar(); });
+    document.getElementById("vBusca").addEventListener("input", e=>{ filtrosVendas.busca=e.target.value; atualizar(); });
+    document.getElementById("vSemPagamento").addEventListener("change", e=>{ filtrosVendas.semPagamento=e.target.checked; atualizar(); });
+    document.getElementById("btnLimparFiltroVendas").addEventListener("click", ()=>{
+      filtrosVendas = { loja:"", dataIni:"", dataFim:"", busca:"", semPagamento:false };
+      renderSecaoVendas(mostraFinanceiro);
     });
 
     atualizar();
