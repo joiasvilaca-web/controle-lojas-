@@ -1195,8 +1195,12 @@ function printOrder(order){
   ${(pagamentosRows || order.valorTotal) ? `
   <div class="section-title">Pagamento</div>
   <table>
+    <tr><td class="label">Momento</td><td>${order.momentoPagamento==='na_volta' ? 'Pagar na volta (retirada)' : 'Pago no ato da encomenda'}</td></tr>
     ${order.valorTotal ? `<tr><td class="label">Valor total</td><td>R$ ${Number(order.valorTotal).toFixed(2)}</td></tr>` : ''}
     ${pagamentosRows}
+    <tr><td class="label">Recebido</td><td>R$ ${valorRecebidoDe(order).toFixed(2)}</td></tr>
+    <tr><td class="label">A receber</td><td>R$ ${valorAReceberDe(order).toFixed(2)}</td></tr>
+    ${order.emissaoNota==='sim' ? `<tr><td class="label">Local da nota</td><td>${escapeHtml((config.lojas.find(l=>l.id===order.lojaNotaId)||{}).nome||'—')}</td></tr>` : ''}
   </table>` : ''}
 
   <div class="section-title">Observações</div>
@@ -1507,20 +1511,64 @@ function mountFotosInline(container, fotosArray){
  * Mounts a "valor total + formas de pagamento" widget bound to `holder` ({valorTotal, pagamentos:[{formaId,valor}]}).
  * Supports more than one payment method per order (ex: parte no cartão, parte no PIX).
  */
+/**
+ * Mounts o widget de pagamento vinculado ao `holder`:
+ * { momentoPagamento:'na_encomenda'|'na_volta', valorTotal, pagamentos:[{formaId,valor}],
+ *   emissaoNota:'sim'|'nao', numeroNota, lojaNotaId }
+ * Regras:
+ * - "Pago no ato da encomenda" ou "Pagar na volta (retirada)".
+ * - Só quando "pago no ato" é que aparece a pergunta de emissão de nota; se sim, número + loja da nota.
+ * - Valores recebidos/a receber são calculados a partir da soma dos pagamentos vs valor total,
+ *   usados no Painel e no Dashboard para os filtros de "Recebido"/"A receber".
+ */
 function mountPagamentos(container, holder){
   if(!holder.pagamentos) holder.pagamentos = [];
+  if(!holder.momentoPagamento) holder.momentoPagamento = 'na_encomenda';
+  if(!holder.emissaoNota) holder.emissaoNota = 'nao';
 
   function draw(){
     container.innerHTML = `
       <div class="section-label" style="margin-top:14px;">Pagamento</div>
+      <div class="field">
+        <label>Momento do pagamento</label>
+        <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:2px;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:13.5px; text-transform:none; letter-spacing:0;">
+            <input type="radio" name="pagMomento" value="na_encomenda" ${holder.momentoPagamento==='na_encomenda'?'checked':''}> Pago no ato da encomenda
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:13.5px; text-transform:none; letter-spacing:0;">
+            <input type="radio" name="pagMomento" value="na_volta" ${holder.momentoPagamento==='na_volta'?'checked':''}> Pagar na volta (retirada)
+          </label>
+        </div>
+      </div>
       <div class="grid-2">
         <div class="field"><label>Valor total (R$)</label><input type="number" step="0.01" min="0" id="pagValorTotal" placeholder="0,00" value="${holder.valorTotal!==undefined && holder.valorTotal!==null ? holder.valorTotal : ''}"></div>
       </div>
       <div id="pagRows"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">+ Adicionar forma de pagamento</button>
       <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+      <div id="pagNotaWrap" style="margin-top:14px; display:none;">
+        <div class="field">
+          <label>Emitir nota fiscal?</label>
+          <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:2px;">
+            <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:13.5px; text-transform:none; letter-spacing:0;">
+              <input type="radio" name="pagEmiteNota" value="sim" ${holder.emissaoNota==='sim'?'checked':''}> Sim
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:13.5px; text-transform:none; letter-spacing:0;">
+              <input type="radio" name="pagEmiteNota" value="nao" ${holder.emissaoNota==='nao'?'checked':''}> Não
+            </label>
+          </div>
+        </div>
+        <div class="grid-2" id="pagNotaCamposWrap" style="display:none;">
+          <div class="field"><label>Número da nota</label><input id="pagNumeroNota" placeholder="Ex: 12345" value="${escapeHtml(holder.numeroNota||'')}"></div>
+          <div class="field"><label>Local da nota</label><select id="pagLojaNota">${lojaOptionsHtml(holder.lojaNotaId||'')}</select></div>
+        </div>
+      </div>
     `;
     drawRows();
+    atualizarVisibilidadeNota();
+    container.querySelectorAll('input[name="pagMomento"]').forEach(r=>{
+      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; atualizarVisibilidadeNota(); });
+    });
     container.querySelector('#pagValorTotal').addEventListener('input', (e)=>{
       holder.valorTotal = e.target.value === '' ? null : parseFloat(e.target.value);
       updateHint();
@@ -1530,6 +1578,28 @@ function mountPagamentos(container, holder){
       holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
       drawRows();
     });
+    container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
+      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; atualizarVisibilidadeNota(); });
+    });
+    const numNotaEl = container.querySelector('#pagNumeroNota');
+    if(numNotaEl) numNotaEl.addEventListener('input', ()=>{ holder.numeroNota = numNotaEl.value.trim(); });
+    const lojaNotaEl = container.querySelector('#pagLojaNota');
+    if(lojaNotaEl) lojaNotaEl.addEventListener('change', ()=>{ holder.lojaNotaId = lojaNotaEl.value; });
+  }
+
+  function atualizarVisibilidadeNota(){
+    const notaWrap = container.querySelector('#pagNotaWrap');
+    const camposWrap = container.querySelector('#pagNotaCamposWrap');
+    if(!notaWrap) return;
+    if(holder.momentoPagamento === 'na_encomenda'){
+      notaWrap.style.display = '';
+      camposWrap.style.display = holder.emissaoNota === 'sim' ? '' : 'none';
+    }else{
+      notaWrap.style.display = 'none';
+      holder.emissaoNota = 'nao';
+      holder.numeroNota = '';
+      holder.lojaNotaId = '';
+    }
   }
 
   function drawRows(){
@@ -1577,6 +1647,13 @@ function mountPagamentos(container, holder){
 
   draw();
 }
+
+/** Soma já paga de uma ordem/venda (a partir dos pagamentos lançados). */
+function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
+/** Valor ainda pendente (nunca negativo). */
+function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
+/** true quando NENHUMA informação de pagamento foi lançada — dispara o aviso vermelho e o filtro. */
+function semPagamentoLancado(o){ return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
 
 /* ============================================================
    OBSERVAÇÕES / NOTIFICAÇÕES INTERNAS
@@ -2021,7 +2098,6 @@ function renderNovaOrdem(main){
           <select id="f_loja"><option value="">Selecione</option>${lojaOptionsHtml('')}</select>
         </div>
         <div class="field"><label>Número da via <span class="muted">(preenchido ao escolher a loja)</span></label><input id="f_via" placeholder="Selecione a loja"></div>
-        <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="f_nota" placeholder="Ex: 12345"></div>
         <div class="field"><label>Nome da vendedora</label><select id="f_vendedora">${funcionarioOptionsHtml('vendedora', currentUser.nivel==='vendedora'?currentUser.nome:'')}</select></div>
         <div class="field">
           <label>Tipo de serviço</label>
@@ -2151,7 +2227,7 @@ function renderNovaOrdem(main){
       id: uid('ord'),
       ...cli,
       via: viaInp.value.trim(),
-      numeroNota: document.getElementById('f_nota').value.trim(),
+      numeroNota: tempPagHolder.numeroNota || '',
       vendedora: document.getElementById('f_vendedora').value.trim(),
       descricao: document.getElementById('f_descricao').value.trim(),
       loja,
@@ -2164,6 +2240,9 @@ function renderNovaOrdem(main){
       fatorPercentual: produtoSel.value ? getFatorPercentual(produtoSel.value) : 0,
       valorTotal: tempPagHolder.valorTotal,
       pagamentos: tempPagHolder.pagamentos,
+      momentoPagamento: tempPagHolder.momentoPagamento,
+      emissaoNota: tempPagHolder.emissaoNota,
+      lojaNotaId: tempPagHolder.lojaNotaId || '',
       observacoes: tempObsHolder.observacoes,
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
@@ -2180,7 +2259,7 @@ function renderNovaOrdem(main){
     const cli = collectClienteFields();
     const { cliente, telefone } = cli;
     const via = viaInp.value.trim();
-    const numeroNota = document.getElementById('f_nota').value.trim();
+    const numeroNota = tempPagHolder.numeroNota || '';
     const vendedora = document.getElementById('f_vendedora').value.trim();
     const descricao = document.getElementById('f_descricao').value.trim();
     const loja = lojaSel.value;
@@ -2230,6 +2309,9 @@ function renderNovaOrdem(main){
       fatorPercentual: produtoSel.value ? getFatorPercentual(produtoSel.value) : 0,
       valorTotal: tempPagHolder.valorTotal,
       pagamentos: tempPagHolder.pagamentos,
+      momentoPagamento: tempPagHolder.momentoPagamento,
+      emissaoNota: tempPagHolder.emissaoNota,
+      lojaNotaId: tempPagHolder.lojaNotaId || '',
       observacoes: tempObsHolder.observacoes,
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
@@ -2292,10 +2374,9 @@ function openEditModalCompleto(order, opts){
     ${clienteFieldsHtml('e', order)}
     <div class="grid-2">
       <div class="field"><label>Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
-      <div class="field"><label>Número da nota <span class="muted">(opcional)</span></label><input id="e_nota" value="${escapeHtml(order.numeroNota||'')}" placeholder="Ex: 12345"></div>
+      <div class="field"><label>Vendedora</label><select id="e_vendedora">${funcionarioOptionsHtml('vendedora', order.vendedora)}</select></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Vendedora</label><select id="e_vendedora">${funcionarioOptionsHtml('vendedora', order.vendedora)}</select></div>
       <div class="field"><label>Loja</label><select id="e_loja">${lojaOptionsHtml(order.loja)}</select></div>
     </div>
     <div class="field"><label>Status</label>
@@ -2425,7 +2506,6 @@ function openEditModalCompleto(order, opts){
     const cidade = document.getElementById('e_cidade').value.trim();
     const estado = document.getElementById('e_estado').value.trim();
     const via = document.getElementById('e_via').value.trim();
-    const numeroNota = document.getElementById('e_nota').value.trim();
     const vendedora = document.getElementById('e_vendedora').value.trim();
     const descricao = document.getElementById('e_descricao').value.trim();
     const loja = document.getElementById('e_loja').value;
@@ -2484,7 +2564,7 @@ function openEditModalCompleto(order, opts){
     const st = config.serviceTypes.find(s=>s.id===sid);
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
-      via, numeroNota, vendedora, descricao, loja, status,
+      via, vendedora, descricao, loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
       encaixe, autorizadoPor, recebidoPor, recebidoEm,
       produtoId: produtoSelEdit.value || null,
@@ -2524,8 +2604,12 @@ function renderPainel(main){
       </select>
       <input type="date" id="filtroData">
       <input type="text" id="filtroBusca" placeholder="Buscar cliente...">
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--danger);">
+        <input type="checkbox" id="filtroSemPagamento"> Só sem pagamento
+      </label>
       <button class="btn btn-ghost btn-sm" id="btnLimparFiltro">Limpar filtros</button>
     </div>
+    <div id="resumoValores" class="muted" style="margin:2px 0 12px; font-size:13px;"></div>
     <div class="card" style="padding:14px 18px; overflow-x:auto;">
       <div id="tabelaWrap"></div>
     </div>
@@ -2569,6 +2653,7 @@ function renderPainel(main){
   const fStatus = document.getElementById('filtroStatus');
   const fData = document.getElementById('filtroData');
   const fBusca = document.getElementById('filtroBusca');
+  const fSemPagamento = document.getElementById('filtroSemPagamento');
 
   function renderTable(){
     renderProntosCard();
@@ -2588,7 +2673,15 @@ function renderPainel(main){
       const q = fBusca.value.trim().toLowerCase();
       list = list.filter(o=>o.cliente.toLowerCase().includes(q));
     }
+    if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     list.sort((a,b)=> a.data.localeCompare(b.data) || b.criadoEm-a.criadoEm );
+
+    const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
+    const totalAReceber = list.reduce((acc,o)=> acc + valorAReceberDe(o), 0);
+    const semPagCount = list.filter(o=>semPagamentoLancado(o)).length;
+    document.getElementById('resumoValores').innerHTML =
+      `Nesta lista: <b style="color:var(--ok);">Recebido R$ ${totalRecebido.toFixed(2)}</b> · <b style="color:var(--danger);">A receber R$ ${totalAReceber.toFixed(2)}</b>` +
+      (semPagCount>0 ? ` · <b style="color:var(--danger);">${semPagCount} sem pagamento lançado</b>` : '');
 
     const wrap = document.getElementById('tabelaWrap');
     if(list.length===0){
@@ -2600,7 +2693,7 @@ function renderPainel(main){
         <thead>
           <tr>
             <th>Cliente</th><th>Telefone</th><th>Via</th><th>Vendedora</th><th>Loja</th>
-            <th>Serviço</th><th>Data</th><th>Status</th><th>Ações</th>
+            <th>Serviço</th><th>Data</th><th>Recebido</th><th>A receber</th><th>Status</th><th>Ações</th>
           </tr>
         </thead>
         <tbody>
@@ -2652,15 +2745,20 @@ function renderPainel(main){
   function rowHtml(o){
     const pendObs = (o.observacoes||[]).some(ob=>!ob.ciente && ob.notificarPara && ob.notificarPara.length>0);
     const isRascunho = o.status === 'rascunho';
+    const semPag = semPagamentoLancado(o);
+    const recebido = valorRecebidoDe(o);
+    const aReceber = valorAReceberDe(o);
     return `
       <tr>
-        <td><b>${escapeHtml(o.cliente)}</b>${isRascunho ? `<div class="badge rascunho-badge" style="margin-top:4px;">📝 Rascunho</div>` : ''}${o.encaixe ? `<div class="badge badge-encaixe" style="margin-top:4px;" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</div>` : ''}${pendObs ? `<div class="badge badge-flag" style="margin-top:4px;">⚠ Observação pendente</div>` : ''}${o.numeroNota ? `<div class="muted" style="margin-top:4px;">Nota ${escapeHtml(o.numeroNota)}</div>` : ''}${o.status==='entregue' ? `<div class="muted" style="margin-top:4px;">Recebido por ${escapeHtml(o.recebidoPor||'—')}</div>` : ''}</td>
+        <td><b>${escapeHtml(o.cliente)}</b>${isRascunho ? `<div class="badge rascunho-badge" style="margin-top:4px;">📝 Rascunho</div>` : ''}${o.encaixe ? `<div class="badge badge-encaixe" style="margin-top:4px;" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</div>` : ''}${pendObs ? `<div class="badge badge-flag" style="margin-top:4px;">⚠ Observação pendente</div>` : ''}${semPag && o.status!=='cancelado' ? `<div style="margin-top:4px; color:var(--danger); font-weight:700; font-size:11.5px;">⚠ Sem pagamento lançado</div>` : ''}${o.numeroNota ? `<div class="muted" style="margin-top:4px;">Nota ${escapeHtml(o.numeroNota)}</div>` : ''}${o.status==='entregue' ? `<div class="muted" style="margin-top:4px;">Recebido por ${escapeHtml(o.recebidoPor||'—')}</div>` : ''}</td>
         <td>${escapeHtml(o.telefone)}</td>
         <td>${escapeHtml(o.via)}</td>
         <td>${escapeHtml(o.vendedora)}</td>
         <td><span class="badge badge-loja">${escapeHtml(o.loja)}</span></td>
         <td>${escapeHtml(o.serviceTypeName)}</td>
         <td>${fmtDate(o.data)}</td>
+        <td style="color:var(--ok); white-space:nowrap;">R$ ${recebido.toFixed(2)}</td>
+        <td style="${aReceber>0?'color:var(--danger); font-weight:700;':''} white-space:nowrap;">R$ ${aReceber.toFixed(2)}</td>
         <td>
           ${isRascunho
             ? `<span class="badge rascunho-badge">📝 Rascunho</span>`
@@ -2687,9 +2785,9 @@ function renderPainel(main){
     `;
   }
 
-  [fServico,fLoja,fStatus,fData,fBusca].forEach(el=>el.addEventListener('input', renderTable));
+  [fServico,fLoja,fStatus,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
   document.getElementById('btnLimparFiltro').addEventListener('click', ()=>{
-    fServico.value=''; fLoja.value=''; fStatus.value=''; fData.value=''; fBusca.value='';
+    fServico.value=''; fLoja.value=''; fStatus.value=''; fData.value=''; fBusca.value=''; fSemPagamento.checked=false;
     renderTable();
   });
 
