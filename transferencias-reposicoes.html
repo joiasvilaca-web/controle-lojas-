@@ -189,6 +189,8 @@
     .brand h1{font-size:27px;}
     .grid{grid-template-columns:1fr 1fr;}
   }
+  html.embedded .tabbar{display:none !important;}
+  html.embedded .back-link{display:none !important;}
 </style>
 </head>
 <body>
@@ -267,6 +269,41 @@
     if(str === null || str === undefined) return "";
     return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
   }
+
+  /* ================= MODO EMBUTIDO ================= */
+  const EMBEDDED = window.self !== window.top;
+  let permissoesAbasOverride = null;
+  const TABS_MODULO = [
+    { id:"transferencias", label:"Transferências", icon:"🔁" },
+    { id:"reposicao", label:"Reposição", icon:"📦" },
+  ];
+  function tabsPermitidas(){
+    if(!permissoesAbasOverride) return TABS_MODULO;
+    return TABS_MODULO.filter(t => permissoesAbasOverride[t.id] !== false);
+  }
+  function setTab(tabId){
+    state.tab = tabId;
+    document.querySelectorAll(".tab:not(.tab-link-external)").forEach(b=>{ b.classList.toggle("active", b.dataset.tab===tabId); });
+    state.storeFilter = "Todas"; state.statusFilter = "Todas"; state.search = "";
+    if(searchInput) searchInput.value = "";
+    render();
+    if(EMBEDDED) parent.postMessage({ type:"activeTab", modulo:"transferencias", tabId }, "*");
+  }
+  if(EMBEDDED){
+    document.documentElement.classList.add("embedded");
+    window.addEventListener("message", (ev)=>{
+      if(!ev.data || !ev.data.type) return;
+      if(ev.data.type === "auth"){
+        permissoesAbasOverride = ev.data.abas || null;
+        const permitidas = tabsPermitidas();
+        if(!permitidas.some(t=>t.id===state.tab)) setTab(permitidas[0] ? permitidas[0].id : "transferencias");
+        parent.postMessage({ type:"tabs", modulo:"transferencias", tabs: permitidas, active: state.tab }, "*");
+      } else if(ev.data.type === "gotoTab"){
+        setTab(ev.data.tabId);
+      }
+    });
+  }
+
   function stepDone(visto, nome, data){
     if(!visto) return false;
     if(nome !== undefined && String(nome||"").trim() === "") return false;
@@ -1462,14 +1499,7 @@
   }
 
   document.querySelectorAll(".tab:not(.tab-link-external)").forEach(btn=>{
-    btn.addEventListener("click", ()=>{
-      document.querySelectorAll(".tab").forEach(b=>b.classList.remove("active"));
-      btn.classList.add("active");
-      state.tab = btn.dataset.tab;
-      state.storeFilter = "Todas"; state.statusFilter = "Todas"; state.search = "";
-      searchInput.value = "";
-      render();
-    });
+    btn.addEventListener("click", ()=> setTab(btn.dataset.tab) );
   });
 
   searchInput.addEventListener("input", ()=>{ state.search = searchInput.value.trim(); render(); });
@@ -1498,7 +1528,7 @@
     }, 50);
   });
 
-  async function init(){ applyTheme(); await loadConfig(); await loadData(); render(); }
+  async function init(){ applyTheme(); await loadConfig(); await loadData(); render(); if(EMBEDDED) parent.postMessage({ type:"ready", modulo:"transferencias" }, "*"); }
   init();
 
 })();

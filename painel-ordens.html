@@ -462,6 +462,12 @@
     border-radius:50%; width:19px; height:19px; font-size:11px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;
   }
   .foto-del:hover{background:rgba(178,58,58,0.85);}
+
+  /* Modo embutido: este arquivo roda dentro de um iframe do shell único (index.html),
+     que já cuida do login, da barra lateral e das abas — aqui escondemos essas partes. */
+  html.embedded #view-login{display:none !important;}
+  html.embedded .topbar{display:none !important;}
+  html.embedded .mobile-tabbar{display:none !important;}
 </style>
 </head>
 <body>
@@ -1899,6 +1905,30 @@ function mountObservacoes(container, orderLike, persisted){
 /* ============================================================
    LOGIN
    ============================================================ */
+/* ============================================================
+   MODO EMBUTIDO — quando este arquivo é aberto dentro do shell
+   único (index.html), a senha já foi pedida lá; aqui a gente só
+   escuta a autenticação e os comandos de troca de aba via postMessage,
+   e não mostra a tela de login nem a barra de abas/topo próprias
+   (o shell já tem a barra lateral e as abas por cima).
+   ============================================================ */
+const EMBEDDED = window.self !== window.top;
+if(EMBEDDED){
+  document.documentElement.classList.add('embedded');
+  window.addEventListener('message', (ev)=>{
+    if(!ev.data || !ev.data.type) return;
+    if(ev.data.type === 'auth'){
+      currentUser = ev.data.user;
+      window.__permissoesAbasOverride = ev.data.abas || null;
+      enterApp();
+    } else if(ev.data.type === 'gotoTab'){
+      currentTab = ev.data.tabId;
+      renderTabs();
+      renderView();
+    }
+  });
+}
+
 document.getElementById('btnLogin').addEventListener('click', doLogin);
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 
@@ -1924,6 +1954,11 @@ function enterApp(){
   document.getElementById('linkConfigHub').style.display = currentUser.nivel==='diretoria' ? '' : 'none';
   buildTabs();
   currentTab = currentUser.nivel==='oficina' ? 'painel' : 'nova';
+  if(EMBEDDED){
+    const permitido = tabsForLevel();
+    if(!permitido.some(t=>t.id===currentTab)) currentTab = permitido[0] ? permitido[0].id : 'painel';
+    parent.postMessage({ type:'tabs', modulo:'os', tabs: permitido, active: currentTab }, '*');
+  }
   renderTabs();
   renderView();
   renderAlerts();
@@ -1951,6 +1986,9 @@ function tabsForLevel(){
   }
   if(currentUser.nivel==='oficina' || currentUser.nivel==='diretoria'){
     t.push({ id:'codigo', label:'Código', icon:'🔑' });
+  }
+  if(window.__permissoesAbasOverride){
+    return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
   }
   return t;
 }
@@ -1981,6 +2019,7 @@ function renderTabs(){
   document.querySelectorAll('nav.tabs button, .mobile-tabbar button').forEach(b=>{
     b.classList.toggle('active', b.dataset.tab === currentTab);
   });
+  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'os', tabId: currentTab }, '*');
 }
 function renderView(){
   renderAlerts();
@@ -3328,6 +3367,10 @@ function renderGerarCodigo(main){
    ============================================================ */
 (async function init(){
   await loadAll();
+  if(EMBEDDED){
+    parent.postMessage({ type:'ready', modulo:'os' }, '*');
+    return;
+  }
   const hint = document.getElementById('loginHint');
   const hasCustomDirector = config.users.some(u=>u.nivel==='diretoria' && u.senha!=='diretor123');
   if(!hasCustomDirector){

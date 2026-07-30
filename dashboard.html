@@ -80,6 +80,8 @@
   .badge.just{ background:var(--just-soft); color:var(--just); }
   .empty{ text-align:center; padding:36px 20px; color:var(--ink-faint); font-size:13px; }
   .locked-note{ background:var(--accent-soft); color:var(--accent-ink); padding:11px 13px; border-radius:8px; font-size:12.5px; margin-bottom:16px; }
+  html.embedded #view-login{ display:none !important; }
+  html.embedded header.topbar{ display:none !important; }
 </style>
 </head>
 <body>
@@ -132,6 +134,28 @@
   function semPagamentoLancado(o){ return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
 
   /* ================= LOGIN ================= */
+  /* ================= MODO EMBUTIDO ================= */
+  const EMBEDDED = window.self !== window.top;
+  if(EMBEDDED){
+    document.documentElement.classList.add("embedded");
+    window.addEventListener("message", async (ev)=>{
+      if(!ev.data || !ev.data.type) return;
+      if(ev.data.type === "auth"){
+        currentUser = ev.data.user;
+        try{
+          const { data } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
+          const unificado = data ? data.payload : null;
+          ordersConfig = unificado ? { lojas: unificado.lojas||[], serviceTypes: unificado.tiposServico||[], users: unificado.users||[] } : null;
+          transfConfig = unificado ? { stores: (unificado.lojas||[]).map(l=>l.abreviacao) } : { stores: [] };
+        }catch(e){ console.error("Erro ao carregar config no dashboard embutido:", e); }
+        await loadAllData();
+        enterDashboard();
+        parent.postMessage({ type:"tabs", modulo:"dashboard", tabs: [], active: null }, "*");
+      }
+    });
+    parent.postMessage({ type:"ready", modulo:"dashboard" }, "*");
+  }
+
   document.getElementById("btnLogin").addEventListener("click", doLogin);
   document.getElementById("loginPass").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
 

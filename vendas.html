@@ -98,6 +98,9 @@ td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
   .mt-icon{font-size:17px;}
   .tabs{display:none;}
 }
+html.embedded #view-login{display:none !important;}
+html.embedded .topbar{display:none !important;}
+html.embedded .mobile-tabbar{display:none !important;}
 </style>
 </head>
 <body>
@@ -414,6 +417,26 @@ function mountItens(container, holder){
 }
 
 /* ============================================================
+   MODO EMBUTIDO — ver mesma explicação no painel-ordens.html.
+   ============================================================ */
+const EMBEDDED = window.self !== window.top;
+if(EMBEDDED){
+  document.documentElement.classList.add('embedded');
+  window.addEventListener('message', (ev)=>{
+    if(!ev.data || !ev.data.type) return;
+    if(ev.data.type === 'auth'){
+      currentUser = ev.data.user;
+      window.__permissoesAbasOverride = ev.data.abas || null;
+      enterApp();
+    } else if(ev.data.type === 'gotoTab'){
+      currentTab = ev.data.tabId;
+      renderTabs();
+      renderView();
+    }
+  });
+}
+
+/* ============================================================
    LOGIN
    ============================================================ */
 document.getElementById('btnLogin').addEventListener('click', doLogin);
@@ -443,6 +466,11 @@ function enterApp(){
   document.getElementById('linkConfigHub').style.display = currentUser.nivel==='diretoria' ? '' : 'none';
   buildTabs();
   currentTab = 'nova';
+  if(EMBEDDED){
+    const permitido = tabsForLevel();
+    if(!permitido.some(t=>t.id===currentTab)) currentTab = permitido[0] ? permitido[0].id : 'vendas';
+    parent.postMessage({ type:'tabs', modulo:'vendas', tabs: permitido, active: currentTab }, '*');
+  }
   renderTabs();
   renderView();
 }
@@ -451,10 +479,14 @@ function enterApp(){
    NAVEGAÇÃO
    ============================================================ */
 function tabsForLevel(){
-  return [
+  const t = [
     { id:'nova', label:'Nova venda', icon:'🧾' },
     { id:'vendas', label:'Vendas', icon:'📋' },
   ];
+  if(window.__permissoesAbasOverride){
+    return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
+  }
+  return t;
 }
 function buildTabs(){
   const tabs = tabsForLevel();
@@ -480,6 +512,7 @@ function renderTabs(){
   document.querySelectorAll('nav.tabs button, .mobile-tabbar button').forEach(b=>{
     b.classList.toggle('active', b.dataset.tab === currentTab);
   });
+  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'vendas', tabId: currentTab }, '*');
 }
 function renderView(){
   const main = document.getElementById('mainContent');
@@ -694,6 +727,10 @@ function abrirDetalheVenda(v){
    ============================================================ */
 (async function init(){
   await loadAll();
+  if(EMBEDDED){
+    parent.postMessage({ type:'ready', modulo:'vendas' }, '*');
+    return;
+  }
   const hint = document.getElementById('loginHint');
   const hasUsers = (config.users||[]).length > 0;
   if(!hasUsers){
