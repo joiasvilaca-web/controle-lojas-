@@ -1825,6 +1825,7 @@ function tabsForLevel(){
     t.push({ id:'codigo', label:'Código', icon:'🔑' });
   }
   if(currentUser.nivel==='diretoria'){
+    t.push({ id:'produtos', label:'Produtos', icon:'📦' });
     t.push({ id:'config', label:'Config', icon:'⚙️' });
   }
   return t;
@@ -1866,6 +1867,7 @@ function renderView(){
   else if(currentTab==='agenda') renderAgenda(main);
   else if(currentTab==='clientes') renderClientes(main);
   else if(currentTab==='codigo') renderGerarCodigo(main);
+  else if(currentTab==='produtos') renderProdutos(main);
   else if(currentTab==='config') renderConfig(main);
 }
 
@@ -1919,17 +1921,17 @@ function getFatorPercentual(produtoId){
   if(!produto) return 0;
   const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===produto.subcategoriaId);
   if(sub && sub.fator !== undefined && sub.fator !== null && sub.fator !== '') return Number(sub.fator);
-  const cat = (config.categoriasProdutos||[]).find(c=>c.id===produto.categoriaId);
-  if(cat && cat.fator !== undefined && cat.fator !== null && cat.fator !== '') return Number(cat.fator);
   return 0;
 }
 function produtoOptionsHtml(selected){
   const lista = config.produtos||[];
   const vazio = lista.length===0 ? `<option value="" disabled>Nenhum produto cadastrado</option>` : '';
   return `<option value="">Nenhum (sem Fator)</option>${vazio}` + lista.map(p=>{
-    const cat = (config.categoriasProdutos||[]).find(c=>c.id===p.categoriaId);
+    const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===p.subcategoriaId);
+    const cat = sub ? (config.categoriasProdutos||[]).find(c=>c.id===sub.categoriaId) : null;
     const fatorPct = getFatorPercentual(p.id);
-    return `<option value="${p.id}" ${selected===p.id?'selected':''}>${escapeHtml(p.nome)}${cat?' — '+escapeHtml(cat.nome):''} (F: ${fatorPct}%)</option>`;
+    const caminho = [cat?cat.nome:null, sub?sub.nome:null].filter(Boolean).join(' / ');
+    return `<option value="${p.id}" ${selected===p.id?'selected':''}>${escapeHtml(p.nome)}${caminho?' — '+escapeHtml(caminho):''} (F: ${fatorPct}%)</option>`;
   }).join('');
 }
 
@@ -3126,6 +3128,177 @@ function renderGerarCodigo(main){
 /* ============================================================
    CONFIGURAÇÕES (diretoria)
    ============================================================ */
+/* ============================================================
+   PRODUTOS (tela exclusiva: Categorias, Subcategorias, Produtos)
+   O Fator (F) existe SOMENTE na subcategoria. Ao cadastrar um produto,
+   basta escolher a subcategoria — o F aparece automaticamente.
+   ============================================================ */
+function renderProdutos(main){
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">Produtos</h1>
+        <p class="page-sub">Cadastro de categorias, subcategorias e produtos. O Fator (F) de cada venda é definido na subcategoria.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Categorias</div>
+      <p class="muted" style="margin:-4px 0 14px;">Só organiza as subcategorias — o Fator (F) é definido lá, não aqui.</p>
+      <div id="categoriaRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
+        <button class="btn btn-accent btn-sm" id="btnAddCategoria">+ Adicionar</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Subcategorias</div>
+      <p class="muted" style="margin:-4px 0 14px;">O "F" aqui é obrigatório — é o percentual de Fator pago à vendedora sobre a venda de produtos dessa subcategoria.</p>
+      <div id="subcategoriaRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <select id="sub_categoria" style="min-width:160px;">${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select>
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="sub_nome" placeholder="Nome da subcategoria"></div>
+        <input id="sub_fator" type="number" min="0" step="0.1" placeholder="F (%)" style="width:110px; padding:8px 9px; border:1px solid var(--line); border-radius:8px;">
+        <button class="btn btn-accent btn-sm" id="btnAddSubcategoria">+ Adicionar</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Produtos</div>
+      <p class="muted" style="margin:-4px 0 14px;">Escolha a subcategoria — o Fator (F) dela aparece automaticamente no produto.</p>
+      <div id="produtoRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="prod_nome" placeholder="Nome do produto"></div>
+        <select id="prod_categoria" style="min-width:150px;">
+          <option value="">Categoria</option>
+          ${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}
+        </select>
+        <select id="prod_subcategoria" style="min-width:150px;"><option value="">Subcategoria</option></select>
+        <button class="btn btn-accent btn-sm" id="btnAddProduto">+ Adicionar</button>
+      </div>
+    </div>
+  `;
+
+  function renderCategoriaRows(){
+    const wrap = document.getElementById('categoriaRows');
+    if(!config.categoriasProdutos) config.categoriasProdutos = [];
+    if(config.categoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma categoria cadastrada.</div>`; return; }
+    wrap.innerHTML = config.categoriasProdutos.map((c,i)=>`
+      <div class="code-list-item">
+        <div><b>${escapeHtml(c.nome)}</b></div>
+        <button class="icon-btn" data-delcategoria="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-delcategoria]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const cat = config.categoriasProdutos[Number(b.dataset.delcategoria)];
+        const emUso = (config.subcategoriasProdutos||[]).some(s=>s.categoriaId===cat.id);
+        if(emUso){ showToast('Essa categoria está em uso por subcategorias — remova-as primeiro.'); return; }
+        config.categoriasProdutos.splice(Number(b.dataset.delcategoria),1);
+        await saveConfig();
+        renderView();
+        showToast('Categoria removida.');
+      });
+    });
+  }
+  renderCategoriaRows();
+
+  document.getElementById('btnAddCategoria').addEventListener('click', async ()=>{
+    const nome = document.getElementById('cat_nome').value.trim();
+    if(!nome){ showToast('Informe o nome da categoria.'); return; }
+    config.categoriasProdutos.push({ id: uid('cat'), nome });
+    await saveConfig();
+    renderView();
+    showToast('Categoria cadastrada.');
+  });
+
+  function renderSubcategoriaRows(){
+    const wrap = document.getElementById('subcategoriaRows');
+    if(!config.subcategoriasProdutos) config.subcategoriasProdutos = [];
+    if(config.subcategoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma subcategoria cadastrada.</div>`; return; }
+    wrap.innerHTML = config.subcategoriasProdutos.map((s,i)=>{
+      const cat = (config.categoriasProdutos||[]).find(c=>c.id===s.categoriaId);
+      return `
+      <div class="code-list-item">
+        <div><b>${escapeHtml(s.nome)}</b> <span class="muted">(${cat?escapeHtml(cat.nome):'—'})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${s.fator}%</span></div>
+        <button class="icon-btn" data-delsubcategoria="${i}" title="Remover">✕</button>
+      </div>
+    `;}).join('');
+    wrap.querySelectorAll('[data-delsubcategoria]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const sub = config.subcategoriasProdutos[Number(b.dataset.delsubcategoria)];
+        const emUso = (config.produtos||[]).some(p=>p.subcategoriaId===sub.id);
+        if(emUso){ showToast('Essa subcategoria está em uso por produtos — remova-os primeiro.'); return; }
+        config.subcategoriasProdutos.splice(Number(b.dataset.delsubcategoria),1);
+        await saveConfig();
+        renderView();
+        showToast('Subcategoria removida.');
+      });
+    });
+  }
+  renderSubcategoriaRows();
+
+  document.getElementById('btnAddSubcategoria').addEventListener('click', async ()=>{
+    const categoriaId = document.getElementById('sub_categoria').value;
+    const nome = document.getElementById('sub_nome').value.trim();
+    const fatorRaw = document.getElementById('sub_fator').value.trim();
+    if(!categoriaId){ showToast('Cadastre uma categoria primeiro.'); return; }
+    if(!nome){ showToast('Informe o nome da subcategoria.'); return; }
+    if(fatorRaw===''){ showToast('Informe o Fator (F%) — ele é obrigatório na subcategoria.'); return; }
+    config.subcategoriasProdutos.push({ id: uid('sub'), categoriaId, nome, fator: Number(fatorRaw) });
+    await saveConfig();
+    renderView();
+    showToast('Subcategoria cadastrada.');
+  });
+
+  function renderProdutoRows(){
+    const wrap = document.getElementById('produtoRows');
+    if(!config.produtos) config.produtos = [];
+    if(config.produtos.length===0){ wrap.innerHTML = `<div class="empty">Nenhum produto cadastrado.</div>`; return; }
+    wrap.innerHTML = config.produtos.map((p,i)=>{
+      const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===p.subcategoriaId);
+      const cat = sub ? (config.categoriasProdutos||[]).find(c=>c.id===sub.categoriaId) : null;
+      const caminho = [cat?cat.nome:null, sub?sub.nome:null].filter(Boolean).join(' / ');
+      return `
+      <div class="code-list-item">
+        <div><b>${escapeHtml(p.nome)}</b> <span class="muted">(${escapeHtml(caminho||'—')})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${getFatorPercentual(p.id)}%</span></div>
+        <button class="icon-btn" data-delproduto="${i}" title="Remover">✕</button>
+      </div>
+    `;}).join('');
+    wrap.querySelectorAll('[data-delproduto]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        config.produtos.splice(Number(b.dataset.delproduto),1);
+        await saveConfig();
+        renderView();
+        showToast('Produto removido.');
+      });
+    });
+  }
+  renderProdutoRows();
+
+  const prodCategoriaSel = document.getElementById('prod_categoria');
+  const prodSubcategoriaSel = document.getElementById('prod_subcategoria');
+  function atualizarSubcategoriasDoProduto(){
+    const catId = prodCategoriaSel.value;
+    const subs = (config.subcategoriasProdutos||[]).filter(s=>s.categoriaId===catId);
+    prodSubcategoriaSel.innerHTML = `<option value="">Subcategoria</option>` + subs.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)} (F: ${s.fator}%)</option>`).join('');
+  }
+  prodCategoriaSel.addEventListener('change', atualizarSubcategoriasDoProduto);
+  atualizarSubcategoriasDoProduto();
+
+  document.getElementById('btnAddProduto').addEventListener('click', async ()=>{
+    const nome = document.getElementById('prod_nome').value.trim();
+    const subcategoriaId = prodSubcategoriaSel.value;
+    if(!nome){ showToast('Informe o nome do produto.'); return; }
+    if(!subcategoriaId){ showToast('Escolha uma subcategoria — é dela que vem o Fator.'); return; }
+    config.produtos.push({ id: uid('prod'), nome, subcategoriaId });
+    await saveConfig();
+    renderView();
+    showToast('Produto cadastrado.');
+  });
+}
+
 function renderConfig(main){
   main.innerHTML = `
     <div class="page-head">
@@ -3170,44 +3343,6 @@ function renderConfig(main){
           <option value="oficina">Oficina (ourives)</option>
         </select>
         <button class="btn btn-accent btn-sm" id="btnAddFuncionario">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Categorias de produto</div>
-      <p class="muted" style="margin:-4px 0 14px;">O campo "F" é o percentual de Fator (%) pago à vendedora sobre a venda de produtos dessa categoria. Deixe em branco se não houver Fator.</p>
-      <div id="categoriaRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
-        <input id="cat_fator" type="number" min="0" step="0.1" placeholder="F (%)" style="width:90px; padding:8px 9px; border:1px solid var(--line); border-radius:8px;">
-        <button class="btn btn-accent btn-sm" id="btnAddCategoria">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Subcategorias de produto</div>
-      <p class="muted" style="margin:-4px 0 14px;">Se preencher o "F" aqui, ele vale mais que o da categoria (Fator diferenciado). Deixe em branco pra herdar o F da categoria.</p>
-      <div id="subcategoriaRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <select id="sub_categoria" style="min-width:160px;">${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select>
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="sub_nome" placeholder="Nome da subcategoria"></div>
-        <input id="sub_fator" type="number" min="0" step="0.1" placeholder="F (%) — opcional" style="width:140px; padding:8px 9px; border:1px solid var(--line); border-radius:8px;">
-        <button class="btn btn-accent btn-sm" id="btnAddSubcategoria">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Produtos</div>
-      <p class="muted" style="margin:-4px 0 14px;">Cada produto pertence a uma categoria e (opcionalmente) uma subcategoria — o F efetivo dele aparece na lista.</p>
-      <div id="produtoRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="prod_nome" placeholder="Nome do produto"></div>
-        <select id="prod_categoria" style="min-width:150px;">
-          <option value="">Categoria</option>
-          ${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}
-        </select>
-        <select id="prod_subcategoria" style="min-width:150px;"><option value="">Subcategoria (opcional)</option></select>
-        <button class="btn btn-accent btn-sm" id="btnAddProduto">+ Adicionar</button>
       </div>
     </div>
 
@@ -3383,125 +3518,6 @@ function renderConfig(main){
     document.getElementById('func_nome').value = '';
     renderFuncionarioRows();
     showToast('Funcionário cadastrado.');
-  });
-
-  function renderCategoriaRows(){
-    const wrap = document.getElementById('categoriaRows');
-    if(!config.categoriasProdutos) config.categoriasProdutos = [];
-    if(config.categoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma categoria cadastrada.</div>`; return; }
-    wrap.innerHTML = config.categoriasProdutos.map((c,i)=>`
-      <div class="code-list-item">
-        <div><b>${escapeHtml(c.nome)}</b> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${(c.fator!==undefined && c.fator!==null && c.fator!=='') ? c.fator+'%' : '—'}</span></div>
-        <button class="icon-btn" data-delcategoria="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-delcategoria]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        const cat = config.categoriasProdutos[Number(b.dataset.delcategoria)];
-        const emUso = (config.produtos||[]).some(p=>p.categoriaId===cat.id) || (config.subcategoriasProdutos||[]).some(s=>s.categoriaId===cat.id);
-        if(emUso){ showToast('Essa categoria está em uso por produtos ou subcategorias — remova-os primeiro.'); return; }
-        config.categoriasProdutos.splice(Number(b.dataset.delcategoria),1);
-        await saveConfig();
-        renderView();
-        showToast('Categoria removida.');
-      });
-    });
-  }
-  renderCategoriaRows();
-
-  document.getElementById('btnAddCategoria').addEventListener('click', async ()=>{
-    const nome = document.getElementById('cat_nome').value.trim();
-    const fatorRaw = document.getElementById('cat_fator').value.trim();
-    if(!nome){ showToast('Informe o nome da categoria.'); return; }
-    config.categoriasProdutos.push({ id: uid('cat'), nome, fator: fatorRaw==='' ? '' : Number(fatorRaw) });
-    await saveConfig();
-    renderView();
-    showToast('Categoria cadastrada.');
-  });
-
-  function renderSubcategoriaRows(){
-    const wrap = document.getElementById('subcategoriaRows');
-    if(!config.subcategoriasProdutos) config.subcategoriasProdutos = [];
-    if(config.subcategoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma subcategoria cadastrada.</div>`; return; }
-    wrap.innerHTML = config.subcategoriasProdutos.map((s,i)=>{
-      const cat = (config.categoriasProdutos||[]).find(c=>c.id===s.categoriaId);
-      const temFatorProprio = s.fator!==undefined && s.fator!==null && s.fator!=='';
-      return `
-      <div class="code-list-item">
-        <div><b>${escapeHtml(s.nome)}</b> <span class="muted">(${cat?escapeHtml(cat.nome):'—'})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${temFatorProprio ? s.fator+'% (diferenciado)' : 'herda da categoria'}</span></div>
-        <button class="icon-btn" data-delsubcategoria="${i}" title="Remover">✕</button>
-      </div>
-    `;}).join('');
-    wrap.querySelectorAll('[data-delsubcategoria]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        const sub = config.subcategoriasProdutos[Number(b.dataset.delsubcategoria)];
-        const emUso = (config.produtos||[]).some(p=>p.subcategoriaId===sub.id);
-        if(emUso){ showToast('Essa subcategoria está em uso por produtos — remova-os primeiro.'); return; }
-        config.subcategoriasProdutos.splice(Number(b.dataset.delsubcategoria),1);
-        await saveConfig();
-        renderView();
-        showToast('Subcategoria removida.');
-      });
-    });
-  }
-  renderSubcategoriaRows();
-
-  document.getElementById('btnAddSubcategoria').addEventListener('click', async ()=>{
-    const categoriaId = document.getElementById('sub_categoria').value;
-    const nome = document.getElementById('sub_nome').value.trim();
-    const fatorRaw = document.getElementById('sub_fator').value.trim();
-    if(!categoriaId){ showToast('Cadastre uma categoria primeiro.'); return; }
-    if(!nome){ showToast('Informe o nome da subcategoria.'); return; }
-    config.subcategoriasProdutos.push({ id: uid('sub'), categoriaId, nome, fator: fatorRaw==='' ? '' : Number(fatorRaw) });
-    await saveConfig();
-    renderView();
-    showToast('Subcategoria cadastrada.');
-  });
-
-  function renderProdutoRows(){
-    const wrap = document.getElementById('produtoRows');
-    if(!config.produtos) config.produtos = [];
-    if(config.produtos.length===0){ wrap.innerHTML = `<div class="empty">Nenhum produto cadastrado.</div>`; return; }
-    wrap.innerHTML = config.produtos.map((p,i)=>{
-      const cat = (config.categoriasProdutos||[]).find(c=>c.id===p.categoriaId);
-      const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===p.subcategoriaId);
-      return `
-      <div class="code-list-item">
-        <div><b>${escapeHtml(p.nome)}</b> <span class="muted">(${cat?escapeHtml(cat.nome):'—'}${sub?' / '+escapeHtml(sub.nome):''})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${getFatorPercentual(p.id)}%</span></div>
-        <button class="icon-btn" data-delproduto="${i}" title="Remover">✕</button>
-      </div>
-    `;}).join('');
-    wrap.querySelectorAll('[data-delproduto]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        config.produtos.splice(Number(b.dataset.delproduto),1);
-        await saveConfig();
-        renderView();
-        showToast('Produto removido.');
-      });
-    });
-  }
-  renderProdutoRows();
-
-  const prodCategoriaSel = document.getElementById('prod_categoria');
-  const prodSubcategoriaSel = document.getElementById('prod_subcategoria');
-  function atualizarSubcategoriasDoProduto(){
-    const catId = prodCategoriaSel.value;
-    const subs = (config.subcategoriasProdutos||[]).filter(s=>s.categoriaId===catId);
-    prodSubcategoriaSel.innerHTML = `<option value="">Subcategoria (opcional)</option>` + subs.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('');
-  }
-  prodCategoriaSel.addEventListener('change', atualizarSubcategoriasDoProduto);
-  atualizarSubcategoriasDoProduto();
-
-  document.getElementById('btnAddProduto').addEventListener('click', async ()=>{
-    const nome = document.getElementById('prod_nome').value.trim();
-    const categoriaId = prodCategoriaSel.value;
-    const subcategoriaId = prodSubcategoriaSel.value;
-    if(!nome){ showToast('Informe o nome do produto.'); return; }
-    if(!categoriaId){ showToast('Escolha uma categoria.'); return; }
-    config.produtos.push({ id: uid('prod'), nome, categoriaId, subcategoriaId: subcategoriaId || null });
-    await saveConfig();
-    renderView();
-    showToast('Produto cadastrado.');
   });
 
   function renderPaymentRows(){
