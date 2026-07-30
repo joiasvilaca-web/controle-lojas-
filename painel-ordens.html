@@ -2243,6 +2243,8 @@ function renderNovaOrdem(main){
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
       lojaNotaId: tempPagHolder.lojaNotaId || '',
+      localAtual: 'loja',
+      historicoLocal: [{ local:'loja', em: Date.now(), por: currentUser.nome }],
       observacoes: tempObsHolder.observacoes,
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
@@ -2312,6 +2314,8 @@ function renderNovaOrdem(main){
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
       lojaNotaId: tempPagHolder.lojaNotaId || '',
+      localAtual: 'loja',
+      historicoLocal: [{ local:'loja', em: Date.now(), por: currentUser.nome }],
       observacoes: tempObsHolder.observacoes,
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
@@ -2346,12 +2350,53 @@ async function openEditModal(orderId, somenteLeitura){
   }
 }
 
+/**
+ * Rastreamento simples de onde a peça está fisicamente: na loja ou enviada para a fábrica
+ * (fabricação/laser/conserto externo). Qualquer nível com acesso à ordem pode alternar
+ * (inclusive a oficina, que normalmente só vê observações — essa é a exceção proposital,
+ * já que é quem mais lida com o envio/retorno da fábrica no dia a dia).
+ * A troca já salva na hora (não depende do botão "Salvar alterações" do resto do formulário).
+ */
+function mountLocalizacao(container, order, somenteLeitura){
+  function draw(){
+    const naFabrica = order.localAtual === 'fabrica';
+    const hist = (order.historicoLocal||[]).slice(-5).reverse();
+    container.innerHTML = `
+      <div class="section-label" style="margin-top:14px;">Localização da peça</div>
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <span class="badge" style="background:${naFabrica?'var(--wait-soft)':'var(--ok-soft)'}; color:${naFabrica?'var(--wait)':'var(--ok)'};">
+          ${naFabrica ? '🏭 Na fábrica' : '📍 Na loja'}
+        </span>
+        ${somenteLeitura ? '' : `<button type="button" class="btn btn-ghost btn-sm" id="btnToggleLocal">${naFabrica ? 'Registrar retorno para a loja' : 'Enviar para a fábrica'}</button>`}
+      </div>
+      ${hist.length ? `
+        <div class="muted" style="margin-top:8px; font-size:12px;">
+          ${hist.map(h=>`${h.local==='fabrica'?'🏭 Enviado para a fábrica':'📍 Retornou para a loja'} — ${fmtDate(new Date(h.em).toISOString().slice(0,10))} por ${escapeHtml(h.por||'—')}`).join('<br>')}
+        </div>
+      ` : ''}
+    `;
+    if(!somenteLeitura){
+      const btn = container.querySelector('#btnToggleLocal');
+      btn.addEventListener('click', async ()=>{
+        order.localAtual = naFabrica ? 'loja' : 'fabrica';
+        if(!order.historicoLocal) order.historicoLocal = [];
+        order.historicoLocal.push({ local: order.localAtual, em: Date.now(), por: currentUser.nome });
+        await saveOrders();
+        showToast(order.localAtual==='fabrica' ? 'Marcado como enviado para a fábrica.' : 'Marcado como retornado para a loja.');
+        draw();
+      });
+    }
+  }
+  draw();
+}
+
 function openEditModalOficina(order){
   openModal(`
     <h3>Ordem de ${escapeHtml(order.cliente)}</h3>
     <p>${escapeHtml(order.serviceTypeName)} · ${fmtDate(order.data)} · Loja ${escapeHtml(order.loja)} · Status ${statusLabel(order.status)}</p>
-    <div class="locked-note">🔒 Este acesso permite apenas incluir observações e dar ciência. Para alterar os demais dados, fale com a vendedora ou a diretoria.</div>
+    <div class="locked-note">🔒 Este acesso permite apenas incluir observações, dar ciência e atualizar a localização da peça. Para alterar os demais dados, fale com a vendedora ou a diretoria.</div>
     ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
+    <div id="localContainerOficina"></div>
     <div id="fotoContainerEditOficina"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
@@ -2359,6 +2404,7 @@ function openEditModalOficina(order){
       <button class="btn btn-ghost" id="editCancel">Fechar</button>
     </div>
   `);
+  mountLocalizacao(document.getElementById('localContainerOficina'), order, false);
   mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
   document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
@@ -2407,6 +2453,7 @@ function openEditModalCompleto(order, opts){
     </div>
     <div class="muted" id="fatorHintEdit" style="margin:-6px 0 10px;"></div>
     <div id="pagamentoContainerEdit"></div>
+    <div id="localContainerEdit"></div>
     <div class="field" style="margin-top:6px;">
       <label>Descrição do serviço <span class="muted">(o cliente vê isso na página de acompanhamento)</span></label>
       <textarea id="e_descricao" style="min-height:70px;">${escapeHtml(order.descricao||'')}</textarea>
@@ -2423,6 +2470,7 @@ function openEditModalCompleto(order, opts){
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
+  mountLocalizacao(document.getElementById('localContainerEdit'), order, somenteLeitura);
   wireClienteFields('e', { buscarClientePorCpf: true });
   document.getElementById('printBtnCompleto').addEventListener('click', ()=> printOrder(order) );
 
@@ -2594,6 +2642,11 @@ function renderPainel(main){
     <div class="filters">
       <select id="filtroServico"><option value="">Todos os serviços</option>${st.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}</select>
       <select id="filtroLoja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
+      <select id="filtroLocal">
+        <option value="">Local: todos</option>
+        <option value="loja">📍 Na loja</option>
+        <option value="fabrica">🏭 Na fábrica</option>
+      </select>
       <select id="filtroStatus">
         <option value="">Todos os status (exceto entregues)</option>
         <option value="rascunho">Rascunho</option>
@@ -2650,6 +2703,7 @@ function renderPainel(main){
 
   const fServico = document.getElementById('filtroServico');
   const fLoja = document.getElementById('filtroLoja');
+  const fLocal = document.getElementById('filtroLocal');
   const fStatus = document.getElementById('filtroStatus');
   const fData = document.getElementById('filtroData');
   const fBusca = document.getElementById('filtroBusca');
@@ -2668,6 +2722,7 @@ function renderPainel(main){
     }
     if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
     if(fLoja.value) list = list.filter(o=>o.loja===fLoja.value);
+    if(fLocal.value) list = list.filter(o=>(o.localAtual||'loja')===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()) {
       const q = fBusca.value.trim().toLowerCase();
@@ -2754,7 +2809,7 @@ function renderPainel(main){
         <td>${escapeHtml(o.telefone)}</td>
         <td>${escapeHtml(o.via)}</td>
         <td>${escapeHtml(o.vendedora)}</td>
-        <td><span class="badge badge-loja">${escapeHtml(o.loja)}</span></td>
+        <td><span class="badge badge-loja">${escapeHtml(o.loja)}</span>${o.localAtual==='fabrica' ? `<div class="badge" style="margin-top:4px; background:var(--wait-soft); color:var(--wait);">🏭 Fábrica</div>` : ''}</td>
         <td>${escapeHtml(o.serviceTypeName)}</td>
         <td>${fmtDate(o.data)}</td>
         <td style="color:var(--ok); white-space:nowrap;">R$ ${recebido.toFixed(2)}</td>
@@ -2785,9 +2840,9 @@ function renderPainel(main){
     `;
   }
 
-  [fServico,fLoja,fStatus,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
+  [fServico,fLoja,fLocal,fStatus,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
   document.getElementById('btnLimparFiltro').addEventListener('click', ()=>{
-    fServico.value=''; fLoja.value=''; fStatus.value=''; fData.value=''; fBusca.value=''; fSemPagamento.checked=false;
+    fServico.value=''; fLoja.value=''; fLocal.value=''; fStatus.value=''; fData.value=''; fBusca.value=''; fSemPagamento.checked=false;
     renderTable();
   });
 
