@@ -207,7 +207,7 @@
   <div class="tabbar">
     <button class="tab active" data-tab="transferencias"><span class="tab-dot"></span>Transferências</button>
     <button class="tab" data-tab="reposicao"><span class="tab-dot"></span>Reposição</button>
-    <button class="tab" data-tab="config">⚙️ Configurações</button>
+    <a class="tab tab-link-external" href="index.html#config" style="text-decoration:none; display:inline-flex; align-items:center;">⚙️ Configurações</a>
   </div>
 
   <div class="toolbar">
@@ -534,22 +534,37 @@
   }
 
   const CONFIG_ROW_ID = "config";
+  // A partir daqui a config é a mesma tabela usada pelo hub (index.html) e pelo Painel de O.S.:
+  // "gestao_config" (linha id='config'). STORES/PRODUCTS/METALS/funcionarios são derivados dela.
+  let unificadoBruto = null;
   async function loadConfig(){
     try{
-      const { data, error } = await supabaseClient.from("controle_config").select("id,payload").eq("id", CONFIG_ROW_ID).maybeSingle();
+      const { data, error } = await supabaseClient.from("gestao_config").select("payload").eq("id", CONFIG_ROW_ID).maybeSingle();
       if(error) throw error;
       const cfg = (data && data.payload) || {};
-      if(Array.isArray(cfg.stores) && cfg.stores.length){ STORES.length = 0; STORES.push(...cfg.stores); }
-      if(Array.isArray(cfg.products) && cfg.products.length){ PRODUCTS.length = 0; PRODUCTS.push(...cfg.products); }
-      if(Array.isArray(cfg.metals) && cfg.metals.length){ METALS.length = 0; METALS.push(...cfg.metals); }
-      state.funcionarios = Array.isArray(cfg.funcionarios) ? cfg.funcionarios : [];
+      unificadoBruto = cfg;
+      const lojas = Array.isArray(cfg.lojas) ? cfg.lojas : [];
+      if(lojas.length){ STORES.length = 0; STORES.push(...lojas.map(l=>l.abreviacao)); }
+      if(Array.isArray(cfg.joiasProdutos) && cfg.joiasProdutos.length){ PRODUCTS.length = 0; PRODUCTS.push(...cfg.joiasProdutos); }
+      if(Array.isArray(cfg.metais) && cfg.metais.length){ METALS.length = 0; METALS.push(...cfg.metais); }
+      state.funcionarios = (Array.isArray(cfg.funcionarios) ? cfg.funcionarios : []).map(f=>({
+        id: f.id, nome: f.nome,
+        cargo: (f.cargos||[]).includes("diretor") ? "diretor" : "vendedora"
+      }));
     }catch(e){ console.error("Erro ao carregar configurações:", e); }
   }
 
+  // Mantido só por compatibilidade: a edição de cadastros agora acontece em index.html#config.
+  // Isso NÃO deve ser chamado normalmente (a aba de config foi removida da interface),
+  // mas se algum fluxo antigo ainda chamar, escreve de volta na tabela unificada sem perder
+  // os campos que pertencem a outros módulos (produtos de ótica, tipos de serviço, etc.).
   async function saveConfigData(){
-    const payload = { stores: STORES, products: PRODUCTS, metals: METALS, funcionarios: state.funcionarios };
+    const base = unificadoBruto || {};
+    const payload = Object.assign({}, base, {
+      stores: undefined, products: undefined, metals: undefined, // campos legados, não usar mais
+    });
     try{
-      const { error } = await supabaseClient.from("controle_config").upsert({ id: CONFIG_ROW_ID, payload, updated_at: new Date().toISOString() });
+      const { error } = await supabaseClient.from("gestao_config").upsert({ id: CONFIG_ROW_ID, payload, updated_at: new Date().toISOString() });
       if(error) throw error;
     }catch(e){ console.error("Erro ao salvar configurações:", e); }
   }
@@ -1446,7 +1461,7 @@
     }
   }
 
-  document.querySelectorAll(".tab").forEach(btn=>{
+  document.querySelectorAll(".tab:not(.tab-link-external)").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       document.querySelectorAll(".tab").forEach(b=>b.classList.remove("active"));
       btn.classList.add("active");

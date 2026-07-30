@@ -495,6 +495,7 @@
     <div class="who">
       <span id="whoName"><b></b></span>
       <span class="level-pill" id="whoLevel"></span>
+      <a class="icon-btn" id="linkConfigHub" href="index.html#config" title="Configurações (Gestão e Controle)" style="display:none; text-decoration:none;">⚙️</a>
       <button class="icon-btn" id="btnLogout" title="Sair">⏻</button>
     </div>
   </header>
@@ -668,59 +669,108 @@ async function uploadFotoParaDrive(dataUrl, filename){
   return data;
 }
 
+/**
+ * A partir daqui a Config deixou de ser exclusiva deste app: ela é compartilhada
+ * pelo hub (index.html), pelo módulo de Transferências e pelo futuro módulo de Vendas,
+ * salva na tabela única "gestao_config" (linha id='config'). Aqui só fazemos a ponte:
+ * lemos o formato unificado e montamos o objeto `config` com os MESMOS nomes de campo
+ * que o resto deste arquivo já usa (serviceTypes, paymentTypes, mensagemPadrao, etc.),
+ * e ao salvar fazemos o caminho inverso. Isso evita reescrever toda a lógica do painel.
+ */
+async function configGetUnificada(){
+  try{
+    const { data, error } = await supabaseClient.from('gestao_config').select('payload').eq('id','config').maybeSingle();
+    if(error) throw error;
+    return data ? data.payload : null;
+  }catch(e){ console.error('erro ao carregar config unificada', e); return null; }
+}
+async function configSetUnificada(payload){
+  try{
+    const { error } = await supabaseClient.from('gestao_config').upsert({ id:'config', payload, updated_at: new Date().toISOString() });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar config unificada', e); return false; }
+}
+function mapFuncionarioParaLegado(f){
+  const cargos = f.cargos || (f.area ? [f.area] : []);
+  return { id:f.id, nome:f.nome, cargos, area: cargos.includes('oficina') ? 'oficina' : 'vendedora' };
+}
+function montarConfigLegadoApartirDoUnificado(u){
+  return {
+    lojas: u.lojas || [],
+    funcionarios: (u.funcionarios||[]).map(mapFuncionarioParaLegado),
+    users: u.users || [],
+    paymentTypes: u.formasPagamento || [],
+    serviceTypes: u.tiposServico || [],
+    categoriasProdutos: (u.produtosOtica && u.produtosOtica.categorias) || [],
+    subcategoriasProdutos: (u.produtosOtica && u.produtosOtica.subcategorias) || [],
+    produtos: (u.produtosOtica && u.produtosOtica.produtos) || [],
+    mensagemPadrao: (u.mensagens && u.mensagens.padrao) || DEFAULT_TEMPLATE,
+    mensagemPronto: (u.mensagens && u.mensagens.pronto) || DEFAULT_TEMPLATE_PRONTO,
+    mensagemEntregue: (u.mensagens && u.mensagens.entregue) || DEFAULT_TEMPLATE_ENTREGUE,
+    mensagemAniversario: (u.mensagens && u.mensagens.aniversario) || DEFAULT_TEMPLATE_ANIVERSARIO,
+    viaSequences: u.viaSequences || {},
+  };
+}
+function montarUnificadoApartirDoConfigLegado(c){
+  return {
+    lojas: c.lojas || [],
+    funcionarios: (c.funcionarios||[]).map(f=>({ id:f.id, nome:f.nome, cargos: f.cargos || (f.area?[f.area]:[]) })),
+    users: c.users || [],
+    formasPagamento: c.paymentTypes || [],
+    tiposServico: c.serviceTypes || [],
+    produtosOtica: {
+      categorias: c.categoriasProdutos || [],
+      subcategorias: c.subcategoriasProdutos || [],
+      produtos: c.produtos || []
+    },
+    joiasProdutos: (window.__configUnificadoBruto && window.__configUnificadoBruto.joiasProdutos) || [],
+    metais: (window.__configUnificadoBruto && window.__configUnificadoBruto.metais) || [],
+    mensagens: {
+      padrao: c.mensagemPadrao, pronto: c.mensagemPronto, entregue: c.mensagemEntregue, aniversario: c.mensagemAniversario
+    },
+    viaSequences: c.viaSequences || {},
+  };
+}
 async function loadAll(){
   const lojasPadrao = [
     { id: uid('loja'), nome: 'Vilaça Marechal Center', abreviacao: 'MC', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
-    { id: uid('loja'), nome: 'Vilaça João Beraldo', abreviacao: 'JB', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
+    { id: uid('loja'), nome: 'Vilaça João Beraldo', abreviacao: 'JV', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
     { id: uid('loja'), nome: 'Vilaça Jardim Norte', abreviacao: 'JN', cnpj:'', inscricaoEstadual:'', telefone:'', email:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' },
   ];
-  config = await storageGet('config', true);
-  if(!config){
-    config = {
-      serviceTypes:[
+  let unificado = await configGetUnificada();
+  if(!unificado){
+    unificado = {
+      lojas: lojasPadrao,
+      funcionarios: [],
+      users: [{ id:'u_diretor', nome:'Diretor(a)', senha:'diretor123', nivel:'diretoria' }],
+      formasPagamento: [
+        { id: uid('pt'), nome: 'Dinheiro' }, { id: uid('pt'), nome: 'Cartão de Crédito' },
+        { id: uid('pt'), nome: 'Cartão de Débito' }, { id: uid('pt'), nome: 'PIX' }
+      ],
+      tiposServico: [
         { id:'st_lente_simples', nome:'Lente Simples', maxPorDia:10, prazoMinimoDias:2 },
         { id:'st_multifocal', nome:'Lente Multifocal', maxPorDia:5, prazoMinimoDias:5 }
       ],
-      users:[
-        { id:'u_diretor', nome:'Diretor(a)', senha:'diretor123', nivel:'diretoria' }
-      ],
-      mensagemPadrao: DEFAULT_TEMPLATE,
-      mensagemPronto: DEFAULT_TEMPLATE_PRONTO,
-      mensagemEntregue: DEFAULT_TEMPLATE_ENTREGUE,
-      mensagemAniversario: DEFAULT_TEMPLATE_ANIVERSARIO,
-      paymentTypes: [
-        { id: uid('pt'), nome: 'Dinheiro' },
-        { id: uid('pt'), nome: 'Cartão de Crédito' },
-        { id: uid('pt'), nome: 'Cartão de Débito' },
-        { id: uid('pt'), nome: 'PIX' }
-      ],
-      viaSequences: {},
-      funcionarios: [],
-      lojas: lojasPadrao
+      produtosOtica: { categorias:[], subcategorias:[], produtos:[] },
+      joiasProdutos: [], metais: [],
+      mensagens: { padrao: DEFAULT_TEMPLATE, pronto: DEFAULT_TEMPLATE_PRONTO, entregue: DEFAULT_TEMPLATE_ENTREGUE, aniversario: DEFAULT_TEMPLATE_ANIVERSARIO },
+      viaSequences: {}
     };
-    await storageSet('config', config, true);
+    await configSetUnificada(unificado);
   }
-  if(!config.mensagemPadrao) config.mensagemPadrao = DEFAULT_TEMPLATE;
-  if(!config.mensagemPronto) config.mensagemPronto = DEFAULT_TEMPLATE_PRONTO;
-  if(!config.mensagemEntregue) config.mensagemEntregue = DEFAULT_TEMPLATE_ENTREGUE;
-  if(!config.mensagemAniversario) config.mensagemAniversario = DEFAULT_TEMPLATE_ANIVERSARIO;
-  if(!config.paymentTypes) config.paymentTypes = [
-    { id: uid('pt'), nome: 'Dinheiro' },
-    { id: uid('pt'), nome: 'Cartão de Crédito' },
-    { id: uid('pt'), nome: 'Cartão de Débito' },
-    { id: uid('pt'), nome: 'PIX' }
-  ];
-  if(!config.viaSequences) config.viaSequences = {};
-  if(!config.funcionarios) config.funcionarios = [];
+  window.__configUnificadoBruto = unificado;
+  config = montarConfigLegadoApartirDoUnificado(unificado);
   if(!config.lojas || config.lojas.length===0) config.lojas = lojasPadrao;
-  if(!config.categoriasProdutos) config.categoriasProdutos = [];
-  if(!config.subcategoriasProdutos) config.subcategoriasProdutos = [];
-  if(!config.produtos) config.produtos = [];
   orders = await storageGet('orders', true) || [];
   codes = await storageGet('codes', true) || [];
   clientes = await storageGet('clientes', true) || [];
 }
-async function saveConfig(){ await storageSet('config', config, true); }
+async function saveConfig(){
+  const unificado = montarUnificadoApartirDoConfigLegado(config);
+  window.__configUnificadoBruto = unificado;
+  await configSetUnificada(unificado);
+}
 async function saveOrders(){ await storageSet('orders', orders, true); }
 async function saveCodes(){ await storageSet('codes', codes, true); }
 async function saveClientes(){ await storageSet('clientes', clientes, true); }
@@ -1794,6 +1844,7 @@ function enterApp(){
   document.getElementById('view-app').style.display = 'block';
   document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
+  document.getElementById('linkConfigHub').style.display = currentUser.nivel==='diretoria' ? '' : 'none';
   buildTabs();
   currentTab = currentUser.nivel==='oficina' ? 'painel' : 'nova';
   renderTabs();
@@ -1823,10 +1874,6 @@ function tabsForLevel(){
   }
   if(currentUser.nivel==='oficina' || currentUser.nivel==='diretoria'){
     t.push({ id:'codigo', label:'Código', icon:'🔑' });
-  }
-  if(currentUser.nivel==='diretoria'){
-    t.push({ id:'produtos', label:'Produtos', icon:'📦' });
-    t.push({ id:'config', label:'Config', icon:'⚙️' });
   }
   return t;
 }
@@ -1867,8 +1914,6 @@ function renderView(){
   else if(currentTab==='agenda') renderAgenda(main);
   else if(currentTab==='clientes') renderClientes(main);
   else if(currentTab==='codigo') renderGerarCodigo(main);
-  else if(currentTab==='produtos') renderProdutos(main);
-  else if(currentTab==='config') renderConfig(main);
 }
 
 /* ============================================================
@@ -3123,495 +3168,6 @@ function renderGerarCodigo(main){
     codes = await storageGet('codes', true) || codes;
     renderCodeHistory();
   })();
-}
-
-/* ============================================================
-   CONFIGURAÇÕES (diretoria)
-   ============================================================ */
-/* ============================================================
-   PRODUTOS (tela exclusiva: Categorias, Subcategorias, Produtos)
-   O Fator (F) existe SOMENTE na subcategoria. Ao cadastrar um produto,
-   basta escolher a subcategoria — o F aparece automaticamente.
-   ============================================================ */
-function renderProdutos(main){
-  main.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1 class="page-title">Produtos</h1>
-        <p class="page-sub">Cadastro de categorias, subcategorias e produtos. O Fator (F) de cada venda é definido na subcategoria.</p>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Categorias</div>
-      <p class="muted" style="margin:-4px 0 14px;">Só organiza as subcategorias — o Fator (F) é definido lá, não aqui.</p>
-      <div id="categoriaRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
-        <button class="btn btn-accent btn-sm" id="btnAddCategoria">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Subcategorias</div>
-      <p class="muted" style="margin:-4px 0 14px;">O "F" aqui é obrigatório — é o percentual de Fator pago à vendedora sobre a venda de produtos dessa subcategoria.</p>
-      <div id="subcategoriaRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <select id="sub_categoria" style="min-width:160px;">${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select>
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="sub_nome" placeholder="Nome da subcategoria"></div>
-        <input id="sub_fator" type="number" min="0" step="0.1" placeholder="F (%)" style="width:110px; padding:8px 9px; border:1px solid var(--line); border-radius:8px;">
-        <button class="btn btn-accent btn-sm" id="btnAddSubcategoria">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Produtos</div>
-      <p class="muted" style="margin:-4px 0 14px;">Escolha a subcategoria — o Fator (F) dela aparece automaticamente no produto.</p>
-      <div id="produtoRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="prod_nome" placeholder="Nome do produto"></div>
-        <select id="prod_categoria" style="min-width:150px;">
-          <option value="">Categoria</option>
-          ${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}
-        </select>
-        <select id="prod_subcategoria" style="min-width:150px;"><option value="">Subcategoria</option></select>
-        <button class="btn btn-accent btn-sm" id="btnAddProduto">+ Adicionar</button>
-      </div>
-    </div>
-  `;
-
-  function renderCategoriaRows(){
-    const wrap = document.getElementById('categoriaRows');
-    if(!config.categoriasProdutos) config.categoriasProdutos = [];
-    if(config.categoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma categoria cadastrada.</div>`; return; }
-    wrap.innerHTML = config.categoriasProdutos.map((c,i)=>`
-      <div class="code-list-item">
-        <div><b>${escapeHtml(c.nome)}</b></div>
-        <button class="icon-btn" data-delcategoria="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-delcategoria]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        const cat = config.categoriasProdutos[Number(b.dataset.delcategoria)];
-        const emUso = (config.subcategoriasProdutos||[]).some(s=>s.categoriaId===cat.id);
-        if(emUso){ showToast('Essa categoria está em uso por subcategorias — remova-as primeiro.'); return; }
-        config.categoriasProdutos.splice(Number(b.dataset.delcategoria),1);
-        await saveConfig();
-        renderView();
-        showToast('Categoria removida.');
-      });
-    });
-  }
-  renderCategoriaRows();
-
-  document.getElementById('btnAddCategoria').addEventListener('click', async ()=>{
-    const nome = document.getElementById('cat_nome').value.trim();
-    if(!nome){ showToast('Informe o nome da categoria.'); return; }
-    config.categoriasProdutos.push({ id: uid('cat'), nome });
-    await saveConfig();
-    renderView();
-    showToast('Categoria cadastrada.');
-  });
-
-  function renderSubcategoriaRows(){
-    const wrap = document.getElementById('subcategoriaRows');
-    if(!config.subcategoriasProdutos) config.subcategoriasProdutos = [];
-    if(config.subcategoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma subcategoria cadastrada.</div>`; return; }
-    wrap.innerHTML = config.subcategoriasProdutos.map((s,i)=>{
-      const cat = (config.categoriasProdutos||[]).find(c=>c.id===s.categoriaId);
-      return `
-      <div class="code-list-item">
-        <div><b>${escapeHtml(s.nome)}</b> <span class="muted">(${cat?escapeHtml(cat.nome):'—'})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${s.fator}%</span></div>
-        <button class="icon-btn" data-delsubcategoria="${i}" title="Remover">✕</button>
-      </div>
-    `;}).join('');
-    wrap.querySelectorAll('[data-delsubcategoria]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        const sub = config.subcategoriasProdutos[Number(b.dataset.delsubcategoria)];
-        const emUso = (config.produtos||[]).some(p=>p.subcategoriaId===sub.id);
-        if(emUso){ showToast('Essa subcategoria está em uso por produtos — remova-os primeiro.'); return; }
-        config.subcategoriasProdutos.splice(Number(b.dataset.delsubcategoria),1);
-        await saveConfig();
-        renderView();
-        showToast('Subcategoria removida.');
-      });
-    });
-  }
-  renderSubcategoriaRows();
-
-  document.getElementById('btnAddSubcategoria').addEventListener('click', async ()=>{
-    const categoriaId = document.getElementById('sub_categoria').value;
-    const nome = document.getElementById('sub_nome').value.trim();
-    const fatorRaw = document.getElementById('sub_fator').value.trim();
-    if(!categoriaId){ showToast('Cadastre uma categoria primeiro.'); return; }
-    if(!nome){ showToast('Informe o nome da subcategoria.'); return; }
-    if(fatorRaw===''){ showToast('Informe o Fator (F%) — ele é obrigatório na subcategoria.'); return; }
-    config.subcategoriasProdutos.push({ id: uid('sub'), categoriaId, nome, fator: Number(fatorRaw) });
-    await saveConfig();
-    renderView();
-    showToast('Subcategoria cadastrada.');
-  });
-
-  function renderProdutoRows(){
-    const wrap = document.getElementById('produtoRows');
-    if(!config.produtos) config.produtos = [];
-    if(config.produtos.length===0){ wrap.innerHTML = `<div class="empty">Nenhum produto cadastrado.</div>`; return; }
-    wrap.innerHTML = config.produtos.map((p,i)=>{
-      const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===p.subcategoriaId);
-      const cat = sub ? (config.categoriasProdutos||[]).find(c=>c.id===sub.categoriaId) : null;
-      const caminho = [cat?cat.nome:null, sub?sub.nome:null].filter(Boolean).join(' / ');
-      return `
-      <div class="code-list-item">
-        <div><b>${escapeHtml(p.nome)}</b> <span class="muted">(${escapeHtml(caminho||'—')})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${getFatorPercentual(p.id)}%</span></div>
-        <button class="icon-btn" data-delproduto="${i}" title="Remover">✕</button>
-      </div>
-    `;}).join('');
-    wrap.querySelectorAll('[data-delproduto]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        config.produtos.splice(Number(b.dataset.delproduto),1);
-        await saveConfig();
-        renderView();
-        showToast('Produto removido.');
-      });
-    });
-  }
-  renderProdutoRows();
-
-  const prodCategoriaSel = document.getElementById('prod_categoria');
-  const prodSubcategoriaSel = document.getElementById('prod_subcategoria');
-  function atualizarSubcategoriasDoProduto(){
-    const catId = prodCategoriaSel.value;
-    const subs = (config.subcategoriasProdutos||[]).filter(s=>s.categoriaId===catId);
-    prodSubcategoriaSel.innerHTML = `<option value="">Subcategoria</option>` + subs.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)} (F: ${s.fator}%)</option>`).join('');
-  }
-  prodCategoriaSel.addEventListener('change', atualizarSubcategoriasDoProduto);
-  atualizarSubcategoriasDoProduto();
-
-  document.getElementById('btnAddProduto').addEventListener('click', async ()=>{
-    const nome = document.getElementById('prod_nome').value.trim();
-    const subcategoriaId = prodSubcategoriaSel.value;
-    if(!nome){ showToast('Informe o nome do produto.'); return; }
-    if(!subcategoriaId){ showToast('Escolha uma subcategoria — é dela que vem o Fator.'); return; }
-    config.produtos.push({ id: uid('prod'), nome, subcategoriaId });
-    await saveConfig();
-    renderView();
-    showToast('Produto cadastrado.');
-  });
-}
-
-function renderConfig(main){
-  main.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1 class="page-title">Configurações</h1>
-        <p class="page-sub">Defina os parâmetros de agendamento, os acessos e a mensagem enviada aos clientes.</p>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Tipos de serviço</div>
-      <div class="config-row" style="border-bottom:none; padding-top:0;">
-        <div class="muted">Nome do serviço</div>
-        <div class="muted">Máx. por dia</div>
-        <div class="muted">Prazo mínimo (dias)</div>
-        <div></div>
-      </div>
-      <div id="serviceRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px;">
-        <button class="btn btn-ghost btn-sm" id="btnAddServico">+ Adicionar tipo de serviço</button>
-        <button class="btn btn-accent btn-sm" id="btnSalvarServicos">Salvar alterações</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Lojas</div>
-      <p class="muted" style="margin:-4px 0 14px;">Cadastro completo de cada loja/empresa. A abreviação (2 letras) é usada para gerar o número da via automaticamente.</p>
-      <div id="lojaRows"></div>
-      <div style="margin-top:14px;">
-        <button class="btn btn-accent btn-sm" id="btnNovaLoja">+ Nova loja</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Funcionários</div>
-      <p class="muted" style="margin:-4px 0 14px;">Cadastre por área — vendedoras aparecem nos campos de venda, ourives aparecem nos campos da oficina. Isso permite selecionar em vez de digitar o nome toda vez.</p>
-      <div id="funcionarioRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
-        <select id="func_area" style="min-width:140px;">
-          <option value="vendedora">Vendedora</option>
-          <option value="oficina">Oficina (ourives)</option>
-        </select>
-        <button class="btn btn-accent btn-sm" id="btnAddFuncionario">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Formas de pagamento</div>
-      <p class="muted" style="margin:-4px 0 14px;">Essas opções aparecem no campo de pagamento das ordens de serviço.</p>
-      <div id="paymentRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px;">
-        <div class="field" style="flex:1; margin-bottom:0;"><input id="pt_nome" placeholder="Nome da forma de pagamento"></div>
-        <button class="btn btn-accent btn-sm" id="btnAddPaymentType">+ Adicionar</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Senhas de acesso</div>
-      <div id="userRows"></div>
-      <div style="margin-top:14px;">
-        <div class="grid-3">
-          <div class="field"><label>Nome</label><input id="u_nome" placeholder="Nome"></div>
-          <div class="field"><label>Senha</label><input id="u_senha" placeholder="Senha"></div>
-          <div class="field">
-            <label>Nível</label>
-            <select id="u_nivel">
-              <option value="vendedora">Vendedora</option>
-              <option value="oficina">Oficina</option>
-              <option value="diretoria">Diretoria</option>
-            </select>
-          </div>
-        </div>
-        <button class="btn btn-accent btn-sm" id="btnAddUser">+ Adicionar senha</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Mensagens de notificação</div>
-      <p class="muted" style="margin:-4px 0 14px;">Cada status usa sua própria mensagem ao enviar por WhatsApp ou e-mail. Marcadores disponíveis: {status} {cliente} {via} {servico} {data} {loja} {vendedora} {recebidoPor} {nota} {notaLinha} {linkAcompanhamento} — substituídos automaticamente ao enviar. Use {notaLinha} para inserir a linha "Número da nota: ..." apenas quando ela estiver preenchida na ordem (some sozinha se estiver vazia); {nota} traz só o número puro, se preferir montar a linha manualmente. Use {linkAcompanhamento} para inserir o link onde o cliente acompanha o status da ordem em tempo real, sem precisar de novas mensagens a cada mudança.</p>
-
-      <div style="margin-bottom:20px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <label style="font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint);">Mensagem geral (Aguardando / Cancelado)</label>
-          <button class="btn btn-ghost btn-sm" id="btnRestaurarGeral">Restaurar padrão</button>
-        </div>
-        <textarea id="c_mensagemGeral" class="plain-input">${escapeHtml(config.mensagemPadrao)}</textarea>
-      </div>
-
-      <div style="margin-bottom:20px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <label style="font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint);">Mensagem — Status Pronto</label>
-          <button class="btn btn-ghost btn-sm" id="btnRestaurarPronto">Restaurar padrão</button>
-        </div>
-        <textarea id="c_mensagemPronto" class="plain-input">${escapeHtml(config.mensagemPronto)}</textarea>
-      </div>
-
-      <div style="margin-bottom:8px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <label style="font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint);">Mensagem — Status Entregue</label>
-          <button class="btn btn-ghost btn-sm" id="btnRestaurarEntregue">Restaurar padrão</button>
-        </div>
-        <textarea id="c_mensagemEntregue" class="plain-input">${escapeHtml(config.mensagemEntregue)}</textarea>
-        <p class="muted" style="margin-top:6px;">Use {recebidoPor} para inserir o nome de quem recebeu o produto.</p>
-      </div>
-
-      <button class="btn btn-accent btn-sm" id="btnSalvarMensagens">Salvar mensagens</button>
-    </div>
-
-    <div class="card">
-      <div class="section-label">Mensagem de aniversário</div>
-      <p class="muted" style="margin:-4px 0 14px;">Usada na aba Clientes para enviar parabéns aos aniversariantes do dia. Marcador disponível: {cliente}.</p>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-        <label style="font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint);">Mensagem</label>
-        <button class="btn btn-ghost btn-sm" id="btnRestaurarAniversario">Restaurar padrão</button>
-      </div>
-      <textarea id="c_mensagemAniversario" class="plain-input">${escapeHtml(config.mensagemAniversario)}</textarea>
-      <button class="btn btn-accent btn-sm" style="margin-top:12px;" id="btnSalvarAniversario">Salvar mensagem</button>
-    </div>
-  `;
-
-  function renderServiceRows(){
-    const wrap = document.getElementById('serviceRows');
-    wrap.innerHTML = config.serviceTypes.map((s,i)=>`
-      <div class="config-row" data-idx="${i}">
-        <input value="${escapeHtml(s.nome)}" data-field="nome">
-        <input type="number" min="1" value="${s.maxPorDia}" data-field="maxPorDia">
-        <input type="number" min="0" value="${s.prazoMinimoDias}" data-field="prazoMinimoDias">
-        <button class="icon-btn" data-remove="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-remove]').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        config.serviceTypes.splice(Number(b.dataset.remove),1);
-        renderServiceRows();
-      });
-    });
-  }
-  renderServiceRows();
-
-  document.getElementById('btnAddServico').addEventListener('click', ()=>{
-    config.serviceTypes.push({ id: uid('st'), nome:'Novo serviço', maxPorDia:5, prazoMinimoDias:1 });
-    renderServiceRows();
-  });
-
-  document.getElementById('btnSalvarServicos').addEventListener('click', async ()=>{
-    const rows = document.querySelectorAll('#serviceRows .config-row');
-    rows.forEach((row, i)=>{
-      const nome = row.querySelector('[data-field="nome"]').value.trim() || 'Serviço';
-      const max = Math.max(1, parseInt(row.querySelector('[data-field="maxPorDia"]').value)||1);
-      const prazo = Math.max(0, parseInt(row.querySelector('[data-field="prazoMinimoDias"]').value)||0);
-      config.serviceTypes[i].nome = nome;
-      config.serviceTypes[i].maxPorDia = max;
-      config.serviceTypes[i].prazoMinimoDias = prazo;
-    });
-    await saveConfig();
-    showToast('Parâmetros de serviço salvos.');
-    renderServiceRows();
-  });
-
-  function renderLojaRows(){
-    const wrap = document.getElementById('lojaRows');
-    if(!config.lojas) config.lojas = [];
-    if(config.lojas.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma loja cadastrada.</div>`; return; }
-    wrap.innerHTML = config.lojas.map((l,i)=>`
-      <div class="code-list-item">
-        <div><span class="code-chip" style="font-size:11.5px; padding:4px 10px;">${escapeHtml(l.abreviacao)}</span> <b style="margin-left:8px;">${escapeHtml(l.nome)}</b>${l.cnpj?`<div class="muted" style="margin-top:2px;">${escapeHtml(l.cnpj)}</div>`:''}</div>
-        <div style="display:flex; gap:4px;">
-          <button class="icon-btn" data-editloja="${i}" title="Editar">✎</button>
-          <button class="icon-btn" data-delloja="${i}" title="Remover">✕</button>
-        </div>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-editloja]').forEach(b=>{
-      b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.editloja)]) );
-    });
-    wrap.querySelectorAll('[data-delloja]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        if(config.lojas.length<=1){ showToast('É necessário manter ao menos uma loja cadastrada.'); return; }
-        config.lojas.splice(Number(b.dataset.delloja),1);
-        await saveConfig();
-        renderLojaRows();
-        showToast('Loja removida.');
-      });
-    });
-  }
-  renderLojaRows();
-  document.getElementById('btnNovaLoja').addEventListener('click', ()=> openLojaModal(null) );
-
-  function renderFuncionarioRows(){
-    const wrap = document.getElementById('funcionarioRows');
-    if(!config.funcionarios) config.funcionarios = [];
-    if(config.funcionarios.length===0){ wrap.innerHTML = `<div class="empty">Nenhum funcionário cadastrado.</div>`; return; }
-    wrap.innerHTML = config.funcionarios.map((f,i)=>`
-      <div class="code-list-item">
-        <div><b>${escapeHtml(f.nome)}</b> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">${f.area==='vendedora'?'Vendedora':'Oficina'}</span></div>
-        <button class="icon-btn" data-delfuncionario="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-delfuncionario]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        config.funcionarios.splice(Number(b.dataset.delfuncionario),1);
-        await saveConfig();
-        renderFuncionarioRows();
-        showToast('Funcionário removido.');
-      });
-    });
-  }
-  renderFuncionarioRows();
-
-  document.getElementById('btnAddFuncionario').addEventListener('click', async ()=>{
-    const nome = document.getElementById('func_nome').value.trim();
-    const area = document.getElementById('func_area').value;
-    if(!nome){ showToast('Informe o nome do funcionário.'); return; }
-    config.funcionarios.push({ id: uid('func'), nome, area });
-    await saveConfig();
-    document.getElementById('func_nome').value = '';
-    renderFuncionarioRows();
-    showToast('Funcionário cadastrado.');
-  });
-
-  function renderPaymentRows(){
-    const wrap = document.getElementById('paymentRows');
-    if(!config.paymentTypes) config.paymentTypes = [];
-    if(config.paymentTypes.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma forma de pagamento cadastrada.</div>`; return; }
-    wrap.innerHTML = config.paymentTypes.map((pt,i)=>`
-      <div class="code-list-item">
-        <div>${escapeHtml(pt.nome)}</div>
-        <button class="icon-btn" data-delpayment="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-delpayment]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        config.paymentTypes.splice(Number(b.dataset.delpayment),1);
-        await saveConfig();
-        renderPaymentRows();
-        showToast('Forma de pagamento removida.');
-      });
-    });
-  }
-  renderPaymentRows();
-
-  document.getElementById('btnAddPaymentType').addEventListener('click', async ()=>{
-    const nome = document.getElementById('pt_nome').value.trim();
-    if(!nome){ showToast('Informe o nome da forma de pagamento.'); return; }
-    config.paymentTypes.push({ id: uid('pt'), nome });
-    await saveConfig();
-    document.getElementById('pt_nome').value = '';
-    renderPaymentRows();
-    showToast('Forma de pagamento adicionada.');
-  });
-
-  function renderUserRows(){
-    const wrap = document.getElementById('userRows');
-    wrap.innerHTML = config.users.map((u,i)=>`
-      <div class="code-list-item">
-        <div><b>${escapeHtml(u.nome)}</b> <span class="muted" style="margin-left:8px;">senha: ${escapeHtml(u.senha)}</span></div>
-        <div style="display:flex; align-items:center; gap:10px;">
-          <span class="level-pill" style="background:var(--surface-2); color:var(--ink-soft);">${levelLabel(u.nivel)}</span>
-          <button class="icon-btn" data-deluser="${i}" title="Remover">✕</button>
-        </div>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-deluser]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        if(config.users.length<=1){ showToast('É necessário manter ao menos um acesso.'); return; }
-        config.users.splice(Number(b.dataset.deluser),1);
-        await saveConfig();
-        renderUserRows();
-        showToast('Acesso removido.');
-      });
-    });
-  }
-  renderUserRows();
-
-  document.getElementById('btnAddUser').addEventListener('click', async ()=>{
-    const nome = document.getElementById('u_nome').value.trim();
-    const senha = document.getElementById('u_senha').value.trim();
-    const nivel = document.getElementById('u_nivel').value;
-    if(!nome || !senha){ showToast('Preencha nome e senha.'); return; }
-    if(config.users.some(u=>u.senha===senha)){ showToast('Essa senha já está em uso.'); return; }
-    config.users.push({ id: uid('u'), nome, senha, nivel });
-    await saveConfig();
-    document.getElementById('u_nome').value='';
-    document.getElementById('u_senha').value='';
-    renderUserRows();
-    showToast('Senha criada.');
-  });
-
-  document.getElementById('btnSalvarMensagens').addEventListener('click', async ()=>{
-    config.mensagemPadrao = document.getElementById('c_mensagemGeral').value;
-    config.mensagemPronto = document.getElementById('c_mensagemPronto').value;
-    config.mensagemEntregue = document.getElementById('c_mensagemEntregue').value;
-    await saveConfig();
-    showToast('Mensagens salvas.');
-  });
-  document.getElementById('btnRestaurarGeral').addEventListener('click', ()=>{
-    document.getElementById('c_mensagemGeral').value = DEFAULT_TEMPLATE;
-  });
-  document.getElementById('btnRestaurarPronto').addEventListener('click', ()=>{
-    document.getElementById('c_mensagemPronto').value = DEFAULT_TEMPLATE_PRONTO;
-  });
-  document.getElementById('btnRestaurarEntregue').addEventListener('click', ()=>{
-    document.getElementById('c_mensagemEntregue').value = DEFAULT_TEMPLATE_ENTREGUE;
-  });
-  document.getElementById('btnSalvarAniversario').addEventListener('click', async ()=>{
-    config.mensagemAniversario = document.getElementById('c_mensagemAniversario').value;
-    await saveConfig();
-    showToast('Mensagem de aniversário salva.');
-  });
-  document.getElementById('btnRestaurarAniversario').addEventListener('click', ()=>{
-    document.getElementById('c_mensagemAniversario').value = DEFAULT_TEMPLATE_ANIVERSARIO;
-  });
 }
 
 /* ============================================================
