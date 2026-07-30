@@ -713,6 +713,9 @@ async function loadAll(){
   if(!config.viaSequences) config.viaSequences = {};
   if(!config.funcionarios) config.funcionarios = [];
   if(!config.lojas || config.lojas.length===0) config.lojas = lojasPadrao;
+  if(!config.categoriasProdutos) config.categoriasProdutos = [];
+  if(!config.subcategoriasProdutos) config.subcategoriasProdutos = [];
+  if(!config.produtos) config.produtos = [];
   orders = await storageGet('orders', true) || [];
   codes = await storageGet('codes', true) || [];
   clientes = await storageGet('clientes', true) || [];
@@ -1908,6 +1911,29 @@ function funcionarioOptionsTodosHtml(selected){
 }
 
 /* ============================================================
+   PRODUTOS / CATEGORIAS / SUBCATEGORIAS / FATOR (F)
+   ============================================================ */
+/** Retorna o percentual de Fator (F) efetivo de um produto: usa o da subcategoria se definido, senão herda da categoria. */
+function getFatorPercentual(produtoId){
+  const produto = (config.produtos||[]).find(p=>p.id===produtoId);
+  if(!produto) return 0;
+  const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===produto.subcategoriaId);
+  if(sub && sub.fator !== undefined && sub.fator !== null && sub.fator !== '') return Number(sub.fator);
+  const cat = (config.categoriasProdutos||[]).find(c=>c.id===produto.categoriaId);
+  if(cat && cat.fator !== undefined && cat.fator !== null && cat.fator !== '') return Number(cat.fator);
+  return 0;
+}
+function produtoOptionsHtml(selected){
+  const lista = config.produtos||[];
+  const vazio = lista.length===0 ? `<option value="" disabled>Nenhum produto cadastrado</option>` : '';
+  return `<option value="">Nenhum (sem Fator)</option>${vazio}` + lista.map(p=>{
+    const cat = (config.categoriasProdutos||[]).find(c=>c.id===p.categoriaId);
+    const fatorPct = getFatorPercentual(p.id);
+    return `<option value="${p.id}" ${selected===p.id?'selected':''}>${escapeHtml(p.nome)}${cat?' — '+escapeHtml(cat.nome):''} (F: ${fatorPct}%)</option>`;
+  }).join('');
+}
+
+/* ============================================================
    NOTIFICAR CLIENTE (modal pós-lançamento / pós-edição)
    ============================================================ */
 function openNotifyModal(order){
@@ -1963,6 +1989,11 @@ function renderNovaOrdem(main){
           <input id="f_codigo" placeholder="Digite o código fornecido pela oficina/diretoria" style="text-transform:uppercase;">
         </div>
       </div>
+      <div class="field" style="margin-top:14px;">
+        <label>Produto vendido <span class="muted">(define o Fator da vendedora)</span></label>
+        <select id="f_produto">${produtoOptionsHtml('')}</select>
+      </div>
+      <div class="muted" id="fatorHintNova" style="margin:-6px 0 10px;"></div>
       <div id="pagamentoContainerNova"></div>
       <div class="divider-nova"></div>
       <div class="field" style="margin-top:0;">
@@ -1990,6 +2021,17 @@ function renderNovaOrdem(main){
   const tempPagHolder = { valorTotal: null, pagamentos: [] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
   wireClienteFields('f', { buscarClientePorCpf: true });
+
+  const produtoSel = document.getElementById('f_produto');
+  function atualizarFatorHintNova(){
+    const hint = document.getElementById('fatorHintNova');
+    if(!produtoSel.value){ hint.textContent = ''; return; }
+    const fatorPct = getFatorPercentual(produtoSel.value);
+    const valorTotal = Number(tempPagHolder.valorTotal) || 0;
+    hint.innerHTML = `F: <b>${fatorPct}%</b>${valorTotal ? ' = <b>R$ ' + (valorTotal*fatorPct/100).toFixed(2) + '</b>' : ''}`;
+  }
+  produtoSel.addEventListener('change', atualizarFatorHintNova);
+  document.getElementById('pagamentoContainerNova').addEventListener('input', atualizarFatorHintNova);
 
   const servicoSel = document.getElementById('f_servico');
   const dataInp = document.getElementById('f_data');
@@ -2071,6 +2113,8 @@ function renderNovaOrdem(main){
       data: dataInp.value,
       status: STATUS.RASCUNHO,
       encaixe: false, autorizadoPor: null,
+      produtoId: produtoSel.value || null,
+      fatorPercentual: produtoSel.value ? getFatorPercentual(produtoSel.value) : 0,
       valorTotal: tempPagHolder.valorTotal,
       pagamentos: tempPagHolder.pagamentos,
       observacoes: tempObsHolder.observacoes,
@@ -2135,6 +2179,8 @@ function renderNovaOrdem(main){
       data: dt,
       status: STATUS.AGUARDANDO,
       encaixe, autorizadoPor,
+      produtoId: produtoSel.value || null,
+      fatorPercentual: produtoSel.value ? getFatorPercentual(produtoSel.value) : 0,
       valorTotal: tempPagHolder.valorTotal,
       pagamentos: tempPagHolder.pagamentos,
       observacoes: tempObsHolder.observacoes,
@@ -2155,13 +2201,19 @@ function renderNovaOrdem(main){
 /* ============================================================
    EDITAR ORDEM (modal)
    ============================================================ */
-function openEditModal(orderId){
+async function openEditModal(orderId, somenteLeitura){
+  // Recarrega as ordens direto do banco: o cliente pode ter confirmado uma leitura
+  // (ou o status pode ter mudado em outra aba/sessão) depois que esta página carregou.
+  try{
+    const freshOrders = await storageGet('orders', true);
+    if(Array.isArray(freshOrders)) orders = freshOrders;
+  }catch(e){ console.error('Não foi possível atualizar as ordens antes de abrir:', e); }
   const order = orders.find(o=>o.id===orderId);
   if(!order) return;
   if(currentUser.nivel==='oficina'){
     openEditModalOficina(order);
   } else {
-    openEditModalCompleto(order);
+    openEditModalCompleto(order, { somenteLeitura: !!somenteLeitura });
   }
 }
 
@@ -2184,10 +2236,12 @@ function openEditModalOficina(order){
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
 }
 
-function openEditModalCompleto(order){
+function openEditModalCompleto(order, opts){
+  opts = opts || {};
+  const somenteLeitura = !!opts.somenteLeitura;
   openModal(`
-    <h3>Editar ordem de serviço</h3>
-    <p>Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.</p>
+    <h3>${somenteLeitura ? 'Detalhes da ordem de serviço' : 'Editar ordem de serviço'}</h3>
+    <p>${somenteLeitura ? 'Visualização somente — clique em "Editar" na tabela para alterar algo.' : 'Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.'}</p>
     ${clienteFieldsHtml('e', order)}
     <div class="grid-2">
       <div class="field"><label>Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
@@ -2219,6 +2273,11 @@ function openEditModalCompleto(order){
         <input id="e_codigo" placeholder="Código da oficina/diretoria" style="text-transform:uppercase;">
       </div>
     </div>
+    <div class="field" style="margin-top:14px;">
+      <label>Produto vendido <span class="muted">(define o Fator da vendedora)</span></label>
+      <select id="e_produto">${produtoOptionsHtml(order.produtoId)}</select>
+    </div>
+    <div class="muted" id="fatorHintEdit" style="margin:-6px 0 10px;"></div>
     <div id="pagamentoContainerEdit"></div>
     <div class="field" style="margin-top:6px;">
       <label>Descrição do serviço <span class="muted">(o cliente vê isso na página de acompanhamento)</span></label>
@@ -2229,15 +2288,36 @@ function openEditModalCompleto(order){
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="printBtnCompleto">🖨️ Imprimir</button>
-      <button class="btn btn-ghost" id="editCancel">Cancelar</button>
-      <button class="btn btn-accent" id="editSave">Salvar alterações</button>
+      <button class="btn btn-ghost" id="editCancel">${somenteLeitura ? 'Fechar' : 'Cancelar'}</button>
+      ${somenteLeitura ? '' : '<button class="btn btn-accent" id="editSave">Salvar alterações</button>'}
     </div>
   `);
-  mountFotos(document.getElementById('fotoContainerEdit'), order, true, false);
-  mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
+  mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
+  mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
   wireClienteFields('e', { buscarClientePorCpf: true });
   document.getElementById('printBtnCompleto').addEventListener('click', ()=> printOrder(order) );
+
+  if(somenteLeitura){
+    document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=>{ el.disabled = true; });
+    document.querySelectorAll('#modalBox button').forEach(el=>{
+      if(el.id !== 'editCancel' && el.id !== 'printBtnCompleto') el.disabled = true;
+    });
+    document.getElementById('editCancel').addEventListener('click', closeModal);
+    return;
+  }
+
+  const produtoSelEdit = document.getElementById('e_produto');
+  function atualizarFatorHintEdit(){
+    const hint = document.getElementById('fatorHintEdit');
+    if(!produtoSelEdit.value){ hint.textContent = ''; return; }
+    const fatorPct = getFatorPercentual(produtoSelEdit.value);
+    const valorTotal = Number(order.valorTotal) || 0;
+    hint.innerHTML = `F: <b>${fatorPct}%</b>${valorTotal ? ' = <b>R$ ' + (valorTotal*fatorPct/100).toFixed(2) + '</b>' : ''}`;
+  }
+  produtoSelEdit.addEventListener('change', atualizarFatorHintEdit);
+  document.getElementById('pagamentoContainerEdit').addEventListener('input', atualizarFatorHintEdit);
+  atualizarFatorHintEdit();
 
   const servicoSel = document.getElementById('e_servico');
   const dataInp = document.getElementById('e_data');
@@ -2359,7 +2439,9 @@ function openEditModalCompleto(order){
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
       via, numeroNota, vendedora, descricao, loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
-      encaixe, autorizadoPor, recebidoPor, recebidoEm
+      encaixe, autorizadoPor, recebidoPor, recebidoEm,
+      produtoId: produtoSelEdit.value || null,
+      fatorPercentual: produtoSelEdit.value ? getFatorPercentual(produtoSelEdit.value) : 0,
     });
     await saveOrders();
     await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado });
@@ -2509,8 +2591,11 @@ function renderPainel(main){
     wrap.querySelectorAll('[data-mail]').forEach(b=>{
       b.addEventListener('click', ()=> sendEmail(orders.find(x=>x.id===b.dataset.mail)) );
     });
+    wrap.querySelectorAll('[data-view]').forEach(b=>{
+      b.addEventListener('click', ()=> openEditModal(b.dataset.view, true) );
+    });
     wrap.querySelectorAll('[data-edit]').forEach(b=>{
-      b.addEventListener('click', ()=> openEditModal(b.dataset.edit) );
+      b.addEventListener('click', ()=> openEditModal(b.dataset.edit, false) );
     });
     wrap.querySelectorAll('[data-print]').forEach(b=>{
       b.addEventListener('click', ()=> printOrder(orders.find(x=>x.id===b.dataset.print)) );
@@ -2543,6 +2628,7 @@ function renderPainel(main){
           }
         </td>
         <td style="white-space:nowrap;">
+          <button class="icon-btn" data-view="${o.id}" title="Ver detalhes (somente leitura)">👁</button>
           <button class="icon-btn" data-edit="${o.id}" title="Editar ordem">✎</button>
           <button class="icon-btn" data-print="${o.id}" title="Imprimir ordem">🖨️</button>
           ${currentUser.nivel!=='oficina' ? `
@@ -3088,6 +3174,44 @@ function renderConfig(main){
     </div>
 
     <div class="card">
+      <div class="section-label">Categorias de produto</div>
+      <p class="muted" style="margin:-4px 0 14px;">O campo "F" é o percentual de Fator (%) pago à vendedora sobre a venda de produtos dessa categoria. Deixe em branco se não houver Fator.</p>
+      <div id="categoriaRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
+        <input id="cat_fator" type="number" min="0" step="0.1" placeholder="F (%)" style="width:90px; padding:8px 9px; border:1px solid var(--line); border-radius:8px;">
+        <button class="btn btn-accent btn-sm" id="btnAddCategoria">+ Adicionar</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Subcategorias de produto</div>
+      <p class="muted" style="margin:-4px 0 14px;">Se preencher o "F" aqui, ele vale mais que o da categoria (Fator diferenciado). Deixe em branco pra herdar o F da categoria.</p>
+      <div id="subcategoriaRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <select id="sub_categoria" style="min-width:160px;">${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select>
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="sub_nome" placeholder="Nome da subcategoria"></div>
+        <input id="sub_fator" type="number" min="0" step="0.1" placeholder="F (%) — opcional" style="width:140px; padding:8px 9px; border:1px solid var(--line); border-radius:8px;">
+        <button class="btn btn-accent btn-sm" id="btnAddSubcategoria">+ Adicionar</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Produtos</div>
+      <p class="muted" style="margin:-4px 0 14px;">Cada produto pertence a uma categoria e (opcionalmente) uma subcategoria — o F efetivo dele aparece na lista.</p>
+      <div id="produtoRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="prod_nome" placeholder="Nome do produto"></div>
+        <select id="prod_categoria" style="min-width:150px;">
+          <option value="">Categoria</option>
+          ${(config.categoriasProdutos||[]).map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}
+        </select>
+        <select id="prod_subcategoria" style="min-width:150px;"><option value="">Subcategoria (opcional)</option></select>
+        <button class="btn btn-accent btn-sm" id="btnAddProduto">+ Adicionar</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-label">Formas de pagamento</div>
       <p class="muted" style="margin:-4px 0 14px;">Essas opções aparecem no campo de pagamento das ordens de serviço.</p>
       <div id="paymentRows"></div>
@@ -3259,6 +3383,125 @@ function renderConfig(main){
     document.getElementById('func_nome').value = '';
     renderFuncionarioRows();
     showToast('Funcionário cadastrado.');
+  });
+
+  function renderCategoriaRows(){
+    const wrap = document.getElementById('categoriaRows');
+    if(!config.categoriasProdutos) config.categoriasProdutos = [];
+    if(config.categoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma categoria cadastrada.</div>`; return; }
+    wrap.innerHTML = config.categoriasProdutos.map((c,i)=>`
+      <div class="code-list-item">
+        <div><b>${escapeHtml(c.nome)}</b> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${(c.fator!==undefined && c.fator!==null && c.fator!=='') ? c.fator+'%' : '—'}</span></div>
+        <button class="icon-btn" data-delcategoria="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-delcategoria]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const cat = config.categoriasProdutos[Number(b.dataset.delcategoria)];
+        const emUso = (config.produtos||[]).some(p=>p.categoriaId===cat.id) || (config.subcategoriasProdutos||[]).some(s=>s.categoriaId===cat.id);
+        if(emUso){ showToast('Essa categoria está em uso por produtos ou subcategorias — remova-os primeiro.'); return; }
+        config.categoriasProdutos.splice(Number(b.dataset.delcategoria),1);
+        await saveConfig();
+        renderView();
+        showToast('Categoria removida.');
+      });
+    });
+  }
+  renderCategoriaRows();
+
+  document.getElementById('btnAddCategoria').addEventListener('click', async ()=>{
+    const nome = document.getElementById('cat_nome').value.trim();
+    const fatorRaw = document.getElementById('cat_fator').value.trim();
+    if(!nome){ showToast('Informe o nome da categoria.'); return; }
+    config.categoriasProdutos.push({ id: uid('cat'), nome, fator: fatorRaw==='' ? '' : Number(fatorRaw) });
+    await saveConfig();
+    renderView();
+    showToast('Categoria cadastrada.');
+  });
+
+  function renderSubcategoriaRows(){
+    const wrap = document.getElementById('subcategoriaRows');
+    if(!config.subcategoriasProdutos) config.subcategoriasProdutos = [];
+    if(config.subcategoriasProdutos.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma subcategoria cadastrada.</div>`; return; }
+    wrap.innerHTML = config.subcategoriasProdutos.map((s,i)=>{
+      const cat = (config.categoriasProdutos||[]).find(c=>c.id===s.categoriaId);
+      const temFatorProprio = s.fator!==undefined && s.fator!==null && s.fator!=='';
+      return `
+      <div class="code-list-item">
+        <div><b>${escapeHtml(s.nome)}</b> <span class="muted">(${cat?escapeHtml(cat.nome):'—'})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${temFatorProprio ? s.fator+'% (diferenciado)' : 'herda da categoria'}</span></div>
+        <button class="icon-btn" data-delsubcategoria="${i}" title="Remover">✕</button>
+      </div>
+    `;}).join('');
+    wrap.querySelectorAll('[data-delsubcategoria]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const sub = config.subcategoriasProdutos[Number(b.dataset.delsubcategoria)];
+        const emUso = (config.produtos||[]).some(p=>p.subcategoriaId===sub.id);
+        if(emUso){ showToast('Essa subcategoria está em uso por produtos — remova-os primeiro.'); return; }
+        config.subcategoriasProdutos.splice(Number(b.dataset.delsubcategoria),1);
+        await saveConfig();
+        renderView();
+        showToast('Subcategoria removida.');
+      });
+    });
+  }
+  renderSubcategoriaRows();
+
+  document.getElementById('btnAddSubcategoria').addEventListener('click', async ()=>{
+    const categoriaId = document.getElementById('sub_categoria').value;
+    const nome = document.getElementById('sub_nome').value.trim();
+    const fatorRaw = document.getElementById('sub_fator').value.trim();
+    if(!categoriaId){ showToast('Cadastre uma categoria primeiro.'); return; }
+    if(!nome){ showToast('Informe o nome da subcategoria.'); return; }
+    config.subcategoriasProdutos.push({ id: uid('sub'), categoriaId, nome, fator: fatorRaw==='' ? '' : Number(fatorRaw) });
+    await saveConfig();
+    renderView();
+    showToast('Subcategoria cadastrada.');
+  });
+
+  function renderProdutoRows(){
+    const wrap = document.getElementById('produtoRows');
+    if(!config.produtos) config.produtos = [];
+    if(config.produtos.length===0){ wrap.innerHTML = `<div class="empty">Nenhum produto cadastrado.</div>`; return; }
+    wrap.innerHTML = config.produtos.map((p,i)=>{
+      const cat = (config.categoriasProdutos||[]).find(c=>c.id===p.categoriaId);
+      const sub = (config.subcategoriasProdutos||[]).find(s=>s.id===p.subcategoriaId);
+      return `
+      <div class="code-list-item">
+        <div><b>${escapeHtml(p.nome)}</b> <span class="muted">(${cat?escapeHtml(cat.nome):'—'}${sub?' / '+escapeHtml(sub.nome):''})</span> <span class="badge" style="background:var(--surface-2); color:var(--ink-soft); margin-left:8px;">F: ${getFatorPercentual(p.id)}%</span></div>
+        <button class="icon-btn" data-delproduto="${i}" title="Remover">✕</button>
+      </div>
+    `;}).join('');
+    wrap.querySelectorAll('[data-delproduto]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        config.produtos.splice(Number(b.dataset.delproduto),1);
+        await saveConfig();
+        renderView();
+        showToast('Produto removido.');
+      });
+    });
+  }
+  renderProdutoRows();
+
+  const prodCategoriaSel = document.getElementById('prod_categoria');
+  const prodSubcategoriaSel = document.getElementById('prod_subcategoria');
+  function atualizarSubcategoriasDoProduto(){
+    const catId = prodCategoriaSel.value;
+    const subs = (config.subcategoriasProdutos||[]).filter(s=>s.categoriaId===catId);
+    prodSubcategoriaSel.innerHTML = `<option value="">Subcategoria (opcional)</option>` + subs.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('');
+  }
+  prodCategoriaSel.addEventListener('change', atualizarSubcategoriasDoProduto);
+  atualizarSubcategoriasDoProduto();
+
+  document.getElementById('btnAddProduto').addEventListener('click', async ()=>{
+    const nome = document.getElementById('prod_nome').value.trim();
+    const categoriaId = prodCategoriaSel.value;
+    const subcategoriaId = prodSubcategoriaSel.value;
+    if(!nome){ showToast('Informe o nome do produto.'); return; }
+    if(!categoriaId){ showToast('Escolha uma categoria.'); return; }
+    config.produtos.push({ id: uid('prod'), nome, categoriaId, subcategoriaId: subcategoriaId || null });
+    await saveConfig();
+    renderView();
+    showToast('Produto cadastrado.');
   });
 
   function renderPaymentRows(){
