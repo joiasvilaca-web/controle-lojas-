@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Gestão e Controle</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#EEF1F4; --surface:#FFFFFF; --surface-2:#F5F7F9;
+    --ink:#151C28; --ink-soft:#4B5563; --ink-faint:#8B93A1;
+    --line:#D7DCE2; --accent:#8C6A1F; --accent-ink:#5C4611; --accent-soft:#F3E3BE;
+    --ok:#188A54; --ok-soft:#D7F3E3;
+    --danger:#C4272B; --danger-soft:#FADADA;
+    --wait:#B8650A; --wait-soft:#FBE6C7;
+    --just:#6425C9; --just-soft:#E9DBFA;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); min-height:100vh; -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer;}
+  input,select{font-family:inherit;}
+
+  /* login */
+  #view-login{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card{ width:100%; max-width:380px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:32px 28px; box-shadow:0 12px 32px -18px rgba(20,30,45,0.25); }
+  .login-tag{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:8px; }
+  .login-title{ font-size:20px; font-weight:750; margin:0 0 4px; }
+  .login-sub{ color:var(--ink-soft); font-size:13px; margin:0 0 22px; line-height:1.5; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px; }
+  .field input, .field select{ width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:14px; background:var(--surface-2); color:var(--ink); }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--accent); background:#fff; }
+  .btn{ border:none; border-radius:8px; padding:10px 16px; font-size:13.5px; font-weight:700; }
+  .btn-primary{ background:var(--ink); color:#fff; width:100%; }
+  .btn-ghost{ background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line); }
+  .login-error{ background:var(--danger-soft); color:var(--danger); font-size:12.5px; padding:9px 11px; border-radius:7px; margin-bottom:12px; display:none; }
+  .login-error.show{ display:block; }
+  .back-link{ display:inline-block; font-size:12px; font-weight:700; color:var(--ink-soft); text-decoration:none; margin-bottom:16px; }
+
+  /* dashboard shell */
+  #view-dashboard{ display:none; }
+  header.topbar{
+    background:var(--ink); color:#fff; padding:0 20px; height:56px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px; position:sticky; top:0; z-index:20;
+  }
+  header.topbar a{ color:rgba(255,255,255,.7); text-decoration:none; font-size:13px; font-weight:700; }
+  .who{ font-size:12.5px; color:rgba(255,255,255,.75); display:flex; align-items:center; gap:10px; }
+  .level-pill{ font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; background:rgba(255,255,255,.14); padding:3px 9px; border-radius:20px; }
+  main{ max-width:1120px; margin:0 auto; padding:24px 18px 60px; }
+
+  .section{ margin-bottom:36px; }
+  .section-title{ font-size:17px; font-weight:750; margin:0 0 4px; }
+  .section-sub{ font-size:12.5px; color:var(--ink-soft); margin:0 0 16px; }
+
+  .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:16px; }
+  .kpi{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .kpi .num{ font-size:22px; font-weight:800; }
+  .kpi .lbl{ font-size:11px; color:var(--ink-faint); font-weight:700; text-transform:uppercase; letter-spacing:.03em; margin-top:2px; }
+  .kpi.ok .num{ color:var(--ok); } .kpi.wait .num{ color:var(--wait); } .kpi.danger .num{ color:var(--danger); } .kpi.just .num{ color:var(--just); } .kpi.accent .num{ color:var(--accent-ink); }
+
+  .filters{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+  .filters select, .filters input{ padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px; background:var(--surface); color:var(--ink); }
+  .filters input[type="text"]{ min-width:160px; }
+
+  .card{ background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow-x:auto; }
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  thead th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:750; padding:10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody td{ padding:9px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody tr:last-child td{ border-bottom:none; }
+  .badge{ display:inline-block; font-size:10.5px; font-weight:750; padding:3px 8px; border-radius:20px; }
+  .badge.aguardando, .badge.wait{ background:var(--wait-soft); color:var(--wait); }
+  .badge.pronto, .badge.ok{ background:var(--ok-soft); color:var(--ok); }
+  .badge.entregue{ background:#D9E6FB; color:#1257C4; }
+  .badge.cancelado, .badge.erro{ background:var(--danger-soft); color:var(--danger); }
+  .badge.rascunho{ background:#EDEFF2; color:#6B7280; }
+  .badge.just{ background:var(--just-soft); color:var(--just); }
+  .empty{ text-align:center; padding:36px 20px; color:var(--ink-faint); font-size:13px; }
+  .locked-note{ background:var(--accent-soft); color:var(--accent-ink); padding:11px 13px; border-radius:8px; font-size:12.5px; margin-bottom:16px; }
+</style>
+</head>
+<body>
+
+<div id="view-login">
+  <div class="login-card">
+    <a href="index.html" class="back-link">← Gestão e Controle</a>
+    <div class="login-tag">Dashboard</div>
+    <div class="login-title">Acessar painel geral</div>
+    <p class="login-sub">Use a mesma senha do Painel de Ordens. O que você vê aqui depende do seu nível de acesso.</p>
+    <div class="login-error" id="loginError">Senha não encontrada.</div>
+    <div class="field"><label>Senha</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="off"></div>
+    <button class="btn btn-primary" id="btnLogin">Entrar</button>
+  </div>
+</div>
+
+<div id="view-dashboard">
+  <header class="topbar">
+    <a href="index.html">← Gestão e Controle</a>
+    <div class="who">
+      <span id="whoName"></span>
+      <span class="level-pill" id="whoLevel"></span>
+      <button class="btn btn-ghost" id="btnLogout" style="padding:5px 10px;">Sair</button>
+    </div>
+  </header>
+  <main id="mainContent"></main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  let currentUser = null; // { nome, nivel }
+  let ordersConfig = null;
+  let orders = [];
+  let transfConfig = null;
+  let transferencias = [];
+  let reposicoes = [];
+
+  function escapeHtml(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function fmtDate(s){ if(!s) return "—"; const p=s.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
+  function fmtMoeda(v){ return "R$ " + (Number(v)||0).toFixed(2).replace(".", ","); }
+
+  /* ================= LOGIN ================= */
+  document.getElementById("btnLogin").addEventListener("click", doLogin);
+  document.getElementById("loginPass").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+
+  async function doLogin(){
+    const pass = document.getElementById("loginPass").value.trim();
+    const err = document.getElementById("loginError");
+    if(!pass) return;
+    err.classList.remove("show");
+    try{
+      const { data, error } = await supabaseClient.from("painel_ordens_kv").select("value").eq("key","config").maybeSingle();
+      if(error) throw error;
+      ordersConfig = data ? data.value : null;
+      const user = ordersConfig ? (ordersConfig.users||[]).find(u=>u.senha===pass) : null;
+      if(!user){ err.classList.add("show"); return; }
+      currentUser = { nome: user.nome, nivel: user.nivel };
+      await loadAllData();
+      enterDashboard();
+    }catch(e){
+      console.error("Erro no login do dashboard:", e);
+      err.textContent = "Não foi possível verificar a senha agora. Tente novamente.";
+      err.classList.add("show");
+    }
+  }
+
+  document.getElementById("btnLogout").addEventListener("click", ()=>{
+    currentUser = null;
+    document.getElementById("loginPass").value = "";
+    document.getElementById("view-dashboard").style.display = "none";
+    document.getElementById("view-login").style.display = "flex";
+  });
+
+  /* ================= CARREGAMENTO DE DADOS ================= */
+  async function loadAllData(){
+    const { data: ordersRow } = await supabaseClient.from("painel_ordens_kv").select("value").eq("key","orders").maybeSingle();
+    orders = (ordersRow && ordersRow.value) || [];
+
+    if(currentUser.nivel !== "oficina"){
+      try{
+        const { data: cfgRow } = await supabaseClient.from("controle_config").select("payload").eq("id","config").maybeSingle();
+        transfConfig = (cfgRow && cfgRow.payload) || { stores:[], products:[], metals:[] };
+      }catch(e){ transfConfig = { stores:[], products:[], metals:[] }; }
+      try{
+        const { data: tData } = await supabaseClient.from("transferencias_controle").select("id,payload").order("created_at",{ascending:true});
+        transferencias = (tData||[]).map(r=>r.payload);
+      }catch(e){ transferencias = []; }
+      try{
+        const { data: rData } = await supabaseClient.from("reposicao_controle").select("id,payload").order("created_at",{ascending:true});
+        reposicoes = (rData||[]).map(r=>r.payload);
+      }catch(e){ reposicoes = []; }
+    }
+  }
+
+  function enterDashboard(){
+    document.getElementById("view-login").style.display = "none";
+    document.getElementById("view-dashboard").style.display = "block";
+    document.getElementById("whoName").innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
+    document.getElementById("whoLevel").textContent = currentUser.nivel==="diretoria"?"Diretoria":currentUser.nivel==="oficina"?"Oficina":"Vendedora";
+    renderDashboard();
+  }
+
+  /* ================= LÓGICA DE STATUS (Transferências/Reposição) — mesma regra do app original ================= */
+  function stepDone(visto, nome, data){
+    if(!visto) return false;
+    if(nome !== undefined && String(nome||"").trim()==="") return false;
+    if(data !== undefined && String(data||"").trim()==="") return false;
+    return true;
+  }
+  function multisetEqual(a,b){
+    if(a.length!==b.length) return false;
+    const sa=[...a].sort(), sb=[...b].sort();
+    return JSON.stringify(sa)===JSON.stringify(sb);
+  }
+  function sumByProduto(items, withFator){
+    const map = new Map();
+    (items||[]).forEach(it=>{
+      if(!it.produto || it.quantidade==="" || it.quantidade===null || it.quantidade===undefined) return;
+      if(!map.has(it.produto)) map.set(it.produto, {qty:0, fatores:[]});
+      const e = map.get(it.produto);
+      e.qty += Number(it.quantidade);
+      if(withFator && it.fator && String(it.fator).trim()!=="") e.fatores.push(String(it.fator).trim());
+    });
+    return map;
+  }
+  function sumVendaByProduto(items){
+    const map = new Map();
+    (items||[]).forEach(it=>{
+      if(!it.produto) return;
+      const qtdLoja = it.qtdLoja===""||it.qtdLoja===null||it.qtdLoja===undefined?0:Number(it.qtdLoja);
+      const qtdEco = it.qtdEcommerce===""||it.qtdEcommerce===null||it.qtdEcommerce===undefined?0:Number(it.qtdEcommerce);
+      if(it.qtdLoja==="" && it.qtdEcommerce==="") return;
+      if(!map.has(it.produto)) map.set(it.produto, {qty:0, fatores:[]});
+      map.get(it.produto).qty += qtdLoja+qtdEco;
+    });
+    return map;
+  }
+  function computeStatusTransfer(r){
+    if(!r.tipoTransf) return "PEND";
+    const itemsValid = (r.transferItens||[]).some(it=>it.produto && it.quantidade!=="" && it.quantidade!==null && it.quantidade!==undefined);
+    const stepSaida = stepDone(r.vistoSaida, r.nomeSaida, r.dataSaida);
+    const stepEntrada = stepDone(r.vistoEntrada, r.nomeEntrada, r.dataEntrada);
+    const stepRetornoSaida = r.tipoTransf==="TROCA" ? stepDone(r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida) : true;
+    const stepRetornoEntrada = r.tipoTransf==="TROCA" ? stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada) : true;
+    const stepBaixa = r.tipoTransf==="SAÍDA" ? stepDone(r.vistoBaixaEstoque, r.nomeBaixaEstoque, r.dataBaixaEstoque) : true;
+    const stepEntradaEstoque = r.tipoTransf==="SAÍDA" ? stepDone(r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque) : true;
+    const stepSup = stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria);
+    if(itemsValid && stepSaida && stepEntrada && stepRetornoSaida && stepRetornoEntrada && stepBaixa && stepEntradaEstoque && stepSup) return "OK";
+    return "ERRO";
+  }
+  function computeStatusReposicao(r){
+    const pedidoMap = sumByProduto(r.pedidoItens, false);
+    if(pedidoMap.size===0) return "PEND";
+    const vendaMap = sumVendaByProduto(r.vendaItens);
+    const dispMap = sumByProduto(r.disponibilizadoItens, true);
+    const recMap = sumByProduto(r.recebimentoItens, true);
+    let divergente = false;
+    pedidoMap.forEach((v,produto)=>{ if(vendaMap.has(produto) && vendaMap.get(produto).qty!==v.qty) divergente = true; });
+    const dispProdutos = new Set([...dispMap.keys(), ...recMap.keys()]);
+    dispProdutos.forEach(produto=>{
+      if(dispMap.has(produto) && recMap.has(produto)){
+        const d=dispMap.get(produto), rr=recMap.get(produto);
+        if(d.qty!==rr.qty || !multisetEqual(d.fatores, rr.fatores)) divergente = true;
+      }
+    });
+    const stepDir = stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria);
+    const stepAdm = stepDone(r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo);
+    const stepRecLoja = stepDone(r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja);
+    const stepSist = stepDone(r.vistoSistema, r.nomeSistema, r.dataSistema);
+    const allDone = stepDir && stepAdm && stepRecLoja && stepSist;
+    if(!divergente && allDone) return "OK";
+    const justOk = r.justificativa && r.justificativa.trim()!=="" && stepDone(r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao);
+    if(divergente && justOk) return "JUST";
+    return "ERRO";
+  }
+
+  /* ================= RENDER ================= */
+  let filtrosOrdens = { loja:"", status:"", servico:"", dataIni:"", dataFim:"", busca:"" };
+  let filtrosTransf = { loja:"", tipo:"", status:"", dataIni:"", dataFim:"" };
+
+  function ordensVisiveis(){
+    // rascunho nunca conta como "lançado" no dashboard
+    return orders.filter(o=>o.status!=="rascunho");
+  }
+
+  function filtrarOrdens(){
+    return ordensVisiveis().filter(o=>{
+      if(filtrosOrdens.loja && o.loja!==filtrosOrdens.loja) return false;
+      if(filtrosOrdens.status && o.status!==filtrosOrdens.status) return false;
+      if(filtrosOrdens.servico && o.serviceTypeId!==filtrosOrdens.servico) return false;
+      if(filtrosOrdens.dataIni && o.data < filtrosOrdens.dataIni) return false;
+      if(filtrosOrdens.dataFim && o.data > filtrosOrdens.dataFim) return false;
+      if(filtrosOrdens.busca && !(o.cliente||"").toLowerCase().includes(filtrosOrdens.busca.toLowerCase())) return false;
+      return true;
+    });
+  }
+
+  function filtrarTransf(){
+    const todas = [
+      ...transferencias.map(r=>({...r, __tipo:"Transferência", __status: computeStatusTransfer(r), __loja: r.lojaOrigem})),
+      ...reposicoes.map(r=>({...r, __tipo:"Reposição", __status: computeStatusReposicao(r), __loja: r.loja})),
+    ];
+    return todas.filter(r=>{
+      if(filtrosTransf.loja && r.__loja!==filtrosTransf.loja) return false;
+      if(filtrosTransf.tipo && r.__tipo!==filtrosTransf.tipo) return false;
+      if(filtrosTransf.status && r.__status!==filtrosTransf.status) return false;
+      if(filtrosTransf.dataIni && r.data < filtrosTransf.dataIni) return false;
+      if(filtrosTransf.dataFim && r.data > filtrosTransf.dataFim) return false;
+      return true;
+    });
+  }
+
+  function renderDashboard(){
+    const main = document.getElementById("mainContent");
+    const mostraFinanceiro = currentUser.nivel === "diretoria";
+    const mostraTransf = currentUser.nivel !== "oficina";
+
+    main.innerHTML = `
+      ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições.</div>` : ""}
+      ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento).</div>` : ""}
+
+      <div class="section" id="secOrdens"></div>
+      ${mostraTransf ? `<div class="section" id="secTransf"></div>` : ""}
+    `;
+
+    renderSecaoOrdens(mostraFinanceiro);
+    if(mostraTransf) renderSecaoTransf();
+  }
+
+  function renderSecaoOrdens(mostraFinanceiro){
+    const el = document.getElementById("secOrdens");
+    const lojas = (ordersConfig && ordersConfig.lojas) || [];
+    const servicos = (ordersConfig && ordersConfig.serviceTypes) || [];
+
+    el.innerHTML = `
+      <h2 class="section-title">🧾 Ordens de Serviço</h2>
+      <p class="section-sub">Dados do Painel de Ordens. Rascunhos não entram nas contagens.</p>
+      <div class="kpis" id="kpisOrdens"></div>
+      <div class="filters">
+        <select id="fLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
+        <select id="fStatus">
+          <option value="">Todos os status</option>
+          <option value="aguardando">Aguardando</option>
+          <option value="pronto">Pronto</option>
+          <option value="entregue">Entregue</option>
+          <option value="cancelado">Cancelado</option>
+        </select>
+        <select id="fServico"><option value="">Todos os serviços</option>${servicos.map(s=>`<option value="${escapeHtml(s.id)}">${escapeHtml(s.nome)}</option>`).join("")}</select>
+        <input type="date" id="fDataIni" title="De">
+        <input type="date" id="fDataFim" title="Até">
+        <input type="text" id="fBusca" placeholder="Buscar cliente...">
+        <button class="btn btn-ghost" id="btnLimparFiltroOrdens">Limpar</button>
+      </div>
+      <div class="card"><div id="tabelaOrdens"></div></div>
+    `;
+
+    function atualizar(){
+      const lista = filtrarOrdens();
+      const kpisWrap = document.getElementById("kpisOrdens");
+      const total = lista.length;
+      const aguardando = lista.filter(o=>o.status==="aguardando").length;
+      const pronto = lista.filter(o=>o.status==="pronto").length;
+      const entregue = lista.filter(o=>o.status==="entregue").length;
+      const cancelado = lista.filter(o=>o.status==="cancelado").length;
+      const faturamento = lista.reduce((acc,o)=> acc + (Number(o.valorTotal)||0), 0);
+
+      kpisWrap.innerHTML = `
+        <div class="kpi"><div class="num">${total}</div><div class="lbl">Total</div></div>
+        <div class="kpi wait"><div class="num">${aguardando}</div><div class="lbl">Aguardando</div></div>
+        <div class="kpi ok"><div class="num">${pronto}</div><div class="lbl">Pronto</div></div>
+        <div class="kpi accent"><div class="num">${entregue}</div><div class="lbl">Entregue</div></div>
+        <div class="kpi danger"><div class="num">${cancelado}</div><div class="lbl">Cancelado</div></div>
+        ${mostraFinanceiro ? `<div class="kpi accent"><div class="num">${fmtMoeda(faturamento)}</div><div class="lbl">Faturamento</div></div>` : ""}
+      `;
+
+      const wrap = document.getElementById("tabelaOrdens");
+      if(lista.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma ordem encontrada com esses filtros.</div>`; return; }
+      const listaOrdenada = [...lista].sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+      wrap.innerHTML = `
+        <table>
+          <thead><tr><th>Cliente</th><th>Loja</th><th>Serviço</th><th>Data</th><th>Status</th>${mostraFinanceiro?"<th>Valor</th>":""}</tr></thead>
+          <tbody>
+            ${listaOrdenada.slice(0,200).map(o=>`
+              <tr>
+                <td>${escapeHtml(o.cliente||"—")}</td>
+                <td>${escapeHtml(o.loja||"—")}</td>
+                <td>${escapeHtml(o.serviceTypeName||"—")}</td>
+                <td>${fmtDate(o.data)}</td>
+                <td><span class="badge ${escapeHtml(o.status)}">${escapeHtml(o.status)}</span></td>
+                ${mostraFinanceiro?`<td>${o.valorTotal?fmtMoeda(o.valorTotal):"—"}</td>`:""}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${listaOrdenada.length>200?`<div class="empty">Mostrando as 200 mais recentes de ${listaOrdenada.length}.</div>`:""}
+      `;
+    }
+
+    document.getElementById("fLoja").addEventListener("change", e=>{ filtrosOrdens.loja=e.target.value; atualizar(); });
+    document.getElementById("fStatus").addEventListener("change", e=>{ filtrosOrdens.status=e.target.value; atualizar(); });
+    document.getElementById("fServico").addEventListener("change", e=>{ filtrosOrdens.servico=e.target.value; atualizar(); });
+    document.getElementById("fDataIni").addEventListener("change", e=>{ filtrosOrdens.dataIni=e.target.value; atualizar(); });
+    document.getElementById("fDataFim").addEventListener("change", e=>{ filtrosOrdens.dataFim=e.target.value; atualizar(); });
+    document.getElementById("fBusca").addEventListener("input", e=>{ filtrosOrdens.busca=e.target.value; atualizar(); });
+    document.getElementById("btnLimparFiltroOrdens").addEventListener("click", ()=>{
+      filtrosOrdens = { loja:"", status:"", servico:"", dataIni:"", dataFim:"", busca:"" };
+      renderSecaoOrdens(mostraFinanceiro);
+    });
+
+    atualizar();
+  }
+
+  function renderSecaoTransf(){
+    const el = document.getElementById("secTransf");
+    const lojas = (transfConfig && transfConfig.stores) || [];
+
+    el.innerHTML = `
+      <h2 class="section-title">🔁 Transferências e Reposições</h2>
+      <p class="section-sub">Dados do app de Transferências e Reposições entre lojas.</p>
+      <div class="kpis" id="kpisTransf"></div>
+      <div class="filters">
+        <select id="tLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join("")}</select>
+        <select id="tTipo"><option value="">Transferência e Reposição</option><option value="Transferência">Só Transferência</option><option value="Reposição">Só Reposição</option></select>
+        <select id="tStatus"><option value="">Todos os status</option><option value="OK">OK</option><option value="ERRO">Pendência</option><option value="JUST">Justificado</option><option value="PEND">Em aberto</option></select>
+        <input type="date" id="tDataIni" title="De">
+        <input type="date" id="tDataFim" title="Até">
+        <button class="btn btn-ghost" id="btnLimparFiltroTransf">Limpar</button>
+      </div>
+      <div class="card"><div id="tabelaTransf"></div></div>
+    `;
+
+    function atualizar(){
+      const lista = filtrarTransf();
+      const kpisWrap = document.getElementById("kpisTransf");
+      const total = lista.length;
+      const ok = lista.filter(r=>r.__status==="OK").length;
+      const erro = lista.filter(r=>r.__status==="ERRO").length;
+      const just = lista.filter(r=>r.__status==="JUST").length;
+
+      kpisWrap.innerHTML = `
+        <div class="kpi"><div class="num">${total}</div><div class="lbl">Total</div></div>
+        <div class="kpi ok"><div class="num">${ok}</div><div class="lbl">OK</div></div>
+        <div class="kpi danger"><div class="num">${erro}</div><div class="lbl">Pendência</div></div>
+        <div class="kpi just"><div class="num">${just}</div><div class="lbl">Justificado</div></div>
+      `;
+
+      const wrap = document.getElementById("tabelaTransf");
+      if(lista.length===0){ wrap.innerHTML = `<div class="empty">Nenhum registro encontrado com esses filtros.</div>`; return; }
+      const listaOrdenada = [...lista].sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+      wrap.innerHTML = `
+        <table>
+          <thead><tr><th>Tipo</th><th>Data</th><th>Loja</th><th>Solicitante</th><th>Status</th></tr></thead>
+          <tbody>
+            ${listaOrdenada.slice(0,200).map(r=>`
+              <tr>
+                <td>${escapeHtml(r.__tipo)}</td>
+                <td>${fmtDate(r.data)}</td>
+                <td>${escapeHtml(r.__loja||"—")}</td>
+                <td>${escapeHtml(r.solicitante||"—")}</td>
+                <td><span class="badge ${r.__status==="OK"?"ok":r.__status==="ERRO"?"erro":r.__status==="JUST"?"just":"wait"}">${r.__status}</span></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+        ${listaOrdenada.length>200?`<div class="empty">Mostrando os 200 mais recentes de ${listaOrdenada.length}.</div>`:""}
+      `;
+    }
+
+    document.getElementById("tLoja").addEventListener("change", e=>{ filtrosTransf.loja=e.target.value; atualizar(); });
+    document.getElementById("tTipo").addEventListener("change", e=>{ filtrosTransf.tipo=e.target.value; atualizar(); });
+    document.getElementById("tStatus").addEventListener("change", e=>{ filtrosTransf.status=e.target.value; atualizar(); });
+    document.getElementById("tDataIni").addEventListener("change", e=>{ filtrosTransf.dataIni=e.target.value; atualizar(); });
+    document.getElementById("tDataFim").addEventListener("change", e=>{ filtrosTransf.dataFim=e.target.value; atualizar(); });
+    document.getElementById("btnLimparFiltroTransf").addEventListener("click", ()=>{
+      filtrosTransf = { loja:"", tipo:"", status:"", dataIni:"", dataFim:"" };
+      renderSecaoTransf();
+    });
+
+    atualizar();
+  }
+})();
+</script>
+</body>
+</html>

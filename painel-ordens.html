@@ -5,29 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Painel de Ordens — Gestão e Controle</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#EEF1F4;
     --surface:#FFFFFF;
     --surface-2:#F5F7F9;
-    --ink:#1B2430;
-    --ink-soft:#5B6472;
+    --ink:#151C28;
+    --ink-soft:#4B5563;
     --ink-faint:#8B93A1;
-    --line:#DBE0E6;
-    --line-strong:#C3CAD2;
-    --accent:#C97A2B;
-    --accent-ink:#7A4415;
-    --accent-soft:#FBE9D4;
-    --ok:#2E7D53;
-    --ok-soft:#E1F3E8;
-    --danger:#B23A3A;
-    --danger-soft:#FBE4E4;
-    --wait:#B4780F;
-    --wait-soft:#FCEEDD;
-    --encaixe:#6E45A8;
-    --encaixe-soft:#EEE6F7;
-    --delivered:#2A5FA8;
-    --delivered-soft:#E3ECFA;
+    --line:#D7DCE2;
+    --line-strong:#B8C0CA;
+    --accent:#C4590A;
+    --accent-ink:#6B3308;
+    --accent-soft:#FBDCC0;
+    --ok:#188A54;
+    --ok-soft:#D7F3E3;
+    --danger:#C4272B;
+    --danger-soft:#FADADA;
+    --wait:#B8650A;
+    --wait-soft:#FBE6C7;
+    --encaixe:#6425C9;
+    --encaixe-soft:#E9DBFA;
+    --delivered:#1257C4;
+    --delivered-soft:#D9E6FB;
     --radius:10px;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -293,10 +294,11 @@
   }
 
   .section-label{
-    font-size:11px; font-weight:750; letter-spacing:.07em; text-transform:uppercase;
-    color:var(--ink-faint); margin:0 0 12px;
+    font-size:11px; font-weight:800; letter-spacing:.07em; text-transform:uppercase;
+    color:var(--accent-ink); margin:0 0 12px; padding-left:9px;
+    border-left:3px solid var(--accent); line-height:1.4;
   }
-  .divider-nova{height:1px;background:var(--line);margin:18px 0;}
+  .divider-nova{height:4px;background:var(--accent-soft);margin:22px 0;border-radius:3px;}
   .rascunho-badge{background:#EDEFF2;color:#6B7280;}
   .copy-btn{border:none;background:var(--surface-2);color:var(--ink-soft);border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;margin-left:8px;}
   .copy-btn:hover{background:#fff;color:var(--ink);}
@@ -850,6 +852,100 @@ function openLojaModal(loja){
   });
 }
 
+/* ============================================================
+   IMPORTAÇÃO DE CLIENTES (planilha)
+   ============================================================ */
+const CAMPOS_IMPORTACAO = [
+  { key: 'nome', label: 'Nome' },
+  { key: 'telefone', label: 'Telefone' },
+  { key: 'email', label: 'E-mail' },
+  { key: 'cpf', label: 'CPF' },
+  { key: 'dataNascimento', label: 'Data de nascimento' },
+  { key: 'cep', label: 'CEP' },
+  { key: 'endereco', label: 'Endereço' },
+  { key: 'numero', label: 'Número' },
+  { key: 'complemento', label: 'Complemento' },
+  { key: 'bairro', label: 'Bairro' },
+  { key: 'cidade', label: 'Cidade' },
+  { key: 'estado', label: 'Estado' },
+];
+
+function normalizarTexto(s){
+  return (s||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+}
+
+/** Tenta adivinhar qual campo do app corresponde ao nome de uma coluna da planilha importada. */
+function sugerirCampoImportacao(header){
+  const h = normalizarTexto(header);
+  if(!h) return '';
+  if(/^(nome|cliente|nome completo|nome do cliente)$/.test(h)) return 'nome';
+  if(/telefone|celular|whatsapp|^fone$|contato/.test(h)) return 'telefone';
+  if(/e-?mail/.test(h)) return 'email';
+  if(/^cpf$/.test(h)) return 'cpf';
+  if(/nasc|aniversario/.test(h)) return 'dataNascimento';
+  if(/^cep$/.test(h)) return 'cep';
+  if(/endereco|logradouro|^rua$/.test(h)) return 'endereco';
+  if(/numero|^n[o.]?$/.test(h)) return 'numero';
+  if(/complemento/.test(h)) return 'complemento';
+  if(/bairro/.test(h)) return 'bairro';
+  if(/cidade|municipio/.test(h)) return 'cidade';
+  if(/^(estado|uf)$/.test(h)) return 'estado';
+  return '';
+}
+
+/** Converte um valor de célula (texto DD/MM/AAAA, ou número serial do Excel) para o formato AAAA-MM-DD. */
+function parseDataParaISO(val){
+  if(val === undefined || val === null || val === '') return '';
+  if(typeof val === 'number'){
+    const ms = Math.round((val - 25569) * 86400 * 1000);
+    const date = new Date(ms);
+    if(isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0,10);
+  }
+  const s = String(val).trim();
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if(m){
+    let [, d, mo, y] = m;
+    if(y.length === 2) y = (Number(y) > 30 ? '19' : '20') + y;
+    return `${y.padStart(4,'0')}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return m[0].slice(0,10);
+  return '';
+}
+
+/** Aplica o mapeamento de colunas às linhas lidas da planilha e cadastra/atualiza os clientes. */
+async function processarImportacaoClientes(headers, rows, mapeamento){
+  let novos = 0, atualizados = 0, ignorados = 0;
+  rows.forEach(row=>{
+    const obj = {};
+    headers.forEach((h, i)=>{
+      const campo = mapeamento[i];
+      if(!campo) return;
+      let val = row[i];
+      if(campo === 'dataNascimento') val = parseDataParaISO(val);
+      else val = (val===undefined||val===null) ? '' : String(val).trim();
+      if(val) obj[campo] = val;
+    });
+    if(!obj.nome){ ignorados++; return; }
+    const idx = findClienteIndex(obj.telefone, obj.cpf);
+    if(idx === -1){
+      clientes.unshift({
+        id: uid('cli'), nome:'', telefone:'', email:'', cpf:'', dataNascimento:'',
+        cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'',
+        ...obj, criadoEm: Date.now()
+      });
+      novos++;
+    }else{
+      const existing = clientes[idx];
+      Object.keys(obj).forEach(k=>{ existing[k] = obj[k]; });
+      atualizados++;
+    }
+  });
+  await saveClientes();
+  return { novos, atualizados, ignorados };
+}
+
 function enderecoCompleto(c){
   if(!c) return '';
   const linha1 = [c.endereco, c.numero].filter(Boolean).join(', ') + (c.complemento ? ` - ${c.complemento}` : '');
@@ -1027,6 +1123,7 @@ function printOrder(order){
     ${order.numeroNota ? `<tr><td class="label">Nº da nota</td><td>${escapeHtml(order.numeroNota)}</td></tr>` : ''}
     ${order.status==='entregue' ? `<tr><td class="label">Recebido por</td><td>${escapeHtml(order.recebidoPor||'—')}</td></tr>` : ''}
   </table>
+  ${order.descricao ? `<div class="section-title">Descrição do serviço</div><div>${escapeHtml(order.descricao)}</div>` : ''}
 
   ${(pagamentosRows || order.valorTotal) ? `
   <div class="section-title">Pagamento</div>
@@ -1519,7 +1616,7 @@ function mountObservacoes(container, orderLike, persisted){
 
   function draw(){
     container.innerHTML = `
-      <div class="section-label" style="margin-top:18px;">Observações</div>
+      <div class="section-label" style="margin-top:18px;">Observações <span class="muted" style="text-transform:none; font-weight:600; letter-spacing:0;">(uso interno — o cliente NÃO vê isso)</span></div>
       <div id="obsListInner"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnNovaObsInner">+ Lançar nova observação</button>
       <div id="obsFormInner" style="display:none; margin-top:12px; border:1px solid var(--line); border-radius:9px; padding:14px; background:var(--surface-2);"></div>
@@ -1853,7 +1950,14 @@ function renderNovaOrdem(main){
         </div>
       </div>
       <div id="pagamentoContainerNova"></div>
+      <div class="divider-nova"></div>
+      <div class="field" style="margin-top:0;">
+        <label>Descrição do serviço <span class="muted">(o cliente vê isso na página de acompanhamento)</span></label>
+        <textarea id="f_descricao" placeholder="Ex: Troca de lente, ajuste de armação..." style="min-height:70px;"></textarea>
+      </div>
+      <div class="divider-nova"></div>
       <div id="fotoContainerNova"></div>
+      <div class="divider-nova"></div>
       <div id="obsContainerNova"></div>
       <div style="margin-top:18px; display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-accent" id="btnSalvarOrdem">Lançar ordem</button>
@@ -1946,6 +2050,7 @@ function renderNovaOrdem(main){
       via: viaInp.value.trim(),
       numeroNota: document.getElementById('f_nota').value.trim(),
       vendedora: document.getElementById('f_vendedora').value.trim(),
+      descricao: document.getElementById('f_descricao').value.trim(),
       loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
@@ -1972,6 +2077,7 @@ function renderNovaOrdem(main){
     const via = viaInp.value.trim();
     const numeroNota = document.getElementById('f_nota').value.trim();
     const vendedora = document.getElementById('f_vendedora').value.trim();
+    const descricao = document.getElementById('f_descricao').value.trim();
     const loja = lojaSel.value;
     const sid = servicoSel.value;
     const dt = dataInp.value;
@@ -2009,7 +2115,7 @@ function renderNovaOrdem(main){
     const novaOrdem = {
       id: uid('ord'),
       ...cli,
-      via, numeroNota, vendedora, loja,
+      via, numeroNota, vendedora, descricao, loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
       data: dt,
@@ -2050,6 +2156,7 @@ function openEditModalOficina(order){
     <h3>Ordem de ${escapeHtml(order.cliente)}</h3>
     <p>${escapeHtml(order.serviceTypeName)} · ${fmtDate(order.data)} · Loja ${escapeHtml(order.loja)} · Status ${statusLabel(order.status)}</p>
     <div class="locked-note">🔒 Este acesso permite apenas incluir observações e dar ciência. Para alterar os demais dados, fale com a vendedora ou a diretoria.</div>
+    ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
     <div id="fotoContainerEditOficina"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
@@ -2099,6 +2206,10 @@ function openEditModalCompleto(order){
       </div>
     </div>
     <div id="pagamentoContainerEdit"></div>
+    <div class="field" style="margin-top:6px;">
+      <label>Descrição do serviço <span class="muted">(o cliente vê isso na página de acompanhamento)</span></label>
+      <textarea id="e_descricao" style="min-height:70px;">${escapeHtml(order.descricao||'')}</textarea>
+    </div>
     <div id="fotoContainerEdit"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
@@ -2174,6 +2285,7 @@ function openEditModalCompleto(order){
     const via = document.getElementById('e_via').value.trim();
     const numeroNota = document.getElementById('e_nota').value.trim();
     const vendedora = document.getElementById('e_vendedora').value.trim();
+    const descricao = document.getElementById('e_descricao').value.trim();
     const loja = document.getElementById('e_loja').value;
     const status = document.getElementById('e_status').value;
     const sid = servicoSel.value;
@@ -2230,7 +2342,7 @@ function openEditModalCompleto(order){
     const st = config.serviceTypes.find(s=>s.id===sid);
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
-      via, numeroNota, vendedora, loja, status,
+      via, numeroNota, vendedora, descricao, loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
       encaixe, autorizadoPor, recebidoPor, recebidoEm
     });
@@ -2577,7 +2689,10 @@ function renderClientes(main){
         <h1 class="page-title">Clientes</h1>
         <p class="page-sub">Cadastro para acompanhamento, edição e mala direta de aniversário.</p>
       </div>
-      <button class="btn btn-accent" id="btnNovoCliente">+ Novo cliente</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-ghost" id="btnImportarClientes">📥 Importar clientes</button>
+        <button class="btn btn-accent" id="btnNovoCliente">+ Novo cliente</button>
+      </div>
     </div>
 
     <div id="aniversarioCard"></div>
@@ -2713,6 +2828,86 @@ function renderClientes(main){
   renderTable();
 
   document.getElementById('btnNovoCliente').addEventListener('click', ()=> openClienteModal(null) );
+  document.getElementById('btnImportarClientes').addEventListener('click', ()=> openImportarClientesModal() );
+
+  function openImportarClientesModal(){
+    openModal(`
+      <h3>Importar clientes</h3>
+      <p class="muted">Envie uma planilha (.xlsx, .xls ou .csv) exportada do outro sistema. Você confere e ajusta quais colunas correspondem a cada campo antes de importar — nada é salvo até você confirmar.</p>
+      <div class="field"><label>Arquivo</label><input type="file" id="importFileInput" accept=".xlsx,.xls,.csv"></div>
+      <div id="importMappingArea"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="importCancel">Cancelar</button>
+        <button class="btn btn-accent" id="importConfirm" style="display:none;">Importar</button>
+      </div>
+    `);
+    document.getElementById('importCancel').addEventListener('click', closeModal);
+
+    let parsedHeaders = null, parsedRows = null;
+
+    document.getElementById('importFileInput').addEventListener('change', async (e)=>{
+      const file = e.target.files[0];
+      if(!file) return;
+      try{
+        const isCsv = /\.csv$/i.test(file.name);
+        let wb;
+        if(isCsv){
+          const text = await file.text();
+          wb = XLSX.read(text, { type: 'string' });
+        }else{
+          const buf = await file.arrayBuffer();
+          wb = XLSX.read(buf, { type: 'array', cellDates: false });
+        }
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+        if(!matrix || matrix.length < 2){
+          showToast('A planilha parece estar vazia.');
+          return;
+        }
+        parsedHeaders = matrix[0].map(h=>String(h||'').trim());
+        parsedRows = matrix.slice(1).filter(r=> r.some(c=>c!==''));
+        renderMapping();
+      }catch(err){
+        console.error('Erro ao ler planilha:', err);
+        showToast('Não foi possível ler esse arquivo. Confira se o formato é .xlsx, .xls ou .csv.');
+      }
+    });
+
+    function renderMapping(){
+      const area = document.getElementById('importMappingArea');
+      area.innerHTML = `
+        <div class="section-label" style="margin-top:18px;">Confira o mapeamento das colunas</div>
+        <div class="group-hint" style="margin-bottom:12px;">Encontramos ${parsedRows.length} linha(s). Ajuste abaixo se alguma coluna não foi identificada corretamente — a primeira linha de exemplo aparece embaixo de cada nome.</div>
+        ${parsedHeaders.map((h,i)=>`
+          <div class="grid-2" style="margin-bottom:10px; align-items:center;">
+            <div style="font-size:13px;"><b>${escapeHtml(h||('Coluna '+(i+1)))}</b><div class="muted">${escapeHtml(String((parsedRows[0]&&parsedRows[0][i]!==undefined)?parsedRows[0][i]:''))}</div></div>
+            <select data-mapidx="${i}">
+              <option value="">Ignorar coluna</option>
+              ${CAMPOS_IMPORTACAO.map(c=>`<option value="${c.key}" ${sugerirCampoImportacao(h)===c.key?'selected':''}>${c.label}</option>`).join('')}
+            </select>
+          </div>
+        `).join('')}
+      `;
+      document.getElementById('importConfirm').style.display = '';
+    }
+
+    document.getElementById('importConfirm').addEventListener('click', async ()=>{
+      if(!parsedRows){ showToast('Escolha um arquivo primeiro.'); return; }
+      const mapeamento = parsedHeaders.map((h,i)=>{
+        const sel = document.querySelector(`[data-mapidx="${i}"]`);
+        return sel ? sel.value : '';
+      });
+      if(!mapeamento.includes('nome')){
+        showToast('Marque ao menos uma coluna como "Nome" para continuar.');
+        return;
+      }
+      const resumo = await processarImportacaoClientes(parsedHeaders, parsedRows, mapeamento);
+      closeModal();
+      renderAniversarioCard();
+      renderTable();
+      showToast(`Importação concluída: ${resumo.novos} novo(s), ${resumo.atualizados} atualizado(s), ${resumo.ignorados} ignorado(s).`);
+    });
+  }
 
   function openClienteModal(cliente){
     const editing = !!cliente;
