@@ -273,6 +273,7 @@
   /* ================= MODO EMBUTIDO ================= */
   const EMBEDDED = window.self !== window.top;
   let permissoesAbasOverride = null;
+  let __gatewaySenha = null;
   const TABS_MODULO = [
     { id:"transferencias", label:"Transferências", icon:"🔁" },
     { id:"reposicao", label:"Reposição", icon:"📦" },
@@ -291,10 +292,14 @@
   }
   if(EMBEDDED){
     document.documentElement.classList.add("embedded");
-    window.addEventListener("message", (ev)=>{
+    window.addEventListener("message", async (ev)=>{
       if(!ev.data || !ev.data.type) return;
       if(ev.data.type === "auth"){
         permissoesAbasOverride = ev.data.abas || null;
+        __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
+        await loadConfig();
+        await loadData();
+        render();
         const permitidas = tabsPermitidas();
         if(!permitidas.some(t=>t.id===state.tab)) setTab(permitidas[0] ? permitidas[0].id : "transferencias");
         parent.postMessage({ type:"tabs", modulo:"transferencias", tabs: permitidas, active: state.tab }, "*");
@@ -553,7 +558,56 @@
 
   const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
-  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+
+  // A partir daqui o app não fala mais direto com o banco: tudo passa pela Edge
+  // Function "db-gateway", que exige a senha de um acesso válido (recebida do
+  // shell via postMessage, guardada em __gatewaySenha).
+  async function gatewayCall(body){
+    try{
+      const res = await fetch(GATEWAY_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha: __gatewaySenha, ...body }),
+      });
+      return await res.json();
+    }catch(e){
+      console.error("erro ao falar com o servidor", e);
+      return { error: "Não foi possível conectar. Verifique sua internet." };
+    }
+  }
+  const supabaseClient = {
+    from(table){
+      return {
+        select(){
+          return {
+            eq(column, value){
+              return {
+                maybeSingle: async ()=>{
+                  if(table === "gestao_config" && column === "id" && value === "config"){
+                    const r = await gatewayCall({ op:"getConfig" });
+                    if(r.error) return { data:null, error:r.error };
+                    return { data: { payload: r.data }, error: null };
+                  }
+                  return gatewayCall({ op:"selectOne", table, params:{ column, value } });
+                }
+              };
+            },
+            order(){ return gatewayCall({ op:"selectAll", table }); }
+          };
+        },
+        upsert(row){
+          if(table === "gestao_config"){
+            return gatewayCall({ op:"saveConfig", params:{ payload: row.payload } });
+          }
+          return gatewayCall({ op:"upsert", table, params:{ row } });
+        },
+        delete(){
+          return { eq: (column, value)=> gatewayCall({ op:"delete", table, params:{ column, value } }) };
+        }
+      };
+    }
+  };
 
   function tableName(tab){ return tab === "transferencias" ? "transferencias_controle" : "reposicao_controle"; }
 
@@ -1528,7 +1582,14 @@
     }, 50);
   });
 
-  async function init(){ applyTheme(); await loadConfig(); await loadData(); render(); if(EMBEDDED) parent.postMessage({ type:"ready", modulo:"transferencias" }, "*"); }
+  async function init(){
+    applyTheme();
+    if(EMBEDDED){
+      parent.postMessage({ type:"ready", modulo:"transferencias" }, "*");
+      return;
+    }
+    await loadConfig(); await loadData(); render();
+  }
   init();
 
 })();

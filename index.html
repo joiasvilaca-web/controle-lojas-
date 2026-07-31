@@ -201,6 +201,12 @@
   .who-shell .level-pill{background:rgba(255,255,255,0.14); color:#fff; align-self:flex-start;}
 
   .shell-main{flex:1; display:flex; flex-direction:column; min-width:0; background:var(--surface-2);}
+  .mobile-topbar{display:none; align-items:center; gap:12px; padding:12px 16px; background:var(--bg); color:#fff; flex-shrink:0;}
+  .hamburger-btn{background:rgba(255,255,255,0.12); border:none; color:#fff; width:36px; height:36px; border-radius:9px; font-size:18px; cursor:pointer; flex-shrink:0; line-height:1;}
+  .hamburger-btn:hover{background:rgba(255,255,255,0.2);}
+  .mobile-topbar-title{font-weight:750; font-size:14.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .sidebar-overlay{display:none; position:fixed; inset:0; background:rgba(20,8,15,0.5); z-index:29;}
+  .sidebar-overlay.show{display:block;}
   .shell-topbar{
     display:flex; gap:8px; flex-wrap:wrap; padding:12px 20px; background:var(--surface); border-bottom:1px solid var(--line); flex-shrink:0;
   }
@@ -214,14 +220,19 @@
   .module-iframe{width:100%; height:100%; border:none; display:none; background:var(--surface);}
 
   @media (max-width:900px){
-    #shellView{flex-direction:column; height:auto; min-height:100vh; overflow:visible;}
-    .sidebar{width:100%; flex-direction:row; align-items:center; padding:10px 12px; overflow-x:auto;}
-    .sidebar-brand{padding:0 10px 0 0;}
-    #sidebarModules{flex-direction:row; flex:none;}
-    .side-item{white-space:nowrap;}
-    .sidebar-footer{border-top:none; border-left:1px solid rgba(255,255,255,0.12); padding:0 0 0 12px; margin:0 0 0 6px;}
-    .who-shell{flex-direction:row; align-items:center; gap:8px;}
-    .shell-content{height:70vh;}
+    #shellView{position:relative; height:100vh; overflow:hidden;}
+    .mobile-topbar{display:flex;}
+    .sidebar{
+      position:fixed; top:0; left:0; bottom:0; width:250px; max-width:82vw; z-index:30;
+      transform:translateX(-100%); transition:transform .25s ease; box-shadow:10px 0 30px rgba(0,0,0,0.3);
+    }
+    .sidebar.open{transform:translateX(0);}
+    .shell-content{padding:16px;}
+    .shell-topbar{padding:10px 14px; overflow-x:auto; flex-wrap:nowrap; -webkit-overflow-scrolling:touch;}
+    .shell-topbar button{flex-shrink:0;}
+  }
+  @media (max-width:520px){
+    .login-card{padding:26px 22px;}
   }
 </style>
 </head>
@@ -239,7 +250,8 @@
 </div>
 
 <div id="shellView">
-  <aside class="sidebar">
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <aside class="sidebar" id="sidebarEl">
     <div class="sidebar-brand">
       <div class="brand-mark-shell">GC</div>
       <div class="brand-name-shell">Gestão e Controle</div>
@@ -254,6 +266,10 @@
     </div>
   </aside>
   <div class="shell-main">
+    <div class="mobile-topbar" id="mobileTopbar">
+      <button class="hamburger-btn" id="btnToggleSidebar" aria-label="Abrir menu">☰</button>
+      <div class="mobile-topbar-title" id="mobileTopbarTitle">Gestão e Controle</div>
+    </div>
     <div class="shell-topbar" id="shellTopTabs"></div>
     <div class="shell-content">
       <div id="shellEmptyState" class="empty" style="display:none; padding:60px 20px;">Seu acesso não tem nenhum módulo liberado. Fale com a diretoria.</div>
@@ -276,7 +292,65 @@
 <script>
 const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+
+/**
+ * A partir daqui o app NÃO fala mais direto com o banco usando a anon key.
+ * Toda leitura/escrita passa pela Edge Function "db-gateway", que exige a senha
+ * de um acesso válido antes de fazer qualquer coisa (a anon key sozinha não abre
+ * mais nenhuma porta). `__gatewaySenha` guarda a senha da pessoa logada nesta aba.
+ */
+let __gatewaySenha = null;
+async function gatewayCall(body){
+  try{
+    const res = await fetch(GATEWAY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({ senha: __gatewaySenha, ...body }),
+    });
+    return await res.json();
+  }catch(e){
+    console.error('erro ao falar com o servidor', e);
+    return { error: 'Não foi possível conectar. Verifique sua internet.' };
+  }
+}
+async function gatewayLogin(senhaTentativa){
+  return gatewayCall({ op:'login', senha: senhaTentativa });
+}
+/** Shim com a mesma "forma" do cliente Supabase antigo, pra não precisar reescrever
+ * cada chamada existente — só troca o que acontece por baixo dos panos. */
+const supabaseClient = {
+  from(table){
+    return {
+      select(){
+        return {
+          eq(column, value){
+            return {
+              maybeSingle: async ()=>{
+                if(table === 'gestao_config' && column === 'id' && value === 'config'){
+                  const r = await gatewayCall({ op:'getConfig' });
+                  if(r.error) return { data:null, error:r.error };
+                  return { data: { payload: r.data }, error: null };
+                }
+                return gatewayCall({ op:'selectOne', table, params:{ column, value } });
+              }
+            };
+          },
+          order(){ return gatewayCall({ op:'selectAll', table }); }
+        };
+      },
+      upsert(row){
+        if(table === 'gestao_config'){
+          return gatewayCall({ op:'saveConfig', params:{ payload: row.payload } });
+        }
+        return gatewayCall({ op:'upsert', table, params:{ row } });
+      },
+      delete(){
+        return { eq: (column, value)=> gatewayCall({ op:'delete', table, params:{ column, value } }) };
+      }
+    };
+  }
+};
 
 let config = null;
 
@@ -345,18 +419,22 @@ document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==
 async function doLogin(){
   const pass = document.getElementById('loginPass').value.trim();
   const err = document.getElementById('loginError');
+  const btn = document.getElementById('btnLogin');
   if(!pass) return;
   err.classList.remove('show');
-  if(!config) await loadConfig();
-  const user = (config.users||[]).find(u=>u.senha===pass);
-  if(!user){ err.classList.add('show'); return; }
-  currentUser = { id:user.id, nome:user.nome, nivel:user.nivel, senha:user.senha };
-  currentPermissoes = permissoesDoUsuario(user);
+  btn.disabled = true; btn.textContent = 'Entrando...';
+  const r = await gatewayLogin(pass);
+  btn.disabled = false; btn.textContent = 'Entrar';
+  if(!r || !r.ok){ err.classList.add('show'); return; }
+  __gatewaySenha = pass;
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
+  currentPermissoes = permissoesDoUsuario(r.user);
+  await loadConfig();
   enterShell();
 }
 
 document.getElementById('btnLogoutShell').addEventListener('click', ()=>{
-  currentUser = null; currentPermissoes = null; moduloAtual = null;
+  currentUser = null; currentPermissoes = null; moduloAtual = null; __gatewaySenha = null; config = null;
   Object.values(iframesCriados).forEach(f=> f.remove());
   for(const k in iframesCriados) delete iframesCriados[k];
   for(const k in tabsCache) delete tabsCache[k];
@@ -381,6 +459,17 @@ function enterShell(){
   const primeiro = permitidos.find(m=>m.id!=='config') || permitidos[0];
   selecionarModulo(primeiro.id);
 }
+
+function abrirMenuMobile(){
+  document.getElementById('sidebarEl').classList.add('open');
+  document.getElementById('sidebarOverlay').classList.add('show');
+}
+function fecharMenuMobile(){
+  document.getElementById('sidebarEl').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+}
+document.getElementById('btnToggleSidebar').addEventListener('click', abrirMenuMobile);
+document.getElementById('sidebarOverlay').addEventListener('click', fecharMenuMobile);
 
 function buildSidebar(){
   const wrap = document.getElementById('sidebarModules');
@@ -412,6 +501,9 @@ function renderShellTabs(moduloId, tabs, active){
 
 function selecionarModulo(moduloId){
   moduloAtual = moduloId;
+  fecharMenuMobile();
+  const info = SIDEBAR_MODULES.find(m=>m.id===moduloId);
+  document.getElementById('mobileTopbarTitle').textContent = info ? info.label : 'Gestão e Controle';
   document.getElementById('shellEmptyState').style.display = 'none';
   document.querySelectorAll('.side-item').forEach(b=> b.classList.toggle('active', b.dataset.modulo===moduloId));
   document.getElementById('configPanelShell').style.display = 'none';
@@ -425,7 +517,6 @@ function selecionarModulo(moduloId){
     return;
   }
 
-  const info = SIDEBAR_MODULES.find(m=>m.id===moduloId);
   let iframe = iframesCriados[moduloId];
   if(!iframe){
     iframe = document.createElement('iframe');
@@ -1109,9 +1200,7 @@ function renderMensagensTab(main){
 }
 
 /* ===================== INIT ===================== */
-(async function init(){
-  await loadConfig();
-})();
+/* A config só é buscada depois do login (o gateway exige senha válida pra isso). */
 </script>
 </body>
 </html>

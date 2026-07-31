@@ -116,7 +116,59 @@
 
   const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
-  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+
+  // A partir daqui o app não fala mais direto com o banco: tudo passa pela Edge
+  // Function "db-gateway", que exige a senha de um acesso válido.
+  let __gatewaySenha = null;
+  async function gatewayCall(body){
+    try{
+      const res = await fetch(GATEWAY_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha: __gatewaySenha, ...body }),
+      });
+      return await res.json();
+    }catch(e){
+      console.error("erro ao falar com o servidor", e);
+      return { error: "Não foi possível conectar. Verifique sua internet." };
+    }
+  }
+  async function gatewayLogin(senhaTentativa){
+    return gatewayCall({ op:"login", senha: senhaTentativa });
+  }
+  const supabaseClient = {
+    from(table){
+      return {
+        select(){
+          return {
+            eq(column, value){
+              return {
+                maybeSingle: async ()=>{
+                  if(table === "gestao_config" && column === "id" && value === "config"){
+                    const r = await gatewayCall({ op:"getConfig" });
+                    if(r.error) return { data:null, error:r.error };
+                    return { data: { payload: r.data }, error: null };
+                  }
+                  return gatewayCall({ op:"selectOne", table, params:{ column, value } });
+                }
+              };
+            },
+            order(){ return gatewayCall({ op:"selectAll", table }); }
+          };
+        },
+        upsert(row){
+          if(table === "gestao_config"){
+            return gatewayCall({ op:"saveConfig", params:{ payload: row.payload } });
+          }
+          return gatewayCall({ op:"upsert", table, params:{ row } });
+        },
+        delete(){
+          return { eq: (column, value)=> gatewayCall({ op:"delete", table, params:{ column, value } }) };
+        }
+      };
+    }
+  };
 
   let currentUser = null; // { nome, nivel }
   let ordersConfig = null;
@@ -142,6 +194,7 @@
       if(!ev.data || !ev.data.type) return;
       if(ev.data.type === "auth"){
         currentUser = ev.data.user;
+        __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
         try{
           const { data } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
           const unificado = data ? data.payload : null;
@@ -162,28 +215,33 @@
   async function doLogin(){
     const pass = document.getElementById("loginPass").value.trim();
     const err = document.getElementById("loginError");
+    const btn = document.getElementById("btnLogin");
     if(!pass) return;
     err.classList.remove("show");
+    btn.disabled = true;
     try{
-      const { data, error } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
-      if(error) throw error;
+      const r = await gatewayLogin(pass);
+      if(!r || !r.ok){ err.classList.add("show"); return; }
+      __gatewaySenha = pass;
+      currentUser = { nome: r.user.nome, nivel: r.user.nivel };
+      const { data } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
       const unificado = data ? data.payload : null;
       ordersConfig = unificado ? { lojas: unificado.lojas||[], serviceTypes: unificado.tiposServico||[], users: unificado.users||[] } : null;
       transfConfig = unificado ? { stores: (unificado.lojas||[]).map(l=>l.abreviacao) } : { stores: [] };
-      const user = ordersConfig ? (ordersConfig.users||[]).find(u=>u.senha===pass) : null;
-      if(!user){ err.classList.add("show"); return; }
-      currentUser = { nome: user.nome, nivel: user.nivel };
       await loadAllData();
       enterDashboard();
     }catch(e){
       console.error("Erro no login do dashboard:", e);
       err.textContent = "Não foi possível verificar a senha agora. Tente novamente.";
       err.classList.add("show");
+    }finally{
+      btn.disabled = false;
     }
   }
 
   document.getElementById("btnLogout").addEventListener("click", ()=>{
     currentUser = null;
+    __gatewaySenha = null;
     document.getElementById("loginPass").value = "";
     document.getElementById("view-dashboard").style.display = "none";
     document.getElementById("view-login").style.display = "flex";
