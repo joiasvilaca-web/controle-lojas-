@@ -351,6 +351,56 @@ const supabaseClient = {
     };
   }
 };
+// Cliente real do Supabase, mantido só pra chamar a Edge Function de upload de foto pro Drive
+// (essa função não mexe em tabela nenhuma direto, então não passa pelo porteiro/gateway).
+const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function compressImage(file, maxDim=1400, quality=0.85){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let { width, height } = img;
+        if(width > maxDim || height > maxDim){
+          if(width > height){ height = Math.round(height * maxDim / width); width = maxDim; }
+          else { width = Math.round(width * maxDim / height); height = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function readFileAsDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+/**
+ * Envia uma foto/vídeo (data URL) pra pasta de Fotos do Drive, via Edge Function.
+ * `pasta`: 'os' (padrão) ou 'produtos' — pastas separadas por finalidade.
+ * `tratar`: true pede o tratamento automático (remoção de fundo, recorte quadrado,
+ * ajuste de tom) — só faz sentido pra fotos de produto, nunca pra vídeo.
+ */
+async function uploadFotoParaDrive(dataUrl, filename, pasta, tratar){
+  const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
+    body: { dataUrl, filename, pasta, tratar }
+  });
+  if(error) throw error;
+  if(!data || !data.url) throw new Error('Resposta inválida do upload para o Drive');
+  return data;
+}
 
 let config = null;
 
@@ -409,6 +459,7 @@ const SIDEBAR_MODULES = [
   { id:'transferencias', label:'Transferências', icon:'🔁', src:'transferencias-reposicoes.html' },
   { id:'os', label:'Painel de O.S.', icon:'🧾', src:'painel-ordens.html' },
   { id:'vendas', label:'Vendas (PDV)', icon:'🛒', src:'vendas.html' },
+  { id:'conciliacao', label:'Conciliação de Cartão', icon:'🔄', src:'conciliacao.html' },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'config', label:'Configurações', icon:'⚙️', src:null },
 ];
@@ -558,6 +609,7 @@ const CFG_TABS = [
   { id:'funcionarios', label:'Funcionários' },
   { id:'produtos', label:'Produtos (Ótica)' },
   { id:'joias', label:'Joias & Metais' },
+  { id:'estoque', label:'Produtos & Estoque' },
   { id:'servicos', label:'Tipos de Serviço' },
   { id:'pagamento', label:'Formas de Pagamento' },
   { id:'acessos', label:'Perfis de Acesso' },
@@ -586,6 +638,7 @@ function renderCfgTab(tab){
   if(tab==='funcionarios') return renderFuncionariosTab(body);
   if(tab==='produtos') return renderProdutosTab(body);
   if(tab==='joias') return renderJoiasTab(body);
+  if(tab==='estoque') return renderEstoqueTab(body);
   if(tab==='servicos') return renderServicosTab(body);
   if(tab==='pagamento') return renderPagamentoTab(body);
   if(tab==='acessos') return renderAcessosTab(body);
@@ -879,6 +932,263 @@ function renderJoiasTab(main){
   });
 }
 
+/* ---------- PRODUTOS & ESTOQUE (composição / BOM em cascata) ---------- */
+let produtosEstoque = [];
+let produtosEstoqueCarregado = false;
+async function produtosEstoqueGet(){
+  try{
+    const { data, error } = await supabaseClient.from('produtos_estoque').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
+}
+async function produtoEstoqueSalvar(produto){
+  try{
+    const { error } = await supabaseClient.from('produtos_estoque').upsert({ id: produto.id, payload: produto });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar produto/insumo', e); showToast('Não foi possível salvar. Tente novamente.'); return false; }
+}
+async function produtoEstoqueExcluir(id){
+  try{
+    const { error } = await supabaseClient.from('produtos_estoque').delete().eq('id', id);
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao excluir produto/insumo', e); return false; }
+}
+
+function unidadeLabel(u){ return u==='g' ? 'gramas' : u==='kg' ? 'kg' : 'unidade(s)'; }
+
+/**
+ * Componente de fotos/vídeos do produto. `holder.fotos` acumula os itens já enviados
+ * pro Drive (cada upload já sobe na hora, mesmo antes de salvar o produto — usa o
+ * `produtoId` já pré-gerado pra nomear o arquivo). Fotos passam pelo tratamento
+ * automático (fundo branco, recorte quadrado, ajuste de tom); vídeos só são
+ * arquivados por enquanto, sem tratamento.
+ */
+function mountFotosProduto(container, holder, produtoId){
+  if(!holder.fotos) holder.fotos = [];
+
+  function draw(){
+    container.innerHTML = `
+      <div class="section-label" style="margin-top:14px;">Fotos e vídeos</div>
+      <p class="muted" style="margin:-4px 0 10px;">As fotos passam por tratamento automático (fundo branco, recorte quadrado, ajuste de tom para ouro/prata). Vídeos são só arquivados por enquanto, sem tratamento.</p>
+      <div id="pe_fotoGrid" style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px;"></div>
+      <input type="file" accept="image/*" multiple id="pe_inputFoto" style="display:none;">
+      <input type="file" accept="video/*" id="pe_inputVideo" style="display:none;">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-ghost btn-sm" id="pe_btnAddFoto">🖼️ Anexar foto</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="pe_btnAddVideo">🎬 Anexar vídeo</button>
+      </div>
+      <div class="muted" id="pe_uploadStatus" style="margin-top:8px;"></div>
+    `;
+    drawGrid();
+    container.querySelector('#pe_btnAddFoto').addEventListener('click', ()=> container.querySelector('#pe_inputFoto').click());
+    container.querySelector('#pe_btnAddVideo').addEventListener('click', ()=> container.querySelector('#pe_inputVideo').click());
+    container.querySelector('#pe_inputFoto').addEventListener('change', async (e)=>{
+      const files = Array.from(e.target.files||[]);
+      e.target.value = '';
+      for(const file of files){ await processarUpload(file, 'foto', true); }
+    });
+    container.querySelector('#pe_inputVideo').addEventListener('change', async (e)=>{
+      const files = Array.from(e.target.files||[]);
+      e.target.value = '';
+      for(const file of files){ await processarUpload(file, 'video', false); }
+    });
+  }
+
+  async function processarUpload(file, tipo, tratar){
+    const status = container.querySelector('#pe_uploadStatus');
+    status.textContent = tipo==='foto' ? 'Enviando e tratando a foto...' : 'Enviando o vídeo...';
+    try{
+      const dataUrl = tipo==='foto' ? await compressImage(file, 1400, 0.85) : await readFileAsDataUrl(file);
+      const itemId = uid('midia');
+      const resultado = await uploadFotoParaDrive(dataUrl, produtoId+'_'+itemId+'_'+file.name, 'produtos', tratar);
+      holder.fotos.push({
+        id: itemId, nome: file.name, tipo,
+        driveUrl: resultado.url, driveFileId: resultado.fileId,
+        tratamentoAplicado: !!resultado.tratamentoAplicado,
+        criadoEm: Date.now(),
+      });
+      status.textContent = (tipo==='foto' && !resultado.tratamentoAplicado)
+        ? 'Foto anexada, mas sem tratamento automático ainda (verifique se a chave da Photoroom já foi configurada).'
+        : 'Anexado com sucesso.';
+    }catch(e){
+      console.error('erro ao anexar mídia do produto', e);
+      status.textContent = 'Não foi possível enviar. Tente novamente.';
+    }
+    drawGrid();
+  }
+
+  function drawGrid(){
+    const grid = container.querySelector('#pe_fotoGrid');
+    if(holder.fotos.length===0){ grid.innerHTML = `<span class="muted">Nenhuma foto/vídeo anexado ainda.</span>`; return; }
+    grid.innerHTML = holder.fotos.map(f=>`
+      <div style="position:relative; width:90px; height:90px; border-radius:8px; overflow:hidden; border:1px solid var(--line); background:var(--surface-2);">
+        ${f.tipo==='video'
+          ? `<div style="display:flex; align-items:center; justify-content:center; height:100%; font-size:26px;">🎬</div>`
+          : `<img src="${escapeHtml(f.driveUrl||'')}" style="width:100%; height:100%; object-fit:cover;">`}
+        <button type="button" data-rmfoto="${f.id}" title="Remover" style="position:absolute; top:2px; right:2px; background:rgba(20,20,20,0.6); color:#fff; border:none; border-radius:50%; width:20px; height:20px; font-size:11px; cursor:pointer; line-height:1;">✕</button>
+        ${f.tipo==='foto' && !f.tratamentoAplicado ? `<span style="position:absolute; bottom:0; left:0; right:0; background:rgba(179,38,30,0.85); color:#fff; font-size:9px; text-align:center; padding:1px 0;">sem tratamento</span>` : ''}
+      </div>
+    `).join('');
+    grid.querySelectorAll('[data-rmfoto]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        holder.fotos = holder.fotos.filter(f=>f.id!==b.dataset.rmfoto);
+        drawGrid();
+      });
+    });
+  }
+
+  draw();
+}
+
+function abrirProdutoEstoqueModal(produto){
+  const editando = !!produto;
+  const idAtual = produto ? produto.id : uid('prodest');
+  const outrosDisponiveis = produtosEstoque.filter(p=> !produto || p.id !== produto.id);
+  const composicaoInicial = (produto && produto.composicao) ? JSON.parse(JSON.stringify(produto.composicao)) : [];
+  const fotosHolder = { fotos: (produto && produto.fotos) ? JSON.parse(JSON.stringify(produto.fotos)) : [] };
+
+  openModal(`
+    <div class="section-label">${editando ? 'Editar produto/insumo' : 'Novo produto/insumo'}</div>
+    <div class="grid-2">
+      <div class="field"><label>Nome</label><input id="pe_nome" placeholder="Ex: Ouro 18k, Anel Solitário..." value="${escapeHtml(produto?produto.nome:'')}"></div>
+      <div class="field"><label>Unidade</label>
+        <select id="pe_unidade">
+          <option value="un" ${(!produto||produto.unidade==='un')?'selected':''}>Unidade</option>
+          <option value="g" ${produto&&produto.unidade==='g'?'selected':''}>Gramas (g)</option>
+          <option value="kg" ${produto&&produto.unidade==='kg'?'selected':''}>Quilos (kg)</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Estoque atual</label><input type="number" step="0.001" id="pe_estoque" value="${produto&&produto.estoque!==undefined?produto.estoque:0}"></div>
+      <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${produto&&produto.custo!==undefined?produto.custo:''}"></div>
+    </div>
+    <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:2px 0 10px;">
+      <input type="checkbox" id="pe_vendavel" ${(!produto || produto.vendavel!==false) ? 'checked' : ''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
+    </label>
+    <div id="pe_fotosWrap"></div>
+
+    <div class="section-label" style="margin-top:14px;">Composição (receita) <span class="muted" style="text-transform:none; font-weight:400;">— deixe vazio se for uma matéria-prima pura, sem receita</span></div>
+    <p class="muted" style="margin:-4px 0 10px;">Quantidade de cada insumo necessária para produzir 1 ${unidadeLabel(produto?produto.unidade:'un')} deste item. Se um insumo aqui também tiver a própria composição, o sistema explode automaticamente na hora da venda quando faltar estoque.</p>
+    <div id="pe_composicaoRows"></div>
+    <button type="button" class="btn btn-ghost btn-sm" id="btnAddComponente">+ Adicionar insumo à composição</button>
+    <div style="display:flex; gap:10px; margin-top:18px;">
+      <button class="btn btn-accent" id="btnSalvarProdutoEstoque">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarProdutoEstoque">Cancelar</button>
+    </div>
+  `);
+
+  let composicao = composicaoInicial;
+  mountFotosProduto(document.getElementById('pe_fotosWrap'), fotosHolder, idAtual);
+  function renderComposicaoRows(){
+    const wrap = document.getElementById('pe_composicaoRows');
+    if(outrosDisponiveis.length===0){
+      wrap.innerHTML = `<div class="empty">Cadastre outros produtos/insumos primeiro pra poder usá-los aqui numa composição.</div>`;
+      return;
+    }
+    wrap.innerHTML = composicao.map((c,i)=>`
+      <div class="grid-3" style="margin-bottom:6px; align-items:center;">
+        <select data-comp-insumo="${i}">${outrosDisponiveis.map(p=>`<option value="${p.id}" ${c.insumoId===p.id?'selected':''}>${escapeHtml(p.nome)}</option>`).join('')}</select>
+        <input type="number" step="0.001" min="0" data-comp-qtd="${i}" placeholder="Quantidade" value="${c.quantidade!==undefined?c.quantidade:''}">
+        <button type="button" class="icon-btn" data-comp-del="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-comp-insumo]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ composicao[Number(sel.dataset.compInsumo)].insumoId = sel.value; });
+    });
+    wrap.querySelectorAll('[data-comp-qtd]').forEach(inp=>{
+      inp.addEventListener('input', ()=>{ composicao[Number(inp.dataset.compQtd)].quantidade = inp.value===''?'':parseFloat(inp.value); });
+    });
+    wrap.querySelectorAll('[data-comp-del]').forEach(b=>{
+      b.addEventListener('click', ()=>{ composicao.splice(Number(b.dataset.compDel),1); renderComposicaoRows(); });
+    });
+  }
+  renderComposicaoRows();
+  document.getElementById('btnAddComponente').addEventListener('click', ()=>{
+    if(outrosDisponiveis.length===0){ showToast('Não há outros produtos/insumos cadastrados ainda.'); return; }
+    composicao.push({ insumoId: outrosDisponiveis[0].id, quantidade: '' });
+    renderComposicaoRows();
+  });
+
+  document.getElementById('btnCancelarProdutoEstoque').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarProdutoEstoque').addEventListener('click', async ()=>{
+    const nome = document.getElementById('pe_nome').value.trim();
+    if(!nome){ showToast('Informe o nome do produto/insumo.'); return; }
+    const composicaoValida = composicao.filter(c=> c.insumoId && c.quantidade && Number(c.quantidade) > 0)
+      .map(c=> ({ insumoId: c.insumoId, quantidade: Number(c.quantidade) }));
+    const dados = {
+      id: idAtual,
+      nome,
+      unidade: document.getElementById('pe_unidade').value,
+      estoque: parseFloat(document.getElementById('pe_estoque').value) || 0,
+      custo: document.getElementById('pe_custo').value === '' ? null : parseFloat(document.getElementById('pe_custo').value),
+      vendavel: document.getElementById('pe_vendavel').checked,
+      composicao: composicaoValida,
+      fotos: fotosHolder.fotos,
+    };
+    const ok = await produtoEstoqueSalvar(dados);
+    if(ok){
+      const idx = produtosEstoque.findIndex(p=>p.id===dados.id);
+      if(idx>=0) produtosEstoque[idx] = dados; else produtosEstoque.push(dados);
+      closeModal();
+      renderEstoqueTab(document.getElementById('cfgBody'));
+      showToast(editando ? 'Produto/insumo atualizado.' : 'Produto/insumo cadastrado.');
+    }
+  });
+}
+
+async function renderEstoqueTab(main){
+  main.innerHTML = `<div class="card"><div class="empty">Carregando...</div></div>`;
+  if(!produtosEstoqueCarregado){
+    produtosEstoque = await produtosEstoqueGet();
+    produtosEstoqueCarregado = true;
+  }
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Produtos & Estoque</div>
+      <p class="muted" style="margin:-4px 0 14px;">Cadastro de matérias-primas (insumos) e produtos vendáveis, com composição em cascata: um produto pode ser feito de outro produto que também tem sua própria receita (ex: joia ← ouro 18k ← ouro puro + cobre). Usado pelo módulo Vendas pra descontar o estoque certo na hora da venda.</p>
+      <div id="peRows"></div>
+      <div style="margin-top:14px;"><button class="btn btn-accent btn-sm" id="btnNovoProdutoEstoque">+ Novo produto/insumo</button></div>
+    </div>
+  `;
+  function renderRows(){
+    const wrap = document.getElementById('peRows');
+    if(produtosEstoque.length===0){ wrap.innerHTML = `<div class="empty">Nenhum produto/insumo cadastrado ainda.</div>`; return; }
+    wrap.innerHTML = produtosEstoque.map((p,i)=>{
+      const temComposicao = p.composicao && p.composicao.length>0;
+      return `
+      <div class="code-list-item">
+        <div>
+          <b>${escapeHtml(p.nome)}</b>
+          <span class="chip" style="margin-left:8px;">${Number(p.estoque||0)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
+          ${temComposicao ? `<span class="chip" style="margin-left:6px; background:var(--gold-soft); color:var(--gold-ink);">Receita: ${p.composicao.length} insumo(s)</span>` : `<span class="chip" style="margin-left:6px;">Matéria-prima</span>`}
+          ${p.vendavel===false ? `<span class="chip" style="margin-left:6px;">Só interno</span>` : `<span class="chip" style="margin-left:6px; background:var(--ok-soft); color:var(--ok);">Vendável</span>`}
+          ${p.fotos && p.fotos.length>0 ? `<span class="chip" style="margin-left:6px;">📷 ${p.fotos.length}</span>` : ''}
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
+          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `;}).join('');
+    wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> abrirProdutoEstoqueModal(produtosEstoque[Number(b.dataset.edit)]) ));
+    wrap.querySelectorAll('[data-del]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const p = produtosEstoque[Number(b.dataset.del)];
+        const usadoEmComposicao = produtosEstoque.some(x=> x.id!==p.id && (x.composicao||[]).some(c=>c.insumoId===p.id));
+        if(usadoEmComposicao){ showToast('Esse item é usado na composição de outro produto — remova essa referência antes de excluir.'); return; }
+        const ok = await produtoEstoqueExcluir(p.id);
+        if(ok){ produtosEstoque.splice(Number(b.dataset.del),1); renderRows(); showToast('Removido.'); }
+      });
+    });
+  }
+  renderRows();
+  document.getElementById('btnNovoProdutoEstoque').addEventListener('click', ()=> abrirProdutoEstoqueModal(null) );
+}
+
 /* ---------- TIPOS DE SERVIÇO ---------- */
 function renderServicosTab(main){
   main.innerHTML = `
@@ -977,12 +1287,17 @@ const MODULOS_APP = {
     { id:'nova', label:'Nova venda' },
     { id:'vendas', label:'Vendas' },
   ]},
+  conciliacao: { nome:'Conciliação de Cartão', abas:[
+    { id:'conciliar', label:'Conciliar' },
+    { id:'taxas', label:'Taxas e Prazos' },
+  ]},
   dashboard: { nome:'Dashboard', abas:[] },
   config: { nome:'Configurações', abas:[
     { id:'lojas', label:'Lojas' },
     { id:'funcionarios', label:'Funcionários' },
     { id:'produtos', label:'Produtos (Ótica)' },
     { id:'joias', label:'Joias & Metais' },
+    { id:'estoque', label:'Produtos & Estoque' },
     { id:'servicos', label:'Tipos de Serviço' },
     { id:'pagamento', label:'Formas de Pagamento' },
     { id:'acessos', label:'Perfis de Acesso' },
@@ -998,6 +1313,7 @@ function permissoesPadrao(nivel){
       transferencias:{ ativo:true, abas:todasAbas('transferencias') },
       os:{ ativo:true, abas:todasAbas('os') },
       vendas:{ ativo:true, abas:todasAbas('vendas') },
+      conciliacao:{ ativo:true, abas:todasAbas('conciliacao') },
       dashboard:{ ativo:true }, config:{ ativo:true, abas:todasAbas('config') },
     };
   }
@@ -1006,6 +1322,7 @@ function permissoesPadrao(nivel){
       transferencias:{ ativo:false, abas:{} },
       os:{ ativo:true, abas:{ nova:false, painel:true, agenda:true, clientes:false, codigo:true } },
       vendas:{ ativo:false, abas:{} },
+      conciliacao:{ ativo:false, abas:{} },
       dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
     };
   }
@@ -1014,6 +1331,7 @@ function permissoesPadrao(nivel){
     transferencias:{ ativo:true, abas:todasAbas('transferencias') },
     os:{ ativo:true, abas:{ nova:true, painel:true, agenda:true, clientes:true, codigo:false } },
     vendas:{ ativo:true, abas:todasAbas('vendas') },
+    conciliacao:{ ativo:false, abas:{} },
     dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
   };
 }

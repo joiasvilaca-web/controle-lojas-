@@ -82,8 +82,10 @@ input[type=text], input[type=number], input[type=password], input[type=date], se
 table{width:100%; border-collapse:collapse; font-size:13.5px;}
 th{text-align:left; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-faint); padding:8px 10px; border-bottom:2px solid var(--line);}
 td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
-.item-row{display:grid; grid-template-columns:1.4fr 1fr 70px 100px 34px; gap:8px; margin-bottom:6px; align-items:center;}
-@media (max-width:640px){ .item-row{grid-template-columns:1fr 1fr; grid-template-areas:"produto metal" "qtd valor" "del del";} }
+.item-row{border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:8px;}
+.item-row-topo{display:grid; grid-template-columns:1.4fr 1fr 70px 100px 34px; gap:8px; align-items:center;}
+.item-row-estoque{margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+@media (max-width:640px){ .item-row-topo{grid-template-columns:1fr 1fr; grid-template-areas:"produto metal" "qtd valor" "del del";} }
 .toast{position:fixed; left:50%; bottom:26px; transform:translate(-50%,20px); background:#2B0F1F; color:#fff; padding:11px 18px; border-radius:10px; font-size:13.5px; box-shadow:0 12px 30px rgba(0,0,0,0.3); opacity:0; pointer-events:none; transition:all .2s ease; z-index:50;}
 .toast.show{opacity:1; transform:translate(-50%,0);}
 .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px;}
@@ -251,12 +253,77 @@ async function vendaExcluir(id){
   }catch(e){ console.error('erro ao excluir venda', e); return false; }
 }
 
+let produtosEstoque = [];
+
+async function produtosEstoqueGet(){
+  try{
+    const { data, error } = await supabaseClient.from('produtos_estoque').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
+}
+async function produtoEstoqueAtualizar(produto){
+  try{
+    const { error } = await supabaseClient.from('produtos_estoque').upsert({ id: produto.id, payload: produto });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao atualizar estoque', e); return false; }
+}
+function unidadeEstoqueLabel(u){ return u==='g' ? 'g' : u==='kg' ? 'kg' : 'un'; }
+
+/**
+ * Planeja o consumo de `quantidadeNecessaria` unidades do produto `produtoId`,
+ * explodindo pela composição (receita) em cascata quando falta estoque em
+ * qualquer nível — ex: falta o produto pronto -> usa o insumo secundário ->
+ * se também faltar, usa os insumos primários que compõem o secundário.
+ * `reservas` acumula quanto de cada produto já foi planejado consumir nesta
+ * venda (pra não contar duas vezes o mesmo estoque entre itens diferentes).
+ * Retorna { ok, faltando:[{produtoId, nome, quantidade}] }.
+ */
+function planejarConsumoEstoque(produtoId, quantidadeNecessaria, reservas){
+  const produto = produtosEstoque.find(p=>p.id===produtoId);
+  if(!produto) return { ok:false, faltando:[{ produtoId, nome:'(produto não encontrado)', quantidade:quantidadeNecessaria }] };
+
+  const jaReservado = reservas[produtoId] || 0;
+  const disponivel = Math.max(0, (Number(produto.estoque)||0) - jaReservado);
+  const usarDoProprio = Math.min(disponivel, quantidadeNecessaria);
+  if(usarDoProprio > 0) reservas[produtoId] = jaReservado + usarDoProprio;
+
+  const faltaAinda = quantidadeNecessaria - usarDoProprio;
+  if(faltaAinda <= 1e-9) return { ok:true, faltando:[] };
+
+  if(!produto.composicao || produto.composicao.length===0){
+    return { ok:false, faltando:[{ produtoId, nome:produto.nome, quantidade:faltaAinda }] };
+  }
+
+  let tudoOk = true;
+  const faltandoTotal = [];
+  produto.composicao.forEach(comp=>{
+    const qtdComponente = (Number(comp.quantidade)||0) * faltaAinda;
+    const resultado = planejarConsumoEstoque(comp.insumoId, qtdComponente, reservas);
+    if(!resultado.ok){ tudoOk = false; faltandoTotal.push(...resultado.faltando); }
+  });
+  return { ok: tudoOk, faltando: faltandoTotal };
+}
+
+/** Aplica os consumos planejados (debita do estoque, mesmo que fique negativo) e salva cada produto afetado. */
+async function aplicarConsumosEstoque(reservas){
+  const ids = Object.keys(reservas).filter(id=> reservas[id] > 0);
+  for(const id of ids){
+    const produto = produtosEstoque.find(p=>p.id===id);
+    if(!produto) continue;
+    produto.estoque = (Number(produto.estoque)||0) - reservas[id];
+    await produtoEstoqueAtualizar(produto);
+  }
+}
+
 async function loadAll(){
   config = await configGetUnificada();
   if(!config){
     config = { lojas:[], funcionarios:[], users:[], formasPagamento:[], joiasProdutos:[], metais:[] };
   }
   vendas = await vendasGet();
+  produtosEstoque = await produtosEstoqueGet();
 }
 
 /* ============================================================
@@ -458,19 +525,29 @@ function mountItens(container, holder){
     `;
     drawRows();
     container.querySelector('#btnAddItem').addEventListener('click', ()=>{
-      holder.itens.push({ id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'' });
+      holder.itens.push({ id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'' });
       drawRows();
     });
   }
   function drawRows(){
     const wrap = container.querySelector('#itensRows');
+    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
     wrap.innerHTML = holder.itens.map((it,i)=>`
       <div class="item-row" data-idx="${i}">
-        <select data-itfield="produto">${produtoJoiaOptionsHtml(it.produto)}</select>
-        <select data-itfield="metal">${metalOptionsHtml(it.metal)}</select>
-        <input type="number" min="1" step="1" data-itfield="quantidade" value="${it.quantidade!==undefined?it.quantidade:1}">
-        <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00" value="${it.valorUnitario!==undefined && it.valorUnitario!=='' ? it.valorUnitario : ''}">
-        <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
+        <div class="item-row-topo">
+          <select data-itfield="produto">${produtoJoiaOptionsHtml(it.produto)}</select>
+          <select data-itfield="metal">${metalOptionsHtml(it.metal)}</select>
+          <input type="number" min="1" step="1" data-itfield="quantidade" value="${it.quantidade!==undefined?it.quantidade:1}">
+          <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00" value="${it.valorUnitario!==undefined && it.valorUnitario!=='' ? it.valorUnitario : ''}">
+          <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
+        </div>
+        <div class="item-row-estoque">
+          <label class="muted" style="font-size:11.5px; text-transform:uppercase; font-weight:700;">Descontar do estoque</label>
+          <select data-itfield="produtoEstoqueId" style="max-width:260px;">
+            <option value="">— Sem controle de estoque —</option>
+            ${vendaveis.map(p=>`<option value="${p.id}" ${it.produtoEstoqueId===p.id?'selected':''}>${escapeHtml(p.nome)} (${Number(p.estoque||0)} ${escapeHtml(unidadeEstoqueLabel(p.unidade))} em estoque)</option>`).join('')}
+          </select>
+        </div>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-itfield]').forEach(el=>{
@@ -665,6 +742,22 @@ function renderNovaVenda(main){
     const erroNota = notaEmpresasErro(tempPagHolder);
     if(erroNota){ showToast(erroNota); return; }
 
+    // Planeja o desconto de estoque (com explosão em cascata pela composição) pra
+    // cada item vinculado a um produto do catálogo. Itens sem vínculo (produtoEstoqueId
+    // vazio) não mexem em estoque nenhum, como sempre foi.
+    const reservas = {};
+    let faltandoGeral = [];
+    itensValidos.forEach(it=>{
+      if(!it.produtoEstoqueId) return;
+      const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas);
+      if(!resultado.ok) faltandoGeral.push(...resultado.faltando);
+    });
+    if(faltandoGeral.length > 0){
+      const lista = faltandoGeral.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
+      const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nLançar a venda mesmo assim? O estoque desses itens vai ficar negativo, sinalizando que precisa repor.`);
+      if(!prosseguir) return;
+    }
+
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
     const venda = {
       id: uid('venda'),
@@ -685,6 +778,7 @@ function renderNovaVenda(main){
     };
     const ok = await vendaSalvar(venda);
     if(ok){
+      await aplicarConsumosEstoque(reservas);
       vendas.unshift(venda);
       showToast('Venda lançada com sucesso.');
       currentTab = 'vendas';
