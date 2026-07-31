@@ -290,6 +290,36 @@
 <div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBox"></div></div>
 
 <script>
+/**
+ * Rede de segurança: se QUALQUER coisa quebrar ao carregar ou rodar o app,
+ * mostra um aviso bem visível na tela (não só no console do navegador) com o
+ * erro exato. Isso existe pra facilitar diagnosticar problemas remotamente,
+ * sem depender de a pessoa saber abrir o DevTools.
+ */
+(function(){
+  function mostrarErroNaTela(mensagem){
+    if(document.getElementById('erroFatalBanner')) return; // já mostrando um
+    const div = document.createElement('div');
+    div.id = 'erroFatalBanner';
+    div.style.cssText = 'position:fixed;inset:0;background:#2B0F1F;color:#fff;z-index:9999;padding:24px;font-family:system-ui,sans-serif;overflow:auto;';
+    div.innerHTML = '<div style="max-width:640px;margin:40px auto;">'
+      + '<h2 style="font-size:20px;margin:0 0 12px;">⚠️ O sistema encontrou um erro ao carregar</h2>'
+      + '<p style="opacity:0.85;font-size:14px;line-height:1.5;">Tira um print desta tela inteira e manda pro suporte — isso ajuda a corrigir rápido.</p>'
+      + '<pre style="background:rgba(255,255,255,0.08);padding:14px;border-radius:8px;font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin-top:14px;">' + mensagem.replace(/</g,'&lt;') + '</pre>'
+      + '<button onclick="location.reload()" style="margin-top:16px;background:#FDD49E;color:#4A1830;border:none;border-radius:8px;padding:10px 18px;font-weight:700;cursor:pointer;">Tentar de novo</button>'
+      + '</div>';
+    document.body.appendChild(div);
+  }
+  window.addEventListener('error', function(ev){
+    mostrarErroNaTela((ev.message||'Erro desconhecido') + '\n\nArquivo: ' + (ev.filename||'?') + ':' + (ev.lineno||'?') + '\n\n' + (ev.error && ev.error.stack || ''));
+  });
+  window.addEventListener('unhandledrejection', function(ev){
+    const r = ev.reason;
+    mostrarErroNaTela('Promessa não tratada: ' + (r && r.message || String(r)) + '\n\n' + (r && r.stack || ''));
+  });
+})();
+</script>
+<script>
 const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
 const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
@@ -353,6 +383,9 @@ const supabaseClient = {
 };
 // Cliente real do Supabase, mantido só pra chamar a Edge Function de upload de foto pro Drive
 // (essa função não mexe em tabela nenhuma direto, então não passa pelo porteiro/gateway).
+if(!window.supabase || typeof window.supabase.createClient !== 'function'){
+  throw new Error('A biblioteca do Supabase (cdn.jsdelivr.net) não carregou. Isso costuma acontecer por bloqueio de rede/firewall/DNS a esse endereço. Verifique a conexão ou tente outra rede.');
+}
 const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function compressImage(file, maxDim=1400, quality=0.85){
