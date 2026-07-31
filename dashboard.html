@@ -171,6 +171,7 @@
   };
 
   let currentUser = null; // { nome, nivel }
+  let configCompleto = null;
   let ordersConfig = null;
   let orders = [];
   let transfConfig = null;
@@ -198,6 +199,7 @@
         try{
           const { data } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
           const unificado = data ? data.payload : null;
+          configCompleto = unificado;
           ordersConfig = unificado ? { lojas: unificado.lojas||[], serviceTypes: unificado.tiposServico||[], users: unificado.users||[] } : null;
           transfConfig = unificado ? { stores: (unificado.lojas||[]).map(l=>l.abreviacao) } : { stores: [] };
         }catch(e){ console.error("Erro ao carregar config no dashboard embutido:", e); }
@@ -226,6 +228,7 @@
       currentUser = { nome: r.user.nome, nivel: r.user.nivel };
       const { data } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
       const unificado = data ? data.payload : null;
+      configCompleto = unificado;
       ordersConfig = unificado ? { lojas: unificado.lojas||[], serviceTypes: unificado.tiposServico||[], users: unificado.users||[] } : null;
       transfConfig = unificado ? { stores: (unificado.lojas||[]).map(l=>l.abreviacao) } : { stores: [] };
       await loadAllData();
@@ -434,6 +437,7 @@
       ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições/Vendas.</div>` : ""}
       ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento) nem o Fator (F).</div>` : ""}
 
+      ${mostraFinanceiro ? `<div class="section" id="secInteligencia"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secPagamentos"></div>` : ""}
       <div class="section" id="secOrdens"></div>
       ${mostraTransf ? `<div class="section" id="secVendas"></div>` : ""}
@@ -441,11 +445,199 @@
       ${mostraFinanceiro ? `<div class="section" id="secFator"></div>` : ""}
     `;
 
+    if(mostraFinanceiro) renderSecaoInteligencia();
     if(mostraFinanceiro) renderSecaoPagamentos();
     renderSecaoOrdens(mostraFinanceiro);
     if(mostraTransf) renderSecaoVendas(mostraFinanceiro);
     if(mostraTransf) renderSecaoTransf();
     if(mostraFinanceiro) renderSecaoFator();
+  }
+
+  /* ================= INTELIGÊNCIA (Curva ABC / avisos / metas / IA) ================= */
+  function curvaAbcProdutos(){
+    const totais = {};
+    vendas.forEach(v=>{
+      (v.itens||[]).forEach(it=>{
+        if(!it.produto) return;
+        const valor = (Number(it.quantidade)||0) * (Number(it.valorUnitario)||0);
+        totais[it.produto] = (totais[it.produto]||0) + valor;
+      });
+    });
+    const lista = Object.entries(totais).map(([produto,total])=>({produto,total})).sort((a,b)=>b.total-a.total);
+    const somaGeral = lista.reduce((acc,x)=>acc+x.total,0);
+    let acumulado = 0;
+    return lista.map(item=>{
+      acumulado += item.total;
+      const pctAcumulado = somaGeral>0 ? acumulado/somaGeral : 0;
+      const classe = pctAcumulado<=0.8 ? "A" : pctAcumulado<=0.95 ? "B" : "C";
+      return { ...item, classe, pctAcumulado };
+    });
+  }
+
+  function avisosDadosIncompletos(){
+    const avisos = [];
+    orders.forEach(o=>{
+      if(!o.telefone) avisos.push({ tipo:"O.S.", ref:o.via||o.id, problema:"Sem telefone do cliente" });
+      if(o.emissaoNota==="sim"){
+        if(!o.numeroNota) avisos.push({ tipo:"O.S.", ref:o.via||o.id, problema:"Marcou nota mas não tem número" });
+        if(!o.lojaSaidaId || !o.lojaPagamentoId || !o.lojaNotaId) avisos.push({ tipo:"O.S.", ref:o.via||o.id, problema:"Nota sem as 3 empresas preenchidas" });
+        else if(o.lojaPagamentoId !== o.lojaNotaId) avisos.push({ tipo:"O.S.", ref:o.via||o.id, problema:"Empresa do pagamento diferente da empresa da nota" });
+      }
+    });
+    vendas.forEach(v=>{
+      if(v.emissaoNota==="sim"){
+        if(!v.numeroNota) avisos.push({ tipo:"Venda", ref:v.id, problema:"Marcou nota mas não tem número" });
+        if(!v.lojaSaidaId || !v.lojaPagamentoId || !v.lojaNotaId) avisos.push({ tipo:"Venda", ref:v.id, problema:"Nota sem as 3 empresas preenchidas" });
+        else if(v.lojaPagamentoId !== v.lojaNotaId) avisos.push({ tipo:"Venda", ref:v.id, problema:"Empresa do pagamento diferente da empresa da nota" });
+      }
+    });
+    return avisos;
+  }
+
+  function totalDoMesPorLoja(){
+    const hoje = new Date();
+    const mesRef = hoje.toISOString().slice(0,7); // YYYY-MM
+    const totais = {};
+    orders.forEach(o=>{
+      if((o.data||"").slice(0,7) !== mesRef) return;
+      totais[o.loja] = (totais[o.loja]||0) + valorRecebidoDe(o);
+    });
+    vendas.forEach(v=>{
+      if((v.data||"").slice(0,7) !== mesRef) return;
+      totais[v.loja] = (totais[v.loja]||0) + valorRecebidoDe(v);
+    });
+    return totais;
+  }
+
+  function renderSecaoInteligencia(){
+    const el = document.getElementById("secInteligencia");
+    const abc = curvaAbcProdutos();
+    const avisos = avisosDadosIncompletos();
+    const metas = (configCompleto && configCompleto.metas && configCompleto.metas.mensal) || {};
+    const totaisMes = totalDoMesPorLoja();
+    const hoje = new Date();
+    const diaDoMes = hoje.getDate();
+    const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate();
+    const fracaoDoMes = diaDoMes / diasNoMes;
+
+    el.innerHTML = `
+      <h2 class="section-title">🧠 Inteligência</h2>
+      <p class="section-sub">Curva ABC, avisos de dados incompletos, metas do mês e um espaço pra perguntar qualquer coisa sobre os dados (respondido por IA).</p>
+
+      <div class="card" style="padding:16px; margin-bottom:14px;">
+        <b>Curva ABC de produtos</b> <span style="color:var(--ink-faint); font-size:12px;">(por faturamento nas vendas do PDV)</span>
+        <table style="margin-top:10px;">
+          <thead><tr><th>Produto</th><th>Faturamento</th><th>% acumulado</th><th>Classe</th></tr></thead>
+          <tbody>
+            ${abc.length===0 ? `<tr><td colspan="4" style="color:var(--ink-faint);">Sem vendas suficientes ainda.</td></tr>` : abc.slice(0,15).map(item=>`
+              <tr>
+                <td>${escapeHtml(item.produto)}</td>
+                <td>${fmtMoeda(item.total)}</td>
+                <td>${(item.pctAcumulado*100).toFixed(1)}%</td>
+                <td><span class="badge ${item.classe==='A'?'ok':item.classe==='B'?'wait':'erro'}">${item.classe}</span></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="padding:16px; margin-bottom:14px;">
+        <b>Avisos de dados incompletos</b>
+        ${avisos.length===0 ? `<p style="color:var(--ok); margin:8px 0 0;">Tudo certo — nenhum aviso no momento.</p>` : `
+          <table style="margin-top:10px;">
+            <thead><tr><th>Tipo</th><th>Referência</th><th>Aviso</th></tr></thead>
+            <tbody>${avisos.slice(0,30).map(a=>`<tr><td>${escapeHtml(a.tipo)}</td><td>${escapeHtml(String(a.ref))}</td><td>${escapeHtml(a.problema)}</td></tr>`).join("")}</tbody>
+          </table>
+        `}
+      </div>
+
+      <div class="card" style="padding:16px; margin-bottom:14px;">
+        <b>Metas do mês</b>
+        <div id="metasLista" style="margin-top:10px;"></div>
+        <button class="btn btn-ghost" id="btnEditarMetas" style="margin-top:10px;">Editar metas</button>
+      </div>
+
+      <div class="card" style="padding:16px;">
+        <b>Perguntar pra IA</b>
+        <p style="color:var(--ink-faint); font-size:12.5px; margin:4px 0 10px;">Responde com base nos dados já carregados aqui no dashboard (vendas, ordens, metas).</p>
+        <textarea id="perguntaIa" rows="2" placeholder="Ex: qual foi a loja que mais vendeu esse mês?" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:9px 10px; font-size:13.5px; font-family:inherit;"></textarea>
+        <button class="btn btn-primary" id="btnPerguntarIa" style="width:auto; margin-top:8px;">Perguntar</button>
+        <div id="respostaIa" style="margin-top:12px; font-size:13.5px; white-space:pre-wrap;"></div>
+      </div>
+    `;
+
+    function renderMetasLista(){
+      const wrap = document.getElementById("metasLista");
+      const lojas = (ordersConfig && ordersConfig.lojas) || [];
+      if(lojas.length===0){ wrap.innerHTML = `<span style="color:var(--ink-faint);">Nenhuma loja cadastrada.</span>`; return; }
+      wrap.innerHTML = lojas.map(l=>{
+        const meta = Number(metas[l.nome])||0;
+        const atual = totaisMes[l.nome]||0;
+        const pctAtual = meta>0 ? atual/meta : 0;
+        const status = meta===0 ? "sem meta definida" : pctAtual>=fracaoDoMes ? "no ritmo" : "atrás do ritmo";
+        const cor = meta===0 ? "var(--ink-faint)" : pctAtual>=fracaoDoMes ? "var(--ok)" : "var(--danger)";
+        return `<div style="margin-bottom:8px;">
+          <b>${escapeHtml(l.nome)}</b> — ${fmtMoeda(atual)} ${meta>0 ? `de ${fmtMoeda(meta)} (${(pctAtual*100).toFixed(0)}%)` : ""}
+          <span style="color:${cor}; font-size:12px; margin-left:6px;">${status}</span>
+        </div>`;
+      }).join("");
+    }
+    renderMetasLista();
+
+    document.getElementById("btnEditarMetas").addEventListener("click", ()=>{
+      const lojas = (ordersConfig && ordersConfig.lojas) || [];
+      if(lojas.length===0){ alert("Cadastre lojas primeiro em Configurações."); return; }
+      const novasMetas = {};
+      let cancelado = false;
+      lojas.forEach(l=>{
+        if(cancelado) return;
+        const atual = metas[l.nome]||"";
+        const resp = prompt(`Meta mensal de recebimento pra ${l.nome} (R$):`, atual);
+        if(resp===null){ cancelado = true; return; }
+        novasMetas[l.nome] = parseFloat(resp)||0;
+      });
+      if(cancelado) return;
+      salvarMetas(novasMetas);
+    });
+
+    async function salvarMetas(novasMetas){
+      if(!configCompleto){ alert("Configuração ainda não carregada."); return; }
+      const payload = { ...configCompleto, metas: { ...(configCompleto.metas||{}), mensal: novasMetas } };
+      try{
+        const { error } = await supabaseClient.from("gestao_config").upsert({ id:"config", payload });
+        if(error) throw error;
+        configCompleto = payload;
+        renderMetasLista();
+      }catch(e){
+        console.error("erro ao salvar metas", e);
+        alert("Não foi possível salvar as metas. Verifique se seu acesso tem permissão de Configurações.");
+      }
+    }
+
+    document.getElementById("btnPerguntarIa").addEventListener("click", async ()=>{
+      const pergunta = document.getElementById("perguntaIa").value.trim();
+      const respostaEl = document.getElementById("respostaIa");
+      if(!pergunta) return;
+      respostaEl.textContent = "Pensando...";
+      const resumoDados = {
+        curvaAbcTop10: abc.slice(0,10).map(x=>({produto:x.produto, faturamento:x.total, classe:x.classe})),
+        avisosDadosIncompletos: avisos.length,
+        metasDoMes: Object.keys(metas).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
+        totalDeVendasRegistradas: vendas.length,
+        totalDeOrdensRegistradas: orders.length,
+      };
+      try{
+        const res = await fetch("https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/gemini-agente", {
+          method: "POST",
+          headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+          body: JSON.stringify({ senha: __gatewaySenha, pergunta, resumoDados }),
+        });
+        const data = await res.json();
+        respostaEl.textContent = data.resposta || ("Não foi possível responder: " + (data.error||"erro desconhecido"));
+      }catch(e){
+        respostaEl.textContent = "Não foi possível falar com a IA agora. Tente novamente.";
+      }
+    });
   }
 
   let filtrosFator = { loja:"", dataIni:"", dataFim:"" };
