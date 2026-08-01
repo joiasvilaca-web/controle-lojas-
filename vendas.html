@@ -913,10 +913,86 @@ function abrirDetalheVenda(v){
       ` : ''}
     </table>
     <div class="modal-actions">
+      <button class="btn btn-accent" id="btnImprimirVenda">🖨️ Imprimir</button>
       <button class="btn btn-ghost" id="fecharDetalheVenda">Fechar</button>
     </div>
   `);
   document.getElementById('fecharDetalheVenda').addEventListener('click', closeModal);
+  document.getElementById('btnImprimirVenda').addEventListener('click', ()=> printVenda(v));
+}
+
+/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura configurada. */
+function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(titulo)}</title>
+<style>
+  @page{ margin:0; }
+  body{ font-family:'Courier New', monospace; width:${larguraMm}mm; margin:0 auto; padding:6mm 3mm; color:#000; font-size:11.5px; line-height:1.45; }
+  .titulo{ font-size:14px; font-weight:700; text-align:center; }
+  .sub{ font-size:10.5px; color:#333; text-align:center; }
+  .linha{ border-top:1px dashed #000; margin:6px 0; }
+  b{ font-weight:700; }
+  @media print{ body{ padding:2mm 2mm; } }
+</style>
+</head>
+<body>
+  ${conteudoHtml}
+</body>
+</html>`;
+  const printWin = window.open('', '_blank', 'width=420,height=700');
+  if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
+  printWin.document.open();
+  printWin.document.write(html);
+  printWin.document.close();
+  printWin.focus();
+  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+}
+
+function printVenda(v){
+  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; });
+  const imp = (config.impressao && config.impressao.vendas) || {};
+  const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
+
+  const linhas = [];
+  linhas.push(`<div class="titulo">VENDA</div>`);
+  linhas.push(`<div class="sub">${escapeHtml(v.loja)}</div>`);
+  linhas.push(`<div class="sub">${fmtDate(v.data)}</div>`);
+  linhas.push(`<div class="linha"></div>`);
+
+  if(imp.cliente !== false){
+    linhas.push(`<div><b>Cliente:</b> ${escapeHtml(v.cliente||'—')}</div>`);
+  }
+  if(imp.telefone !== false && v.telefone){
+    linhas.push(`<div><b>Telefone:</b> ${escapeHtml(v.telefone)}</div>`);
+  }
+  if(imp.vendedora !== false){
+    linhas.push(`<div><b>Vendedora:</b> ${escapeHtml(v.vendedora||'—')}</div>`);
+  }
+
+  if(imp.itens !== false){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div><b>ITENS</b></div>`);
+    (v.itens||[]).forEach(it=>{
+      linhas.push(`<div>${escapeHtml(it.produto)}${it.metal?' ('+escapeHtml(it.metal)+')':''} x${it.quantidade} — R$ ${Number(it.valorUnitario||0).toFixed(2)}</div>`);
+    });
+  }
+
+  if(imp.valores !== false){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div>Valor total: R$ ${Number(v.valorTotal||0).toFixed(2)}</div>`);
+    linhas.push(`<div>Recebido: R$ ${valorRecebidoDe(v).toFixed(2)}</div>`);
+    linhas.push(`<div>A receber: R$ ${valorAReceberDe(v).toFixed(2)}</div>`);
+  }
+  if(imp.formaPagamento !== false){
+    (v.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
+      linhas.push(`<div>${escapeHtml(paymentTypesMap[p.formaId]||'—')}: R$ ${Number(p.valor||0).toFixed(2)}</div>`);
+    });
+  }
+
+  abrirImpressaoBobina('Venda', linhas.join(''), larguraMm);
 }
 
 /* ============================================================

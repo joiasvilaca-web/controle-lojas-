@@ -492,6 +492,7 @@ const SIDEBAR_MODULES = [
   { id:'transferencias', label:'Transferências', icon:'🔁', src:'transferencias-reposicoes.html' },
   { id:'os', label:'Painel de O.S.', icon:'🧾', src:'painel-ordens.html' },
   { id:'vendas', label:'Vendas (PDV)', icon:'🛒', src:'vendas.html' },
+  { id:'orcamentos', label:'Orçamentos', icon:'📝', src:'orcamentos.html' },
   { id:'conciliacao', label:'Conciliação de Cartão', icon:'🔄', src:'conciliacao.html' },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'config', label:'Configurações', icon:'⚙️', src:null },
@@ -640,11 +641,12 @@ window.addEventListener('message', (ev)=>{
 const CFG_TABS = [
   { id:'lojas', label:'Lojas' },
   { id:'funcionarios', label:'Funcionários' },
-  { id:'produtos', label:'Produtos (Ótica)' },
+  { id:'produtos', label:'Categoria' },
   { id:'joias', label:'Joias & Metais' },
   { id:'estoque', label:'Produtos & Estoque' },
   { id:'servicos', label:'Tipos de Serviço' },
   { id:'pagamento', label:'Formas de Pagamento' },
+  { id:'impressao', label:'Impressão & Etiquetas' },
   { id:'acessos', label:'Perfis de Acesso' },
   { id:'mensagens', label:'Mensagens' },
 ];
@@ -674,6 +676,7 @@ function renderCfgTab(tab){
   if(tab==='estoque') return renderEstoqueTab(body);
   if(tab==='servicos') return renderServicosTab(body);
   if(tab==='pagamento') return renderPagamentoTab(body);
+  if(tab==='impressao') return renderImpressaoTab(body);
   if(tab==='acessos') return renderAcessosTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
 }
@@ -839,21 +842,22 @@ function renderProdutosTab(main){
   const subs = config.produtosOtica.subcategorias;
   main.innerHTML = `
     <div class="card">
-      <div class="section-label">Categorias de produto (Ótica)</div>
-      <p class="muted" style="margin:-4px 0 14px;">O Fator (F) fica somente na subcategoria. A categoria é só um agrupamento.</p>
+      <div class="section-label">Categorias</div>
+      <p class="muted" style="margin:-4px 0 14px;">Só o nome e uma descrição. O cruzamento com subcategoria (e o Fator, se houver) é feito no cadastro do produto, em Configurações → Produtos & Estoque.</p>
       <div id="catRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px;">
-        <div class="field" style="flex:1; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
+        <div class="field" style="flex:2; min-width:200px; margin-bottom:0;"><input id="cat_descricao" placeholder="Descrição (opcional)"></div>
         <button class="btn btn-accent btn-sm" id="btnAddCat">+ Adicionar</button>
       </div>
     </div>
     <div class="card">
-      <div class="section-label">Subcategorias e Fator (F)</div>
+      <div class="section-label">Subcategorias</div>
+      <p class="muted" style="margin:-4px 0 14px;">Também só nome e descrição — independente da categoria.</p>
       <div id="subRows"></div>
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <select id="sub_cat" style="min-width:160px;">${cats.map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}</select>
         <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="sub_nome" placeholder="Nome da subcategoria"></div>
-        <input id="sub_fator" type="number" step="0.01" placeholder="Fator %" style="max-width:110px;">
+        <div class="field" style="flex:2; min-width:200px; margin-bottom:0;"><input id="sub_descricao" placeholder="Descrição (opcional)"></div>
         <button class="btn btn-accent btn-sm" id="btnAddSub">+ Adicionar</button>
       </div>
     </div>
@@ -861,25 +865,22 @@ function renderProdutosTab(main){
   function renderCatRows(){
     const wrap = document.getElementById('catRows');
     wrap.innerHTML = cats.length===0 ? `<div class="empty">Nenhuma categoria cadastrada.</div>` : cats.map((c,i)=>`
-      <div class="code-list-item"><div>${escapeHtml(c.nome)}</div><button class="icon-btn" data-del="${i}">✕</button></div>
+      <div class="code-list-item"><div><b>${escapeHtml(c.nome)}</b>${c.descricao?` <span class="muted">— ${escapeHtml(c.descricao)}</span>`:''}</div><button class="icon-btn" data-del="${i}">✕</button></div>
     `).join('');
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
-        const removed = cats[Number(b.dataset.del)];
         cats.splice(Number(b.dataset.del),1);
-        config.produtosOtica.subcategorias = subs.filter(s=>s.categoriaId!==removed.id);
         await configSave();
-        renderProdutosTab(main);
+        renderCatRows();
         showToast('Categoria removida.');
       });
     });
   }
   function renderSubRows(){
     const wrap = document.getElementById('subRows');
-    wrap.innerHTML = subs.length===0 ? `<div class="empty">Nenhuma subcategoria cadastrada.</div>` : subs.map((s,i)=>{
-      const cat = cats.find(c=>c.id===s.categoriaId);
-      return `<div class="code-list-item"><div>${escapeHtml(s.nome)} <span class="muted">— F: ${s.fator}%${cat?' · '+escapeHtml(cat.nome):''}</span></div><button class="icon-btn" data-del="${i}">✕</button></div>`;
-    }).join('');
+    wrap.innerHTML = subs.length===0 ? `<div class="empty">Nenhuma subcategoria cadastrada.</div>` : subs.map((s,i)=>`
+      <div class="code-list-item"><div><b>${escapeHtml(s.nome)}</b>${s.descricao?` <span class="muted">— ${escapeHtml(s.descricao)}</span>`:''}</div><button class="icon-btn" data-del="${i}">✕</button></div>
+    `).join('');
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         subs.splice(Number(b.dataset.del),1);
@@ -892,20 +893,22 @@ function renderProdutosTab(main){
   renderCatRows(); renderSubRows();
   document.getElementById('btnAddCat').addEventListener('click', async ()=>{
     const nome = document.getElementById('cat_nome').value.trim();
+    const descricao = document.getElementById('cat_descricao').value.trim();
     if(!nome){ showToast('Informe o nome da categoria.'); return; }
-    cats.push({ id: uid('cat'), nome, fator:'' });
+    cats.push({ id: uid('cat'), nome, descricao });
     await configSave();
-    renderProdutosTab(main);
+    renderCatRows();
+    document.getElementById('cat_nome').value=''; document.getElementById('cat_descricao').value='';
     showToast('Categoria cadastrada.');
   });
   document.getElementById('btnAddSub').addEventListener('click', async ()=>{
     const nome = document.getElementById('sub_nome').value.trim();
-    const categoriaId = document.getElementById('sub_cat').value;
-    const fator = Number(document.getElementById('sub_fator').value)||0;
-    if(!nome || !categoriaId){ showToast('Preencha subcategoria e categoria.'); return; }
-    subs.push({ id: uid('sub'), nome, fator, categoriaId });
+    const descricao = document.getElementById('sub_descricao').value.trim();
+    if(!nome){ showToast('Informe o nome da subcategoria.'); return; }
+    subs.push({ id: uid('sub'), nome, descricao });
     await configSave();
     renderSubRows();
+    document.getElementById('sub_nome').value=''; document.getElementById('sub_descricao').value='';
     showToast('Subcategoria cadastrada.');
   });
 }
@@ -1076,50 +1079,159 @@ function mountFotosProduto(container, holder, produtoId){
   draw();
 }
 
+const PE_TABS = [
+  { id:'nomenclatura', label:'Nomenclatura' },
+  { id:'fiscal', label:'Fiscal' },
+  { id:'composicao', label:'Composição' },
+  { id:'valores', label:'Valores' },
+];
+
 function abrirProdutoEstoqueModal(produto){
   const editando = !!produto;
   const idAtual = produto ? produto.id : uid('prodest');
   const outrosDisponiveis = produtosEstoque.filter(p=> !produto || p.id !== produto.id);
-  const composicaoInicial = (produto && produto.composicao) ? JSON.parse(JSON.stringify(produto.composicao)) : [];
   const fotosHolder = { fotos: (produto && produto.fotos) ? JSON.parse(JSON.stringify(produto.fotos)) : [] };
+  const composicao = (produto && produto.composicao) ? JSON.parse(JSON.stringify(produto.composicao)) : [];
+  const d = {
+    nome: produto ? (produto.nome||'') : '',
+    unidade: produto ? (produto.unidade||'un') : 'un',
+    codigoInterno: produto ? (produto.codigoInterno||'') : '',
+    nomePopular: produto ? (produto.nomePopular||'') : '',
+    nomeTecnico: produto ? (produto.nomeTecnico||'') : '',
+    categoriaId: produto ? (produto.categoriaId||'') : '',
+    subcategoriaId: produto ? (produto.subcategoriaId||'') : '',
+    vendavel: !produto || produto.vendavel !== false,
+    ncm: produto ? (produto.ncm||'') : '',
+    cfop: produto ? (produto.cfop||'') : '',
+    cstCsosn: produto ? (produto.cstCsosn||'') : '',
+    origemMercadoria: produto ? (produto.origemMercadoria||'') : '',
+    gtin: produto ? (produto.gtin||'') : '',
+    estoque: produto && produto.estoque!==undefined ? produto.estoque : 0,
+    custo: produto && produto.custo!==undefined ? produto.custo : null,
+    precoVenda: produto && produto.precoVenda!==undefined ? produto.precoVenda : null,
+    fatorPercentual: produto && produto.fatorPercentual!==undefined ? produto.fatorPercentual : null,
+  };
+  let peTabAtiva = 'nomenclatura';
 
   openModal(`
-    <div class="section-label">${editando ? 'Editar produto/insumo' : 'Novo produto/insumo'}</div>
-    <div class="grid-2">
-      <div class="field"><label>Nome</label><input id="pe_nome" placeholder="Ex: Ouro 18k, Anel Solitário..." value="${escapeHtml(produto?produto.nome:'')}"></div>
-      <div class="field"><label>Unidade</label>
-        <select id="pe_unidade">
-          <option value="un" ${(!produto||produto.unidade==='un')?'selected':''}>Unidade</option>
-          <option value="g" ${produto&&produto.unidade==='g'?'selected':''}>Gramas (g)</option>
-          <option value="kg" ${produto&&produto.unidade==='kg'?'selected':''}>Quilos (kg)</option>
-        </select>
-      </div>
+    <div class="section-label">${editando ? 'Editar produto' : 'Novo produto'}</div>
+    <div style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;" id="peModalTabs">
+      ${PE_TABS.map(t=>`<button type="button" class="btn btn-ghost btn-sm" data-petab="${t.id}">${t.label}</button>`).join('')}
     </div>
-    <div class="grid-2">
-      <div class="field"><label>Estoque atual</label><input type="number" step="0.001" id="pe_estoque" value="${produto&&produto.estoque!==undefined?produto.estoque:0}"></div>
-      <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${produto&&produto.custo!==undefined?produto.custo:''}"></div>
-    </div>
-    <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:2px 0 10px;">
-      <input type="checkbox" id="pe_vendavel" ${(!produto || produto.vendavel!==false) ? 'checked' : ''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
-    </label>
-    <div id="pe_fotosWrap"></div>
-
-    <div class="section-label" style="margin-top:14px;">Composição (receita) <span class="muted" style="text-transform:none; font-weight:400;">— deixe vazio se for uma matéria-prima pura, sem receita</span></div>
-    <p class="muted" style="margin:-4px 0 10px;">Quantidade de cada insumo necessária para produzir 1 ${unidadeLabel(produto?produto.unidade:'un')} deste item. Se um insumo aqui também tiver a própria composição, o sistema explode automaticamente na hora da venda quando faltar estoque.</p>
-    <div id="pe_composicaoRows"></div>
-    <button type="button" class="btn btn-ghost btn-sm" id="btnAddComponente">+ Adicionar insumo à composição</button>
+    <div id="peModalBody"></div>
+    <div id="pe_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
     <div style="display:flex; gap:10px; margin-top:18px;">
       <button class="btn btn-accent" id="btnSalvarProdutoEstoque">Salvar</button>
       <button class="btn btn-ghost" id="btnCancelarProdutoEstoque">Cancelar</button>
     </div>
   `);
-
-  let composicao = composicaoInicial;
   mountFotosProduto(document.getElementById('pe_fotosWrap'), fotosHolder, idAtual);
+
+  function renderPeTabs(){
+    document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
+      b.classList.toggle('btn-accent', b.dataset.petab===peTabAtiva);
+      b.classList.toggle('btn-ghost', b.dataset.petab!==peTabAtiva);
+    });
+  }
+  document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
+    b.addEventListener('click', ()=>{ peTabAtiva = b.dataset.petab; renderPeTabBody(); renderPeTabs(); });
+  });
+
+  function renderPeTabBody(){
+    const body = document.getElementById('peModalBody');
+    if(peTabAtiva==='nomenclatura'){
+      body.innerHTML = `
+        <div class="field"><label>Nome</label><input id="pe_nome" placeholder="Ex: Ouro 18k, Anel Solitário..." value="${escapeHtml(d.nome)}"></div>
+        <div class="grid-2">
+          <div class="field"><label>Código interno / referência</label><input id="pe_codigoInterno" value="${escapeHtml(d.codigoInterno)}"></div>
+          <div class="field"><label>Unidade</label>
+            <select id="pe_unidade">
+              <option value="un" ${d.unidade==='un'?'selected':''}>Unidade</option>
+              <option value="g" ${d.unidade==='g'?'selected':''}>Gramas (g)</option>
+              <option value="kg" ${d.unidade==='kg'?'selected':''}>Quilos (kg)</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Nome popular <span class="muted">opcional</span></label><input id="pe_nomePopular" value="${escapeHtml(d.nomePopular)}"></div>
+          <div class="field"><label>Nome técnico <span class="muted">opcional</span></label><input id="pe_nomeTecnico" value="${escapeHtml(d.nomeTecnico)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Categoria <span class="muted">opcional</span></label>
+            <select id="pe_categoriaId"><option value="">—</option>${(config.produtosOtica.categorias||[]).map(c=>`<option value="${c.id}" ${d.categoriaId===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}</select>
+          </div>
+          <div class="field"><label>Subcategoria <span class="muted">opcional</span></label>
+            <select id="pe_subcategoriaId"><option value="">—</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+          </div>
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:2px 0 0;">
+          <input type="checkbox" id="pe_vendavel" ${d.vendavel?'checked':''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
+        </label>
+      `;
+      document.getElementById('pe_nome').addEventListener('input', e=> d.nome=e.target.value);
+      document.getElementById('pe_codigoInterno').addEventListener('input', e=> d.codigoInterno=e.target.value);
+      document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
+      document.getElementById('pe_nomePopular').addEventListener('input', e=> d.nomePopular=e.target.value);
+      document.getElementById('pe_nomeTecnico').addEventListener('input', e=> d.nomeTecnico=e.target.value);
+      document.getElementById('pe_categoriaId').addEventListener('change', e=> d.categoriaId=e.target.value);
+      document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
+      document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
+    }
+    else if(peTabAtiva==='fiscal'){
+      body.innerHTML = `
+        <p class="muted" style="margin:-4px 0 12px;">Campos fiscais — confirme os valores exatos com o contador antes de emitir nota de verdade. Preencher aqui não emite nada, só deixa pronto.</p>
+        <div class="grid-2">
+          <div class="field"><label>NCM</label><input id="pe_ncm" value="${escapeHtml(d.ncm)}"></div>
+          <div class="field"><label>CFOP</label><input id="pe_cfop" value="${escapeHtml(d.cfop)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>CST/CSOSN</label><input id="pe_cstCsosn" value="${escapeHtml(d.cstCsosn)}"></div>
+          <div class="field"><label>Origem da mercadoria</label><input id="pe_origemMercadoria" value="${escapeHtml(d.origemMercadoria)}"></div>
+        </div>
+        <div class="field"><label>GTIN/EAN <span class="muted">opcional</span></label><input id="pe_gtin" value="${escapeHtml(d.gtin)}"></div>
+      `;
+      document.getElementById('pe_ncm').addEventListener('input', e=> d.ncm=e.target.value);
+      document.getElementById('pe_cfop').addEventListener('input', e=> d.cfop=e.target.value);
+      document.getElementById('pe_cstCsosn').addEventListener('input', e=> d.cstCsosn=e.target.value);
+      document.getElementById('pe_origemMercadoria').addEventListener('input', e=> d.origemMercadoria=e.target.value);
+      document.getElementById('pe_gtin').addEventListener('input', e=> d.gtin=e.target.value);
+    }
+    else if(peTabAtiva==='composicao'){
+      body.innerHTML = `
+        <p class="muted" style="margin:-4px 0 10px;">Quantidade de cada insumo necessária para produzir 1 ${unidadeLabel(d.unidade)} deste item. Se um insumo aqui também tiver a própria composição, o sistema explode automaticamente na hora da venda quando faltar estoque. Deixe vazio se for matéria-prima pura.</p>
+        <div id="pe_composicaoRows"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnAddComponente">+ Adicionar insumo à composição</button>
+      `;
+      renderComposicaoRows();
+      document.getElementById('btnAddComponente').addEventListener('click', ()=>{
+        if(outrosDisponiveis.length===0){ showToast('Não há outros produtos/insumos cadastrados ainda.'); return; }
+        composicao.push({ insumoId: outrosDisponiveis[0].id, quantidade: '' });
+        renderComposicaoRows();
+      });
+    }
+    else if(peTabAtiva==='valores'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>Estoque atual</label><input type="number" step="0.001" id="pe_estoque" value="${d.estoque}"></div>
+          <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Preço de venda (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
+          <div class="field"><label>Fator/comissão (%) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_fatorPercentual" value="${d.fatorPercentual!==null?d.fatorPercentual:''}"></div>
+        </div>
+      `;
+      document.getElementById('pe_estoque').addEventListener('input', e=> d.estoque=e.target.value);
+      document.getElementById('pe_custo').addEventListener('input', e=> d.custo=e.target.value);
+      document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
+      document.getElementById('pe_fatorPercentual').addEventListener('input', e=> d.fatorPercentual=e.target.value);
+    }
+  }
+
   function renderComposicaoRows(){
     const wrap = document.getElementById('pe_composicaoRows');
+    if(!wrap) return;
     if(outrosDisponiveis.length===0){
-      wrap.innerHTML = `<div class="empty">Cadastre outros produtos/insumos primeiro pra poder usá-los aqui numa composição.</div>`;
+      wrap.innerHTML = `<div class="empty">Cadastre outros produtos primeiro pra poder usá-los aqui numa composição.</div>`;
       return;
     }
     wrap.innerHTML = composicao.map((c,i)=>`
@@ -1139,26 +1251,34 @@ function abrirProdutoEstoqueModal(produto){
       b.addEventListener('click', ()=>{ composicao.splice(Number(b.dataset.compDel),1); renderComposicaoRows(); });
     });
   }
-  renderComposicaoRows();
-  document.getElementById('btnAddComponente').addEventListener('click', ()=>{
-    if(outrosDisponiveis.length===0){ showToast('Não há outros produtos/insumos cadastrados ainda.'); return; }
-    composicao.push({ insumoId: outrosDisponiveis[0].id, quantidade: '' });
-    renderComposicaoRows();
-  });
+
+  renderPeTabBody(); renderPeTabs();
 
   document.getElementById('btnCancelarProdutoEstoque').addEventListener('click', closeModal);
   document.getElementById('btnSalvarProdutoEstoque').addEventListener('click', async ()=>{
-    const nome = document.getElementById('pe_nome').value.trim();
-    if(!nome){ showToast('Informe o nome do produto/insumo.'); return; }
+    const nome = (d.nome||'').trim();
+    if(!nome){ showToast('Informe o nome do produto (aba Nomenclatura).'); peTabAtiva='nomenclatura'; renderPeTabBody(); renderPeTabs(); return; }
     const composicaoValida = composicao.filter(c=> c.insumoId && c.quantidade && Number(c.quantidade) > 0)
       .map(c=> ({ insumoId: c.insumoId, quantidade: Number(c.quantidade) }));
     const dados = {
       id: idAtual,
       nome,
-      unidade: document.getElementById('pe_unidade').value,
-      estoque: parseFloat(document.getElementById('pe_estoque').value) || 0,
-      custo: document.getElementById('pe_custo').value === '' ? null : parseFloat(document.getElementById('pe_custo').value),
-      vendavel: document.getElementById('pe_vendavel').checked,
+      unidade: d.unidade,
+      codigoInterno: (d.codigoInterno||'').trim(),
+      nomePopular: (d.nomePopular||'').trim(),
+      nomeTecnico: (d.nomeTecnico||'').trim(),
+      categoriaId: d.categoriaId||'',
+      subcategoriaId: d.subcategoriaId||'',
+      vendavel: d.vendavel,
+      ncm: (d.ncm||'').trim(),
+      cfop: (d.cfop||'').trim(),
+      cstCsosn: (d.cstCsosn||'').trim(),
+      origemMercadoria: (d.origemMercadoria||'').trim(),
+      gtin: (d.gtin||'').trim(),
+      estoque: parseFloat(d.estoque) || 0,
+      custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
+      precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
+      fatorPercentual: d.fatorPercentual===null || d.fatorPercentual==='' ? null : parseFloat(d.fatorPercentual),
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
     };
@@ -1168,7 +1288,7 @@ function abrirProdutoEstoqueModal(produto){
       if(idx>=0) produtosEstoque[idx] = dados; else produtosEstoque.push(dados);
       closeModal();
       renderEstoqueTab(document.getElementById('cfgBody'));
-      showToast(editando ? 'Produto/insumo atualizado.' : 'Produto/insumo cadastrado.');
+      showToast(editando ? 'Produto atualizado.' : 'Produto cadastrado.');
     }
   });
 }
@@ -1202,11 +1322,13 @@ async function renderEstoqueTab(main){
           ${p.fotos && p.fotos.length>0 ? `<span class="chip" style="margin-left:6px;">📷 ${p.fotos.length}</span>` : ''}
         </div>
         <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-etiqueta="${i}" title="Imprimir etiqueta">🏷️</button>
           <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
           <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
         </div>
       </div>
     `;}).join('');
+    wrap.querySelectorAll('[data-etiqueta]').forEach(b=> b.addEventListener('click', ()=> imprimirEtiquetaProduto(produtosEstoque[Number(b.dataset.etiqueta)]) ));
     wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> abrirProdutoEstoqueModal(produtosEstoque[Number(b.dataset.edit)]) ));
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
@@ -1220,6 +1342,51 @@ async function renderEstoqueTab(main){
   }
   renderRows();
   document.getElementById('btnNovoProdutoEstoque').addEventListener('click', ()=> abrirProdutoEstoqueModal(null) );
+}
+
+/** Gera e imprime a etiqueta de um produto no tamanho e com os campos configurados em Impressão & Etiquetas. */
+function imprimirEtiquetaProduto(produto){
+  garantirConfigImpressao();
+  const cfg = config.etiquetaJoia;
+  const campos = cfg.campos || {};
+  const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===produto.categoriaId);
+  const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
+
+  const linhas = [];
+  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nomePopular || produto.nome)}</div>`);
+  if(campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
+  if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
+  if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
+  if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${produto.estoque} ${unidadeLabel(produto.unidade)}</div>`);
+  if(campos.gtin && produto.gtin) linhas.push(`<div>${escapeHtml(produto.gtin)}</div>`);
+  if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
+  if(campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
+    linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Etiqueta - ${escapeHtml(produto.nome)}</title>
+<style>
+  @page{ size:${cfg.larguraMm}mm ${cfg.alturaMm}mm; margin:0; }
+  body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:2mm; box-sizing:border-box; color:#000; font-size:9px; line-height:1.3; display:flex; flex-direction:column; justify-content:center; }
+  .etq-nome{ font-weight:700; font-size:10px; }
+  .etq-preco{ font-weight:700; font-size:11px; margin-top:2px; }
+</style>
+</head>
+<body>
+  ${linhas.join('')}
+</body>
+</html>`;
+  const printWin = window.open('', '_blank', 'width=300,height=300');
+  if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
+  printWin.document.open();
+  printWin.document.write(html);
+  printWin.document.close();
+  printWin.focus();
+  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
 }
 
 /* ---------- TIPOS DE SERVIÇO ---------- */
@@ -1300,6 +1467,121 @@ function renderPagamentoTab(main){
   });
 }
 
+/* ---------- IMPRESSÃO (BOBINA) & ETIQUETAS ---------- */
+const CAMPOS_ETIQUETA = [
+  { id:'nome', label:'Nome do produto' },
+  { id:'codigoInterno', label:'Código interno' },
+  { id:'precoVenda', label:'Preço de venda' },
+  { id:'peso', label:'Peso (para itens em gramas)' },
+  { id:'categoria', label:'Categoria' },
+  { id:'subcategoria', label:'Subcategoria' },
+  { id:'gtin', label:'Código de barras (GTIN)' },
+  { id:'loja', label:'Nome da loja' },
+];
+const CAMPOS_IMPRESSAO = {
+  os: [
+    { id:'cliente', label:'Nome do cliente' }, { id:'telefone', label:'Telefone' },
+    { id:'servico', label:'Tipo de serviço' }, { id:'vendedora', label:'Vendedora' },
+    { id:'valores', label:'Valores e pagamento' }, { id:'observacoes', label:'Observações' },
+    { id:'assinatura', label:'Linha de assinatura' },
+  ],
+  vendas: [
+    { id:'cliente', label:'Nome do cliente' }, { id:'telefone', label:'Telefone' },
+    { id:'itens', label:'Itens vendidos' }, { id:'vendedora', label:'Vendedora' },
+    { id:'valores', label:'Valores' }, { id:'formaPagamento', label:'Forma de pagamento' },
+  ],
+  orcamentos: [
+    { id:'cliente', label:'Nome do cliente' }, { id:'telefone', label:'Telefone' },
+    { id:'itens', label:'Itens do orçamento' }, { id:'vendedora', label:'Vendedora' },
+    { id:'valores', label:'Valores' }, { id:'validade', label:'Validade' },
+  ],
+};
+const NOMES_MODULOS_IMPRESSAO = { os:'Ordens de Serviço', vendas:'Vendas (PDV)', orcamentos:'Orçamentos' };
+
+function garantirConfigImpressao(){
+  if(!config.impressao){
+    config.impressao = { larguraBobina: 80, os:{}, vendas:{}, orcamentos:{} };
+  }
+  Object.keys(CAMPOS_IMPRESSAO).forEach(mod=>{
+    if(!config.impressao[mod]) config.impressao[mod] = {};
+    CAMPOS_IMPRESSAO[mod].forEach(c=>{ if(config.impressao[mod][c.id]===undefined) config.impressao[mod][c.id] = true; });
+  });
+  if(!config.etiquetaJoia){
+    config.etiquetaJoia = { larguraMm:40, alturaMm:25, campos:{ nome:true, codigoInterno:true, precoVenda:true } };
+  }
+  if(!config.etiquetaJoia.campos) config.etiquetaJoia.campos = {};
+}
+
+function renderImpressaoTab(main){
+  garantirConfigImpressao();
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Impressão (formato bobina)</div>
+      <p class="muted" style="margin:-4px 0 14px;">Escolha o que aparece no recibo impresso de O.S., Vendas e Orçamentos. Sempre em formato de bobina (impressora térmica de recibo).</p>
+      <div class="field" style="max-width:220px;"><label>Largura da bobina</label>
+        <select id="impLargura">
+          <option value="58" ${config.impressao.larguraBobina===58?'selected':''}>58mm</option>
+          <option value="80" ${config.impressao.larguraBobina!==58?'selected':''}>80mm</option>
+        </select>
+      </div>
+      <div id="impCamposWrap" style="margin-top:10px;"></div>
+      <button class="btn btn-accent btn-sm" id="btnSalvarImpressao" style="margin-top:14px;">Salvar impressão</button>
+    </div>
+    <div class="card">
+      <div class="section-label">Etiqueta de joia</div>
+      <p class="muted" style="margin:-4px 0 14px;">O que aparece na etiqueta de preço/identificação de cada peça, e o tamanho físico dela.</p>
+      <div class="grid-2" style="max-width:360px;">
+        <div class="field"><label>Largura (mm)</label><input type="number" min="10" id="etqLargura" value="${config.etiquetaJoia.larguraMm}"></div>
+        <div class="field"><label>Altura (mm)</label><input type="number" min="10" id="etqAltura" value="${config.etiquetaJoia.alturaMm}"></div>
+      </div>
+      <div class="section-label" style="margin-top:10px;">Campos na etiqueta</div>
+      <div id="etqCamposWrap"></div>
+      <button class="btn btn-accent btn-sm" id="btnSalvarEtiqueta" style="margin-top:14px;">Salvar etiqueta</button>
+    </div>
+  `;
+
+  const impWrap = document.getElementById('impCamposWrap');
+  impWrap.innerHTML = Object.keys(CAMPOS_IMPRESSAO).map(mod=>`
+    <div style="margin-bottom:14px;">
+      <b style="font-size:13px;">${escapeHtml(NOMES_MODULOS_IMPRESSAO[mod])}</b>
+      <div style="display:flex; flex-wrap:wrap; gap:10px 16px; margin-top:6px;">
+        ${CAMPOS_IMPRESSAO[mod].map(c=>`
+          <label style="display:flex; align-items:center; gap:5px; font-size:13px; color:var(--ink-soft);">
+            <input type="checkbox" data-impmod="${mod}" data-impcampo="${c.id}" ${config.impressao[mod][c.id]?'checked':''}> ${escapeHtml(c.label)}
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+
+  const etqWrap = document.getElementById('etqCamposWrap');
+  etqWrap.innerHTML = `<div style="display:flex; flex-wrap:wrap; gap:10px 16px;">
+    ${CAMPOS_ETIQUETA.map(c=>`
+      <label style="display:flex; align-items:center; gap:5px; font-size:13px; color:var(--ink-soft);">
+        <input type="checkbox" data-etqcampo="${c.id}" ${config.etiquetaJoia.campos[c.id]?'checked':''}> ${escapeHtml(c.label)}
+      </label>
+    `).join('')}
+  </div>`;
+
+  document.getElementById('btnSalvarImpressao').addEventListener('click', async ()=>{
+    config.impressao.larguraBobina = Number(document.getElementById('impLargura').value);
+    impWrap.querySelectorAll('[data-impmod]').forEach(chk=>{
+      config.impressao[chk.dataset.impmod][chk.dataset.impcampo] = chk.checked;
+    });
+    const ok = await configSave();
+    if(ok) showToast('Configuração de impressão salva.');
+  });
+  document.getElementById('btnSalvarEtiqueta').addEventListener('click', async ()=>{
+    config.etiquetaJoia.larguraMm = Number(document.getElementById('etqLargura').value) || 40;
+    config.etiquetaJoia.alturaMm = Number(document.getElementById('etqAltura').value) || 25;
+    etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{
+      config.etiquetaJoia.campos[chk.dataset.etqcampo] = chk.checked;
+    });
+    const ok = await configSave();
+    if(ok) showToast('Configuração de etiqueta salva.');
+  });
+}
+
 /* ---------- ACESSOS (SENHAS) ---------- */
 function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='oficina'?'Oficina':n==='vendedora'?'Vendedora':'Personalizado'; }
 
@@ -1320,6 +1602,10 @@ const MODULOS_APP = {
     { id:'nova', label:'Nova venda' },
     { id:'vendas', label:'Vendas' },
   ]},
+  orcamentos: { nome:'Orçamentos', abas:[
+    { id:'novo', label:'Novo orçamento' },
+    { id:'lista', label:'Orçamentos' },
+  ]},
   conciliacao: { nome:'Conciliação de Cartão', abas:[
     { id:'conciliar', label:'Conciliar' },
     { id:'taxas', label:'Taxas e Prazos' },
@@ -1328,11 +1614,12 @@ const MODULOS_APP = {
   config: { nome:'Configurações', abas:[
     { id:'lojas', label:'Lojas' },
     { id:'funcionarios', label:'Funcionários' },
-    { id:'produtos', label:'Produtos (Ótica)' },
+    { id:'produtos', label:'Categoria' },
     { id:'joias', label:'Joias & Metais' },
     { id:'estoque', label:'Produtos & Estoque' },
     { id:'servicos', label:'Tipos de Serviço' },
     { id:'pagamento', label:'Formas de Pagamento' },
+    { id:'impressao', label:'Impressão & Etiquetas' },
     { id:'acessos', label:'Perfis de Acesso' },
     { id:'mensagens', label:'Mensagens' },
   ]},
@@ -1346,6 +1633,7 @@ function permissoesPadrao(nivel){
       transferencias:{ ativo:true, abas:todasAbas('transferencias') },
       os:{ ativo:true, abas:todasAbas('os') },
       vendas:{ ativo:true, abas:todasAbas('vendas') },
+      orcamentos:{ ativo:true, abas:todasAbas('orcamentos') },
       conciliacao:{ ativo:true, abas:todasAbas('conciliacao') },
       dashboard:{ ativo:true }, config:{ ativo:true, abas:todasAbas('config') },
     };
@@ -1355,6 +1643,7 @@ function permissoesPadrao(nivel){
       transferencias:{ ativo:false, abas:{} },
       os:{ ativo:true, abas:{ nova:false, painel:true, agenda:true, clientes:false, codigo:true } },
       vendas:{ ativo:false, abas:{} },
+      orcamentos:{ ativo:false, abas:{} },
       conciliacao:{ ativo:false, abas:{} },
       dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
     };
@@ -1364,6 +1653,7 @@ function permissoesPadrao(nivel){
     transferencias:{ ativo:true, abas:todasAbas('transferencias') },
     os:{ ativo:true, abas:{ nova:true, painel:true, agenda:true, clientes:true, codigo:false } },
     vendas:{ ativo:true, abas:todasAbas('vendas') },
+    orcamentos:{ ativo:true, abas:todasAbas('orcamentos') },
     conciliacao:{ ativo:false, abas:{} },
     dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
   };

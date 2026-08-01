@@ -82,6 +82,9 @@
   .locked-note{ background:var(--accent-soft); color:var(--accent-ink); padding:11px 13px; border-radius:8px; font-size:12.5px; margin-bottom:16px; }
   html.embedded #view-login{ display:none !important; }
   html.embedded header.topbar{ display:none !important; }
+  .alerta-meta-popup{ position:fixed; top:18px; right:18px; max-width:360px; background:#fff; border:1px solid var(--danger); border-left:5px solid var(--danger); border-radius:10px; padding:14px 16px; box-shadow:0 20px 45px -18px rgba(0,0,0,0.35); z-index:80; font-size:13px; }
+  .alerta-meta-popup b{ display:block; margin-bottom:4px; color:var(--danger); }
+  .alerta-meta-popup button{ background:var(--surface-2); border:1px solid var(--line); border-radius:7px; padding:5px 10px; font-size:12px; margin-top:8px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -474,6 +477,27 @@
     });
   }
 
+  function curvaAbcVendedoras(){
+    const totais = {};
+    vendas.forEach(v=>{
+      if(!v.vendedora) return;
+      totais[v.vendedora] = (totais[v.vendedora]||0) + (Number(v.valorTotal)||0);
+    });
+    orders.forEach(o=>{
+      if(!o.vendedora) return;
+      totais[o.vendedora] = (totais[o.vendedora]||0) + (Number(o.valorTotal)||0);
+    });
+    const lista = Object.entries(totais).map(([vendedora,total])=>({vendedora,total})).sort((a,b)=>b.total-a.total);
+    const somaGeral = lista.reduce((acc,x)=>acc+x.total,0);
+    let acumulado = 0;
+    return lista.map(item=>{
+      acumulado += item.total;
+      const pctAcumulado = somaGeral>0 ? acumulado/somaGeral : 0;
+      const classe = pctAcumulado<=0.8 ? "A" : pctAcumulado<=0.95 ? "B" : "C";
+      return { ...item, classe, pctAcumulado };
+    });
+  }
+
   function avisosDadosIncompletos(){
     const avisos = [];
     orders.forEach(o=>{
@@ -512,6 +536,7 @@
   function renderSecaoInteligencia(){
     const el = document.getElementById("secInteligencia");
     const abc = curvaAbcProdutos();
+    const abcVend = curvaAbcVendedoras();
     const avisos = avisosDadosIncompletos();
     const metas = (configCompleto && configCompleto.metas && configCompleto.metas.mensal) || {};
     const totaisMes = totalDoMesPorLoja();
@@ -532,6 +557,23 @@
             ${abc.length===0 ? `<tr><td colspan="4" style="color:var(--ink-faint);">Sem vendas suficientes ainda.</td></tr>` : abc.slice(0,15).map(item=>`
               <tr>
                 <td>${escapeHtml(item.produto)}</td>
+                <td>${fmtMoeda(item.total)}</td>
+                <td>${(item.pctAcumulado*100).toFixed(1)}%</td>
+                <td><span class="badge ${item.classe==='A'?'ok':item.classe==='B'?'wait':'erro'}">${item.classe}</span></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="padding:16px; margin-bottom:14px;">
+        <b>Curva ABC de vendedoras</b> <span style="color:var(--ink-faint); font-size:12px;">(por faturamento em Vendas + O.S.)</span>
+        <table style="margin-top:10px;">
+          <thead><tr><th>Vendedora</th><th>Faturamento</th><th>% acumulado</th><th>Classe</th></tr></thead>
+          <tbody>
+            ${abcVend.length===0 ? `<tr><td colspan="4" style="color:var(--ink-faint);">Sem dados suficientes ainda.</td></tr>` : abcVend.map(item=>`
+              <tr>
+                <td>${escapeHtml(item.vendedora)}</td>
                 <td>${fmtMoeda(item.total)}</td>
                 <td>${(item.pctAcumulado*100).toFixed(1)}%</td>
                 <td><span class="badge ${item.classe==='A'?'ok':item.classe==='B'?'wait':'erro'}">${item.classe}</span></td>
@@ -638,6 +680,32 @@
         respostaEl.textContent = "Não foi possível falar com a IA agora. Tente novamente.";
       }
     });
+
+    verificarAlertaDeMetas(metas, totaisMes, fracaoDoMes);
+  }
+
+  let alertaDeMetasJaMostrado = false;
+  /** Mostra um aviso (uma vez por sessão) se alguma loja estiver bem atrás do ritmo esperado da meta do mês. */
+  function verificarAlertaDeMetas(metas, totaisMes, fracaoDoMes){
+    if(alertaDeMetasJaMostrado) return;
+    const lojas = (ordersConfig && ordersConfig.lojas) || [];
+    const atrasadas = lojas.filter(l=>{
+      const meta = Number(metas[l.nome])||0;
+      if(meta<=0) return false;
+      const pctAtual = (totaisMes[l.nome]||0) / meta;
+      return pctAtual < fracaoDoMes - 0.15; // mais de 15 pontos percentuais atrás do esperado
+    });
+    if(atrasadas.length===0) return;
+    alertaDeMetasJaMostrado = true;
+    const popup = document.createElement("div");
+    popup.className = "alerta-meta-popup";
+    popup.innerHTML = `
+      <b>⚠️ Meta do mês fora do ritmo</b>
+      ${atrasadas.map(l=>`${escapeHtml(l.nome)}`).join(", ")} ${atrasadas.length===1?"está":"estão"} abaixo do ritmo esperado pra bater a meta esse mês.
+      <br><button id="btnFecharAlertaMeta">Entendi</button>
+    `;
+    document.body.appendChild(popup);
+    document.getElementById("btnFecharAlertaMeta").addEventListener("click", ()=> popup.remove());
   }
 
   let filtrosFator = { loja:"", dataIni:"", dataFim:"" };

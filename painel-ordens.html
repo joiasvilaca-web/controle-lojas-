@@ -1140,78 +1140,84 @@ function buildMessage(order){
 function printOrder(order){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
-  const pagamentosRows = (order.pagamentos||[]).filter(p=>p.formaId).map(p=>`
-    <tr><td>${escapeHtml(paymentTypesMap[p.formaId]||'—')}</td><td style="text-align:right;">R$ ${Number(p.valor||0).toFixed(2)}</td></tr>
-  `).join('');
-  const obsHtml = (order.observacoes||[]).length
-    ? order.observacoes.map(o=>`<div style="margin-bottom:6px;"><b>${escapeHtml(o.nome)}:</b> ${escapeHtml(o.descricao)}</div>`).join('')
-    : '<div class="muted">Nenhuma observação.</div>';
+  const imp = (config.impressao && config.impressao.os) || {};
+  const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 
+  const linhas = [];
+  linhas.push(`<div class="titulo">ORDEM DE SERVIÇO</div>`);
+  linhas.push(`<div class="sub">Loja ${escapeHtml(order.loja)} · Via ${escapeHtml(order.via||'—')}</div>`);
+  linhas.push(`<div class="sub">${fmtDate(order.data)}</div>`);
+  linhas.push(`<div class="linha"></div>`);
+
+  if(imp.cliente !== false){
+    linhas.push(`<div><b>Cliente:</b> ${escapeHtml(order.cliente||'—')}</div>`);
+  }
+  if(imp.telefone !== false && order.telefone){
+    linhas.push(`<div><b>Telefone:</b> ${escapeHtml(order.telefone)}</div>`);
+  }
+  if(imp.servico !== false){
+    linhas.push(`<div><b>Serviço:</b> ${escapeHtml(order.serviceTypeName||'—')}</div>`);
+  }
+  if(imp.vendedora !== false){
+    linhas.push(`<div><b>Vendedora:</b> ${escapeHtml(order.vendedora||'—')}</div>`);
+  }
+  linhas.push(`<div><b>Status:</b> ${statusLabel(order.status)}${order.encaixe ? ' (Encaixe)' : ''}</div>`);
+  if(order.numeroNota){
+    linhas.push(`<div><b>Nota nº:</b> ${escapeHtml(order.numeroNota)}</div>`);
+  }
+
+  if(imp.valores !== false){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div><b>PAGAMENTO</b></div>`);
+    linhas.push(`<div>Momento: ${order.momentoPagamento==='na_volta' ? 'Na retirada' : 'No ato'}</div>`);
+    if(order.valorTotal) linhas.push(`<div>Valor total: R$ ${Number(order.valorTotal).toFixed(2)}</div>`);
+    (order.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
+      linhas.push(`<div>${escapeHtml(paymentTypesMap[p.formaId]||'—')}: R$ ${Number(p.valor||0).toFixed(2)}</div>`);
+    });
+    linhas.push(`<div>Recebido: R$ ${valorRecebidoDe(order).toFixed(2)}</div>`);
+    linhas.push(`<div>A receber: R$ ${valorAReceberDe(order).toFixed(2)}</div>`);
+  }
+
+  if(imp.observacoes !== false && (order.observacoes||[]).length){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div><b>OBSERVAÇÕES</b></div>`);
+    order.observacoes.forEach(o=>{
+      linhas.push(`<div>${escapeHtml(o.nome)}: ${escapeHtml(o.descricao)}</div>`);
+    });
+  }
+
+  if(imp.assinatura !== false){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div class="assinatura"></div>`);
+    linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
+  }
+
+  abrirImpressaoBobina('Ordem de Serviço', linhas.join(''), larguraMm);
+}
+
+/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura configurada. */
+function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Ordem de Serviço - ${escapeHtml(order.cliente)}</title>
+<title>${escapeHtml(titulo)}</title>
 <style>
-  body{ font-family: Arial, Helvetica, sans-serif; padding: 28px; color:#1B2430; max-width:640px; margin:0 auto; }
-  h1{ font-size:19px; margin:0 0 4px; }
-  .sub{ color:#5B6472; font-size:12.5px; margin-bottom:18px; }
-  .section-title{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:#8B93A1; border-bottom:1px solid #DBE0E6; padding-bottom:4px; margin:18px 0 8px; }
-  table{ width:100%; border-collapse:collapse; font-size:13.5px; }
-  td{ padding:4px 0; vertical-align:top; }
-  .label{ color:#5B6472; width:150px; }
-  .muted{ color:#8B93A1; font-size:12.5px; }
-  .assinatura{ margin-top:46px; border-top:1px solid #1B2430; width:280px; }
-  @media print{ body{ padding: 0; } }
+  @page{ margin:0; }
+  body{ font-family:'Courier New', monospace; width:${larguraMm}mm; margin:0 auto; padding:6mm 3mm; color:#000; font-size:11.5px; line-height:1.45; }
+  .titulo{ font-size:14px; font-weight:700; text-align:center; }
+  .sub{ font-size:10.5px; color:#333; text-align:center; }
+  .linha{ border-top:1px dashed #000; margin:6px 0; }
+  .assinatura{ border-top:1px solid #000; margin-top:26px; }
+  b{ font-weight:700; }
+  @media print{ body{ padding:2mm 2mm; } }
 </style>
 </head>
 <body>
-  <h1>Ordem de Serviço</h1>
-  <div class="sub">Loja ${escapeHtml(order.loja)} · Via nº ${escapeHtml(order.via||'—')} · Agendado para ${fmtDate(order.data)}</div>
-
-  <div class="section-title">Cliente</div>
-  <table>
-    <tr><td class="label">Nome</td><td>${escapeHtml(order.cliente)}</td></tr>
-    <tr><td class="label">Telefone</td><td>${escapeHtml(order.telefone||'—')}</td></tr>
-    ${order.email ? `<tr><td class="label">E-mail</td><td>${escapeHtml(order.email)}</td></tr>` : ''}
-    ${order.cpf ? `<tr><td class="label">CPF</td><td>${escapeHtml(order.cpf)}</td></tr>` : ''}
-    ${enderecoCompleto(order) ? `<tr><td class="label">Endereço</td><td>${escapeHtml(enderecoCompleto(order))}</td></tr>` : ''}
-  </table>
-
-  <div class="section-title">Serviço</div>
-  <table>
-    <tr><td class="label">Tipo de serviço</td><td>${escapeHtml(order.serviceTypeName||'—')}</td></tr>
-    <tr><td class="label">Vendedora</td><td>${escapeHtml(order.vendedora||'—')}</td></tr>
-    <tr><td class="label">Status</td><td>${statusLabel(order.status)}${order.encaixe ? ' (Encaixe)' : ''}</td></tr>
-    ${order.numeroNota ? `<tr><td class="label">Nº da nota</td><td>${escapeHtml(order.numeroNota)}</td></tr>` : ''}
-    ${order.status==='entregue' ? `<tr><td class="label">Recebido por</td><td>${escapeHtml(order.recebidoPor||'—')}</td></tr>` : ''}
-  </table>
-  ${order.descricao ? `<div class="section-title">Descrição do serviço</div><div>${escapeHtml(order.descricao)}</div>` : ''}
-
-  ${(pagamentosRows || order.valorTotal) ? `
-  <div class="section-title">Pagamento</div>
-  <table>
-    <tr><td class="label">Momento</td><td>${order.momentoPagamento==='na_volta' ? 'Pagar na volta (retirada)' : 'Pago no ato da encomenda'}</td></tr>
-    ${order.valorTotal ? `<tr><td class="label">Valor total</td><td>R$ ${Number(order.valorTotal).toFixed(2)}</td></tr>` : ''}
-    ${pagamentosRows}
-    <tr><td class="label">Recebido</td><td>R$ ${valorRecebidoDe(order).toFixed(2)}</td></tr>
-    <tr><td class="label">A receber</td><td>R$ ${valorAReceberDe(order).toFixed(2)}</td></tr>
-    ${order.emissaoNota==='sim' ? `
-    <tr><td class="label">Saída da joia</td><td>${escapeHtml((config.lojas.find(l=>l.id===order.lojaSaidaId)||{}).nome||'—')}</td></tr>
-    <tr><td class="label">Recebeu pagamento</td><td>${escapeHtml((config.lojas.find(l=>l.id===order.lojaPagamentoId)||{}).nome||'—')}</td></tr>
-    <tr><td class="label">Emitiu a nota</td><td>${escapeHtml((config.lojas.find(l=>l.id===order.lojaNotaId)||{}).nome||'—')}</td></tr>
-    ` : ''}
-  </table>` : ''}
-
-  <div class="section-title">Observações</div>
-  ${obsHtml}
-
-  <div class="assinatura"></div>
-  <div class="muted" style="margin-top:4px;">Assinatura do cliente</div>
+  ${conteudoHtml}
 </body>
 </html>`;
-
-  const printWin = window.open('', '_blank', 'width=800,height=900');
+  const printWin = window.open('', '_blank', 'width=420,height=700');
   if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
   printWin.document.open();
   printWin.document.write(html);
