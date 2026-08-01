@@ -831,7 +831,7 @@ async function loadAll(){
   if(!config.lojas || config.lojas.length===0) config.lojas = lojasPadrao;
   orders = await storageGet('orders', true) || [];
   codes = await storageGet('codes', true) || [];
-  clientes = await storageGet('clientes', true) || [];
+  clientes = await clientesGet();
 }
 async function saveConfig(){
   const unificado = montarUnificadoApartirDoConfigLegado(config);
@@ -840,7 +840,124 @@ async function saveConfig(){
 }
 async function saveOrders(){ await storageSet('orders', orders, true); }
 async function saveCodes(){ await storageSet('codes', codes, true); }
-async function saveClientes(){ await storageSet('clientes', clientes, true); }
+/** Clientes agora vivem numa tabela compartilhada (clientes_cadastro) — usada também
+ * por Vendas e Orçamentos, não só pelo O.S. Cada cliente é salvo/excluído individualmente
+ * (a lista pode ter milhares de registros, então não faz sentido regravar tudo de uma vez). */
+async function clientesGet(){
+  try{
+    const { data, error } = await supabaseClient.from('clientes_cadastro').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar clientes', e); return []; }
+}
+async function salvarUmCliente(cliente){
+  try{
+    const { error } = await supabaseClient.from('clientes_cadastro').upsert({ id: cliente.id, payload: cliente });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar cliente', e); showToast('Não foi possível salvar o cliente.'); return false; }
+}
+async function excluirCliente(id){
+  try{
+    const { error } = await supabaseClient.from('clientes_cadastro').delete().eq('id', id);
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao excluir cliente', e); return false; }
+}
+
+/**
+ * Abre a tela de cliente com busca (lupa): digitando, filtra os clientes já
+ * cadastrados; clicar num resultado preenche o formulário abaixo com os dados
+ * dele; ou preenche do zero pra cadastrar alguém novo. Ao confirmar, salva
+ * (cria ou atualiza) e chama `onConfirmar(cliente)` com o registro final.
+ */
+function abrirSeletorCliente(onConfirmar, clienteAtual){
+  let selecionado = clienteAtual ? { ...clienteAtual } : null;
+  openModal(`
+    <h3>Cliente</h3>
+    <div class="field"><label>🔍 Buscar cliente já cadastrado</label><input id="busca_cliente" placeholder="Nome, telefone ou CPF..." autocomplete="off"></div>
+    <div id="resultados_cliente" style="max-height:180px; overflow-y:auto; margin-bottom:12px;"></div>
+    <div style="border-top:1px solid var(--line); padding-top:12px;">
+      <p class="muted" style="margin:0 0 8px;">Ou preencha os dados abaixo pra cadastrar um cliente novo:</p>
+      ${clienteFieldsHtml('sel', clienteAtual || {})}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-accent" id="btnConfirmarSelecaoCliente">Confirmar</button>
+      <button class="btn btn-ghost" id="btnCancelarSelecaoCliente">Cancelar</button>
+    </div>
+  `);
+  wireClienteFields('sel', {});
+
+  function preencherFormulario(c){
+    const map = { cpf:c.cpf, cliente:c.nome, telefone:c.telefone, email:c.email, nascimento:c.dataNascimento,
+      cep:c.cep, endereco:c.endereco, numero:c.numero, complemento:c.complemento, bairro:c.bairro, cidade:c.cidade, estado:c.estado };
+    Object.keys(map).forEach(campo=>{
+      const el = document.getElementById('sel_'+campo);
+      if(el) el.value = map[campo] || '';
+    });
+    selecionado = c;
+  }
+
+  function renderResultados(termo){
+    const wrap = document.getElementById('resultados_cliente');
+    if(!termo){ wrap.innerHTML=''; return; }
+    const termoDigits = onlyDigits(termo);
+    const termoLower = termo.toLowerCase();
+    const achados = clientes.filter(c=>
+      (c.nome||'').toLowerCase().includes(termoLower) ||
+      (termoDigits.length>=4 && onlyDigits(c.telefone||'').includes(termoDigits)) ||
+      (termoDigits.length>=4 && onlyDigitsCpf(c.cpf||'').includes(termoDigits))
+    ).slice(0,8);
+    wrap.innerHTML = achados.length===0
+      ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
+      : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
+    wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const c = clientes.find(x=>x.id===el.dataset.selcli);
+        if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+      });
+    });
+  }
+  document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
+
+  document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
+  document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
+    const nome = document.getElementById('sel_cliente').value.trim();
+    if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    const patch = {
+      nome,
+      telefone: document.getElementById('sel_telefone').value.trim(),
+      email: document.getElementById('sel_email').value.trim(),
+      cpf: document.getElementById('sel_cpf').value.trim(),
+      dataNascimento: document.getElementById('sel_nascimento').value,
+      cep: document.getElementById('sel_cep').value.trim(),
+      endereco: document.getElementById('sel_endereco').value.trim(),
+      numero: document.getElementById('sel_numero').value.trim(),
+      complemento: document.getElementById('sel_complemento').value.trim(),
+      bairro: document.getElementById('sel_bairro').value.trim(),
+      cidade: document.getElementById('sel_cidade').value.trim(),
+      estado: document.getElementById('sel_estado').value.trim(),
+    };
+    let clienteFinal;
+    if(selecionado && selecionado.id){
+      clienteFinal = { ...selecionado, ...patch };
+      const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+      if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
+    } else {
+      const idxExistente = findClienteIndex(patch.telefone, patch.cpf);
+      if(idxExistente >= 0){
+        clienteFinal = { ...clientes[idxExistente], ...patch };
+        clientes[idxExistente] = clienteFinal;
+      } else {
+        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
+        clientes.unshift(clienteFinal);
+      }
+    }
+    await salvarUmCliente(clienteFinal);
+    closeModal();
+    onConfirmar(clienteFinal);
+  });
+}
 
 /* ============================================================
    CLIENTES (cadastro / mala direta de aniversário)
@@ -877,11 +994,13 @@ async function upsertClienteFromOrder(data){
     dataNascimento: data.dataNascimento || '',
     cpf: data.cpf || ''
   };
+  let clienteAfetado;
   if(idx === -1){
-    clientes.unshift({ id: uid('cli'), ...patch, criadoEm: Date.now() });
+    clienteAfetado = { id: uid('cli'), ...patch, criadoEm: Date.now() };
+    clientes.unshift(clienteAfetado);
   } else {
     const existing = clientes[idx];
-    clientes[idx] = {
+    clienteAfetado = {
       ...existing,
       nome: patch.nome || existing.nome,
       telefone: patch.telefone || existing.telefone,
@@ -896,8 +1015,9 @@ async function upsertClienteFromOrder(data){
       dataNascimento: patch.dataNascimento || existing.dataNascimento,
       cpf: patch.cpf || existing.cpf
     };
+    clientes[idx] = clienteAfetado;
   }
-  await saveClientes();
+  await salvarUmCliente(clienteAfetado);
 }
 
 
@@ -966,7 +1086,8 @@ function parseDataParaISO(val){
 /** Aplica o mapeamento de colunas às linhas lidas da planilha e cadastra/atualiza os clientes. */
 async function processarImportacaoClientes(headers, rows, mapeamento){
   let novos = 0, atualizados = 0, ignorados = 0;
-  rows.forEach(row=>{
+  const afetados = [];
+  for(const row of rows){
     const obj = {};
     headers.forEach((h, i)=>{
       const campo = mapeamento[i];
@@ -976,22 +1097,25 @@ async function processarImportacaoClientes(headers, rows, mapeamento){
       else val = (val===undefined||val===null) ? '' : String(val).trim();
       if(val) obj[campo] = val;
     });
-    if(!obj.nome){ ignorados++; return; }
+    if(!obj.nome){ ignorados++; continue; }
     const idx = findClienteIndex(obj.telefone, obj.cpf);
     if(idx === -1){
-      clientes.unshift({
+      const novoCliente = {
         id: uid('cli'), nome:'', telefone:'', email:'', cpf:'', dataNascimento:'',
         cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'',
         ...obj, criadoEm: Date.now()
-      });
+      };
+      clientes.unshift(novoCliente);
+      afetados.push(novoCliente);
       novos++;
     }else{
       const existing = clientes[idx];
       Object.keys(obj).forEach(k=>{ existing[k] = obj[k]; });
+      afetados.push(existing);
       atualizados++;
     }
-  });
-  await saveClientes();
+  }
+  for(const c of afetados){ await salvarUmCliente(c); }
   return { novos, atualizados, ignorados };
 }
 
@@ -1315,7 +1439,7 @@ function buildAniversarioMessage(nomeCliente){
 }
 async function marcarAniversarioEnviado(cliente){
   cliente.ultimoAniversarioEnviado = new Date().getFullYear();
-  await saveClientes();
+  await salvarUmCliente(cliente);
 }
 async function sendWhatsAppCliente(cliente){
   if(!cliente) return;
@@ -2173,7 +2297,16 @@ function renderNovaOrdem(main){
     </div>
     <div class="ticket">
       <div class="section-label">Cliente</div>
-      ${clienteFieldsHtml('f', {})}
+      <div class="field">
+        <div id="f_clienteResumo" style="padding:10px 12px; background:var(--bg); border:1px solid var(--line); border-radius:8px; margin-bottom:8px; font-size:13.5px;">
+          <span class="muted">Nenhum cliente selecionado ainda.</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnSelecionarClienteNovaOrdem">🔍 Selecionar / cadastrar cliente</button>
+      </div>
+      <input type="hidden" id="f_cliente"><input type="hidden" id="f_telefone"><input type="hidden" id="f_email">
+      <input type="hidden" id="f_cpf"><input type="hidden" id="f_nascimento"><input type="hidden" id="f_cep">
+      <input type="hidden" id="f_endereco"><input type="hidden" id="f_numero"><input type="hidden" id="f_complemento">
+      <input type="hidden" id="f_bairro"><input type="hidden" id="f_cidade"><input type="hidden" id="f_estado">
       <div class="divider-nova"></div>
       <div class="section-label">Ordem</div>
       <div class="grid-2">
@@ -2226,7 +2359,28 @@ function renderNovaOrdem(main){
 
   const tempPagHolder = { valorTotal: null, pagamentos: [] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
-  wireClienteFields('f', { buscarClientePorCpf: true });
+
+  function atualizarResumoClienteNovaOrdem(){
+    const nome = document.getElementById('f_cliente').value;
+    const tel = document.getElementById('f_telefone').value;
+    const resumo = document.getElementById('f_clienteResumo');
+    resumo.innerHTML = nome
+      ? `<b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}`
+      : `<span class="muted">Nenhum cliente selecionado ainda.</span>`;
+  }
+  document.getElementById('btnSelecionarClienteNovaOrdem').addEventListener('click', ()=>{
+    abrirSeletorCliente((clienteFinal)=>{
+      const map = { cliente:clienteFinal.nome, telefone:clienteFinal.telefone, email:clienteFinal.email,
+        cpf:clienteFinal.cpf, nascimento:clienteFinal.dataNascimento, cep:clienteFinal.cep, endereco:clienteFinal.endereco,
+        numero:clienteFinal.numero, complemento:clienteFinal.complemento, bairro:clienteFinal.bairro,
+        cidade:clienteFinal.cidade, estado:clienteFinal.estado };
+      Object.keys(map).forEach(campo=>{
+        const el = document.getElementById('f_'+campo);
+        if(el) el.value = map[campo] || '';
+      });
+      atualizarResumoClienteNovaOrdem();
+    });
+  });
 
   const produtoSel = document.getElementById('f_produto');
   function atualizarFatorHintNova(){
@@ -3214,7 +3368,7 @@ function renderClientes(main){
         document.getElementById('cliDelCancel').addEventListener('click', closeModal);
         document.getElementById('cliDelConfirm').addEventListener('click', async ()=>{
           clientes = clientes.filter(x=>x.id!==clienteId);
-          await saveClientes();
+          await excluirCliente(clienteId);
           closeModal();
           renderAniversarioCard();
           renderTable();
@@ -3338,12 +3492,15 @@ function renderClientes(main){
         cidade: document.getElementById('cli_cidade').value.trim(),
         estado: document.getElementById('cli_estado').value.trim(),
       };
+      let clienteFinal;
       if(editing){
         Object.assign(cliente, patch);
+        clienteFinal = cliente;
       } else {
-        clientes.unshift({ id: uid('cli'), ...patch, criadoEm: Date.now() });
+        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
+        clientes.unshift(clienteFinal);
       }
-      await saveClientes();
+      await salvarUmCliente(clienteFinal);
       closeModal();
       renderAniversarioCard();
       renderTable();

@@ -317,6 +317,8 @@ async function aplicarConsumosEstoque(reservas){
   }
 }
 
+let clientes = [];
+
 async function loadAll(){
   config = await configGetUnificada();
   if(!config){
@@ -324,6 +326,182 @@ async function loadAll(){
   }
   vendas = await vendasGet();
   produtosEstoque = await produtosEstoqueGet();
+  clientes = await clientesGet();
+}
+
+/* ============================================================
+   CLIENTES (cadastro compartilhado com O.S. e Orçamentos)
+   ============================================================ */
+function onlyDigits(s){ return (s||'').replace(/\D/g,''); }
+function onlyDigitsCpf(s){ return (s||'').replace(/\D/g,''); }
+function findClienteIndex(telefone, cpf){
+  const tel = onlyDigits(telefone);
+  const doc = onlyDigitsCpf(cpf);
+  return clientes.findIndex(c=>
+    (tel && onlyDigits(c.telefone) === tel) ||
+    (doc && onlyDigitsCpf(c.cpf) === doc)
+  );
+}
+async function clientesGet(){
+  try{
+    const { data, error } = await supabaseClient.from('clientes_cadastro').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar clientes', e); return []; }
+}
+async function salvarUmCliente(cliente){
+  try{
+    const { error } = await supabaseClient.from('clientes_cadastro').upsert({ id: cliente.id, payload: cliente });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar cliente', e); showToast('Não foi possível salvar o cliente.'); return false; }
+}
+/** Busca endereço pelo CEP usando o ViaCEP (gratuito, sem chave). Retorna null se não achar. */
+async function buscarEnderecoPorCep(cep){
+  const cepDigits = onlyDigits(cep);
+  if(cepDigits.length !== 8) return null;
+  try{
+    const res = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+    const data = await res.json();
+    if(data.erro) return null;
+    return { endereco: data.logradouro || '', bairro: data.bairro || '', cidade: data.localidade || '', estado: data.uf || '' };
+  }catch(e){ return null; }
+}
+/** Monta o HTML dos campos completos de cliente (mesmo padrão do O.S.). */
+function clienteFieldsHtml(prefix, c){
+  c = c || {};
+  const nome = c.cliente !== undefined ? c.cliente : (c.nome || '');
+  return `
+    <div class="grid-2">
+      <div class="field"><label>CPF</label><input id="${prefix}_cpf" placeholder="000.000.000-00" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field"><label>Nome do cliente</label><input id="${prefix}_cliente" placeholder="Nome completo" value="${escapeHtml(nome)}"></div>
+      <div class="field"><label>Telefone</label><input id="${prefix}_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>E-mail do cliente</label><input type="email" id="${prefix}_email" placeholder="cliente@email.com" value="${escapeHtml(c.email||'')}"></div>
+      <div class="field"><label>Data de nascimento</label><input type="date" id="${prefix}_nascimento" value="${c.dataNascimento||''}"></div>
+      <div class="field"><label>CEP</label><input id="${prefix}_cep" placeholder="00000-000" value="${escapeHtml(c.cep||'')}"></div>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div class="field"><label>Endereço</label><input id="${prefix}_endereco" placeholder="Rua / Avenida" value="${escapeHtml(c.endereco||'')}"></div>
+      <div class="field"><label>Número</label><input id="${prefix}_numero" placeholder="Nº" value="${escapeHtml(c.numero||'')}"></div>
+      <div class="field"><label>Complemento</label><input id="${prefix}_complemento" placeholder="Apto, bloco…" value="${escapeHtml(c.complemento||'')}"></div>
+      <div class="field"><label>Bairro</label><input id="${prefix}_bairro" placeholder="Bairro" value="${escapeHtml(c.bairro||'')}"></div>
+      <div class="field"><label>Cidade</label><input id="${prefix}_cidade" placeholder="Cidade" value="${escapeHtml(c.cidade||'')}"></div>
+      <div class="field"><label>Estado</label><input id="${prefix}_estado" placeholder="UF" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
+    </div>
+  `;
+}
+function wireClienteFields(prefix){
+  const cepInp = document.getElementById(prefix+'_cep');
+  if(cepInp){
+    cepInp.addEventListener('blur', async ()=>{
+      const cepDigits = onlyDigits(cepInp.value);
+      if(cepDigits.length !== 8) return;
+      const endereco = await buscarEnderecoPorCep(cepDigits);
+      if(!endereco) return;
+      const enderecoInp = document.getElementById(prefix+'_endereco');
+      const bairroInp = document.getElementById(prefix+'_bairro');
+      const cidadeInp = document.getElementById(prefix+'_cidade');
+      const estadoInp = document.getElementById(prefix+'_estado');
+      if(enderecoInp) enderecoInp.value = endereco.endereco;
+      if(bairroInp) bairroInp.value = endereco.bairro;
+      if(cidadeInp) cidadeInp.value = endereco.cidade;
+      if(estadoInp) estadoInp.value = endereco.estado;
+      showToast('Endereço preenchido — falta só número e complemento.');
+    });
+  }
+}
+/**
+ * Abre a tela de cliente com busca (lupa): digitando, filtra os clientes já
+ * cadastrados; clicar num resultado preenche o formulário com os dados dele;
+ * ou preenche do zero pra cadastrar alguém novo. Ao confirmar, salva e chama
+ * `onConfirmar(cliente)` com o registro final. `permitirVazio` deixa cancelar
+ * sem selecionar nada (usado em telas onde o cliente é opcional).
+ */
+function abrirSeletorCliente(onConfirmar, clienteAtual){
+  let selecionado = clienteAtual ? { ...clienteAtual } : null;
+  openModal(`
+    <h3>Cliente</h3>
+    <div class="field"><label>🔍 Buscar cliente já cadastrado</label><input id="busca_cliente" placeholder="Nome, telefone ou CPF..." autocomplete="off"></div>
+    <div id="resultados_cliente" style="max-height:180px; overflow-y:auto; margin-bottom:12px;"></div>
+    <div style="border-top:1px solid var(--line); padding-top:12px;">
+      <p class="muted" style="margin:0 0 8px;">Ou preencha os dados abaixo pra cadastrar um cliente novo:</p>
+      ${clienteFieldsHtml('sel', clienteAtual || {})}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-accent" id="btnConfirmarSelecaoCliente">Confirmar</button>
+      <button class="btn btn-ghost" id="btnCancelarSelecaoCliente">Cancelar</button>
+    </div>
+  `);
+  wireClienteFields('sel');
+
+  function preencherFormulario(c){
+    const map = { cpf:c.cpf, cliente:c.nome, telefone:c.telefone, email:c.email, nascimento:c.dataNascimento,
+      cep:c.cep, endereco:c.endereco, numero:c.numero, complemento:c.complemento, bairro:c.bairro, cidade:c.cidade, estado:c.estado };
+    Object.keys(map).forEach(campo=>{
+      const el = document.getElementById('sel_'+campo);
+      if(el) el.value = map[campo] || '';
+    });
+    selecionado = c;
+  }
+  function renderResultados(termo){
+    const wrap = document.getElementById('resultados_cliente');
+    if(!termo){ wrap.innerHTML=''; return; }
+    const termoDigits = onlyDigits(termo);
+    const termoLower = termo.toLowerCase();
+    const achados = clientes.filter(c=>
+      (c.nome||'').toLowerCase().includes(termoLower) ||
+      (termoDigits.length>=4 && onlyDigits(c.telefone||'').includes(termoDigits)) ||
+      (termoDigits.length>=4 && onlyDigitsCpf(c.cpf||'').includes(termoDigits))
+    ).slice(0,8);
+    wrap.innerHTML = achados.length===0
+      ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
+      : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
+    wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const c = clientes.find(x=>x.id===el.dataset.selcli);
+        if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+      });
+    });
+  }
+  document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
+
+  document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
+  document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
+    const nome = document.getElementById('sel_cliente').value.trim();
+    if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    const patch = {
+      nome,
+      telefone: document.getElementById('sel_telefone').value.trim(),
+      email: document.getElementById('sel_email').value.trim(),
+      cpf: document.getElementById('sel_cpf').value.trim(),
+      dataNascimento: document.getElementById('sel_nascimento').value,
+      cep: document.getElementById('sel_cep').value.trim(),
+      endereco: document.getElementById('sel_endereco').value.trim(),
+      numero: document.getElementById('sel_numero').value.trim(),
+      complemento: document.getElementById('sel_complemento').value.trim(),
+      bairro: document.getElementById('sel_bairro').value.trim(),
+      cidade: document.getElementById('sel_cidade').value.trim(),
+      estado: document.getElementById('sel_estado').value.trim(),
+    };
+    let clienteFinal;
+    if(selecionado && selecionado.id){
+      clienteFinal = { ...selecionado, ...patch };
+      const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+      if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
+    } else {
+      const idxExistente = findClienteIndex(patch.telefone, patch.cpf);
+      if(idxExistente >= 0){
+        clienteFinal = { ...clientes[idxExistente], ...patch };
+        clientes[idxExistente] = clienteFinal;
+      } else {
+        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
+        clientes.unshift(clienteFinal);
+      }
+    }
+    await salvarUmCliente(clienteFinal);
+    closeModal();
+    onConfirmar(clienteFinal);
+  });
 }
 
 /* ============================================================
@@ -711,9 +889,14 @@ function renderNovaVenda(main){
       </div>
       <div class="grid-2">
         <div class="field"><label>Data</label><input type="date" id="v_data" value="${todayStr()}"></div>
-        <div class="field"><label>Cliente <span class="muted">(opcional)</span></label><input id="v_cliente" placeholder="Nome do cliente"></div>
+        <div class="field"><label>Cliente <span class="muted">(opcional)</span></label>
+          <div id="v_clienteResumo" style="padding:9px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; font-size:13.5px; margin-bottom:6px;">
+            <span class="muted">Nenhum cliente selecionado.</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnSelecionarClienteVenda">🔍 Selecionar / cadastrar cliente</button>
+        </div>
       </div>
-      <div class="field"><label>Telefone do cliente <span class="muted">(opcional)</span></label><input id="v_telefone" placeholder="(32) 9...."></div>
+      <input type="hidden" id="v_cliente"><input type="hidden" id="v_telefone">
     </div>
     <div class="card"><div id="itensContainerNova"></div></div>
     <div class="card"><div id="pagamentoContainerNova"></div></div>
@@ -726,6 +909,22 @@ function renderNovaVenda(main){
   const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder);
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
+
+  function atualizarResumoClienteVenda(){
+    const nome = document.getElementById('v_cliente').value;
+    const tel = document.getElementById('v_telefone').value;
+    const resumo = document.getElementById('v_clienteResumo');
+    resumo.innerHTML = nome
+      ? `<b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}`
+      : `<span class="muted">Nenhum cliente selecionado.</span>`;
+  }
+  document.getElementById('btnSelecionarClienteVenda').addEventListener('click', ()=>{
+    abrirSeletorCliente((clienteFinal)=>{
+      document.getElementById('v_cliente').value = clienteFinal.nome || '';
+      document.getElementById('v_telefone').value = clienteFinal.telefone || '';
+      atualizarResumoClienteVenda();
+    });
+  });
 
   document.getElementById('btnLimparVenda').addEventListener('click', ()=> renderNovaVenda(main) );
 

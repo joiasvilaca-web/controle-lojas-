@@ -647,6 +647,7 @@ const CFG_TABS = [
   { id:'servicos', label:'Tipos de Serviço' },
   { id:'pagamento', label:'Formas de Pagamento' },
   { id:'impressao', label:'Impressão & Etiquetas' },
+  { id:'statusOrcamento', label:'Status de Orçamento' },
   { id:'acessos', label:'Perfis de Acesso' },
   { id:'mensagens', label:'Mensagens' },
 ];
@@ -677,6 +678,7 @@ function renderCfgTab(tab){
   if(tab==='servicos') return renderServicosTab(body);
   if(tab==='pagamento') return renderPagamentoTab(body);
   if(tab==='impressao') return renderImpressaoTab(body);
+  if(tab==='statusOrcamento') return renderStatusOrcamentoTab(body);
   if(tab==='acessos') return renderAcessosTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
 }
@@ -1582,6 +1584,84 @@ function renderImpressaoTab(main){
   });
 }
 
+/* ---------- STATUS DE ORÇAMENTO (com mensagem de WhatsApp por status) ---------- */
+const STATUS_ORCAMENTO_PADRAO = [
+  { id:'pendente', nome:'Pendente', inicial:true, encerra:false, mensagemWhatsapp:'Olá {cliente}! Segue o orçamento da Vilaça Joias no valor de {valor}, válido até {validade}. Qualquer dúvida, é só chamar por aqui 💛' },
+  { id:'cutucado', nome:'Cutucado', inicial:false, encerra:false, mensagemWhatsapp:'Oi {cliente}, tudo bem? Passando pra lembrar do seu orçamento de {valor} na Vilaça Joias — ainda está de pé até {validade}. Posso te ajudar a fechar?' },
+  { id:'aprovado', nome:'Aprovado', inicial:false, encerra:true, mensagemWhatsapp:'' },
+  { id:'recusado', nome:'Recusado', inicial:false, encerra:true, mensagemWhatsapp:'' },
+];
+
+function garantirStatusOrcamentoPadrao(){
+  if(!config.statusOrcamento || !Array.isArray(config.statusOrcamento) || config.statusOrcamento.length===0){
+    config.statusOrcamento = JSON.parse(JSON.stringify(STATUS_ORCAMENTO_PADRAO));
+  }
+}
+
+function renderStatusOrcamentoTab(main){
+  garantirStatusOrcamentoPadrao();
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Status de Orçamento</div>
+      <p class="muted" style="margin:-4px 0 14px;">Crie os status que fizerem sentido pro seu fluxo (ex: Pendente, Cutucado, Aprovado, Recusado...). Pra cada um, você pode escrever uma mensagem de WhatsApp — se deixar em branco, o botão de enviar mensagem não aparece pra esse status. Use <b>{cliente}</b>, <b>{loja}</b>, <b>{valor}</b> e <b>{validade}</b> na mensagem, que o sistema troca pelos dados de cada orçamento.</p>
+      <div id="statusRows"></div>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <button class="btn btn-ghost btn-sm" id="btnNovoStatus">+ Novo status</button>
+        <button class="btn btn-accent btn-sm" id="btnSalvarStatus">Salvar status</button>
+      </div>
+    </div>
+  `;
+  function renderRows(){
+    const wrap = document.getElementById('statusRows');
+    wrap.innerHTML = config.statusOrcamento.map((s,i)=>`
+      <div class="card" style="padding:14px 16px; margin-bottom:10px; background:var(--surface-2);">
+        <div class="grid-2">
+          <div class="field"><label>Nome do status</label><input data-scampo="nome" data-si="${i}" value="${escapeHtml(s.nome)}"></div>
+          <div style="display:flex; align-items:flex-end; gap:16px; padding-bottom:10px;">
+            <label style="display:flex; align-items:center; gap:5px; font-size:13px;"><input type="radio" name="statusInicial" data-scampo="inicial" data-si="${i}" ${s.inicial?'checked':''}> Status inicial</label>
+            <label style="display:flex; align-items:center; gap:5px; font-size:13px;"><input type="checkbox" data-scampo="encerra" data-si="${i}" ${s.encerra?'checked':''}> Encerra o orçamento</label>
+          </div>
+        </div>
+        <div class="field"><label>Mensagem de WhatsApp <span class="muted">(deixe vazio pra não mostrar botão de enviar)</span></label>
+          <textarea rows="2" data-scampo="mensagemWhatsapp" data-si="${i}">${escapeHtml(s.mensagemWhatsapp||'')}</textarea>
+        </div>
+        <button class="icon-btn" data-sdel="${i}" title="Remover status" style="color:var(--danger);">✕ Remover</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-scampo]').forEach(el=>{
+      const ev = el.tagName==='SELECT' || el.type==='checkbox' || el.type==='radio' ? 'change' : 'input';
+      el.addEventListener(ev, ()=>{
+        const i = Number(el.dataset.si);
+        const campo = el.dataset.scampo;
+        if(campo==='inicial'){
+          config.statusOrcamento.forEach((s,j)=>{ s.inicial = (j===i); });
+        } else if(campo==='encerra'){
+          config.statusOrcamento[i][campo] = el.checked;
+        } else {
+          config.statusOrcamento[i][campo] = el.value;
+        }
+      });
+    });
+    wrap.querySelectorAll('[data-sdel]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        if(config.statusOrcamento.length<=1){ showToast('Deixe pelo menos um status cadastrado.'); return; }
+        config.statusOrcamento.splice(Number(b.dataset.sdel),1);
+        if(!config.statusOrcamento.some(s=>s.inicial)) config.statusOrcamento[0].inicial = true;
+        renderRows();
+      });
+    });
+  }
+  renderRows();
+  document.getElementById('btnNovoStatus').addEventListener('click', ()=>{
+    config.statusOrcamento.push({ id: uid('status'), nome:'Novo status', inicial:false, encerra:false, mensagemWhatsapp:'' });
+    renderRows();
+  });
+  document.getElementById('btnSalvarStatus').addEventListener('click', async ()=>{
+    const ok = await configSave();
+    if(ok) showToast('Status de orçamento salvos.');
+  });
+}
+
 /* ---------- ACESSOS (SENHAS) ---------- */
 function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='oficina'?'Oficina':n==='vendedora'?'Vendedora':'Personalizado'; }
 
@@ -1620,6 +1700,7 @@ const MODULOS_APP = {
     { id:'servicos', label:'Tipos de Serviço' },
     { id:'pagamento', label:'Formas de Pagamento' },
     { id:'impressao', label:'Impressão & Etiquetas' },
+    { id:'statusOrcamento', label:'Status de Orçamento' },
     { id:'acessos', label:'Perfis de Acesso' },
     { id:'mensagens', label:'Mensagens' },
   ]},

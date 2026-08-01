@@ -237,11 +237,29 @@ async function orcamentoSalvar(o){
   }catch(e){ console.error('erro ao salvar orçamento', e); showToast('Não foi possível salvar. Tente novamente.'); return false; }
 }
 
-/** Status "de verdade" — se passou da validade e ainda tava pendente, mostra como expirado, mesmo sem ter sido salvo assim. */
-function statusEfetivo(o){
-  if(o.status === 'aprovado' || o.status === 'recusado') return o.status;
-  if(o.validade && o.validade < todayStr()) return 'expirado';
-  return 'pendente';
+/* Status configuráveis — mesmo padrão-semente usado em Configurações, caso ainda não tenha sido salvo. */
+const STATUS_ORCAMENTO_PADRAO = [
+  { id:'pendente', nome:'Pendente', inicial:true, encerra:false, mensagemWhatsapp:'Olá {cliente}! Segue o orçamento da Vilaça Joias no valor de {valor}, válido até {validade}. Qualquer dúvida, é só chamar por aqui 💛' },
+  { id:'cutucado', nome:'Cutucado', inicial:false, encerra:false, mensagemWhatsapp:'Oi {cliente}, tudo bem? Passando pra lembrar do seu orçamento de {valor} na Vilaça Joias — ainda está de pé até {validade}. Posso te ajudar a fechar?' },
+  { id:'aprovado', nome:'Aprovado', inicial:false, encerra:true, mensagemWhatsapp:'' },
+  { id:'recusado', nome:'Recusado', inicial:false, encerra:true, mensagemWhatsapp:'' },
+];
+function statusList(){
+  return (config.statusOrcamento && config.statusOrcamento.length>0) ? config.statusOrcamento : STATUS_ORCAMENTO_PADRAO;
+}
+function statusInfoDe(id){
+  return statusList().find(s=>s.id===id) || statusList()[0];
+}
+function statusInicialId(){
+  const lista = statusList();
+  const inicial = lista.find(s=>s.inicial);
+  return inicial ? inicial.id : lista[0].id;
+}
+/** Um orçamento está "vencido" quando o status atual não encerra o fluxo e a validade já passou. */
+function estaVencido(o){
+  const info = statusInfoDe(o.status);
+  if(info && info.encerra) return false;
+  return !!(o.validade && o.validade < todayStr());
 }
 function diasParaVencer(o){
   if(!o.validade) return null;
@@ -249,20 +267,197 @@ function diasParaVencer(o){
   const val = new Date(o.validade+'T00:00:00');
   return Math.round((val-hoje)/86400000);
 }
-/** Orçamentos pendentes que vencem em até 3 dias, ou já venceram sem decisão — usado no aviso. */
+/** Orçamentos ainda em aberto (status não-encerrado) que vencem em até 3 dias, ou já venceram. */
 function orcamentosParaAvisar(){
   return orcamentos.filter(o=>{
-    const st = statusEfetivo(o);
-    if(st==='aprovado' || st==='recusado') return false;
+    const info = statusInfoDe(o.status);
+    if(info && info.encerra) return false;
     const dias = diasParaVencer(o);
     return dias !== null && dias <= 3;
   });
 }
+/** Troca {cliente}, {loja}, {valor} e {validade} pelos dados reais do orçamento. */
+function montarMensagemStatus(o, mensagem){
+  return (mensagem||'')
+    .replaceAll('{cliente}', o.cliente||'')
+    .replaceAll('{loja}', o.loja||'')
+    .replaceAll('{valor}', fmtMoeda(o.valorTotal))
+    .replaceAll('{validade}', fmtDate(o.validade));
+}
+
+let clientes = [];
 
 async function loadAll(){
   config = await configGetUnificada();
   if(!config){ config = { lojas:[], formasPagamento:[], joiasProdutos:[], metais:[] }; }
   orcamentos = await orcamentosGet();
+  clientes = await clientesGet();
+}
+
+/* ============================================================
+   CLIENTES (cadastro compartilhado com O.S. e Vendas)
+   ============================================================ */
+function onlyDigits(s){ return (s||'').replace(/\D/g,''); }
+function onlyDigitsCpf(s){ return (s||'').replace(/\D/g,''); }
+function findClienteIndex(telefone, cpf){
+  const tel = onlyDigits(telefone);
+  const doc = onlyDigitsCpf(cpf);
+  return clientes.findIndex(c=>
+    (tel && onlyDigits(c.telefone) === tel) ||
+    (doc && onlyDigitsCpf(c.cpf) === doc)
+  );
+}
+async function clientesGet(){
+  try{
+    const { data, error } = await supabaseClient.from('clientes_cadastro').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar clientes', e); return []; }
+}
+async function salvarUmCliente(cliente){
+  try{
+    const { error } = await supabaseClient.from('clientes_cadastro').upsert({ id: cliente.id, payload: cliente });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar cliente', e); showToast('Não foi possível salvar o cliente.'); return false; }
+}
+async function buscarEnderecoPorCep(cep){
+  const cepDigits = onlyDigits(cep);
+  if(cepDigits.length !== 8) return null;
+  try{
+    const res = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+    const data = await res.json();
+    if(data.erro) return null;
+    return { endereco: data.logradouro || '', bairro: data.bairro || '', cidade: data.localidade || '', estado: data.uf || '' };
+  }catch(e){ return null; }
+}
+function clienteFieldsHtml(prefix, c){
+  c = c || {};
+  const nome = c.cliente !== undefined ? c.cliente : (c.nome || '');
+  return `
+    <div class="grid-2">
+      <div class="field"><label>CPF</label><input id="${prefix}_cpf" placeholder="000.000.000-00" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field"><label>Nome do cliente</label><input id="${prefix}_cliente" placeholder="Nome completo" value="${escapeHtml(nome)}"></div>
+      <div class="field"><label>Telefone</label><input id="${prefix}_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>E-mail do cliente</label><input type="email" id="${prefix}_email" placeholder="cliente@email.com" value="${escapeHtml(c.email||'')}"></div>
+      <div class="field"><label>Data de nascimento</label><input type="date" id="${prefix}_nascimento" value="${c.dataNascimento||''}"></div>
+      <div class="field"><label>CEP</label><input id="${prefix}_cep" placeholder="00000-000" value="${escapeHtml(c.cep||'')}"></div>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div class="field"><label>Endereço</label><input id="${prefix}_endereco" placeholder="Rua / Avenida" value="${escapeHtml(c.endereco||'')}"></div>
+      <div class="field"><label>Número</label><input id="${prefix}_numero" placeholder="Nº" value="${escapeHtml(c.numero||'')}"></div>
+      <div class="field"><label>Complemento</label><input id="${prefix}_complemento" placeholder="Apto, bloco…" value="${escapeHtml(c.complemento||'')}"></div>
+      <div class="field"><label>Bairro</label><input id="${prefix}_bairro" placeholder="Bairro" value="${escapeHtml(c.bairro||'')}"></div>
+      <div class="field"><label>Cidade</label><input id="${prefix}_cidade" placeholder="Cidade" value="${escapeHtml(c.cidade||'')}"></div>
+      <div class="field"><label>Estado</label><input id="${prefix}_estado" placeholder="UF" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
+    </div>
+  `;
+}
+function wireClienteFields(prefix){
+  const cepInp = document.getElementById(prefix+'_cep');
+  if(cepInp){
+    cepInp.addEventListener('blur', async ()=>{
+      const cepDigits = onlyDigits(cepInp.value);
+      if(cepDigits.length !== 8) return;
+      const endereco = await buscarEnderecoPorCep(cepDigits);
+      if(!endereco) return;
+      const enderecoInp = document.getElementById(prefix+'_endereco');
+      const bairroInp = document.getElementById(prefix+'_bairro');
+      const cidadeInp = document.getElementById(prefix+'_cidade');
+      const estadoInp = document.getElementById(prefix+'_estado');
+      if(enderecoInp) enderecoInp.value = endereco.endereco;
+      if(bairroInp) bairroInp.value = endereco.bairro;
+      if(cidadeInp) cidadeInp.value = endereco.cidade;
+      if(estadoInp) estadoInp.value = endereco.estado;
+      showToast('Endereço preenchido — falta só número e complemento.');
+    });
+  }
+}
+function abrirSeletorCliente(onConfirmar, clienteAtual){
+  let selecionado = clienteAtual ? { ...clienteAtual } : null;
+  openModal(`
+    <h3>Cliente</h3>
+    <div class="field"><label>🔍 Buscar cliente já cadastrado</label><input id="busca_cliente" placeholder="Nome, telefone ou CPF..." autocomplete="off"></div>
+    <div id="resultados_cliente" style="max-height:180px; overflow-y:auto; margin-bottom:12px;"></div>
+    <div style="border-top:1px solid var(--line); padding-top:12px;">
+      <p class="muted" style="margin:0 0 8px;">Ou preencha os dados abaixo pra cadastrar um cliente novo:</p>
+      ${clienteFieldsHtml('sel', clienteAtual || {})}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-accent" id="btnConfirmarSelecaoCliente">Confirmar</button>
+      <button class="btn btn-ghost" id="btnCancelarSelecaoCliente">Cancelar</button>
+    </div>
+  `);
+  wireClienteFields('sel');
+
+  function preencherFormulario(c){
+    const map = { cpf:c.cpf, cliente:c.nome, telefone:c.telefone, email:c.email, nascimento:c.dataNascimento,
+      cep:c.cep, endereco:c.endereco, numero:c.numero, complemento:c.complemento, bairro:c.bairro, cidade:c.cidade, estado:c.estado };
+    Object.keys(map).forEach(campo=>{
+      const el = document.getElementById('sel_'+campo);
+      if(el) el.value = map[campo] || '';
+    });
+    selecionado = c;
+  }
+  function renderResultados(termo){
+    const wrap = document.getElementById('resultados_cliente');
+    if(!termo){ wrap.innerHTML=''; return; }
+    const termoDigits = onlyDigits(termo);
+    const termoLower = termo.toLowerCase();
+    const achados = clientes.filter(c=>
+      (c.nome||'').toLowerCase().includes(termoLower) ||
+      (termoDigits.length>=4 && onlyDigits(c.telefone||'').includes(termoDigits)) ||
+      (termoDigits.length>=4 && onlyDigitsCpf(c.cpf||'').includes(termoDigits))
+    ).slice(0,8);
+    wrap.innerHTML = achados.length===0
+      ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
+      : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
+    wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const c = clientes.find(x=>x.id===el.dataset.selcli);
+        if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+      });
+    });
+  }
+  document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
+
+  document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
+  document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
+    const nome = document.getElementById('sel_cliente').value.trim();
+    if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    const patch = {
+      nome,
+      telefone: document.getElementById('sel_telefone').value.trim(),
+      email: document.getElementById('sel_email').value.trim(),
+      cpf: document.getElementById('sel_cpf').value.trim(),
+      dataNascimento: document.getElementById('sel_nascimento').value,
+      cep: document.getElementById('sel_cep').value.trim(),
+      endereco: document.getElementById('sel_endereco').value.trim(),
+      numero: document.getElementById('sel_numero').value.trim(),
+      complemento: document.getElementById('sel_complemento').value.trim(),
+      bairro: document.getElementById('sel_bairro').value.trim(),
+      cidade: document.getElementById('sel_cidade').value.trim(),
+      estado: document.getElementById('sel_estado').value.trim(),
+    };
+    let clienteFinal;
+    if(selecionado && selecionado.id){
+      clienteFinal = { ...selecionado, ...patch };
+      const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+      if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
+    } else {
+      const idxExistente = findClienteIndex(patch.telefone, patch.cpf);
+      if(idxExistente >= 0){
+        clienteFinal = { ...clientes[idxExistente], ...patch };
+        clientes[idxExistente] = clienteFinal;
+      } else {
+        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
+        clientes.unshift(clienteFinal);
+      }
+    }
+    await salvarUmCliente(clienteFinal);
+    closeModal();
+    onConfirmar(clienteFinal);
+  });
 }
 
 const EMBEDDED = window.self !== window.top;
@@ -384,10 +579,14 @@ function renderNovo(main){
         <div class="field"><label>Vendedora</label><select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>`<option value="${escapeHtml(f.nome)}">${escapeHtml(f.nome)}</option>`).join('')}</select></div>
         <div class="field"><label>Validade</label><input type="date" id="o_validade" value="${validadePadrao.toISOString().slice(0,10)}"></div>
       </div>
-      <div class="grid-2">
-        <div class="field"><label>Cliente</label><input id="o_cliente" placeholder="Nome do cliente"></div>
-        <div class="field"><label>Telefone</label><input id="o_telefone" placeholder="(32) 9...."></div>
+      <div class="field" style="margin-top:10px;">
+        <label>Cliente</label>
+        <div id="o_clienteResumo" style="padding:9px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; font-size:13.5px; margin-bottom:6px;">
+          <span class="muted">Nenhum cliente selecionado.</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnSelecionarClienteOrc">🔍 Selecionar / cadastrar cliente</button>
       </div>
+      <input type="hidden" id="o_cliente"><input type="hidden" id="o_telefone">
       <div class="section-label" style="margin-top:14px;">Itens do orçamento</div>
       <div id="itensRows"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnAddItem">+ Adicionar item</button>
@@ -428,6 +627,22 @@ function renderNovo(main){
   drawItens();
   document.getElementById('btnAddItem').addEventListener('click', ()=>{ itens.push({produto:'', quantidade:1, valorUnitario:''}); drawItens(); });
 
+  function atualizarResumoClienteOrc(){
+    const nome = document.getElementById('o_cliente').value;
+    const tel = document.getElementById('o_telefone').value;
+    const resumo = document.getElementById('o_clienteResumo');
+    resumo.innerHTML = nome
+      ? `<b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}`
+      : `<span class="muted">Nenhum cliente selecionado.</span>`;
+  }
+  document.getElementById('btnSelecionarClienteOrc').addEventListener('click', ()=>{
+    abrirSeletorCliente((clienteFinal)=>{
+      document.getElementById('o_cliente').value = clienteFinal.nome || '';
+      document.getElementById('o_telefone').value = clienteFinal.telefone || '';
+      atualizarResumoClienteOrc();
+    });
+  });
+
   document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
     const lojaId = document.getElementById('o_loja').value;
     const vendedora = document.getElementById('o_vendedora').value;
@@ -444,7 +659,7 @@ function renderNovo(main){
       id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
       data: todayStr(), cliente, telefone, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
-      status: 'pendente', criadoPor: currentUser.nome, criadoEm: Date.now(),
+      status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
     };
     const ok = await orcamentoSalvar(orcamento);
     if(ok){
@@ -463,16 +678,14 @@ function renderLista(main){
   main.innerHTML = `
     <div class="page-head">
       <h1 class="page-title">Orçamentos</h1>
-      <p class="page-sub">Acompanhe o que está pendente, aprovado, recusado ou vencido.</p>
+      <p class="page-sub">Acompanhe o status de cada orçamento (configurável em Configurações → Status de Orçamento).</p>
     </div>
     ${avisos.length>0 ? `<div class="alerta-vencimento">⚠️ ${avisos.length} orçamento(s) vencendo em até 3 dias ou já vencido(s) sem decisão. Dá uma olhada na lista abaixo.</div>` : ''}
     <div class="filters">
       <select id="fStatus">
         <option value="">Todos os status</option>
-        <option value="pendente">Pendente</option>
-        <option value="aprovado">Aprovado</option>
-        <option value="recusado">Recusado</option>
-        <option value="expirado">Expirado</option>
+        ${statusList().map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
+        <option value="__vencido__">Vencidos (sem decisão)</option>
       </select>
       <input type="text" id="fBusca" placeholder="Buscar cliente...">
     </div>
@@ -487,24 +700,26 @@ function renderLista(main){
     const statusFiltro = document.getElementById('fStatus').value;
     const busca = document.getElementById('fBusca').value.trim().toLowerCase();
     const lista = orcamentos.filter(o=>{
-      const st = statusEfetivo(o);
-      if(statusFiltro && st!==statusFiltro) return false;
+      if(statusFiltro==='__vencido__' && !estaVencido(o)) return false;
+      if(statusFiltro && statusFiltro!=='__vencido__' && o.status!==statusFiltro) return false;
       if(busca && !(o.cliente||'').toLowerCase().includes(busca)) return false;
       return true;
     }).slice().reverse();
     const tbody = document.getElementById('tbodyOrc');
     if(lista.length===0){ tbody.innerHTML = `<tr><td colspan="7" class="empty">Nenhum orçamento encontrado.</td></tr>`; return; }
     tbody.innerHTML = lista.map(o=>{
-      const st = statusEfetivo(o);
-      const badgeClass = 'badge-'+st;
-      const badgeLabel = st==='pendente'?'Pendente':st==='aprovado'?'Aprovado':st==='recusado'?'Recusado':'Expirado';
+      const info = statusInfoDe(o.status);
+      const vencido = estaVencido(o);
       return `<tr>
         <td>${escapeHtml(o.cliente)}</td>
         <td><span class="badge badge-loja">${escapeHtml(o.loja||'—')}</span></td>
         <td>${escapeHtml(o.vendedora)}</td>
         <td>${fmtDate(o.validade)}</td>
         <td>${fmtMoeda(o.valorTotal)}</td>
-        <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
+        <td>
+          <span class="badge ${info && info.encerra ? 'badge-aprovado' : 'badge-pendente'}">${escapeHtml(info ? info.nome : o.status)}</span>
+          ${vencido ? `<span class="badge badge-recusado" style="margin-left:4px;">Vencido</span>` : ''}
+        </td>
         <td><button class="icon-btn" data-ver="${o.id}" title="Ver">👁️</button></td>
       </tr>`;
     }).join('');
@@ -519,39 +734,45 @@ function renderLista(main){
 
 function abrirDetalheOrcamento(o){
   if(!o) return;
-  const st = statusEfetivo(o);
+  const infoAtual = statusInfoDe(o.status);
   openModal(`
     <h3>Orçamento — ${escapeHtml(o.cliente)}</h3>
-    <p class="muted">${fmtDate(o.data)} · ${escapeHtml(o.loja)} · Vendedora ${escapeHtml(o.vendedora)} · Validade ${fmtDate(o.validade)}</p>
+    <p class="muted">${fmtDate(o.data)} · ${escapeHtml(o.loja)} · Vendedora ${escapeHtml(o.vendedora)} · Validade ${fmtDate(o.validade)}${estaVencido(o) ? ' · <b style="color:var(--danger);">Vencido</b>' : ''}</p>
     <table style="margin-top:10px;">
       <thead><tr><th>Produto</th><th>Qtd.</th><th>Valor unit.</th></tr></thead>
       <tbody>${(o.itens||[]).map(it=>`<tr><td>${escapeHtml(it.produto)}</td><td>${it.quantidade}</td><td>${fmtMoeda(it.valorUnitario)}</td></tr>`).join('')}</tbody>
     </table>
     <p style="margin-top:10px; font-weight:700;">Total: ${fmtMoeda(o.valorTotal)}</p>
     ${o.observacoes ? `<p class="muted">${escapeHtml(o.observacoes)}</p>` : ''}
+    <div class="field" style="margin-top:14px;">
+      <label>Status</label>
+      <select id="orcStatusSel">${statusList().map(s=>`<option value="${s.id}" ${o.status===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+    </div>
     <div class="modal-actions">
-      ${st==='pendente' || st==='expirado' ? `
-        <button class="btn btn-accent" id="btnAprovar">Aprovar</button>
-        <button class="btn btn-ghost" id="btnRecusar">Recusar</button>
-      ` : ''}
+      <button class="btn btn-accent" id="btnSalvarStatusOrc">Salvar status</button>
+      ${o.telefone && infoAtual && infoAtual.mensagemWhatsapp ? `<button class="btn btn-accent" id="btnWhatsappOrc">💬 Enviar WhatsApp</button>` : ''}
       <button class="btn btn-accent" id="btnImprimirOrc">🖨️ Imprimir</button>
       <button class="btn btn-ghost" id="btnFecharDetalheOrc">Fechar</button>
     </div>
   `);
   document.getElementById('btnFecharDetalheOrc').addEventListener('click', closeModal);
   document.getElementById('btnImprimirOrc').addEventListener('click', ()=> printOrcamento(o));
-  const btnAprovar = document.getElementById('btnAprovar');
-  const btnRecusar = document.getElementById('btnRecusar');
-  if(btnAprovar) btnAprovar.addEventListener('click', async ()=>{
-    o.status = 'aprovado';
+
+  document.getElementById('btnSalvarStatusOrc').addEventListener('click', async ()=>{
+    o.status = document.getElementById('orcStatusSel').value;
     const ok = await orcamentoSalvar(o);
-    if(ok){ closeModal(); renderView(); showToast('Orçamento aprovado. Lance a venda/O.S. correspondente normalmente.'); }
+    if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
-  if(btnRecusar) btnRecusar.addEventListener('click', async ()=>{
-    o.status = 'recusado';
-    const ok = await orcamentoSalvar(o);
-    if(ok){ closeModal(); renderView(); showToast('Orçamento marcado como recusado.'); }
-  });
+  const btnWhatsapp = document.getElementById('btnWhatsappOrc');
+  if(btnWhatsapp){
+    btnWhatsapp.addEventListener('click', ()=>{
+      const msg = encodeURIComponent(montarMensagemStatus(o, infoAtual.mensagemWhatsapp));
+      const url = `https://wa.me/55${onlyDigits(o.telefone)}?text=${msg}`;
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    });
+  }
 }
 
 /** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura configurada. */
