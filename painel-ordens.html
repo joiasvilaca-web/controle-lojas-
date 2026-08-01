@@ -396,6 +396,14 @@
     align-items:center; justify-content:center; z-index:150; padding:20px; overflow-y:auto;
   }
   .modal-overlay.show{display:flex;}
+  .photo-lightbox-overlay{
+    position:fixed; inset:0; background:rgba(10,12,18,0.75); display:none;
+    align-items:center; justify-content:center; z-index:200; padding:20px;
+  }
+  .photo-lightbox-overlay.show{display:flex;}
+  .photo-lightbox-box{ max-width:640px; width:100%; }
+  .photo-lightbox-box img{ width:100%; border-radius:10px; display:block; }
+  .photo-lightbox-close{ margin-top:12px; }
   .modal{
     background:#fff; border-radius:12px; padding:24px; width:100%; max-width:480px;
     box-shadow:0 20px 60px rgba(0,0,0,0.3); max-height:88vh; overflow-y:auto;
@@ -514,6 +522,13 @@
 
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal" id="modalBox"></div>
+</div>
+
+<div class="photo-lightbox-overlay" id="photoLightboxOverlay">
+  <div class="photo-lightbox-box">
+    <img id="photoLightboxImg" src="">
+    <button class="btn btn-ghost photo-lightbox-close" id="photoLightboxClose">Fechar</button>
+  </div>
 </div>
 
 <script>
@@ -1508,13 +1523,19 @@ async function getPhotoDataUrl(fotoId){
 }
 
 function openPhotoModal(src){
-  openModal(`
-    <h3>Foto</h3>
-    <img src="${src}" style="width:100%; border-radius:8px; margin-bottom:14px; display:block;">
-    <div class="modal-actions"><button class="btn btn-ghost" id="photoClose">Fechar</button></div>
-  `);
-  document.getElementById('photoClose').addEventListener('click', closeModal);
+  document.getElementById('photoLightboxImg').src = src;
+  document.getElementById('photoLightboxOverlay').classList.add('show');
 }
+document.getElementById('photoLightboxClose').addEventListener('click', ()=>{
+  document.getElementById('photoLightboxOverlay').classList.remove('show');
+  document.getElementById('photoLightboxImg').src = '';
+});
+document.getElementById('photoLightboxOverlay').addEventListener('click', (e)=>{
+  if(e.target.id==='photoLightboxOverlay'){
+    document.getElementById('photoLightboxOverlay').classList.remove('show');
+    document.getElementById('photoLightboxImg').src = '';
+  }
+});
 
 /**
  * Mounts a photo attachment widget into `container`, bound to `holder.fotos` (array of {id, nome, criadoEm}).
@@ -2662,6 +2683,9 @@ function openEditModalCompleto(order, opts){
   openModal(`
     <h3>${somenteLeitura ? 'Detalhes da ordem de serviço' : 'Editar ordem de serviço'}</h3>
     <p>${somenteLeitura ? 'Visualização somente — clique em "Editar" na tabela para alterar algo.' : 'Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.'}</p>
+    <div style="margin-bottom:8px;">
+      <button type="button" class="btn btn-ghost btn-sm" id="btnTrocarClienteEdit" ${somenteLeitura?'disabled':''}>🔍 Trocar cliente (buscar outro)</button>
+    </div>
     ${clienteFieldsHtml('e', order)}
     <div class="grid-2">
       <div class="field"><label>Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
@@ -2717,6 +2741,30 @@ function openEditModalCompleto(order, opts){
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
   mountLocalizacao(document.getElementById('localContainerEdit'), order, somenteLeitura);
   wireClienteFields('e', { buscarClientePorCpf: true });
+  const btnTrocarClienteEdit = document.getElementById('btnTrocarClienteEdit');
+  if(btnTrocarClienteEdit){
+    btnTrocarClienteEdit.addEventListener('click', ()=>{
+      // O app só tem um "espaço" de modal por vez — abrir a busca aqui substitui
+      // esta tela de edição inteira. Por isso, ao confirmar, a gente guarda o
+      // cliente escolhido direto na ordem e reabre a edição do zero, já atualizada.
+      abrirSeletorCliente((clienteFinal)=>{
+        order.cliente = clienteFinal.nome || '';
+        order.telefone = clienteFinal.telefone || '';
+        order.email = clienteFinal.email || '';
+        order.cpf = clienteFinal.cpf || '';
+        order.dataNascimento = clienteFinal.dataNascimento || '';
+        order.cep = clienteFinal.cep || '';
+        order.endereco = clienteFinal.endereco || '';
+        order.numero = clienteFinal.numero || '';
+        order.complemento = clienteFinal.complemento || '';
+        order.bairro = clienteFinal.bairro || '';
+        order.cidade = clienteFinal.cidade || '';
+        order.estado = clienteFinal.estado || '';
+        openEditModalCompleto(order, opts);
+        showToast('Cliente trocado — revise os dados antes de salvar.');
+      });
+    });
+  }
   document.getElementById('printBtnCompleto').addEventListener('click', ()=> printOrder(order) );
 
   if(somenteLeitura){
