@@ -181,6 +181,7 @@
   let transferencias = [];
   let reposicoes = [];
   let vendas = [];
+  let orcamentos = [];
 
   function escapeHtml(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   function fmtDate(s){ if(!s) return "—"; const p=s.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
@@ -271,6 +272,10 @@
         const { data: vData } = await supabaseClient.from("vendas_pdv").select("id,payload").order("created_at",{ascending:true});
         vendas = (vData||[]).map(r=>r.payload);
       }catch(e){ vendas = []; }
+      try{
+        const { data: oData } = await supabaseClient.from("orcamentos").select("id,payload").order("created_at",{ascending:true});
+        orcamentos = (oData||[]).map(r=>r.payload);
+      }catch(e){ orcamentos = []; }
     }
   }
 
@@ -457,6 +462,30 @@
   }
 
   /* ================= INTELIGÊNCIA (Curva ABC / avisos / metas / IA) ================= */
+  const STATUS_ORCAMENTO_PADRAO_DASH = [
+    { id:'pendente', nome:'Pendente', inicial:true, encerra:false },
+    { id:'cutucado', nome:'Cutucado', inicial:false, encerra:false },
+    { id:'aprovado', nome:'Aprovado', inicial:false, encerra:true },
+    { id:'recusado', nome:'Recusado', inicial:false, encerra:true },
+  ];
+  function statusListDash(){ return (configCompleto && configCompleto.statusOrcamento && configCompleto.statusOrcamento.length>0) ? configCompleto.statusOrcamento : STATUS_ORCAMENTO_PADRAO_DASH; }
+  function statusInfoDeDash(id){ return statusListDash().find(s=>s.id===id) || statusListDash()[0]; }
+  /** Métricas de orçamentos por vendedora: total, valor, contagem por status, e taxa de conversão (aprovado/total). */
+  function metricasOrcamentosPorVendedora(){
+    const map = {};
+    orcamentos.forEach(o=>{
+      const v = o.vendedora || "Sem vendedora";
+      if(!map[v]) map[v] = { total:0, valorTotal:0, porStatus:{}, aprovados:0, recusados:0 };
+      map[v].total++;
+      map[v].valorTotal += Number(o.valorTotal)||0;
+      const info = statusInfoDeDash(o.status);
+      const nomeStatus = info ? info.nome : (o.status||"—");
+      map[v].porStatus[nomeStatus] = (map[v].porStatus[nomeStatus]||0) + 1;
+      if(o.status==="aprovado") map[v].aprovados++;
+      if(o.status==="recusado") map[v].recusados++;
+    });
+    return map;
+  }
   function curvaAbcProdutos(){
     const totais = {};
     vendas.forEach(v=>{
@@ -579,6 +608,32 @@
                 <td><span class="badge ${item.classe==='A'?'ok':item.classe==='B'?'wait':'erro'}">${item.classe}</span></td>
               </tr>
             `).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="padding:16px; margin-bottom:14px;">
+        <b>Orçamentos por vendedora</b> <span style="color:var(--ink-faint); font-size:12px;">(status e conversão)</span>
+        <table style="margin-top:10px;">
+          <thead><tr><th>Vendedora</th><th>Total</th><th>Valor</th><th>Aprovados</th><th>Recusados</th><th>Conversão</th></tr></thead>
+          <tbody>
+            ${(()=>{
+              const met = metricasOrcamentosPorVendedora();
+              const nomes = Object.keys(met).sort((a,b)=> met[b].total - met[a].total);
+              if(nomes.length===0) return `<tr><td colspan="6" style="color:var(--ink-faint);">Nenhum orçamento registrado ainda.</td></tr>`;
+              return nomes.map(nome=>{
+                const m = met[nome];
+                const conversao = m.total>0 ? (m.aprovados/m.total*100) : 0;
+                return `<tr>
+                  <td>${escapeHtml(nome)}</td>
+                  <td>${m.total}</td>
+                  <td>${fmtMoeda(m.valorTotal)}</td>
+                  <td>${m.aprovados}</td>
+                  <td>${m.recusados}</td>
+                  <td><span class="badge ${conversao>=50?'ok':conversao>0?'wait':'erro'}">${conversao.toFixed(0)}%</span></td>
+                </tr>`;
+              }).join("");
+            })()}
           </tbody>
         </table>
       </div>

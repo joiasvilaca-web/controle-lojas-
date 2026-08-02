@@ -214,6 +214,7 @@ const supabaseClient = {
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
+function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function showToast(msg){
@@ -338,6 +339,7 @@ async function aplicarConsumosEstoque(reservas){
 
 let clientes = [];
 
+let orcamentos = [];
 async function loadAll(){
   config = await configGetUnificada();
   if(!config){
@@ -346,6 +348,42 @@ async function loadAll(){
   vendas = await vendasGet();
   produtosEstoque = await produtosEstoqueGet();
   clientes = await clientesGet();
+  orcamentos = await orcamentosGet();
+}
+async function orcamentosGet(){
+  try{
+    const { data, error } = await supabaseClient.from('orcamentos').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar orçamentos', e); return []; }
+}
+async function orcamentoSalvar(o){
+  try{
+    const { error } = await supabaseClient.from('orcamentos').upsert({ id: o.id, payload: o });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar orçamento', e); showToast('Não foi possível salvar o orçamento.'); return false; }
+}
+const STATUS_ORCAMENTO_PADRAO = [
+  { id:'pendente', nome:'Pendente', inicial:true, encerra:false, mensagemWhatsapp:'' },
+  { id:'cutucado', nome:'Cutucado', inicial:false, encerra:false, mensagemWhatsapp:'' },
+  { id:'aprovado', nome:'Aprovado', inicial:false, encerra:true, mensagemWhatsapp:'' },
+  { id:'recusado', nome:'Recusado', inicial:false, encerra:true, mensagemWhatsapp:'' },
+];
+function statusList(){ return (config.statusOrcamento && config.statusOrcamento.length>0) ? config.statusOrcamento : STATUS_ORCAMENTO_PADRAO; }
+function statusInfoDe(id){ return statusList().find(s=>s.id===id) || statusList()[0]; }
+/** Orçamentos ainda em aberto (status que não "encerra") do mesmo cliente — por telefone ou nome. */
+function orcamentosAbertosDoCliente(cliente){
+  if(!cliente) return [];
+  const telDigits = onlyDigits(cliente.telefone||'');
+  const nomeLower = (cliente.nome||'').trim().toLowerCase();
+  return orcamentos.filter(o=>{
+    const info = statusInfoDe(o.status);
+    if(info && info.encerra) return false;
+    const mesmoTelefone = telDigits && onlyDigits(o.telefone||'') === telDigits;
+    const mesmoNome = nomeLower && (o.cliente||'').trim().toLowerCase() === nomeLower;
+    return mesmoTelefone || mesmoNome;
+  });
 }
 
 /* ============================================================
@@ -889,6 +927,73 @@ function renderView(){
   else if(currentTab==='vendas') renderVendas(main);
 }
 
+/**
+ * Se o cliente tem orçamento(s) em aberto (status que não "encerra"), mostra uma
+ * tela com a lista: dá pra ver os itens, mudar o status, ou confirmar que um deles
+ * é exatamente o que está virando esta venda agora (marca como aprovado).
+ */
+function mostrarOrcamentosAbertosModal(cliente){
+  const abertos = orcamentosAbertosDoCliente(cliente);
+  if(abertos.length === 0) return;
+  openModal(`
+    <h3>⚠️ ${escapeHtml(cliente.nome)} tem ${abertos.length} orçamento(s) em aberto</h3>
+    <p class="muted">Se um deles é o que está virando esta venda agora, confirme. Os outros, vale checar o status com o cliente.</p>
+    <div id="orcAbertosLista"></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharOrcAbertos">Continuar</button></div>
+  `);
+  function draw(){
+    const wrap = document.getElementById('orcAbertosLista');
+    if(abertos.length===0){ wrap.innerHTML = '<p class="muted">Nenhum orçamento em aberto restante.</p>'; return; }
+    wrap.innerHTML = abertos.map(o=>{
+      const info = statusInfoDe(o.status);
+      return `<div style="border:1px solid var(--line); border-radius:9px; padding:10px 12px; margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <div><b>${fmtMoeda(o.valorTotal)}</b> <span class="muted">— ${fmtDate(o.data)} · válido até ${fmtDate(o.validade)}</span></div>
+          <span class="badge badge-loja">${escapeHtml(info?info.nome:o.status)}</span>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+          <button type="button" class="btn btn-ghost btn-sm" data-verorc="${o.id}">Ver itens</button>
+          <select data-statusorc="${o.id}" style="max-width:170px;">${statusList().map(s=>`<option value="${s.id}" ${o.status===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+          <button type="button" class="btn btn-accent btn-sm" data-confirmarorc="${o.id}">✓ É este</button>
+        </div>
+        <div data-itensorc="${o.id}" style="display:none; margin-top:8px; font-size:12.5px; color:var(--muted);"></div>
+      </div>`;
+    }).join('');
+    wrap.querySelectorAll('[data-verorc]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const o = abertos.find(x=>x.id===b.dataset.verorc);
+        const div = wrap.querySelector(`[data-itensorc="${o.id}"]`);
+        div.style.display = div.style.display==='none' ? 'block' : 'none';
+        div.innerHTML = (o.itens||[]).map(it=>`${escapeHtml(it.produto)} x${it.quantidade} — ${fmtMoeda(it.valorUnitario)}`).join('<br>') || 'Sem itens.';
+      });
+    });
+    wrap.querySelectorAll('[data-statusorc]').forEach(sel=>{
+      sel.addEventListener('change', async ()=>{
+        const o = abertos.find(x=>x.id===sel.dataset.statusorc);
+        o.status = sel.value;
+        await orcamentoSalvar(o);
+        showToast('Status atualizado.');
+        const infoNovo = statusInfoDe(o.status);
+        if(infoNovo && infoNovo.encerra){ abertos.splice(abertos.indexOf(o),1); }
+        draw();
+      });
+    });
+    wrap.querySelectorAll('[data-confirmarorc]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const o = abertos.find(x=>x.id===b.dataset.confirmarorc);
+        const statusAprovado = statusList().find(s=>s.encerra) || statusList()[0];
+        o.status = statusAprovado.id;
+        await orcamentoSalvar(o);
+        showToast('Orçamento confirmado como esta venda.');
+        abertos.splice(abertos.indexOf(o),1);
+        draw();
+      });
+    });
+  }
+  draw();
+  document.getElementById('btnFecharOrcAbertos').addEventListener('click', closeModal);
+}
+
 /* ============================================================
    NOVA VENDA
    ============================================================ */
@@ -942,6 +1047,7 @@ function renderNovaVenda(main){
       document.getElementById('v_cliente').value = clienteFinal.nome || '';
       document.getElementById('v_telefone').value = clienteFinal.telefone || '';
       atualizarResumoClienteVenda();
+      mostrarOrcamentosAbertosModal(clienteFinal);
     });
   });
 

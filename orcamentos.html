@@ -302,6 +302,30 @@ function orcamentosParaAvisar(){
     return dias !== null && dias <= 3;
   });
 }
+/** Há quantos dias o orçamento foi criado (baseado na data de criação, não na validade). */
+function diasAberto(o){
+  const hoje = new Date(todayStr()+'T00:00:00');
+  const criado = new Date((o.data||todayStr())+'T00:00:00');
+  return Math.round((hoje-criado)/86400000);
+}
+/** Orçamentos em aberto (status não-encerrado) criados há mais de 5 dias, sem resposta. */
+function orcamentosAbertosMaisDe5Dias(){
+  return orcamentos.filter(o=>{
+    const info = statusInfoDe(o.status);
+    if(info && info.encerra) return false;
+    return diasAberto(o) > 5;
+  });
+}
+/** Agrupa uma lista de orçamentos por nome de vendedora. */
+function agruparPorVendedora(lista){
+  const map = {};
+  lista.forEach(o=>{
+    const v = o.vendedora || 'Sem vendedora';
+    if(!map[v]) map[v] = [];
+    map[v].push(o);
+  });
+  return map;
+}
 /** Troca {cliente}, {loja}, {valor} e {validade} pelos dados reais do orçamento. */
 function montarMensagemStatus(o, mensagem){
   return (mensagem||'')
@@ -701,17 +725,32 @@ function renderNovo(main){
    ============================================================ */
 function renderLista(main){
   const avisos = orcamentosParaAvisar();
+  const abertos5dias = orcamentosAbertosMaisDe5Dias();
+  const porVendedora = agruparPorVendedora(abertos5dias);
   main.innerHTML = `
     <div class="page-head">
       <h1 class="page-title">Orçamentos</h1>
       <p class="page-sub">Acompanhe o status de cada orçamento (configurável em Configurações → Status de Orçamento).</p>
     </div>
     ${avisos.length>0 ? `<div class="alerta-vencimento">⚠️ ${avisos.length} orçamento(s) vencendo em até 3 dias ou já vencido(s) sem decisão. Dá uma olhada na lista abaixo.</div>` : ''}
+    ${abertos5dias.length>0 ? `
+      <div class="card" style="border:1px solid var(--danger); background:var(--danger-soft);">
+        <div class="section-label" style="color:var(--danger);">⏰ ${abertos5dias.length} orçamento(s) aberto(s) há mais de 5 dias sem resposta</div>
+        <p class="muted" style="margin:-2px 0 10px;">Clique numa vendedora pra ver só os orçamentos pendentes dela.</p>
+        <div style="display:flex; flex-wrap:wrap; gap:8px;">
+          ${Object.entries(porVendedora).map(([nome,lista])=>`<button type="button" class="btn btn-ghost btn-sm" data-filtrovend="${escapeHtml(nome)}">${escapeHtml(nome)} (${lista.length})</button>`).join('')}
+        </div>
+      </div>
+    ` : ''}
     <div class="filters">
       <select id="fStatus">
         <option value="">Todos os status</option>
         ${statusList().map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
         <option value="__vencido__">Vencidos (sem decisão)</option>
+      </select>
+      <select id="fVendedora">
+        <option value="">Todas as vendedoras</option>
+        ${[...new Set(orcamentos.map(o=>o.vendedora).filter(Boolean))].sort().map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
       </select>
       <input type="text" id="fBusca" placeholder="Buscar cliente...">
     </div>
@@ -722,12 +761,22 @@ function renderLista(main){
       </table>
     </div>
   `;
+  document.querySelectorAll('[data-filtrovend]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.getElementById('fVendedora').value = b.dataset.filtrovend;
+      document.getElementById('fStatus').value = '';
+      draw();
+      document.getElementById('tabelaOrc').scrollIntoView({ behavior:'smooth', block:'center' });
+    });
+  });
   function draw(){
     const statusFiltro = document.getElementById('fStatus').value;
+    const vendedoraFiltro = document.getElementById('fVendedora').value;
     const busca = document.getElementById('fBusca').value.trim().toLowerCase();
     const lista = orcamentos.filter(o=>{
       if(statusFiltro==='__vencido__' && !estaVencido(o)) return false;
       if(statusFiltro && statusFiltro!=='__vencido__' && o.status!==statusFiltro) return false;
+      if(vendedoraFiltro && o.vendedora!==vendedoraFiltro) return false;
       if(busca && !(o.cliente||'').toLowerCase().includes(busca)) return false;
       return true;
     }).slice().reverse();
@@ -755,6 +804,7 @@ function renderLista(main){
   }
   draw();
   document.getElementById('fStatus').addEventListener('change', draw);
+  document.getElementById('fVendedora').addEventListener('change', draw);
   document.getElementById('fBusca').addEventListener('input', draw);
 }
 
