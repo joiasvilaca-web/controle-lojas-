@@ -36,6 +36,9 @@ a{color:inherit;}
 .brand{display:flex; align-items:center; gap:10px;}
 .brand-mark{width:34px; height:34px; border-radius:9px; background:var(--gold-soft); color:var(--gold-ink); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px;}
 .brand-name{font-weight:700; font-size:15px;}
+.tabs{display:flex; gap:6px; flex-wrap:wrap;}
+.tabs button{background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.75); border:none; padding:8px 14px; border-radius:999px; font-size:13px; font-weight:600; cursor:pointer;}
+.tabs button.active{background:var(--gold); color:#fff;}
 .who{display:flex; align-items:center; gap:10px; font-size:13px;}
 .level-pill{background:rgba(255,255,255,0.12); padding:4px 10px; border-radius:999px; font-size:11.5px; font-weight:700;}
 .icon-btn{background:none; border:none; color:inherit; font-size:16px; cursor:pointer; padding:5px 7px; border-radius:7px; text-decoration:none;}
@@ -73,6 +76,10 @@ td input[type=number]{text-align:right; padding:5px 6px; font-size:12.5px;}
 .legenda .amostra{width:16px; height:16px; border-radius:4px; background:#FFF9EE; border:1px solid var(--gold-soft); display:inline-block;}
 .toast{position:fixed; left:50%; bottom:26px; transform:translate(-50%,20px); background:#2B0F1F; color:#fff; padding:11px 18px; border-radius:10px; font-size:13.5px; box-shadow:0 12px 30px rgba(0,0,0,0.3); opacity:0; pointer-events:none; transition:all .2s ease; z-index:50;}
 .toast.show{opacity:1; transform:translate(-50%,0);}
+.modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--surface); color:var(--ink); border-radius:16px; max-width:520px; width:100%; max-height:88vh; overflow:auto; padding:26px;}
+.modal-actions{display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;}
 html.embedded #view-login{display:none !important;}
 html.embedded .topbar{display:none !important;}
 </style>
@@ -99,6 +106,7 @@ html.embedded .topbar{display:none !important;}
       <div class="brand-mark">PG</div>
       <div class="brand-name">Venda PG</div>
     </div>
+    <nav class="tabs" id="tabs"></nav>
     <div class="who">
       <span id="whoName"><b></b></span>
       <span class="level-pill" id="whoLevel"></span>
@@ -109,6 +117,7 @@ html.embedded .topbar{display:none !important;}
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBox"></div></div>
 
 <script>
 const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
@@ -168,6 +177,8 @@ const supabaseClient = {
 };
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
+function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
@@ -178,6 +189,26 @@ function showToast(msg){
   clearTimeout(showToast._tm);
   showToast._tm = setTimeout(()=>t.classList.remove('show'), 2600);
 }
+function closeModal(){
+  document.getElementById('modalOverlay').classList.remove('show');
+  document.getElementById('modalBox').innerHTML = '';
+  if(history.state && history.state.modalAberto) history.back();
+}
+function openModal(html){
+  document.getElementById('modalBox').innerHTML = html;
+  document.getElementById('modalOverlay').classList.add('show');
+  history.pushState({ modalAberto:true }, '');
+}
+window.addEventListener('popstate', ()=>{
+  const overlay = document.getElementById('modalOverlay');
+  if(overlay && overlay.classList.contains('show')) history.pushState({ modalAberto:true }, '');
+});
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape'){
+    const overlay = document.getElementById('modalOverlay');
+    if(overlay && overlay.classList.contains('show')){ e.preventDefault(); e.stopPropagation(); }
+  }
+});
 
 async function configGetUnificada(){
   try{
@@ -231,7 +262,71 @@ function novoRegistro(id, lojaId, mesAno){
     conferenciaLojas: { bruto: Object.fromEntries(lojas.map(ab=>[ab,null])), dev: Object.fromEntries(lojas.map(ab=>[ab,null])) },
     vendedoras: vendedorasIniciais,
     fatorTabela: JSON.parse(JSON.stringify(FATOR_PADRAO)),
+    conferido: null, // { por, em (timestamp), dataStr } — preenchido só pelo "Conferir" com senha da diretoria
   };
+}
+
+/* ============================================================
+   CONFERÊNCIA DA DIRETORIA — trava a edição e manda os totais de
+   cada vendedora pra ficha dela em Departamento Pessoal
+   ============================================================ */
+async function dpFuncionariosGet(senha){
+  try{
+    const { data, error } = await supabaseClient.from('dp_funcionarios').select('id,payload').order('created_at', { ascending:true });
+    // observação: supabaseClient já embute __gatewaySenha por padrão; pra usar outra senha
+    // (a da diretoria confirmada na hora), essa função é chamada só depois de já termos
+    // trocado __gatewaySenha temporariamente — ver confirmarConferencia().
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar funcionários do DP', e); return null; }
+}
+async function dpRegistroSalvar(reg){
+  try{
+    const { error } = await supabaseClient.from('dp_registros').upsert({ id: reg.id, payload: reg });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar no DP', e); return false; }
+}
+/**
+ * Confirma a conferência com a senha da diretoria (digitada na hora, não precisa ser
+ * quem está logado no momento). Se validar, tranca a edição do mês pra quem não é
+ * diretoria, e manda os totais de cada vendedora (por item) pra ficha dela no DP —
+ * cria ou atualiza (mesmo id determinístico, então conferir de novo não duplica).
+ */
+async function confirmarConferencia(senhaDigitada){
+  const r = await gatewayCall({ op:'login', senha: senhaDigitada });
+  if(!r || !r.ok || r.user.nivel !== 'diretoria'){
+    return { ok:false, erro:'Senha incorreta ou sem acesso de diretoria.' };
+  }
+  const senhaAntiga = __gatewaySenha;
+  __gatewaySenha = senhaDigitada; // temporariamente, só pra essas chamadas
+  try{
+    const funcionariosDp = await dpFuncionariosGet();
+    if(funcionariosDp === null){ return { ok:false, erro:'Não foi possível acessar o Departamento Pessoal agora.' }; }
+    let enviados = 0, semCorrespondencia = [];
+    for(const v of registro.vendedoras){
+      const totalItens = totalItensVendedora(v);
+      if(totalItens<=0) continue; // nada lançado, não manda registro vazio
+      const nomeLower = (v.nome||'').trim().toLowerCase();
+      const func = funcionariosDp.find(f=> (f.nome||'').trim().toLowerCase() === nomeLower);
+      if(!func){ semCorrespondencia.push(v.nome); continue; }
+      const loja = (config.lojas||[]).find(l=>l.id===registro.lojaId);
+      const regDp = {
+        id: 'vpgsync_' + registro.id + '_' + func.id, // determinístico: reconferir atualiza, não duplica
+        tipo: 'vendaspg', funcionarioId: func.id, data: todayStr(), mesReferencia: registro.mesAno,
+        loja: loja?loja.nome:'', alianca:v.itens.alianca, fabricacao:v.itens.fabricacao, servico:v.itens.servico,
+        represOuro:v.itens.represOuro, represPrata:v.itens.represPrata, relogio:v.itens.relogio,
+        observacoes: 'Enviado automaticamente da conferência do Venda PG.', criadoEm: Date.now(),
+      };
+      const ok = await dpRegistroSalvar(regDp);
+      if(ok) enviados++;
+    }
+    registro.conferido = { por: currentUser.nome, em: Date.now(), dataStr: todayStr() };
+    await registroSalvar(registro);
+    return { ok:true, enviados, semCorrespondencia };
+  } finally {
+    __gatewaySenha = senhaAntiga; // volta a sessão normal, seja lá quem estiver logado
+  }
 }
 
 /* ============================================================
@@ -271,7 +366,11 @@ if(EMBEDDED){
       config = await configGetUnificada();
       if(!config) config = { lojas:[], funcionarios:[] };
       enterApp();
-      parent.postMessage({ type:'tabs', modulo:'vendapg', tabs: [], active: null }, '*');
+      parent.postMessage({ type:'tabs', modulo:'vendapg', tabs: TABS, active: currentTab }, '*');
+    } else if(ev.data.type === 'gotoTab'){
+      currentTab = ev.data.tabId;
+      renderTabs();
+      renderView();
     }
   });
 }
@@ -300,12 +399,41 @@ document.getElementById('btnLogout').addEventListener('click', ()=>{
   document.getElementById('view-app').style.display = 'none';
   document.getElementById('view-login').style.display = 'flex';
 });
+
+let currentTab = 'planilha';
+const TABS = [
+  { id:'planilha', label:'Planilha' },
+  { id:'geral', label:'Geral (comparativo)' },
+];
+function buildTabs(){
+  const nav = document.getElementById('tabs');
+  nav.innerHTML = '';
+  TABS.forEach(t=>{
+    const b = document.createElement('button');
+    b.textContent = t.label; b.dataset.tab = t.id;
+    b.addEventListener('click', ()=>{ currentTab = t.id; renderTabs(); renderView(); });
+    nav.appendChild(b);
+  });
+}
+function renderTabs(){
+  document.querySelectorAll('nav.tabs button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.tab === currentTab);
+  });
+  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'vendapg', tabId: currentTab }, '*');
+}
+function renderView(){
+  if(currentTab==='planilha') renderSeletor();
+  else if(currentTab==='geral') renderGeral();
+}
 function enterApp(){
   document.getElementById('view-login').style.display = 'none';
   document.getElementById('view-app').style.display = 'block';
   document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
-  renderSeletor();
+  buildTabs();
+  currentTab = 'planilha';
+  renderTabs();
+  renderView();
 }
 
 /* ============================================================
@@ -347,6 +475,124 @@ async function salvarRegistro(mostrarToast){
   if(ok && mostrarToast) showToast('Salvo.');
   return ok;
 }
+/* ============================================================
+   GERAL — comparativo entre vendedoras, lojas e categorias
+   ============================================================ */
+async function todosRegistrosGet(){
+  try{
+    const { data, error } = await supabaseClient.from('venda_pg').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar todos os registros', e); return []; }
+}
+function agregarPorVendedora(registros){
+  const map = {};
+  registros.forEach(r=> r.vendedoras.forEach(v=>{
+    const total = totalItensVendedora(v);
+    if(total<=0) return;
+    map[v.nome] = (map[v.nome]||0) + total;
+  }));
+  return map;
+}
+function agregarPorLoja(registros){
+  const map = {};
+  registros.forEach(r=>{
+    const loja = (config.lojas||[]).find(l=>l.id===r.lojaId);
+    const nome = loja ? loja.nome : r.lojaId;
+    const total = r.vendedoras.reduce((acc,v)=> acc + totalItensVendedora(v), 0);
+    if(total<=0) return;
+    map[nome] = (map[nome]||0) + total;
+  });
+  return map;
+}
+function agregarPorCategoria(registros){
+  const map = {};
+  CATEGORIAS.forEach(c=> map[c.label] = 0);
+  registros.forEach(r=> r.vendedoras.forEach(v=>{
+    CATEGORIAS.forEach(c=>{ map[c.label] += Number(v.itens[c.id])||0; });
+  }));
+  return map;
+}
+/** Marca quem está bem abaixo (<70% da média) ou bem acima (>130%) do grupo. */
+function detectarDivergencia(mapa){
+  const valores = Object.values(mapa);
+  if(valores.length===0) return { media:0, itens:[] };
+  const media = valores.reduce((a,b)=>a+b,0) / valores.length;
+  const itens = Object.entries(mapa).map(([nome,total])=>{
+    const percDaMedia = media>0 ? (total/media*100) : 0;
+    const status = percDaMedia < 70 ? 'abaixo' : percDaMedia > 130 ? 'acima' : 'normal';
+    return { nome, total, percDaMedia, status };
+  }).sort((a,b)=> b.total - a.total);
+  return { media, itens };
+}
+/** Gráfico de barra horizontal simples, sem depender de nenhuma biblioteca externa. */
+function barrasHtml(itens, corFn){
+  if(itens.length===0) return `<p class="muted">Sem dados nesse período ainda.</p>`;
+  const max = Math.max(...itens.map(i=>i.total), 1);
+  return itens.map(i=>{
+    const pct = Math.max((i.total/max*100), 2);
+    const cor = corFn ? corFn(i) : 'var(--gold)';
+    return `
+      <div style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:3px;">
+          <span><b>${escapeHtml(i.nome)}</b>${i.status && i.status!=='normal' ? ` <span class="badge ${i.status==='abaixo'?'badge-erro':'badge-ok'}">${i.status==='abaixo'?'abaixo da média':'acima da média'}</span>` : ''}</span>
+          <span>${fmtMoeda(i.total)}</span>
+        </div>
+        <div style="background:var(--surface-2); border-radius:6px; height:14px; overflow:hidden;">
+          <div style="width:${pct}%; height:100%; background:${cor}; border-radius:6px;"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+async function renderGeral(){
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="page-head"><h1 class="page-title">Geral — comparativo</h1><p class="page-sub">Carregando...</p></div>`;
+  const todos = await todosRegistrosGet();
+  const mesesDisponiveis = [...new Set(todos.map(r=>r.mesAno))].sort().reverse();
+  let mesFiltro = mesesDisponiveis[0] || mesAtual();
+
+  function desenhar(){
+    const filtrados = mesFiltro==='__todos__' ? todos : todos.filter(r=>r.mesAno===mesFiltro);
+    const porVendedora = detectarDivergencia(agregarPorVendedora(filtrados));
+    const porLoja = detectarDivergencia(agregarPorLoja(filtrados));
+    const porCategoria = Object.entries(agregarPorCategoria(filtrados)).map(([nome,total])=>({nome,total})).sort((a,b)=>b.total-a.total);
+
+    main.innerHTML = `
+      <div class="page-head">
+        <h1 class="page-title">Geral — comparativo</h1>
+        <p class="page-sub">Compara vendedoras, lojas e categorias — pra ver quem está bem próxima do grupo e quem está destoando.</p>
+      </div>
+      <div class="card" style="max-width:320px;">
+        <div class="field" style="margin-bottom:0;"><label>Período</label>
+          <select id="ger_mes">
+            ${mesesDisponiveis.map(m=>`<option value="${m}" ${mesFiltro===m?'selected':''}>${m}</option>`).join('')}
+            <option value="__todos__" ${mesFiltro==='__todos__'?'selected':''}>Todos os meses</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-label">Vendedoras ${porVendedora.itens.length>0?`<span class="muted" style="text-transform:none; font-weight:400;">— média ${fmtMoeda(porVendedora.media)}</span>`:''}</div>
+        ${barrasHtml(porVendedora.itens, i=> i.status==='abaixo' ? 'var(--danger)' : i.status==='acima' ? 'var(--ok)' : 'var(--gold)')}
+        ${porVendedora.itens.some(i=>i.status==='abaixo') ? `<p class="muted" style="margin-top:8px;">⚠️ Quem está "abaixo da média" vendeu menos de 70% do que a média do grupo nesse período — pode valer a pena conversar/entender o motivo.</p>` : ''}
+      </div>
+
+      <div class="card">
+        <div class="section-label">Lojas ${porLoja.itens.length>0?`<span class="muted" style="text-transform:none; font-weight:400;">— média ${fmtMoeda(porLoja.media)}</span>`:''}</div>
+        ${barrasHtml(porLoja.itens, i=> i.status==='abaixo' ? 'var(--danger)' : i.status==='acima' ? 'var(--ok)' : 'var(--gold)')}
+      </div>
+
+      <div class="card">
+        <div class="section-label">Categorias de produto</div>
+        ${barrasHtml(porCategoria)}
+      </div>
+    `;
+    document.getElementById('ger_mes').addEventListener('change', (e)=>{ mesFiltro = e.target.value; desenhar(); });
+  }
+  desenhar();
+}
+
 function renderPlanilha(){
   const main = document.getElementById('mainContent');
   const lojas = (config.lojas||[]).map(l=>l.abreviacao);
@@ -420,6 +666,17 @@ function renderPlanilha(){
         <thead><tr><th>Vendedora</th>${CATEGORIAS.map(c=>`<th>${c.label}</th>`).join('')}<th>Total</th></tr></thead>
         <tbody id="pg_fatorIndivRows"></tbody>
       </table>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Conferência da diretoria</div>
+      ${registro.conferido ? `
+        <p style="margin:0;"><span class="badge badge-ok">✓ Conferido</span> em ${fmtDate(registro.conferido.dataStr)} por ${escapeHtml(registro.conferido.por)}.
+        ${podeDiretoria ? ' Como você é diretoria, ainda pode editar e salvar normalmente.' : ' A edição está travada — só a diretoria pode alterar esse mês agora.'}</p>
+      ` : `
+        <p class="muted" style="margin:0 0 10px;">Depois de conferir, os totais de cada vendedora (por item) vão automaticamente pra ficha dela em Departamento Pessoal, e a planilha deste mês trava pra quem não é diretoria.</p>
+        <button class="btn btn-accent" id="btnAbrirConferencia">✓ Conferir (senha da diretoria)</button>
+      `}
     </div>
 
     <button class="btn btn-accent" id="btnSalvarPlanilha" style="margin-bottom:30px;">💾 Salvar</button>
@@ -661,6 +918,52 @@ function renderPlanilha(){
   recalcularDeclarado();
   recalcularConferenciaLojas();
   recalcularItens();
+
+  // Trava geral: se já foi conferido e quem está logado não é diretoria, ninguém edita mais nada.
+  if(registro.conferido && !podeDiretoria){
+    document.querySelectorAll('#mainContent input, #mainContent select, #mainContent textarea').forEach(el=> el.disabled = true);
+    const btnSalvar = document.getElementById('btnSalvarPlanilha');
+    if(btnSalvar){ btnSalvar.disabled = true; btnSalvar.textContent = '🔒 Mês travado (conferido)'; }
+    const btnAdd = document.getElementById('btnAddVendedora');
+    if(btnAdd) btnAdd.disabled = true;
+  }
+
+  const btnAbrirConf = document.getElementById('btnAbrirConferencia');
+  if(btnAbrirConf){
+    btnAbrirConf.addEventListener('click', ()=>{
+      openModal(`
+        <h3>Conferir este mês</h3>
+        <p class="muted">Confirme com a senha da diretoria. Os totais de cada vendedora (por item) vão pra ficha dela em Departamento Pessoal, e o mês trava pra edição de quem não é diretoria.</p>
+        <div class="field"><label>Senha da diretoria</label><input type="password" id="conf_senha" autocomplete="off"></div>
+        <div id="conf_erro" class="muted" style="color:var(--danger); display:none;"></div>
+        <div class="modal-actions">
+          <button class="btn btn-accent" id="btnConfirmarConferencia">Confirmar</button>
+          <button class="btn btn-ghost" id="btnCancelarConferencia">Cancelar</button>
+        </div>
+      `);
+      document.getElementById('btnCancelarConferencia').addEventListener('click', closeModal);
+      document.getElementById('btnConfirmarConferencia').addEventListener('click', async ()=>{
+        const senha = document.getElementById('conf_senha').value.trim();
+        const erroEl = document.getElementById('conf_erro');
+        erroEl.style.display = 'none';
+        if(!senha) return;
+        const btn = document.getElementById('btnConfirmarConferencia');
+        btn.disabled = true; btn.textContent = 'Confirmando...';
+        const resultado = await confirmarConferencia(senha);
+        btn.disabled = false; btn.textContent = 'Confirmar';
+        if(!resultado.ok){
+          erroEl.textContent = resultado.erro;
+          erroEl.style.display = 'block';
+          return;
+        }
+        closeModal();
+        let msg = `Conferido! ${resultado.enviados} vendedora(s) sincronizada(s) com o Departamento Pessoal.`;
+        if(resultado.semCorrespondencia.length>0) msg += ` Sem cadastro no DP (não sincronizadas): ${resultado.semCorrespondencia.join(', ')}.`;
+        showToast(msg);
+        renderPlanilha();
+      });
+    });
+  }
 }
 
 (async function init(){

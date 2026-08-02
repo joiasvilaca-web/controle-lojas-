@@ -738,6 +738,56 @@
     });
 
     verificarAlertaDeMetas(metas, totaisMes, fracaoDoMes);
+    verificarMonitoramentoIA(abc, abcVend, avisos, metas, totaisMes);
+  }
+
+  /**
+   * Uma vez por dia (não a cada abertura do Dashboard, pra não gastar API à toa),
+   * manda um resumo amplo do sistema pra IA analisar e apontar, se houver, UM ponto
+   * que realmente mereça atenção da diretoria agora. Só roda pra quem tem acesso
+   * financeiro (ou seja, só diretoria — essa função só é chamada de dentro da
+   * seção de Inteligência, que já é diretoria-only).
+   */
+  async function verificarMonitoramentoIA(abc, abcVend, avisos, metas, totaisMes){
+    const hoje = new Date().toISOString().slice(0,10);
+    const chaveLocal = "vilaca_monitoramento_ia_ultimo_dia";
+    try{
+      if(localStorage.getItem(chaveLocal) === hoje) return; // já rodou hoje
+    }catch(e){ /* localStorage indisponível — segue sem cache, sem travar nada */ }
+
+    const metOrc = (typeof metricasOrcamentosPorVendedora === "function") ? metricasOrcamentosPorVendedora() : {};
+    const resumoAmplo = {
+      curvaAbcProdutosTop10: abc.slice(0,10).map(x=>({produto:x.produto, faturamento:x.total, classe:x.classe})),
+      curvaAbcVendedoras: abcVend.map(x=>({vendedora:x.vendedora, faturamento:x.total, classe:x.classe})),
+      avisosDadosIncompletos: { total: avisos.length, exemplos: avisos.slice(0,5) },
+      metasDoMes: Object.keys(metas).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
+      orcamentosPorVendedora: Object.keys(metOrc).map(nome=>({ vendedora:nome, ...metOrc[nome] })),
+      totalDeVendasRegistradas: vendas.length,
+      totalDeOrdensRegistradas: orders.length,
+      dataDeHoje: hoje,
+    };
+    try{
+      const res = await fetch("https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/gemini-agente", {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha: __gatewaySenha, modo:"monitoramento", resumoDados: resumoAmplo }),
+      });
+      const data = await res.json();
+      try{ localStorage.setItem(chaveLocal, hoje); }catch(e){}
+      if(data && data.temAlerta){
+        const popup = document.createElement("div");
+        popup.className = "alerta-meta-popup";
+        popup.innerHTML = `
+          <b>🧠 ${escapeHtml(data.titulo || "A IA encontrou algo")}</b>
+          ${escapeHtml(data.mensagem || "")}
+          <br><button id="btnFecharAlertaIA">Entendi</button>
+        `;
+        document.body.appendChild(popup);
+        document.getElementById("btnFecharAlertaIA").addEventListener("click", ()=> popup.remove());
+      }
+    }catch(e){
+      console.error("monitoramento IA falhou (silencioso, não atrapalha o resto do dashboard):", e);
+    }
   }
 
   let alertaDeMetasJaMostrado = false;
