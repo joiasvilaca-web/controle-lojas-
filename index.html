@@ -438,6 +438,8 @@ async function uploadFotoParaDrive(dataUrl, filename, pasta, tratar){
 let config = null;
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+function fmtMoedaPE(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
+function fmtDatePE(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showToast(msg){
   const t = document.getElementById('toast');
@@ -1001,6 +1003,16 @@ async function produtosEstoqueGet(){
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
 }
+let vendasParaHistoricoProduto = null; // carregado sob demanda, só quando alguém abre o histórico de um produto
+async function vendasParaHistoricoProdutoGet(){
+  if(vendasParaHistoricoProduto !== null) return vendasParaHistoricoProduto;
+  try{
+    const { data, error } = await supabaseClient.from('vendas_pdv').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    vendasParaHistoricoProduto = (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar vendas pro histórico', e); vendasParaHistoricoProduto = []; }
+  return vendasParaHistoricoProduto;
+}
 async function produtoEstoqueSalvar(produto){
   try{
     const { error } = await supabaseClient.from('produtos_estoque').upsert({ id: produto.id, payload: produto });
@@ -1107,6 +1119,7 @@ const PE_TABS = [
   { id:'fiscal', label:'Fiscal' },
   { id:'composicao', label:'Composição' },
   { id:'valores', label:'Valores' },
+  { id:'historico', label:'Histórico' },
 ];
 
 function abrirProdutoEstoqueModal(produto){
@@ -1247,6 +1260,35 @@ function abrirProdutoEstoqueModal(produto){
       document.getElementById('pe_custo').addEventListener('input', e=> d.custo=e.target.value);
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
       document.getElementById('pe_fatorPercentual').addEventListener('input', e=> d.fatorPercentual=e.target.value);
+    }
+    else if(peTabAtiva==='historico'){
+      if(!editando){
+        body.innerHTML = `<p class="muted">Salve o produto primeiro — o histórico aparece depois que ele já tiver vendas registradas.</p>`;
+      } else {
+        body.innerHTML = `<p class="muted">Carregando histórico...</p>`;
+        vendasParaHistoricoProdutoGet().then(vendas=>{
+          if(peTabAtiva!=='historico') return; // pessoa já trocou de aba antes da resposta chegar
+          const transacoes = [];
+          vendas.forEach(v=>{
+            (v.itens||[]).forEach(it=>{
+              if((it.produto||'').trim().toLowerCase() === (d.nome||'').trim().toLowerCase()){
+                transacoes.push({ data:v.data, cliente:v.cliente||'—', loja:v.loja||'—', quantidade:it.quantidade, valorUnitario:it.valorUnitario });
+              }
+            });
+          });
+          transacoes.sort((a,b)=> (b.data||'').localeCompare(a.data||''));
+          const totalVendido = transacoes.reduce((acc,t)=> acc + (Number(t.quantidade)||0)*(Number(t.valorUnitario)||0), 0);
+          body.innerHTML = transacoes.length===0
+            ? `<p class="muted">Nenhuma venda registrada com este produto ainda.</p>`
+            : `
+              <p class="muted" style="margin:-4px 0 10px;">${transacoes.length} venda(s) — total ${fmtMoedaPE(totalVendido)}</p>
+              <table>
+                <thead><tr><th>Data</th><th>Cliente</th><th>Loja</th><th>Qtd.</th><th>Valor unit.</th></tr></thead>
+                <tbody>${transacoes.map(t=>`<tr><td>${fmtDatePE(t.data)}</td><td>${escapeHtml(t.cliente)}</td><td>${escapeHtml(t.loja)}</td><td>${t.quantidade}</td><td>${fmtMoedaPE(t.valorUnitario)}</td></tr>`).join('')}</tbody>
+              </table>
+            `;
+        });
+      }
     }
   }
 

@@ -868,8 +868,17 @@ async function loadAll(){
   codes = await storageGet('codes', true) || [];
   clientes = await clientesGet();
   orcamentos = await orcamentosGet();
+  vendasParaHistorico = await vendasParaHistoricoGet();
 }
 let orcamentos = [];
+let vendasParaHistorico = [];
+async function vendasParaHistoricoGet(){
+  try{
+    const { data, error } = await supabaseClient.from('vendas_pdv').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    return (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar vendas pro histórico', e); return []; }
+}
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 async function orcamentosGet(){
   try{
@@ -3635,12 +3644,44 @@ function renderClientes(main){
     });
   }
 
+  /** Junta O.S., Vendas e Orçamentos do mesmo cliente (por telefone ou nome), mais recente primeiro. */
+  function historicoTransacoesDoCliente(cliente){
+    if(!cliente) return [];
+    const telDigits = onlyDigits(cliente.telefone||'');
+    const nomeLower = (cliente.nome||'').trim().toLowerCase();
+    const bate = (item)=>{
+      const mesmoTelefone = telDigits && onlyDigits(item.telefone||'') === telDigits;
+      const mesmoNome = nomeLower && (item.cliente||'').trim().toLowerCase() === nomeLower;
+      return mesmoTelefone || mesmoNome;
+    };
+    const doOs = orders.filter(bate).map(o=>({ tipo:'O.S.', data:o.data, valor:Number(o.valorTotal)||0, status:statusLabel(o.status), ref:o.via||o.id }));
+    const doVendas = vendasParaHistorico.filter(bate).map(v=>({ tipo:'Venda', data:v.data, valor:Number(v.valorTotal)||0, status:'—', ref:v.id }));
+    const doOrc = orcamentos.filter(bate).map(o=>{
+      const info = statusInfoDe(o.status);
+      return { tipo:'Orçamento', data:o.data, valor:Number(o.valorTotal)||0, status: info?info.nome:o.status, ref:o.id };
+    });
+    return [...doOs, ...doVendas, ...doOrc].sort((a,b)=> (b.data||'').localeCompare(a.data||''));
+  }
+
   function openClienteModal(cliente){
     const editing = !!cliente;
     const c = cliente || { nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' };
+    const historico = editing ? historicoTransacoesDoCliente(c) : [];
+    const totalGasto = historico.reduce((acc,h)=> acc + h.valor, 0);
     openModal(`
       <h3>${editing?'Editar cliente':'Novo cliente'}</h3>
       ${clienteFieldsHtml('cli', c)}
+      ${editing ? `
+        <div class="section-label" style="margin-top:18px;">Histórico de transações ${historico.length>0?`<span class="muted" style="text-transform:none; font-weight:400;">— total ${fmtMoeda(totalGasto)} em ${historico.length} registro(s)</span>`:''}</div>
+        <div style="max-height:220px; overflow-y:auto;">
+          ${historico.length===0 ? `<p class="muted">Nenhuma O.S., venda ou orçamento encontrado pra este cliente ainda.</p>` : `
+            <table>
+              <thead><tr><th>Tipo</th><th>Data</th><th>Valor</th><th>Status</th></tr></thead>
+              <tbody>${historico.map(h=>`<tr><td>${escapeHtml(h.tipo)}</td><td>${fmtDate(h.data)}</td><td>${fmtMoeda(h.valor)}</td><td>${escapeHtml(h.status)}</td></tr>`).join('')}</tbody>
+            </table>
+          `}
+        </div>
+      ` : ''}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="cliCancel">Cancelar</button>
         <button class="btn btn-accent" id="cliSave">Salvar</button>
