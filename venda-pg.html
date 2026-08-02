@@ -254,7 +254,6 @@ function novoRegistro(id, lojaId, mesAno){
     porLoja: Object.fromEntries(lojas.map(ab=>[ab,{bruto:null,devol:null}])),
     percVend: null, nivel: 1,
     itens: Object.fromEntries(CATEGORIAS.map(c=>[c.id,null])),
-    salarioBase: null, horaExtra: null,
   }));
   return {
     id, lojaId, mesAno,
@@ -264,75 +263,7 @@ function novoRegistro(id, lojaId, mesAno){
     vendedoras: vendedorasIniciais,
     fatorTabela: JSON.parse(JSON.stringify(FATOR_PADRAO)),
     conferido: null, // { por, em (timestamp), dataStr } — preenchido só pelo "Conferir" com senha da diretoria
-    metasFaixa: Object.fromEntries(FAIXAS_META.map(f=>[f,null])), // valor em R$ de venda total da loja pra atingir cada faixa
   };
-}
-
-/** Garante que registros salvos antes dessas funcionalidades (faixas de meta, salário, hora extra) não quebrem. */
-function garantirCompatibilidade(registro){
-  if(!registro.metasFaixa) registro.metasFaixa = Object.fromEntries(FAIXAS_META.map(f=>[f,null]));
-  (registro.vendedoras||[]).forEach(v=>{
-    if(v.salarioBase === undefined) v.salarioBase = null;
-    if(v.horaExtra === undefined) v.horaExtra = null;
-  });
-  return registro;
-}
-const FAIXAS_META = ['4.0','4.5','5.0','5.5','6.0','6.5','7.0'];
-/** Devolve a maior faixa atingida (string, ex "5.0") ou null se nem a mínima (4%) foi batida. */
-function faixaAtingida(registro, totalVendidoLoja){
-  let atual = null;
-  FAIXAS_META.forEach(f=>{
-    const limite = Number(registro.metasFaixa[f]);
-    if(limite > 0 && totalVendidoLoja >= limite) atual = f;
-  });
-  return atual;
-}
-/** Calcula a folha de pagamento prevista de uma vendedora, com o detalhamento item a item. */
-function calcularFolha(registro, v, lojas){
-  const vendasIndividuais = totalItensVendedora(v);
-  const totalLoja = totalVendedorasItens(registro);
-  const faixa = faixaAtingida(registro, totalLoja);
-  const elegivel = faixa !== null;
-  const percTier = elegivel ? parseFloat(faixa) / 100 : 0;
-  const salario = Number(v.salarioBase)||0;
-  const comissao = elegivel ? vendasIndividuais * 0.15 : 0;
-  const baseAssiduidade = elegivel ? vendasIndividuais * percTier : 0; // vendas dela × a faixa atingida
-  const assiduidade = baseAssiduidade * 0.05;
-  const horaExtra = Number(v.horaExtra)||0;
-  let bonus = 0, poolBonus = 0, participacao = 0;
-  if(elegivel && totalLoja > 0){
-    poolBonus = totalLoja * percTier;
-    participacao = vendasIndividuais / totalLoja;
-    bonus = poolBonus * participacao;
-  }
-  const total = salario + comissao + assiduidade + horaExtra + bonus;
-  return { vendasIndividuais, totalLoja, faixa, elegivel, salario, comissao, baseAssiduidade, assiduidade, horaExtra, bonus, poolBonus, participacao, total };
-}
-
-/** Abre um modal em formato de "folha de pagamento" com a previsão de recebimento de uma vendedora. */
-function abrirPrevisaoRecebimento(vi){
-  const v = registro.vendedoras[vi];
-  const f = calcularFolha(registro, v);
-  openModal(`
-    <h3>Previsão de recebimento — ${escapeHtml(v.nome)}</h3>
-    <p class="muted" style="margin:-4px 0 14px;">
-      ${f.elegivel
-        ? `Loja atingiu a faixa de <b>${f.faixa}%</b> (vendas totais da loja: ${fmtMoeda(f.totalLoja)}).`
-        : `A loja ainda não atingiu a faixa mínima (4%) — por isso comissão, assiduidade e bônus ficam zerados neste mês.`}
-    </p>
-    <table>
-      <tbody>
-        <tr><td class="rotulo">Salário base</td><td style="text-align:right;">${fmtMoeda(f.salario)}</td></tr>
-        <tr><td class="rotulo">Comissão <span class="muted">(15% de ${fmtMoeda(f.vendasIndividuais)} em vendas)</span></td><td style="text-align:right;">${fmtMoeda(f.comissao)}</td></tr>
-        <tr><td class="rotulo">Assiduidade <span class="muted">(5% de ${fmtMoeda(f.baseAssiduidade)})</span></td><td style="text-align:right;">${fmtMoeda(f.assiduidade)}</td></tr>
-        <tr><td class="rotulo">Hora extra</td><td style="text-align:right;">${fmtMoeda(f.horaExtra)}</td></tr>
-        <tr><td class="rotulo">Bônus <span class="muted">(${f.elegivel?f.faixa+'% de '+fmtMoeda(f.totalLoja)+' × '+(f.participacao*100).toFixed(1)+'% de participação':'—'})</span></td><td style="text-align:right;">${fmtMoeda(f.bonus)}</td></tr>
-        <tr style="font-weight:800; border-top:2px solid var(--line);"><td class="rotulo">TOTAL PREVISTO</td><td style="text-align:right;">${fmtMoeda(f.total)}</td></tr>
-      </tbody>
-    </table>
-    <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharFolha">Fechar</button></div>
-  `);
-  document.getElementById('btnFecharFolha').addEventListener('click', closeModal);
 }
 
 /* ============================================================
@@ -532,7 +463,6 @@ function renderSeletor(){
     const id = 'vpg_' + lojaId + '_' + mesAno;
     const existente = await registroGet(id);
     registro = existente || novoRegistro(id, lojaId, mesAno);
-    garantirCompatibilidade(registro);
     renderPlanilha();
   });
 }
@@ -685,15 +615,6 @@ function renderPlanilha(){
     <div class="legenda"><span class="amostra"></span> Campo preenchido pela vendedora</div>
 
     <div class="card">
-      <div class="section-label">Faixas de meta (define o % de comissão/assiduidade/bônus) ${podeDiretoria?'':'(só a diretoria edita)'}</div>
-      <p class="muted" style="margin:-4px 0 10px;">Pra cada faixa, informe o valor total de venda da LOJA necessário pra atingi-la. A faixa realmente alcançada no mês é a maior cujo valor a loja bateu — abaixo da faixa de 4%, ninguém recebe comissão, assiduidade ou bônus.</p>
-      <table style="min-width:auto;">
-        <thead><tr>${FAIXAS_META.map(f=>`<th>${f}%</th>`).join('')}</tr></thead>
-        <tbody><tr>${FAIXAS_META.map(f=>`<td><input type="number" step="0.01" data-faixa="${f}" value="${registro.metasFaixa[f]??''}" ${podeDiretoria?'':'disabled'}></td>`).join('')}</tr></tbody>
-      </table>
-    </div>
-
-    <div class="card">
       <div class="section-label">Totais e categorias declaradas ${podeDiretoria?'':'(só a diretoria edita)'}</div>
       <table style="min-width:auto;">
         <tr><td class="rotulo">Total Bruto</td><td><input type="number" step="0.01" id="pg_totalBruto" value="${registro.totalBruto??''}" ${podeDiretoria?'':'disabled'}></td>
@@ -762,9 +683,6 @@ function renderPlanilha(){
   `;
 
   document.getElementById('btnVoltarSeletor').addEventListener('click', renderSeletor);
-  document.querySelectorAll('[data-faixa]').forEach(el=>{
-    el.addEventListener('input', ()=>{ registro.metasFaixa[el.dataset.faixa] = el.value===''?null:parseFloat(el.value); });
-  });
 
   document.getElementById('btnEditarMes').addEventListener('click', ()=>{
     const wrap = document.getElementById('pg_editorMesWrap');
@@ -782,7 +700,6 @@ function renderPlanilha(){
     const novoId = 'vpg_' + registro.lojaId + '_' + novoMes;
     const existente = await registroGet(novoId);
     registro = existente || novoRegistro(novoId, registro.lojaId, novoMes);
-    garantirCompatibilidade(registro);
     renderPlanilha();
     showToast('Mês trocado para ' + novoMes + '.');
   });
@@ -846,11 +763,9 @@ function renderPlanilha(){
       <div style="border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
           <input type="text" data-vnome="${vi}" value="${escapeHtml(v.nome)}" style="font-weight:800; max-width:220px;" ${podeDiretoria?'':'disabled'}>
-          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:8px;">
             <label class="muted" style="text-transform:none;">% Vend</label><input type="number" step="0.1" data-vperc="${vi}" value="${v.percVend??''}" style="width:80px;" ${podeDiretoria?'':'disabled'}>
             <label class="muted" style="text-transform:none;">Nível</label><select data-vnivel="${vi}" style="width:70px;" ${podeDiretoria?'':'disabled'}>${FATOR_PADRAO.map((_,i)=>`<option value="${i+1}" ${v.nivel===i+1?'selected':''}>${i+1}</option>`).join('')}</select>
-            <label class="muted" style="text-transform:none;">Salário</label><input type="number" step="0.01" data-vsalario="${vi}" value="${v.salarioBase??''}" style="width:90px;" ${podeDiretoria?'':'disabled'}>
-            <label class="muted" style="text-transform:none;">H. Extra (R$)</label><input type="number" step="0.01" data-vhextra="${vi}" value="${v.horaExtra??''}" style="width:90px;" ${podeDiretoria?'':'disabled'}>
             <button type="button" class="icon-btn" data-vdel="${vi}" title="Remover linha" style="color:var(--danger);">✕</button>
           </div>
         </div>
@@ -862,16 +777,12 @@ function renderPlanilha(){
             <tr><td class="rotulo">T. Líquido</td>${lojas.map(ab=>`<td><span class="calc" id="pg_vl_${vi}_${ab}"></span></td>`).join('')}<td><span class="calc" id="pg_vl_total_${vi}"></span></td></tr>
           </tbody>
         </table>
-        <button type="button" class="btn btn-ghost btn-sm" data-vfolha="${vi}" style="margin-top:8px;">📄 Ver previsão de recebimento</button>
       </div>
     `).join('');
 
     wrap.querySelectorAll('[data-vnome]').forEach(el=> el.addEventListener('input', ()=>{ registro.vendedoras[Number(el.dataset.vnome)].nome = el.value; }));
     wrap.querySelectorAll('[data-vperc]').forEach(el=> el.addEventListener('input', ()=>{ registro.vendedoras[Number(el.dataset.vperc)].percVend = el.value===''?null:parseFloat(el.value); }));
     wrap.querySelectorAll('[data-vnivel]').forEach(el=> el.addEventListener('change', ()=>{ registro.vendedoras[Number(el.dataset.vnivel)].nivel = Number(el.value); recalcularFatorIndividual(); }));
-    wrap.querySelectorAll('[data-vsalario]').forEach(el=> el.addEventListener('input', ()=>{ registro.vendedoras[Number(el.dataset.vsalario)].salarioBase = el.value===''?null:parseFloat(el.value); }));
-    wrap.querySelectorAll('[data-vhextra]').forEach(el=> el.addEventListener('input', ()=>{ registro.vendedoras[Number(el.dataset.vhextra)].horaExtra = el.value===''?null:parseFloat(el.value); }));
-    wrap.querySelectorAll('[data-vfolha]').forEach(el=> el.addEventListener('click', ()=> abrirPrevisaoRecebimento(Number(el.dataset.vfolha)) ));
     wrap.querySelectorAll('[data-vdel]').forEach(el=> el.addEventListener('click', ()=>{
       registro.vendedoras.splice(Number(el.dataset.vdel),1);
       drawVendedorasBlocos(); recalcularItens();
