@@ -114,6 +114,10 @@
     margin-bottom:24px;box-shadow:0 20px 50px -24px rgba(0,0,0,0.5);
   }
   .section-label{font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--gold-ink);margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--line);}
+  .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;}
+  .badge-ok{background:var(--ok-soft,#E3F5EA);color:var(--ok,#1E7A46);}
+  .badge-wait{background:var(--gold-soft);color:var(--gold-ink);}
+  .badge-loja{background:var(--surface-2,#F7E9DA);color:var(--ink-soft);}
   .muted{color:var(--muted);font-size:13px;}
   .empty{color:var(--ink-faint);font-size:13px;padding:10px 0;}
   .field{margin-bottom:10px;}
@@ -275,7 +279,7 @@
       <div id="shellEmptyState" class="empty" style="display:none; padding:60px 20px;">Seu acesso não tem nenhum módulo liberado. Fale com a diretoria.</div>
       <div id="configPanelShell" style="display:none;">
         <div class="cfg-head">
-          <h1>Configurações</h1>
+          <h1>Cadastro</h1>
           <p>Esses cadastros são únicos e compartilhados: qualquer alteração aqui vale imediatamente para os demais módulos.</p>
         </div>
         <div class="cfg-tabs" id="cfgTabs"></div>
@@ -346,6 +350,20 @@ async function gatewayCall(body){
 }
 async function gatewayLogin(senhaTentativa){
   return gatewayCall({ op:'login', senha: senhaTentativa });
+}
+const FUNCIONARIO_ACESSO_URL = SUPABASE_URL + "/functions/v1/funcionario-acesso";
+async function chamarFuncionarioAcesso(body){
+  try{
+    const res = await fetch(FUNCIONARIO_ACESSO_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  }catch(e){
+    console.error('erro ao falar com o servidor (acesso)', e);
+    return { error: 'Não foi possível conectar. Verifique sua internet.' };
+  }
 }
 /** Shim com a mesma "forma" do cliente Supabase antigo, pra não precisar reescrever
  * cada chamada existente — só troca o que acontece por baixo dos panos. */
@@ -518,7 +536,7 @@ const SIDEBAR_MODULES = [
   { id:'conciliacao', label:'Conciliação de Cartão', icon:'🔄', src:'conciliacao.html' },
   { id:'dp', label:'Departamento Pessoal', icon:'🧑‍💼', src:'dp.html' },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
-  { id:'config', label:'Configurações', icon:'⚙️', src:null },
+  { id:'config', label:'Cadastro', icon:'⚙️', src:null },
 ];
 
 document.getElementById('btnLogin').addEventListener('click', doLogin);
@@ -814,7 +832,7 @@ function renderFuncionariosTab(main){
   main.innerHTML = `
     <div class="card">
       <div class="section-label">Funcionários</div>
-      <p class="muted" style="margin:-4px 0 14px;">Um funcionário pode ter mais de uma função (ex: vendedora em uma loja e diretora ao mesmo tempo). Essas funções aparecem nos campos de seleção de cada módulo.</p>
+      <p class="muted" style="margin:-4px 0 14px;">Cadastro único por funcionário: função (usada nos módulos), dados pessoais, profissionais e bancários — tudo numa aba só. Clique em ✎ pra abrir o cadastro completo.</p>
       <div id="funcRows"></div>
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
         <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
@@ -834,9 +852,15 @@ function renderFuncionariosTab(main){
     wrap.innerHTML = config.funcionarios.map((f,i)=>`
       <div class="code-list-item">
         <div><b>${escapeHtml(f.nome)}</b> ${(f.cargos||[]).map(c=>`<span class="chip" style="margin-left:6px;">${cargoLabel(c)}</span>`).join('')}</div>
-        <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-editfunc="${i}" title="Cadastro completo (RH)">✎</button>
+          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
+        </div>
       </div>
     `).join('');
+    wrap.querySelectorAll('[data-editfunc]').forEach(b=>{
+      b.addEventListener('click', ()=> abrirFuncionarioCompletoModal(config.funcionarios[Number(b.dataset.editfunc)]) );
+    });
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         config.funcionarios.splice(Number(b.dataset.del),1);
@@ -861,6 +885,200 @@ function renderFuncionariosTab(main){
   });
 }
 
+const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','Acesso'];
+/**
+ * Cadastro completo e unificado de um funcionário: a função/cargo (usada em todo o
+ * app pros módulos de venda/O.S./Venda PG) fica na mesma tela que os dados de RH
+ * (pessoais/profissionais/bancários, que também aparecem no Departamento Pessoal).
+ * Ligação entre as duas tabelas é por "funcionarioId" — criada automaticamente na
+ * primeira vez que alguém salva dados de RH pra esse funcionário.
+ */
+async function abrirFuncionarioCompletoModal(funcionario){
+  const todosPerfis = await dpFuncionariosGetTodos();
+  let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
+  const d = {
+    nome: funcionario.nome, cargos: [...(funcionario.cargos||[])],
+    cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
+    telefone: perfil?perfil.telefone:'', email: perfil?perfil.email:'', endereco: perfil?perfil.endereco:'', numero: perfil?perfil.numero:'',
+    complemento: perfil?perfil.complemento:'', bairro: perfil?perfil.bairro:'', cidade: perfil?perfil.cidade:'', estado: perfil?perfil.estado:'', cep: perfil?perfil.cep:'',
+    contatoEmergenciaNome: perfil?perfil.contatoEmergenciaNome:'', contatoEmergenciaTelefone: perfil?perfil.contatoEmergenciaTelefone:'',
+    loja: perfil?perfil.loja:'', dataAdmissao: perfil?perfil.dataAdmissao:'', tipoContrato: perfil?(perfil.tipoContrato||'CLT'):'CLT',
+    salario: perfil&&perfil.salario!==undefined?perfil.salario:null, ctpsNumero: perfil?perfil.ctpsNumero:'', ctpsSerie: perfil?perfil.ctpsSerie:'', pis: perfil?perfil.pis:'',
+    status: perfil?(perfil.status||'ativo'):'ativo', dataDesligamento: perfil?perfil.dataDesligamento:'',
+    banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
+  };
+  let abaAtiva = 'Básico';
+  openModal(`
+    <div class="section-label">Cadastro completo — ${escapeHtml(funcionario.nome)}</div>
+    <div class="mini-tabs" id="fcAbas" style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${ABAS_FUNC_COMPLETO.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fctab="${a}">${a}</button>`).join('')}</div>
+    <div id="fcAbaBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-accent" id="btnSalvarFuncCompleto">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarFuncCompleto">Cancelar</button>
+    </div>
+  `);
+  function renderAbas(){
+    document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=>{
+      b.classList.toggle('btn-accent', b.dataset.fctab===abaAtiva);
+      b.classList.toggle('btn-ghost', b.dataset.fctab!==abaAtiva);
+    });
+  }
+  document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=> b.addEventListener('click', ()=>{ abaAtiva=b.dataset.fctab; renderCorpo(); renderAbas(); }));
+
+  function renderCorpo(){
+    const body = document.getElementById('fcAbaBody');
+    if(abaAtiva==='Básico'){
+      body.innerHTML = `
+        <div class="field"><label>Nome completo</label><input id="fc_nome" value="${escapeHtml(d.nome)}"></div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função (usada nos módulos de venda, O.S., Venda PG...)</div>
+        <div class="cargo-checks">
+          <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''}> Vendedora</label>
+          <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''}> Oficina</label>
+          <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''}> Diretor(a)</label>
+        </div>
+        <p class="muted" style="margin-top:10px;">O que você preencher nas abas Pessoais/Profissionais/Bancários também fica disponível no módulo Departamento Pessoal.</p>
+      `;
+      document.getElementById('fc_nome').addEventListener('input', e=> d.nome = e.target.value);
+      document.querySelectorAll('.fc_cargo').forEach(el=>{
+        el.addEventListener('change', ()=>{
+          d.cargos = Array.from(document.querySelectorAll('.fc_cargo:checked')).map(c=>c.value);
+        });
+      });
+    } else if(abaAtiva==='Pessoais'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>CPF</label><input id="fc_cpf" value="${escapeHtml(d.cpf)}"></div>
+          <div class="field"><label>RG</label><input id="fc_rg" value="${escapeHtml(d.rg)}"></div>
+          <div class="field"><label>Data de nascimento</label><input type="date" id="fc_dataNascimento" value="${d.dataNascimento||''}"></div>
+          <div class="field"><label>Estado civil</label><input id="fc_estadoCivil" value="${escapeHtml(d.estadoCivil)}"></div>
+          <div class="field"><label>Telefone</label><input id="fc_telefone" value="${escapeHtml(d.telefone)}"></div>
+          <div class="field"><label>E-mail</label><input type="email" id="fc_email" value="${escapeHtml(d.email)}"></div>
+          <div class="field"><label>CEP</label><input id="fc_cep" value="${escapeHtml(d.cep)}"></div>
+        </div>
+        <div class="grid-3">
+          <div class="field"><label>Endereço</label><input id="fc_endereco" value="${escapeHtml(d.endereco)}"></div>
+          <div class="field"><label>Número</label><input id="fc_numero" value="${escapeHtml(d.numero)}"></div>
+          <div class="field"><label>Complemento</label><input id="fc_complemento" value="${escapeHtml(d.complemento)}"></div>
+        </div>
+        <div class="grid-3">
+          <div class="field"><label>Bairro</label><input id="fc_bairro" value="${escapeHtml(d.bairro)}"></div>
+          <div class="field"><label>Cidade</label><input id="fc_cidade" value="${escapeHtml(d.cidade)}"></div>
+          <div class="field"><label>Estado</label><input id="fc_estado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml(d.estado)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Contato de emergência</label><input id="fc_contatoEmergenciaNome" value="${escapeHtml(d.contatoEmergenciaNome)}"></div>
+          <div class="field"><label>Telefone do contato</label><input id="fc_contatoEmergenciaTelefone" value="${escapeHtml(d.contatoEmergenciaTelefone)}"></div>
+        </div>
+      `;
+      ligarCampos(body);
+    } else if(abaAtiva==='Profissionais'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>Loja</label><select id="fc_loja"><option value="">—</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.nome)}" ${d.loja===l.nome?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+          <div class="field"><label>Data de admissão</label><input type="date" id="fc_dataAdmissao" value="${d.dataAdmissao||''}"></div>
+          <div class="field"><label>Tipo de contrato</label><select id="fc_tipoContrato">${['CLT','Estágio','PJ','Autônomo'].map(t=>`<option value="${t}" ${d.tipoContrato===t?'selected':''}>${t}</option>`).join('')}</select></div>
+          <div class="field"><label>Salário (R$)</label><input type="number" step="0.01" id="fc_salario" value="${d.salario!==null?d.salario:''}"></div>
+          <div class="field"><label>PIS/PASEP</label><input id="fc_pis" value="${escapeHtml(d.pis)}"></div>
+          <div class="field"><label>CTPS — número</label><input id="fc_ctpsNumero" value="${escapeHtml(d.ctpsNumero)}"></div>
+          <div class="field"><label>CTPS — série</label><input id="fc_ctpsSerie" value="${escapeHtml(d.ctpsSerie)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Status</label><select id="fc_status"><option value="ativo" ${d.status==='ativo'?'selected':''}>Ativo</option><option value="desligado" ${d.status==='desligado'?'selected':''}>Desligado</option></select></div>
+          <div class="field"><label>Data de desligamento <span class="muted">(se houver)</span></label><input type="date" id="fc_dataDesligamento" value="${d.dataDesligamento||''}"></div>
+        </div>
+      `;
+      ligarCampos(body);
+    } else if(abaAtiva==='Bancários'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>Banco</label><input id="fc_banco" value="${escapeHtml(d.banco)}"></div>
+          <div class="field"><label>Tipo de conta</label><select id="fc_tipoConta"><option value="corrente" ${d.tipoConta==='corrente'?'selected':''}>Corrente</option><option value="poupanca" ${d.tipoConta==='poupanca'?'selected':''}>Poupança</option></select></div>
+          <div class="field"><label>Agência</label><input id="fc_agencia" value="${escapeHtml(d.agencia)}"></div>
+          <div class="field"><label>Conta</label><input id="fc_conta" value="${escapeHtml(d.conta)}"></div>
+        </div>
+      `;
+      ligarCampos(body);
+    } else if(abaAtiva==='Acesso'){
+      const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
+      const nivelAtual = cargoLabelPrincipal(d.cargos) || 'Nenhuma função selecionada';
+      const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
+      const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
+      const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      body.innerHTML = `
+        <div class="field"><label>Nível de acesso <span class="muted">(definido pela função, o funcionário só visualiza — não pode mudar)</span></label><input value="${nivelAtual}" disabled></div>
+        <div class="field"><label>E-mail (recebe o link pra definir a senha)</label><input type="email" id="fc_emailAcesso" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
+        <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
+        ${status==='ativo' ? `<p class="muted">Senha atual (visível só pra diretoria): <b style="color:var(--ink); letter-spacing:1px;">${escapeHtml(usuarioLigado.senha||'')}</b></p>` : ''}
+        <button type="button" class="btn btn-accent btn-sm" id="btnEnviarConvite">${status==='sem_acesso' ? '📧 Enviar convite de acesso' : '📧 Reenviar convite (gera nova senha)'}</button>
+        <p class="muted" style="margin-top:10px;">O funcionário recebe um e-mail com um link pra escolher a própria senha. O nível de acesso é sempre o mesmo da função cadastrada na aba Básico.</p>
+      `;
+      document.getElementById('fc_emailAcesso').addEventListener('input', e=>{ d.emailAcesso = e.target.value; });
+      document.getElementById('btnEnviarConvite').addEventListener('click', async ()=>{
+        const email = document.getElementById('fc_emailAcesso').value.trim();
+        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
+        const btn = document.getElementById('btnEnviarConvite');
+        btn.disabled = true; btn.textContent = 'Enviando...';
+        const r = await chamarFuncionarioAcesso({ op:'enviarConvite', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
+        btn.disabled = false;
+        if(r && r.ok){
+          showToast('Convite enviado! O funcionário vai receber um e-mail pra definir a senha.');
+          const configAtualizada = await configGet();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível enviar o convite.');
+          renderCorpo();
+        }
+      });
+    }
+  }
+  function ligarCampos(body){
+    body.querySelectorAll('input, select').forEach(el=>{
+      const campo = el.id.replace('fc_','');
+      const handler = ()=>{ d[campo] = el.value; };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
+    });
+  }
+  renderCorpo(); renderAbas();
+
+  document.getElementById('btnCancelarFuncCompleto').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarFuncCompleto').addEventListener('click', async ()=>{
+    if(!d.nome || !d.nome.trim()){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Informe o nome.'); return; }
+    if(d.cargos.length===0){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Selecione ao menos uma função.'); return; }
+    // 1) Atualiza o básico (config.funcionarios) — usado em todo o app
+    funcionario.nome = d.nome.trim();
+    funcionario.cargos = d.cargos;
+    const okConfig = await configSave();
+    // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId
+    const perfilFinal = {
+      id: perfil ? perfil.id : uid('func'),
+      funcionarioId: funcionario.id,
+      nome: d.nome.trim(), cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
+      telefone:d.telefone, email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
+      bairro:d.bairro, cidade:d.cidade, estado:d.estado, cep:d.cep,
+      contatoEmergenciaNome:d.contatoEmergenciaNome, contatoEmergenciaTelefone:d.contatoEmergenciaTelefone,
+      cargo: cargoLabelPrincipal(d.cargos), loja:d.loja, dataAdmissao:d.dataAdmissao, tipoContrato:d.tipoContrato,
+      salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), ctpsNumero:d.ctpsNumero, ctpsSerie:d.ctpsSerie, pis:d.pis,
+      status:d.status, dataDesligamento:d.dataDesligamento,
+      banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta,
+      criadoEm: perfil ? perfil.criadoEm : Date.now(),
+    };
+    const okPerfil = await dpFuncionarioSalvar(perfilFinal);
+    if(okConfig && okPerfil){
+      closeModal();
+      renderFuncionariosTab(document.getElementById('cfgBody'));
+      showToast('Cadastro do funcionário atualizado.');
+    }
+  });
+}
+function cargoLabelPrincipal(cargos){
+  if(cargos.includes('diretor')) return 'Diretor(a)';
+  if(cargos.includes('vendedora')) return 'Vendedora';
+  if(cargos.includes('oficina')) return 'Oficina';
+  return '';
+}
+
 /* ---------- PRODUTOS (ÓTICA: categorias/subcategorias/fator) ---------- */
 function renderProdutosTab(main){
   const cats = config.produtosOtica.categorias;
@@ -868,7 +1086,7 @@ function renderProdutosTab(main){
   main.innerHTML = `
     <div class="card">
       <div class="section-label">Categorias</div>
-      <p class="muted" style="margin:-4px 0 14px;">Só o nome e uma descrição. O cruzamento com subcategoria (e o Fator, se houver) é feito no cadastro do produto, em Configurações → Produtos & Estoque.</p>
+      <p class="muted" style="margin:-4px 0 14px;">Só o nome e uma descrição. O cruzamento com subcategoria (e o Fator, se houver) é feito no cadastro do produto, em Cadastro → Produtos & Estoque.</p>
       <div id="catRows"></div>
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
         <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><input id="cat_nome" placeholder="Nome da categoria"></div>
@@ -1004,6 +1222,25 @@ async function produtosEstoqueGet(){
   }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
 }
 let vendasParaHistoricoProduto = null; // carregado sob demanda, só quando alguém abre o histórico de um produto
+let dpFuncionariosCache = null; // carregado sob demanda, só quando alguém abre o cadastro completo de um funcionário
+async function dpFuncionariosGetTodos(){
+  if(dpFuncionariosCache !== null) return dpFuncionariosCache;
+  try{
+    const { data, error } = await supabaseClient.from('dp_funcionarios').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    dpFuncionariosCache = (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar perfis do Departamento Pessoal', e); dpFuncionariosCache = []; }
+  return dpFuncionariosCache;
+}
+async function dpFuncionarioSalvar(perfil){
+  try{
+    const { error } = await supabaseClient.from('dp_funcionarios').upsert({ id: perfil.id, payload: perfil });
+    if(error) throw error;
+    const idx = dpFuncionariosCache ? dpFuncionariosCache.findIndex(p=>p.id===perfil.id) : -1;
+    if(idx>=0) dpFuncionariosCache[idx] = perfil; else if(dpFuncionariosCache) dpFuncionariosCache.push(perfil);
+    return true;
+  }catch(e){ console.error('erro ao salvar perfil do Departamento Pessoal', e); showToast('Não foi possível salvar os dados de RH.'); return false; }
+}
 async function vendasParaHistoricoProdutoGet(){
   if(vendasParaHistoricoProduto !== null) return vendasParaHistoricoProduto;
   try{
@@ -1756,7 +1993,7 @@ const MODULOS_APP = {
   ]},
   dp: { nome:'Departamento Pessoal', abas:[] },
   dashboard: { nome:'Dashboard', abas:[] },
-  config: { nome:'Configurações', abas:[
+  config: { nome:'Cadastro', abas:[
     { id:'lojas', label:'Lojas' },
     { id:'funcionarios', label:'Funcionários' },
     { id:'produtos', label:'Categoria' },
