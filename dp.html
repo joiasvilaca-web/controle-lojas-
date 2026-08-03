@@ -42,6 +42,8 @@ a{color:inherit;}
 .who{display:flex; align-items:center; gap:10px; font-size:13px;}
 .level-pill{background:rgba(255,255,255,0.12); padding:4px 10px; border-radius:999px; font-size:11.5px; font-weight:700;}
 .icon-btn{background:none; border:none; color:inherit; font-size:16px; cursor:pointer; padding:5px 7px; border-radius:7px; text-decoration:none;}
+.icon-btn-wa{ background:#25D366; color:#fff; }
+.icon-btn-wa:hover{ background:#1DA851; }
 .icon-btn:hover{background:rgba(255,255,255,0.1);}
 .icon-btn-sair{ background:rgba(179,38,30,0.18) !important; color:#ffb3ac !important; }
 .icon-btn-sair:hover{ background:rgba(179,38,30,0.32) !important; }
@@ -637,7 +639,7 @@ function renderRegistros(main, tipo){
     </div>
     <div class="card" style="padding:14px 18px;">
       <table>
-        <thead><tr><th>Funcionário</th>${meta.colunas.map(c=>`<th>${meta.campos.find(x=>x.id===c)?meta.campos.find(x=>x.id===c).label:(c==='valorLiquido'?'Valor líquido':c==='totalItens'?'Total Itens':c)}</th>`).join('')}<th></th></tr></thead>
+        <thead><tr><th>Funcionário</th>${meta.colunas.map(c=>`<th>${meta.campos.find(x=>x.id===c)?meta.campos.find(x=>x.id===c).label:(c==='valorLiquido'?'Valor líquido':c==='totalItens'?'Total Itens':c)}</th>`).join('')}${tipo==='aviso'?'<th>Status</th>':''}<th></th></tr></thead>
         <tbody id="tbodyReg"></tbody>
       </table>
     </div>
@@ -658,23 +660,38 @@ function renderRegistros(main, tipo){
     if(campo && campo.tipo==='number') return val!==undefined && val!==null && val!=='' ? val : '—';
     return escapeHtml(val||'—');
   }
+  function statusAdvertencia(r){
+    if(r.confirmadoEm) return { texto:'Ciente', classe:'badge-ok' };
+    if(r.notificadoEm) return { texto:'Notificado', classe:'badge-wait' };
+    return { texto:'Pendente', classe:'badge-loja' };
+  }
   function draw(){
     const lista = registros.filter(r=>r.tipo===tipo);
     const filtroFunc = document.getElementById('fFunc').value;
     const filtrada = lista.filter(r=> !filtroFunc || r.funcionarioId===filtroFunc).slice().reverse();
     const tbody = document.getElementById('tbodyReg');
     if(filtrada.length===0){ tbody.innerHTML = `<tr><td colspan="${meta.colunas.length+2}" class="empty">Nenhum registro ainda.</td></tr>`; return; }
-    tbody.innerHTML = filtrada.map(r=>`
+    tbody.innerHTML = filtrada.map(r=>{
+      const st = tipo==='aviso' ? statusAdvertencia(r) : null;
+      return `
       <tr>
         <td><b>${escapeHtml(nomeFuncionario(r.funcionarioId))}</b></td>
         ${meta.colunas.map(c=>`<td>${valorFmt(r,c)}</td>`).join('')}
+        ${tipo==='aviso' ? `<td><span class="badge ${st.classe}">${st.texto}</span></td>` : ''}
         <td>
           <button class="icon-btn" data-verreg="${r.id}" title="Ver/editar">✎</button>
+          ${tipo==='aviso' ? `
+            <button class="icon-btn icon-btn-wa" data-notwa="${r.id}" title="Notificar por WhatsApp">💬</button>
+            <button class="icon-btn" data-notemail="${r.id}" title="Notificar por e-mail">✉️</button>
+          ` : ''}
           <button class="icon-btn" data-delreg="${r.id}" title="Excluir" style="color:var(--danger);">✕</button>
         </td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
     tbody.querySelectorAll('[data-verreg]').forEach(b=> b.addEventListener('click', ()=> abrirRegistroModal(tipo, registros.find(r=>r.id===b.dataset.verreg), draw) ));
+    tbody.querySelectorAll('[data-notwa]').forEach(b=> b.addEventListener('click', ()=> notificarPorWhatsapp(registros.find(r=>r.id===b.dataset.notwa), draw) ));
+    tbody.querySelectorAll('[data-notemail]').forEach(b=> b.addEventListener('click', ()=> notificarPorEmail(registros.find(r=>r.id===b.dataset.notemail), draw, b) ));
     tbody.querySelectorAll('[data-delreg]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         await registroExcluir(b.dataset.delreg);
@@ -687,6 +704,47 @@ function renderRegistros(main, tipo){
   draw();
   document.getElementById('fFunc').addEventListener('change', draw);
   document.getElementById('btnNovoRegistro').addEventListener('click', ()=> abrirRegistroModal(tipo, null, draw));
+}
+
+/** O telefone usado pra notificar é sempre o celular particular — nunca o fixo ou o da loja. */
+function onlyDigitsDp(s){ return (s||'').replace(/\D/g,''); }
+async function marcarNotificado(registro){
+  if(!registro.notificadoEm){
+    registro.notificadoEm = new Date().toISOString();
+    await registroSalvar(registro);
+  }
+}
+function notificarPorWhatsapp(registro, redesenhar){
+  const funcionario = funcionarios.find(f=>f.id===registro.funcionarioId);
+  const tel = onlyDigitsDp(funcionario && funcionario.celularParticular);
+  if(!tel){ showToast('Esse funcionário não tem celular particular cadastrado (Cadastro → Funcionários).'); return; }
+  const linkConfirmacao = window.location.origin + '/advertencia.html?id=' + registro.id;
+  const msg = `Olá, ${funcionario.nome}! Você recebeu uma notificação de advertência. Por favor, confirme o recebimento no link: ${linkConfirmacao}`;
+  window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+  marcarNotificado(registro).then(redesenhar);
+}
+async function notificarPorEmail(registro, redesenhar, botao){
+  const funcionario = funcionarios.find(f=>f.id===registro.funcionarioId);
+  const email = funcionario && funcionario.email;
+  if(!email){ showToast('Esse funcionário não tem e-mail cadastrado.'); return; }
+  if(botao){ botao.disabled = true; }
+  const linkConfirmacao = window.location.origin + '/advertencia.html?id=' + registro.id;
+  try{
+    const res = await fetch(SUPABASE_URL + '/functions/v1/send-email-gmail', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({
+        to: email, subject: 'Notificação de Advertência — Vilaça Joias',
+        body: `Olá, ${funcionario.nome}!\n\nVocê recebeu uma notificação de advertência. Por favor, acesse o link abaixo pra confirmar o recebimento:\n${linkConfirmacao}\n\nAtenciosamente,\nVilaça Joias`,
+      }),
+    });
+    const data = await res.json();
+    if(!res.ok || data.error) throw new Error(data.error || 'falha');
+    showToast('E-mail enviado.');
+    await marcarNotificado(registro);
+    redesenhar();
+  }catch(e){ showToast('Não foi possível enviar o e-mail.'); }
+  if(botao){ botao.disabled = false; }
 }
 
 function abrirRegistroModal(tipo, r, onSalvo){
@@ -706,12 +764,13 @@ function abrirRegistroModal(tipo, r, onSalvo){
       return `<div class="field"><label>${c.label}</label><input id="rg_${c.id}" value="${escapeHtml(val)}"></div>`;
     }).join('')}
     ${tipo==='aviso' && editando ? `
-      <div class="section-label" style="margin-top:16px;">Notificar o funcionário</div>
-      <p class="muted" style="margin:-4px 0 10px;">${r.confirmadoEm ? `✓ Confirmado em ${new Date(r.confirmadoEm).toLocaleString('pt-BR')}` : 'Ainda não confirmou o recebimento.'}</p>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button type="button" class="btn btn-ghost btn-sm" id="btnNotificarWa">💬 Notificar por WhatsApp</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnNotificarEmail">✉️ Notificar por e-mail</button>
-      </div>
+      <div class="section-label" style="margin-top:16px;">Status da notificação</div>
+      <p class="muted" style="margin:-4px 0 10px;">
+        ${r.confirmadoEm ? `<span class="badge badge-ok">Ciente</span> — confirmado em ${new Date(r.confirmadoEm).toLocaleString('pt-BR')}`
+          : r.notificadoEm ? `<span class="badge badge-wait">Notificado</span> — em ${new Date(r.notificadoEm).toLocaleString('pt-BR')}, aguardando confirmação`
+          : `<span class="badge badge-loja">Pendente</span> — ainda não foi notificado`}
+      </p>
+      <p class="muted" style="margin-top:-4px;">Pra notificar, use os botões 💬/✉️ na lista de advertências.</p>
     ` : ''}
     <div class="modal-actions">
       <button class="btn btn-accent" id="btnSalvarReg">Salvar</button>
@@ -719,36 +778,6 @@ function abrirRegistroModal(tipo, r, onSalvo){
     </div>
   `);
   document.getElementById('btnCancelarReg').addEventListener('click', closeModal);
-  if(tipo==='aviso' && editando){
-    const linkConfirmacao = window.location.origin + '/advertencia.html?id=' + r.id;
-    const btnWa = document.getElementById('btnNotificarWa');
-    if(btnWa) btnWa.addEventListener('click', ()=>{
-      const tel = onlyDigitsDp((funcionarioAtual&&funcionarioAtual.telefone)||'');
-      if(!tel){ showToast('Esse funcionário não tem telefone cadastrado.'); return; }
-      const msg = `Olá, ${funcionarioAtual?funcionarioAtual.nome:''}! Você recebeu uma notificação de advertência. Por favor, confirme o recebimento no link: ${linkConfirmacao}`;
-      window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
-    });
-    const btnEmail = document.getElementById('btnNotificarEmail');
-    if(btnEmail) btnEmail.addEventListener('click', async ()=>{
-      const email = funcionarioAtual && funcionarioAtual.email;
-      if(!email){ showToast('Esse funcionário não tem e-mail cadastrado.'); return; }
-      btnEmail.disabled = true; btnEmail.textContent = 'Enviando...';
-      try{
-        const res = await fetch(SUPABASE_URL + '/functions/v1/send-email-gmail', {
-          method: 'POST',
-          headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
-          body: JSON.stringify({
-            to: email, subject: 'Notificação de Advertência — Vilaça Joias',
-            body: `Olá, ${funcionarioAtual.nome}!\n\nVocê recebeu uma notificação de advertência. Por favor, acesse o link abaixo pra confirmar o recebimento:\n${linkConfirmacao}\n\nAtenciosamente,\nVilaça Joias`,
-          }),
-        });
-        const data = await res.json();
-        if(!res.ok || data.error) throw new Error(data.error || 'falha');
-        showToast('E-mail enviado.');
-      }catch(e){ showToast('Não foi possível enviar o e-mail.'); }
-      btnEmail.disabled = false; btnEmail.textContent = '✉️ Notificar por e-mail';
-    });
-  }
   document.getElementById('btnSalvarReg').addEventListener('click', async ()=>{
     const funcionarioId = document.getElementById('rg_funcionarioId').value;
     if(!funcionarioId){ showToast('Selecione o funcionário.'); return; }
@@ -757,6 +786,7 @@ function abrirRegistroModal(tipo, r, onSalvo){
     if(tipo==='aviso'){
       dados.nomeFuncionarioSnapshot = funcSelecionado?funcSelecionado.nome:'';
       dados.confirmadoEm = r?r.confirmadoEm:null;
+      dados.notificadoEm = r?r.notificadoEm:null;
     }
     meta.campos.forEach(c=>{
       const el = document.getElementById('rg_'+c.id);
@@ -772,7 +802,6 @@ function abrirRegistroModal(tipo, r, onSalvo){
     }
   });
 }
-function onlyDigitsDp(s){ return (s||'').replace(/\D/g,''); }
 
 (async function init(){
   if(EMBEDDED){
