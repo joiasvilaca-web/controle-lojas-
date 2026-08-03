@@ -897,7 +897,7 @@ async function abrirFuncionarioCompletoModal(funcionario){
   const todosPerfis = await dpFuncionariosGetTodos();
   let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
   const d = {
-    nome: funcionario.nome, cargos: [...(funcionario.cargos||[])],
+    nome: funcionario.nome, cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
     cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
     telefoneFixo: perfil?perfil.telefoneFixo:'', celularParticular: perfil?perfil.celularParticular:'', celularLoja: perfil?perfil.celularLoja:'',
     temFilhos: perfil?(perfil.temFilhos||'nao'):'nao', filhos: perfil&&Array.isArray(perfil.filhos)?perfil.filhos.map(f=>({...f})):[],
@@ -940,13 +940,54 @@ async function abrirFuncionarioCompletoModal(funcionario){
           <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''}> Diretor(a)</label>
         </div>
         <p class="muted" style="margin-top:10px;">O que você preencher nas abas Pessoais/Profissionais/Bancários também fica disponível no módulo Departamento Pessoal.</p>
+        <div id="fc_fotoArea"></div>
       `;
+      montarFotoFuncionario();
       document.getElementById('fc_nome').addEventListener('input', e=> d.nome = e.target.value);
       document.querySelectorAll('.fc_cargo').forEach(el=>{
         el.addEventListener('change', ()=>{
           d.cargos = Array.from(document.querySelectorAll('.fc_cargo:checked')).map(c=>c.value);
         });
       });
+      function montarFotoFuncionario(){
+        const area = document.getElementById('fc_fotoArea');
+        area.innerHTML = `
+          <div class="section-label" style="margin-top:14px;">Foto do funcionário</div>
+          <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+            ${d.foto ? `<img src="${escapeHtml(d.foto)}" style="width:84px; height:84px; border-radius:50%; object-fit:cover; border:1px solid var(--line);">` : `<div style="width:84px; height:84px; border-radius:50%; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--ink-faint); font-size:11px; text-align:center;">Sem foto</div>`}
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <input type="file" accept="image/*" id="fc_inputAnexarFoto" style="display:none;">
+              <input type="file" accept="image/*" capture="user" id="fc_inputTirarFoto" style="display:none;">
+              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnAnexarFoto">📎 Anexar foto</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnTirarFoto">📷 Tirar foto</button>
+              ${d.foto ? `<button type="button" class="btn btn-ghost btn-sm" id="fc_btnRemoverFoto" style="color:var(--danger);">Remover</button>` : ''}
+            </div>
+          </div>
+          <div class="muted" id="fc_fotoStatus" style="margin-top:6px;"></div>
+        `;
+        document.getElementById('fc_btnAnexarFoto').addEventListener('click', ()=> document.getElementById('fc_inputAnexarFoto').click());
+        document.getElementById('fc_btnTirarFoto').addEventListener('click', ()=> document.getElementById('fc_inputTirarFoto').click());
+        document.getElementById('fc_inputAnexarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
+        document.getElementById('fc_inputTirarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
+        const btnRemover = document.getElementById('fc_btnRemoverFoto');
+        if(btnRemover) btnRemover.addEventListener('click', ()=>{ d.foto = ''; montarFotoFuncionario(); });
+      }
+      async function processarFotoFuncionario(file){
+        if(!file) return;
+        const status = document.getElementById('fc_fotoStatus');
+        status.textContent = 'Enviando foto...';
+        try{
+          const dataUrl = await readFileAsDataUrl(file);
+          const nomeArquivo = 'funcionario_' + (funcionario.id||'novo') + '_' + Date.now() + '.jpg';
+          const resultado = await uploadFotoParaDrive(dataUrl, nomeArquivo, 'funcionarios', false);
+          d.foto = resultado.url;
+          status.textContent = '';
+          montarFotoFuncionario();
+        }catch(e){
+          console.error('erro ao enviar foto do funcionário', e);
+          status.textContent = 'Não foi possível enviar a foto. Tente novamente.';
+        }
+      }
     } else if(abaAtiva==='Pessoais'){
       body.innerHTML = `
         <div class="grid-2">
@@ -1130,7 +1171,7 @@ async function abrirFuncionarioCompletoModal(funcionario){
     const perfilFinal = {
       id: perfil ? perfil.id : uid('func'),
       funcionarioId: funcionario.id,
-      nome: d.nome.trim(), cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
+      nome: d.nome.trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
       telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
       temFilhos:d.temFilhos, filhos: d.temFilhos==='sim' ? d.filhos : [],
       email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,

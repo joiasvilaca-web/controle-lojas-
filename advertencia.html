@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Advertência · Vilaça Joias</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#FBEEDF; --surface:#FFFFFF;
+  --ink:#2B0F1F; --ink-soft:#4A1830; --ink-faint:#8A6A78; --muted:#7A5A68; --line:#EBD9C6;
+  --gold:#662344; --gold-ink:#4A1830; --gold-soft:#FDD49E;
+  --danger:#B3261E; --danger-soft:#FBE7E5; --ok:#1E7A46; --ok-soft:#E3F5EA;
+}
+*{box-sizing:border-box;}
+body{margin:0; font-family:'Inter',system-ui,-apple-system,sans-serif; background:var(--bg); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; color:var(--ink);}
+.card{background:var(--surface); border-radius:18px; padding:32px 28px; max-width:460px; width:100%; box-shadow:0 20px 50px -20px rgba(43,15,31,0.25);}
+.tag{font-size:11.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--gold-ink); margin-bottom:6px;}
+h1{font-family:'Cormorant Garamond',serif; font-size:24px; font-weight:700; margin:0 0 14px;}
+.info{background:#F7E9DA; border-radius:10px; padding:14px 16px; margin-bottom:16px; font-size:13.5px; line-height:1.6;}
+.info b{display:block; margin-bottom:2px;}
+.texto-formal{font-size:13.5px; line-height:1.7; color:var(--ink-soft); margin-bottom:20px;}
+.btn{border:none; border-radius:9px; padding:12px 18px; font-size:14px; font-weight:700; width:100%; cursor:pointer; background:var(--gold); color:#fff;}
+.btn:disabled{opacity:0.55; cursor:default;}
+.confirmado{background:var(--ok-soft); color:var(--ok); padding:12px 16px; border-radius:10px; font-size:14px; font-weight:700; text-align:center;}
+.erro{background:var(--danger-soft); color:var(--danger); padding:12px 16px; border-radius:10px; font-size:13.5px; margin-bottom:14px;}
+.loading{color:var(--muted); font-size:13.5px;}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="tag">Vilaça Joias</div>
+  <h1 id="titulo">Carregando...</h1>
+  <div id="conteudo"><p class="loading">Só um instante...</p></div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+
+const params = new URLSearchParams(window.location.search);
+const id = params.get('id');
+
+async function buscarRegistro(id){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/dp_registros?id=eq.${encodeURIComponent(id)}&select=id,payload`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer '+SUPABASE_ANON_KEY },
+  });
+  const rows = await res.json();
+  return rows && rows[0] ? rows[0].payload : null;
+}
+async function confirmarLeitura(id){
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/confirmar-leitura-dp`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  return await res.json();
+}
+function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
+
+(async function init(){
+  if(!id){
+    document.getElementById('titulo').textContent = 'Link inválido';
+    document.getElementById('conteudo').innerHTML = '<div class="erro">Esse link não tem um identificador válido.</div>';
+    return;
+  }
+  const reg = await buscarRegistro(id);
+  if(!reg || reg.tipo !== 'aviso'){
+    document.getElementById('titulo').textContent = 'Não encontrada';
+    document.getElementById('conteudo').innerHTML = '<div class="erro">Não encontramos essa notificação. Fale com a diretoria.</div>';
+    return;
+  }
+  document.getElementById('titulo').textContent = 'Notificação de Advertência';
+  render(reg);
+
+  function render(reg){
+    const conteudo = document.getElementById('conteudo');
+    const jaConfirmado = !!reg.confirmadoEm;
+    conteudo.innerHTML = `
+      <div class="info">
+        <b>${reg.tipoAviso || 'Advertência'}</b>
+        ${reg.motivo ? 'Motivo: '+reg.motivo : ''}
+      </div>
+      <p class="texto-formal">
+        Prezado(a) colaborador(a),<br><br>
+        Por meio deste comunicado, formalizamos uma <b>advertência ${(reg.tipoAviso||'').toLowerCase()}</b> referente à sua conduta profissional, conforme descrito abaixo, em conformidade com as normas internas da empresa.<br><br>
+        ${reg.descricao ? escapeHtml(reg.descricao) + '<br><br>' : ''}
+        Ao confirmar abaixo, você declara estar ciente do teor desta notificação. Esta confirmação fica registrada com data e hora, e não representa concordância com o conteúdo — apenas a ciência de tê-lo recebido.
+      </p>
+      ${jaConfirmado
+        ? `<div class="confirmado">✓ Confirmado em ${new Date(reg.confirmadoEm).toLocaleString('pt-BR')}</div>`
+        : `<button class="btn" id="btnConfirmar" disabled>Aguarde...</button>`
+      }
+    `;
+    if(!jaConfirmado){
+      setTimeout(()=>{
+        const btn = document.getElementById('btnConfirmar');
+        if(!btn) return;
+        btn.disabled = false;
+        btn.textContent = 'Estou ciente e confirmo o recebimento';
+      }, 1500);
+      document.getElementById('btnConfirmar').addEventListener('click', async ()=>{
+        const btn = document.getElementById('btnConfirmar');
+        btn.disabled = true; btn.textContent = 'Confirmando...';
+        try{
+          await confirmarLeitura(id);
+          reg.confirmadoEm = new Date().toISOString();
+        }catch(e){ console.error('Falha ao confirmar', e); }
+        render(reg);
+      });
+    }
+  }
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+})();
+</script>
+</body>
+</html>

@@ -342,7 +342,7 @@ const TABS = [
   { id:'vendas', label:'Vendas', icon:'🛍️' },
   { id:'pagamentos', label:'Pagamentos', icon:'💰' },
   { id:'ferias', label:'Férias', icon:'🌴' },
-  { id:'avisos', label:'Avisos', icon:'⚠️' },
+  { id:'avisos', label:'Advertência', icon:'⚠️' },
   { id:'atestados', label:'Atestados', icon:'🩺' },
 ];
 function buildTabs(){
@@ -391,12 +391,9 @@ function funcionarioOptionsHtml(selected){
    ============================================================ */
 function renderFuncionarios(main){
   main.innerHTML = `
-    <div class="page-head" style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:10px;">
-      <div>
-        <h1 class="page-title">Funcionários</h1>
-        <p class="page-sub">Cadastro completo: dados pessoais, profissionais e bancários.</p>
-      </div>
-      <button class="btn btn-accent" id="btnNovoFuncionario">+ Novo funcionário</button>
+    <div class="page-head">
+      <h1 class="page-title">Funcionários</h1>
+      <p class="page-sub">Lista de todos os funcionários cadastrados. Pra adicionar um novo, use o módulo Cadastro → Funcionários — aqui só dá pra ver/editar o perfil de RH de quem já existe.</p>
     </div>
     <div class="card" style="padding:14px 18px;">
       <table>
@@ -407,7 +404,7 @@ function renderFuncionarios(main){
   `;
   function draw(){
     const tbody = document.getElementById('tbodyFunc');
-    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">Nenhum funcionário cadastrado ainda.</td></tr>`; return; }
+    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">Nenhum funcionário cadastrado ainda. Cadastre em Cadastro → Funcionários.</td></tr>`; return; }
     tbody.innerHTML = funcionarios.slice().reverse().map(f=>`
       <tr>
         <td><b>${escapeHtml(f.nome)}</b></td>
@@ -417,37 +414,16 @@ function renderFuncionarios(main){
         <td><span class="badge ${f.status==='desligado'?'badge-erro':'badge-ok'}">${f.status==='desligado'?'Desligado':'Ativo'}</span></td>
         <td>
           <button class="icon-btn" data-verfunc="${f.id}" title="Ver/editar">✎</button>
-          <button class="icon-btn" data-delfunc="${f.id}" title="Excluir" style="color:var(--danger);">✕</button>
         </td>
       </tr>
     `).join('');
     tbody.querySelectorAll('[data-verfunc]').forEach(b=> b.addEventListener('click', ()=> abrirFuncionarioModal(funcionarios.find(f=>f.id===b.dataset.verfunc)) ));
-    tbody.querySelectorAll('[data-delfunc]').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        openModal(`
-          <h3>Excluir funcionário?</h3>
-          <p class="muted">O histórico de pagamentos/férias/avisos/atestados dele não será apagado, só o cadastro.</p>
-          <div class="modal-actions">
-            <button class="btn btn-ghost" id="btnCancelDelFunc">Cancelar</button>
-            <button class="btn btn-accent" style="background:var(--danger);" id="btnConfirmDelFunc">Excluir</button>
-          </div>
-        `);
-        document.getElementById('btnCancelDelFunc').addEventListener('click', closeModal);
-        document.getElementById('btnConfirmDelFunc').addEventListener('click', async ()=>{
-          await funcionarioExcluir(b.dataset.delfunc);
-          funcionarios = funcionarios.filter(f=>f.id!==b.dataset.delfunc);
-          closeModal(); draw();
-          showToast('Funcionário excluído.');
-        });
-      });
-    });
   }
   draw();
-  document.getElementById('btnNovoFuncionario').addEventListener('click', ()=> abrirFuncionarioModal(null, draw));
   window.__redrawFuncionarios = draw;
 }
 
-const ABAS_FUNC = ['Pessoais','Profissionais','Bancários'];
+const ABAS_FUNC = ['Pessoais','Profissionais','Bancários','Acesso'];
 function abrirFuncionarioModal(f, onSalvarExtra){
   const editando = !!f;
   const d = {
@@ -541,6 +517,17 @@ function abrirFuncionarioModal(f, onSalvarExtra){
           <div class="field"><label>Conta</label><input id="fu_conta" value="${escapeHtml(d.conta)}"></div>
         </div>
       `;
+    } else if(abaAtiva==='Acesso'){
+      const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===(f&&f.funcionarioId));
+      const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
+      const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
+      const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      body.innerHTML = `
+        <p class="muted" style="margin-top:0;">Só visualização aqui — pra editar o acesso (enviar convite, ver a senha), use o módulo Cadastro → Funcionários.</p>
+        <div class="field"><label>Nível de acesso</label><input value="${escapeHtml(usuarioLigado?levelLabel(usuarioLigado.nivel):(f&&f.cargo)||'—')}" disabled></div>
+        <div class="field"><label>E-mail cadastrado</label><input value="${escapeHtml(usuarioLigado?usuarioLigado.email||'—':'—')}" disabled></div>
+        <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
+      `;
     }
     // religa os campos já preenchidos com o holder `d`, pra não perder ao trocar de aba
     body.querySelectorAll('input, select').forEach(el=>{
@@ -613,7 +600,7 @@ const CAMPOS_POR_TIPO = {
     colunas: ['dataInicio','dataFim','diasTirados'],
   },
   aviso: {
-    titulo: 'Aviso/Advertência', tituloPlural: 'Avisos',
+    titulo: 'Advertência', tituloPlural: 'Advertências',
     campos: [
       { id:'tipoAviso', label:'Tipo', tipo:'select', opcoes:['Verbal','Escrita'] },
       { id:'motivo', label:'Motivo', tipo:'text' },
@@ -705,6 +692,7 @@ function renderRegistros(main, tipo){
 function abrirRegistroModal(tipo, r, onSalvo){
   const meta = CAMPOS_POR_TIPO[tipo];
   const editando = !!r;
+  const funcionarioAtual = r ? funcionarios.find(f=>f.id===r.funcionarioId) : null;
   openModal(`
     <div class="section-label">${editando?'Editar':'Novo'} — ${meta.titulo}</div>
     <div class="field"><label>Funcionário</label><select id="rg_funcionarioId">${funcionarioOptionsHtml(r?r.funcionarioId:'')}</select></div>
@@ -717,16 +705,59 @@ function abrirRegistroModal(tipo, r, onSalvo){
       if(c.tipo==='month') return `<div class="field"><label>${c.label}</label><input type="month" id="rg_${c.id}" value="${val||''}"></div>`;
       return `<div class="field"><label>${c.label}</label><input id="rg_${c.id}" value="${escapeHtml(val)}"></div>`;
     }).join('')}
+    ${tipo==='aviso' && editando ? `
+      <div class="section-label" style="margin-top:16px;">Notificar o funcionário</div>
+      <p class="muted" style="margin:-4px 0 10px;">${r.confirmadoEm ? `✓ Confirmado em ${new Date(r.confirmadoEm).toLocaleString('pt-BR')}` : 'Ainda não confirmou o recebimento.'}</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-ghost btn-sm" id="btnNotificarWa">💬 Notificar por WhatsApp</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnNotificarEmail">✉️ Notificar por e-mail</button>
+      </div>
+    ` : ''}
     <div class="modal-actions">
       <button class="btn btn-accent" id="btnSalvarReg">Salvar</button>
       <button class="btn btn-ghost" id="btnCancelarReg">Cancelar</button>
     </div>
   `);
   document.getElementById('btnCancelarReg').addEventListener('click', closeModal);
+  if(tipo==='aviso' && editando){
+    const linkConfirmacao = window.location.origin + '/advertencia.html?id=' + r.id;
+    const btnWa = document.getElementById('btnNotificarWa');
+    if(btnWa) btnWa.addEventListener('click', ()=>{
+      const tel = onlyDigitsDp((funcionarioAtual&&funcionarioAtual.telefone)||'');
+      if(!tel){ showToast('Esse funcionário não tem telefone cadastrado.'); return; }
+      const msg = `Olá, ${funcionarioAtual?funcionarioAtual.nome:''}! Você recebeu uma notificação de advertência. Por favor, confirme o recebimento no link: ${linkConfirmacao}`;
+      window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+    });
+    const btnEmail = document.getElementById('btnNotificarEmail');
+    if(btnEmail) btnEmail.addEventListener('click', async ()=>{
+      const email = funcionarioAtual && funcionarioAtual.email;
+      if(!email){ showToast('Esse funcionário não tem e-mail cadastrado.'); return; }
+      btnEmail.disabled = true; btnEmail.textContent = 'Enviando...';
+      try{
+        const res = await fetch(SUPABASE_URL + '/functions/v1/send-email-gmail', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+          body: JSON.stringify({
+            to: email, subject: 'Notificação de Advertência — Vilaça Joias',
+            body: `Olá, ${funcionarioAtual.nome}!\n\nVocê recebeu uma notificação de advertência. Por favor, acesse o link abaixo pra confirmar o recebimento:\n${linkConfirmacao}\n\nAtenciosamente,\nVilaça Joias`,
+          }),
+        });
+        const data = await res.json();
+        if(!res.ok || data.error) throw new Error(data.error || 'falha');
+        showToast('E-mail enviado.');
+      }catch(e){ showToast('Não foi possível enviar o e-mail.'); }
+      btnEmail.disabled = false; btnEmail.textContent = '✉️ Notificar por e-mail';
+    });
+  }
   document.getElementById('btnSalvarReg').addEventListener('click', async ()=>{
     const funcionarioId = document.getElementById('rg_funcionarioId').value;
     if(!funcionarioId){ showToast('Selecione o funcionário.'); return; }
+    const funcSelecionado = funcionarios.find(f=>f.id===funcionarioId);
     const dados = { id: r?r.id:uid('dpreg'), tipo, funcionarioId, data: todayStr(), criadoEm: r?r.criadoEm:Date.now() };
+    if(tipo==='aviso'){
+      dados.nomeFuncionarioSnapshot = funcSelecionado?funcSelecionado.nome:'';
+      dados.confirmadoEm = r?r.confirmadoEm:null;
+    }
     meta.campos.forEach(c=>{
       const el = document.getElementById('rg_'+c.id);
       dados[c.id] = c.tipo==='number' ? (el.value===''?null:parseFloat(el.value)) : el.value;
@@ -741,6 +772,7 @@ function abrirRegistroModal(tipo, r, onSalvo){
     }
   });
 }
+function onlyDigitsDp(s){ return (s||'').replace(/\D/g,''); }
 
 (async function init(){
   if(EMBEDDED){
