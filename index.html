@@ -899,13 +899,16 @@ async function abrirFuncionarioCompletoModal(funcionario){
   const d = {
     nome: funcionario.nome, cargos: [...(funcionario.cargos||[])],
     cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
-    telefone: perfil?perfil.telefone:'', email: perfil?perfil.email:'', endereco: perfil?perfil.endereco:'', numero: perfil?perfil.numero:'',
+    telefoneFixo: perfil?perfil.telefoneFixo:'', celularParticular: perfil?perfil.celularParticular:'', celularLoja: perfil?perfil.celularLoja:'',
+    temFilhos: perfil?(perfil.temFilhos||'nao'):'nao', filhos: perfil&&Array.isArray(perfil.filhos)?perfil.filhos.map(f=>({...f})):[],
+    email: perfil?perfil.email:'', endereco: perfil?perfil.endereco:'', numero: perfil?perfil.numero:'',
     complemento: perfil?perfil.complemento:'', bairro: perfil?perfil.bairro:'', cidade: perfil?perfil.cidade:'', estado: perfil?perfil.estado:'', cep: perfil?perfil.cep:'',
     contatoEmergenciaNome: perfil?perfil.contatoEmergenciaNome:'', contatoEmergenciaTelefone: perfil?perfil.contatoEmergenciaTelefone:'',
     loja: perfil?perfil.loja:'', dataAdmissao: perfil?perfil.dataAdmissao:'', tipoContrato: perfil?(perfil.tipoContrato||'CLT'):'CLT',
     salario: perfil&&perfil.salario!==undefined?perfil.salario:null, ctpsNumero: perfil?perfil.ctpsNumero:'', ctpsSerie: perfil?perfil.ctpsSerie:'', pis: perfil?perfil.pis:'',
     status: perfil?(perfil.status||'ativo'):'ativo', dataDesligamento: perfil?perfil.dataDesligamento:'',
     banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
+    tipoPix: perfil?(perfil.tipoPix||''):'', chavePix: perfil?perfil.chavePix:'',
   };
   let abaAtiva = 'Básico';
   openModal(`
@@ -950,10 +953,18 @@ async function abrirFuncionarioCompletoModal(funcionario){
           <div class="field"><label>CPF</label><input id="fc_cpf" value="${escapeHtml(d.cpf)}"></div>
           <div class="field"><label>RG</label><input id="fc_rg" value="${escapeHtml(d.rg)}"></div>
           <div class="field"><label>Data de nascimento</label><input type="date" id="fc_dataNascimento" value="${d.dataNascimento||''}"></div>
-          <div class="field"><label>Estado civil</label><input id="fc_estadoCivil" value="${escapeHtml(d.estadoCivil)}"></div>
-          <div class="field"><label>Telefone</label><input id="fc_telefone" value="${escapeHtml(d.telefone)}"></div>
+          <div class="field"><label>Estado civil</label><select id="fc_estadoCivil">
+            <option value="">—</option>
+            ${['Solteiro(a)','Casado(a)','União estável','Divorciado(a)','Viúvo(a)'].map(o=>`<option value="${o}" ${d.estadoCivil===o?'selected':''}>${o}</option>`).join('')}
+          </select></div>
           <div class="field"><label>E-mail</label><input type="email" id="fc_email" value="${escapeHtml(d.email)}"></div>
           <div class="field"><label>CEP</label><input id="fc_cep" value="${escapeHtml(d.cep)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Telefones</div>
+        <div class="grid-3">
+          <div class="field"><label>Fixo</label><input id="fc_telefoneFixo" value="${escapeHtml(d.telefoneFixo)}"></div>
+          <div class="field"><label>Celular particular</label><input id="fc_celularParticular" value="${escapeHtml(d.celularParticular)}"></div>
+          <div class="field"><label>Celular da loja</label><input id="fc_celularLoja" value="${escapeHtml(d.celularLoja)}"></div>
         </div>
         <div class="grid-3">
           <div class="field"><label>Endereço</label><input id="fc_endereco" value="${escapeHtml(d.endereco)}"></div>
@@ -969,8 +980,65 @@ async function abrirFuncionarioCompletoModal(funcionario){
           <div class="field"><label>Contato de emergência</label><input id="fc_contatoEmergenciaNome" value="${escapeHtml(d.contatoEmergenciaNome)}"></div>
           <div class="field"><label>Telefone do contato</label><input id="fc_contatoEmergenciaTelefone" value="${escapeHtml(d.contatoEmergenciaTelefone)}"></div>
         </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Filhos</div>
+        <div class="field"><label>Tem filhos?</label>
+          <select id="fc_temFilhos">
+            <option value="nao" ${d.temFilhos==='nao'?'selected':''}>Não</option>
+            <option value="sim" ${d.temFilhos==='sim'?'selected':''}>Sim</option>
+          </select>
+        </div>
+        <div id="fc_filhosArea"></div>
       `;
       ligarCampos(body);
+      montarSecaoFilhos();
+      document.getElementById('fc_temFilhos').addEventListener('change', e=>{
+        d.temFilhos = e.target.value;
+        if(d.temFilhos==='sim' && d.filhos.length===0) d.filhos = [{ dataNascimento:'' }];
+        if(d.temFilhos==='nao') d.filhos = [];
+        montarSecaoFilhos();
+      });
+      function montarSecaoFilhos(){
+        const area = document.getElementById('fc_filhosArea');
+        if(d.temFilhos!=='sim'){ area.innerHTML=''; return; }
+        area.innerHTML = `
+          <div class="field" style="max-width:160px;"><label>Quantos filhos?</label><input type="number" min="1" id="fc_qtdFilhos" value="${d.filhos.length||1}"></div>
+          <div id="fc_filhosLista"></div>
+        `;
+        desenharListaFilhos();
+        document.getElementById('fc_qtdFilhos').addEventListener('input', e=>{
+          const qtd = Math.max(1, parseInt(e.target.value)||1);
+          const atual = d.filhos.length;
+          if(qtd > atual){ for(let i=atual;i<qtd;i++) d.filhos.push({ dataNascimento:'' }); }
+          else if(qtd < atual){ d.filhos = d.filhos.slice(0, qtd); }
+          desenharListaFilhos();
+        });
+      }
+      function calcularIdade(dataNasc){
+        if(!dataNasc) return null;
+        const hoje = new Date(); const nasc = new Date(dataNasc+'T00:00:00');
+        let idade = hoje.getFullYear() - nasc.getFullYear();
+        const m = hoje.getMonth() - nasc.getMonth();
+        if(m<0 || (m===0 && hoje.getDate()<nasc.getDate())) idade--;
+        return idade>=0 ? idade : null;
+      }
+      function desenharListaFilhos(){
+        const lista = document.getElementById('fc_filhosLista');
+        lista.innerHTML = d.filhos.map((f,i)=>{
+          const idade = calcularIdade(f.dataNascimento);
+          return `
+          <div class="grid-2" style="align-items:end;">
+            <div class="field"><label>Data de nascimento — filho(a) ${i+1}</label><input type="date" data-filhodata="${i}" value="${f.dataNascimento||''}"></div>
+            <div class="field"><label>Idade atual</label><input value="${idade!==null?idade+' anos':'—'}" disabled></div>
+          </div>
+        `;
+        }).join('');
+        lista.querySelectorAll('[data-filhodata]').forEach(el=>{
+          el.addEventListener('input', ()=>{
+            d.filhos[Number(el.dataset.filhodata)].dataNascimento = el.value;
+            desenharListaFilhos();
+          });
+        });
+      }
     } else if(abaAtiva==='Profissionais'){
       body.innerHTML = `
         <div class="grid-2">
@@ -995,6 +1063,14 @@ async function abrirFuncionarioCompletoModal(funcionario){
           <div class="field"><label>Tipo de conta</label><select id="fc_tipoConta"><option value="corrente" ${d.tipoConta==='corrente'?'selected':''}>Corrente</option><option value="poupanca" ${d.tipoConta==='poupanca'?'selected':''}>Poupança</option></select></div>
           <div class="field"><label>Agência</label><input id="fc_agencia" value="${escapeHtml(d.agencia)}"></div>
           <div class="field"><label>Conta</label><input id="fc_conta" value="${escapeHtml(d.conta)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">PIX</div>
+        <div class="grid-2">
+          <div class="field"><label>Tipo de PIX</label><select id="fc_tipoPix">
+            <option value="">—</option>
+            ${['CPF','CNPJ','E-mail','Telefone','Chave aleatória'].map(o=>`<option value="${o}" ${d.tipoPix===o?'selected':''}>${o}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>Número do PIX</label><input id="fc_chavePix" value="${escapeHtml(d.chavePix)}"></div>
         </div>
       `;
       ligarCampos(body);
@@ -1055,13 +1131,15 @@ async function abrirFuncionarioCompletoModal(funcionario){
       id: perfil ? perfil.id : uid('func'),
       funcionarioId: funcionario.id,
       nome: d.nome.trim(), cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
-      telefone:d.telefone, email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
+      telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
+      temFilhos:d.temFilhos, filhos: d.temFilhos==='sim' ? d.filhos : [],
+      email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
       bairro:d.bairro, cidade:d.cidade, estado:d.estado, cep:d.cep,
       contatoEmergenciaNome:d.contatoEmergenciaNome, contatoEmergenciaTelefone:d.contatoEmergenciaTelefone,
       cargo: cargoLabelPrincipal(d.cargos), loja:d.loja, dataAdmissao:d.dataAdmissao, tipoContrato:d.tipoContrato,
       salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), ctpsNumero:d.ctpsNumero, ctpsSerie:d.ctpsSerie, pis:d.pis,
       status:d.status, dataDesligamento:d.dataDesligamento,
-      banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta,
+      banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta, tipoPix:d.tipoPix, chavePix:d.chavePix,
       criadoEm: perfil ? perfil.criadoEm : Date.now(),
     };
     const okPerfil = await dpFuncionarioSalvar(perfilFinal);
