@@ -215,35 +215,9 @@ function renderEmptyState(){
 }
 
 /* ============================================================
-   RESUMO DE DADOS — reúne um panorama do negócio pra IA usar de contexto
+   RESUMO DE DADOS — agora montado no SERVIDOR (edge function ia-chat), já filtrado
+   pela permissão do usuário logado. O navegador não monta mais isso.
    ============================================================ */
-async function montarResumoDados(){
-  const resumo = { dataDeHoje: new Date().toISOString().slice(0,10), lojas: (config.lojas||[]).map(l=>l.nome) };
-  async function buscar(table){
-    try{
-      const r = await gatewayCall({ op:'selectAll', table });
-      if(r.error) return [];
-      return (r.data||[]).map(row=>row.payload);
-    }catch(e){ return []; }
-  }
-  const [vendas, ordens, orcamentos, produtos, funcionariosDp, registrosDp] = await Promise.all([
-    buscar('vendas_pdv'), buscar('painel_ordens_kv'), buscar('orcamentos'), buscar('produtos_estoque'), buscar('dp_funcionarios'), buscar('dp_registros'),
-  ]);
-  // vendas_pdv e painel_ordens_kv podem vir vazios ou em formatos diferentes — protege com Array.isArray
-  const listaVendas = Array.isArray(vendas) ? vendas : [];
-  const listaOrdens = Array.isArray(ordens) ? ordens : [];
-  resumo.totalVendasRegistradas = listaVendas.length;
-  resumo.faturamentoTotalVendas = listaVendas.reduce((acc,v)=> acc + (Number(v.valorTotal)||0), 0);
-  resumo.totalOrdensServico = listaOrdens.length;
-  resumo.orcamentosAbertos = (orcamentos||[]).filter(o=>o.status && !['aprovado','recusado'].includes(o.status)).length;
-  resumo.totalOrcamentos = (orcamentos||[]).length;
-  resumo.totalProdutosCadastrados = (produtos||[]).length;
-  resumo.produtosEstoqueBaixo = (produtos||[]).filter(p=> Number(p.estoque)<=2).map(p=>p.nome).slice(0,15);
-  resumo.totalFuncionarios = (funcionariosDp||[]).length;
-  resumo.funcionarios = (funcionariosDp||[]).map(f=>({ nome:f.nome, cargo:f.cargo, loja:f.loja, status:f.status }));
-  resumo.advertenciasRecentes = (registrosDp||[]).filter(r=>r.tipo==='aviso').length;
-  return resumo;
-}
 
 /* ============================================================
    ANEXO DE FOTO
@@ -337,7 +311,9 @@ async function enviarMensagem(){
     const body = { senha: __gatewaySenha, mensagem: texto };
     if(anexoParaEnvio){ body.imagemBase64 = anexoParaEnvio.base64; body.imagemMimeType = anexoParaEnvio.mimeType; }
     if(modoParaEnvio==='editar') body.modoImagem = 'editar';
-    if(modoParaEnvio==='chat'){ body.resumoDados = await montarResumoDados(); }
+    // O resumo dos dados do negócio agora é montado no SERVIDOR (edge function ia-chat),
+    // já filtrado pela permissão do usuário logado — o navegador não envia mais isso,
+    // pra ninguém conseguir adulterar o que a IA recebe.
 
     const res = await fetch(IA_URL, {
       method: 'POST',
