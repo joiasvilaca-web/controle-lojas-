@@ -221,6 +221,24 @@
   .shell-content{flex:1; overflow-y:auto; padding:24px; position:relative; color:var(--ink);}
   #configPanelShell{max-width:900px; margin:0 auto; color:var(--ink);}
   #moduleIframesWrap{position:absolute; inset:0; pointer-events:none;}
+  .vendas-home-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+  @media(max-width:640px){ .vendas-home-grid{grid-template-columns:1fr;} }
+  .vendas-home-btn{
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px;
+    background:var(--card,#fff); border:1.5px solid var(--line,#e7d5dd); border-radius:16px;
+    padding:38px 20px; cursor:pointer; transition:all .15s; box-shadow:0 2px 10px rgba(90,30,60,.06);
+    color:var(--ink); font-family:inherit;
+  }
+  .vendas-home-btn:hover{ border-color:var(--gold-ink,#a9812f); transform:translateY(-2px); box-shadow:0 6px 18px rgba(90,30,60,.12); }
+  .vendas-home-btn .vh-icon{ font-size:44px; }
+  .vendas-home-btn .vh-label{ font-size:18px; font-weight:700; }
+  .vendas-home-btn .vh-sub{ font-size:12.5px; color:var(--muted); }
+  .shell-back-btn{
+    display:inline-flex; align-items:center; gap:6px; background:var(--gold-soft,#f6ecd6);
+    color:var(--gold-ink,#8a6a1f); border:none; border-radius:8px; padding:7px 13px;
+    font-size:13.5px; font-weight:700; cursor:pointer; font-family:inherit; margin-right:10px;
+  }
+  .shell-back-btn:hover{ filter:brightness(.96); }
   .module-iframe{width:100%; height:100%; border:none; display:none; background:var(--surface); pointer-events:auto;}
 
   @media (max-width:900px){
@@ -285,6 +303,13 @@
         <div class="cfg-tabs" id="cfgTabs"></div>
         <div id="cfgBody"></div>
       </div>
+      <div id="vendasHome" style="display:none; max-width:760px; margin:0 auto; padding:24px 20px;">
+        <div style="text-align:center; margin-bottom:26px;">
+          <h1 style="font-family:'Cormorant Garamond',serif; font-size:30px; font-weight:700; margin:0 0 6px; color:var(--ink);">Vendas</h1>
+          <p style="color:var(--muted); font-size:14px; margin:0;">O que você quer lançar?</p>
+        </div>
+        <div id="vendasHomeBotoes" class="vendas-home-grid"></div>
+      </div>
       <div id="moduleIframesWrap"></div>
     </div>
   </div>
@@ -335,6 +360,36 @@ const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
  * mais nenhuma porta). `__gatewaySenha` guarda a senha da pessoa logada nesta aba.
  */
 let __gatewaySenha = null;
+
+/* ===================== SESSÃO PERSISTENTE =====================
+ * Guarda a senha e o módulo atual no navegador por algumas horas, pra que ao
+ * atualizar a página (ou apertar "voltar" no celular) o app não caia de volta na
+ * tela de senha — ele reentra sozinho no mesmo lugar. Depois do prazo, pede a
+ * senha de novo por segurança. */
+const SESSAO_CHAVE = 'vilaca_sessao';
+const SESSAO_VALIDADE_MS = 8 * 60 * 60 * 1000; // 8 horas
+function salvarSessao(){
+  try{
+    localStorage.setItem(SESSAO_CHAVE, JSON.stringify({
+      senha: __gatewaySenha,
+      modulo: moduloAtual,
+      expiraEm: Date.now() + SESSAO_VALIDADE_MS,
+    }));
+  }catch(e){ /* se o navegador bloquear storage, só não persiste */ }
+}
+function lerSessao(){
+  try{
+    const raw = localStorage.getItem(SESSAO_CHAVE);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    if(!s || !s.senha || !s.expiraEm || s.expiraEm < Date.now()){ limparSessao(); return null; }
+    return s;
+  }catch(e){ return null; }
+}
+function limparSessao(){
+  try{ localStorage.removeItem(SESSAO_CHAVE); }catch(e){}
+}
+
 async function gatewayCall(body){
   try{
     const res = await fetch(GATEWAY_URL, {
@@ -529,8 +584,7 @@ const tabsCache = {};
 
 const SIDEBAR_MODULES = [
   { id:'transferencias', label:'Transferências', icon:'🔁', src:'transferencias-reposicoes.html' },
-  { id:'os', label:'Painel de O.S.', icon:'🧾', src:'painel-ordens.html' },
-  { id:'vendas', label:'Vendas (PDV)', icon:'🛒', src:'vendas.html' },
+  { id:'vendas', label:'Vendas', icon:'🛒', src:null },
   { id:'orcamentos', label:'Orçamentos', icon:'📝', src:'orcamentos.html' },
   { id:'vendapg', label:'Venda PG', icon:'📊', src:'venda-pg.html' },
   { id:'conciliacao', label:'Conciliação de Cartão', icon:'🔄', src:'conciliacao.html' },
@@ -539,6 +593,28 @@ const SIDEBAR_MODULES = [
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'config', label:'Cadastro', icon:'⚙️', src:null },
 ];
+// Sub-telas do módulo Vendas: o PDV (lançar venda) e a O.S. (lançar pedido).
+// Vivem em iframes próprios, alternados pela tela inicial dos 2 botões.
+const VENDAS_SUBMODULOS = {
+  pdv: { label:'Lançar Venda', icon:'🛒', src:'vendas.html', permModulo:'vendas' },
+  os:  { label:'Lançar Pedido', icon:'🧾', src:'painel-ordens.html', permModulo:'os' },
+};
+let vendasSubAtual = null; // null = tela dos 2 botões; 'pdv' ou 'os' = dentro de uma sub-tela
+
+// O módulo "Vendas" (unificado) fica disponível se a pessoa puder acessar o PDV OU a O.S.
+function podeVerModulo(m){
+  if(m.id==='vendas'){
+    return (currentPermissoes['vendas'] && currentPermissoes['vendas'].ativo) ||
+           (currentPermissoes['os'] && currentPermissoes['os'].ativo);
+  }
+  return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
+}
+function subVendasPermitidos(){
+  const out = [];
+  if(currentPermissoes['vendas'] && currentPermissoes['vendas'].ativo) out.push('pdv');
+  if(currentPermissoes['os'] && currentPermissoes['os'].ativo) out.push('os');
+  return out;
+}
 
 document.getElementById('btnLogin').addEventListener('click', doLogin);
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
@@ -557,10 +633,29 @@ async function doLogin(){
   currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
+  salvarSessao();
   enterShell();
 }
 
+/* Ao abrir/atualizar a página: se houver uma sessão válida salva, reentra sozinho
+ * no mesmo módulo onde a pessoa estava — sem pedir a senha de novo. */
+async function tentarRestaurarSessao(){
+  const s = lerSessao();
+  if(!s) return false;
+  const r = await gatewayLogin(s.senha);
+  if(!r || !r.ok){ limparSessao(); return false; }
+  __gatewaySenha = s.senha;
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha };
+  currentPermissoes = permissoesDoUsuario(r.user);
+  await loadConfig();
+  salvarSessao(); // renova a validade
+  enterShell(s.modulo || null);
+  return true;
+}
+window.addEventListener('DOMContentLoaded', ()=>{ tentarRestaurarSessao(); });
+
 document.getElementById('btnLogoutShell').addEventListener('click', ()=>{
+  limparSessao();
   currentUser = null; currentPermissoes = null; moduloAtual = null; __gatewaySenha = null; config = null;
   Object.values(iframesCriados).forEach(f=> f.remove());
   for(const k in iframesCriados) delete iframesCriados[k];
@@ -570,21 +665,29 @@ document.getElementById('btnLogoutShell').addEventListener('click', ()=>{
   document.getElementById('loginView').style.display = 'flex';
 });
 
-function enterShell(){
+function enterShell(moduloInicial){
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('shellView').style.display = 'flex';
   document.getElementById('shellWhoName').textContent = currentUser.nome;
   document.getElementById('shellWhoLevel').textContent = levelLabel(currentUser.nivel);
   buildSidebar();
-  const permitidos = SIDEBAR_MODULES.filter(m => currentPermissoes[m.id] && currentPermissoes[m.id].ativo);
+  const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
   if(permitidos.length===0){
     document.getElementById('moduleIframesWrap').innerHTML = '';
     document.getElementById('configPanelShell').style.display = 'none';
     document.getElementById('shellEmptyState').style.display = 'block';
     return;
   }
-  const primeiro = permitidos.find(m=>m.id!=='config') || permitidos[0];
-  selecionarModulo(primeiro.id);
+  // Se veio um módulo pra restaurar (ao atualizar a página) e ele é permitido, abre nele.
+  // Senão, a tela inicial é sempre o módulo Vendas.
+  let alvo = null;
+  if(moduloInicial){
+    alvo = permitidos.find(m=>m.id===moduloInicial) || null;
+  }
+  if(!alvo){
+    alvo = permitidos.find(m=>m.id==='vendas') || permitidos.find(m=>m.id!=='config') || permitidos[0];
+  }
+  selecionarModulo(alvo.id);
 }
 
 function abrirMenuMobile(){
@@ -600,7 +703,7 @@ document.getElementById('sidebarOverlay').addEventListener('click', fecharMenuMo
 
 function buildSidebar(){
   const wrap = document.getElementById('sidebarModules');
-  const permitidos = SIDEBAR_MODULES.filter(m => currentPermissoes[m.id] && currentPermissoes[m.id].ativo);
+  const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
   wrap.innerHTML = permitidos.map(m=>`
     <button class="side-item" data-modulo="${m.id}">
       <span class="side-icon">${m.icon}</span><span>${escapeHtml(m.label)}</span>
@@ -626,14 +729,17 @@ function renderShellTabs(moduloId, tabs, active){
   });
 }
 
-function selecionarModulo(moduloId){
+function selecionarModulo(moduloId, subVendas){
   moduloAtual = moduloId;
+  if(moduloId!=='vendas') vendasSubAtual = null;
+  if(__gatewaySenha) salvarSessao();
   fecharMenuMobile();
   const info = SIDEBAR_MODULES.find(m=>m.id===moduloId);
   document.getElementById('mobileTopbarTitle').textContent = info ? info.label : 'Gestão e Controle';
   document.getElementById('shellEmptyState').style.display = 'none';
   document.querySelectorAll('.side-item').forEach(b=> b.classList.toggle('active', b.dataset.modulo===moduloId));
   document.getElementById('configPanelShell').style.display = 'none';
+  document.getElementById('vendasHome').style.display = 'none';
   Object.values(iframesCriados).forEach(f=> f.style.display = 'none');
 
   if(moduloId==='config'){
@@ -641,6 +747,36 @@ function selecionarModulo(moduloId){
     document.getElementById('configPanelShell').style.display = 'block';
     buildCfgTabs();
     renderCfgTab(currentCfgTab);
+    return;
+  }
+
+  // ---------- MÓDULO VENDAS (unificado: tela dos 2 botões ou uma sub-tela) ----------
+  if(moduloId==='vendas'){
+    if(subVendas) vendasSubAtual = subVendas;
+    if(!vendasSubAtual){
+      // tela de escolha dos 2 botões
+      document.getElementById('shellTopTabs').innerHTML = ''; document.getElementById('shellTopTabs').style.display = 'none';
+      renderVendasHome();
+      document.getElementById('vendasHome').style.display = 'block';
+      return;
+    }
+    // dentro de uma sub-tela (pdv ou os): mostra o iframe correspondente
+    const sub = VENDAS_SUBMODULOS[vendasSubAtual];
+    document.getElementById('mobileTopbarTitle').textContent = sub.label;
+    const chaveIframe = 'vendas_'+vendasSubAtual;
+    let iframeV = iframesCriados[chaveIframe];
+    if(!iframeV){
+      iframeV = document.createElement('iframe');
+      iframeV.src = sub.src;
+      iframeV.className = 'module-iframe';
+      iframeV.dataset.modulo = sub.permModulo; // usa o id de permissão real (os/vendas) no handshake
+      document.getElementById('moduleIframesWrap').appendChild(iframeV);
+      iframesCriados[chaveIframe] = iframeV;
+    }
+    iframeV.style.display = 'block';
+    // barra superior com botão Voltar + as abas internas da sub-tela
+    const tc = tabsCache[sub.permModulo];
+    renderShellTabsComVoltar(sub.permModulo, tc?tc.tabs:[], tc?tc.active:null, ()=>{ vendasSubAtual = null; selecionarModulo('vendas'); });
     return;
   }
 
@@ -655,26 +791,89 @@ function selecionarModulo(moduloId){
   }
   iframe.style.display = 'block';
 
-  if(tabsCache[moduloId]) renderShellTabs(moduloId, tabsCache[moduloId].tabs, tabsCache[moduloId].active);
-  else { document.getElementById('shellTopTabs').innerHTML = ''; document.getElementById('shellTopTabs').style.display = 'none'; }
+  // demais módulos ganham um botão Voltar (pra tela anterior) na barra superior,
+  // junto com as abas internas do módulo (se houver).
+  const tc2 = tabsCache[moduloId];
+  renderShellTabsComVoltar(moduloId, tc2?tc2.tabs:[], tc2?tc2.active:null, voltarModulo);
+}
+
+/* Renderiza a tela inicial de Vendas com os botões conforme a permissão da pessoa. */
+function renderVendasHome(){
+  const subs = subVendasPermitidos();
+  const wrap = document.getElementById('vendasHomeBotoes');
+  const labelSub = { pdv:{icon:'🛒', label:'Lançar Venda', sub:'Registrar uma venda no PDV'}, os:{icon:'🧾', label:'Lançar Pedido', sub:'Abrir uma ordem de serviço'} };
+  wrap.innerHTML = subs.map(s=>`
+    <button class="vendas-home-btn" data-sub="${s}">
+      <span class="vh-icon">${labelSub[s].icon}</span>
+      <span class="vh-label">${labelSub[s].label}</span>
+      <span class="vh-sub">${labelSub[s].sub}</span>
+    </button>
+  `).join('');
+  wrap.querySelectorAll('[data-sub]').forEach(b=>{
+    b.addEventListener('click', ()=> selecionarModulo('vendas', b.dataset.sub));
+  });
+}
+
+/* Barra superior com um botão "Voltar" à esquerda + as abas internas do módulo. */
+function renderShellTabsComVoltar(moduloId, tabs, active, aoVoltar){
+  const wrap = document.getElementById('shellTopTabs');
+  wrap.style.display = '';
+  const btnVoltar = `<button class="shell-back-btn" id="btnVoltarShell">← Voltar</button>`;
+  const abasHtml = (tabs && tabs.length) ? tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===active?'active':''}">${t.icon?t.icon+' ':''}${escapeHtml(t.label)}</button>`).join('') : '';
+  wrap.innerHTML = btnVoltar + abasHtml;
+  document.getElementById('btnVoltarShell').addEventListener('click', aoVoltar);
+  wrap.querySelectorAll('button[data-tab]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      wrap.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('active', x===b));
+      const iframe = iframesCriados[moduloId] || iframesCriados['vendas_'+vendasSubAtual];
+      if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ type:'gotoTab', tabId:b.dataset.tab }, '*');
+      if(tabsCache[moduloId]) tabsCache[moduloId].active = b.dataset.tab;
+    });
+  });
+}
+
+/* Voltar pra tela anterior: se estava numa sub-tela de Vendas, volta pros 2 botões;
+ * senão, volta pro módulo Vendas (tela inicial padrão). */
+function voltarModulo(){
+  if(moduloAtual==='vendas' && vendasSubAtual){ vendasSubAtual = null; selecionarModulo('vendas'); return; }
+  // dos outros módulos, "voltar" leva pra tela inicial (Vendas)
+  vendasSubAtual = null;
+  selecionarModulo('vendas');
 }
 
 window.addEventListener('message', (ev)=>{
   const d = ev.data;
   if(!d || !d.type || !d.modulo) return;
+  // Acha o iframe certo: pode estar guardado pelo próprio id (ex: 'dp') ou como
+  // sub-tela de Vendas (ex: permMod 'os' -> iframe 'vendas_os').
+  function acharIframe(mod){
+    if(iframesCriados[mod]) return iframesCriados[mod];
+    if(mod==='os' && iframesCriados['vendas_os']) return iframesCriados['vendas_os'];
+    if(mod==='vendas' && iframesCriados['vendas_pdv']) return iframesCriados['vendas_pdv'];
+    return null;
+  }
+  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas)
+  function estaVisivel(mod){
+    if(mod===moduloAtual) return true;
+    if(moduloAtual==='vendas' && vendasSubAtual){
+      const sub = VENDAS_SUBMODULOS[vendasSubAtual];
+      return sub && sub.permModulo===mod;
+    }
+    return false;
+  }
   if(d.type === 'ready'){
-    const iframe = iframesCriados[d.modulo];
+    const iframe = acharIframe(d.modulo);
     if(!iframe || !ev.source) return;
     const permMod = (currentPermissoes && currentPermissoes[d.modulo]) || {};
     ev.source.postMessage({ type:'auth', user: currentUser, abas: permMod.abas || null }, '*');
   } else if(d.type === 'tabs'){
     tabsCache[d.modulo] = { tabs: d.tabs, active: d.active };
-    if(d.modulo === moduloAtual) renderShellTabs(d.modulo, d.tabs, d.active);
+    if(estaVisivel(d.modulo)) renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
   } else if(d.type === 'activeTab'){
     if(!tabsCache[d.modulo]) tabsCache[d.modulo] = { tabs:[], active:d.tabId };
     else tabsCache[d.modulo].active = d.tabId;
-    if(d.modulo === moduloAtual){
-      document.querySelectorAll('#shellTopTabs button').forEach(b=> b.classList.toggle('active', b.dataset.tab===d.tabId));
+    if(estaVisivel(d.modulo)){
+      document.querySelectorAll('#shellTopTabs button[data-tab]').forEach(b=> b.classList.toggle('active', b.dataset.tab===d.tabId));
     }
   }
 });
