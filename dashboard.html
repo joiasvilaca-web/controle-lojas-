@@ -67,6 +67,16 @@
   .filters input[type="text"]{ min-width:160px; }
 
   .card{ background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow-x:auto; box-shadow:0 2px 10px -4px rgba(43,15,31,0.07); }
+  .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
+  .modal-overlay.show{display:flex;}
+  .modal{background:var(--surface); color:var(--ink); border-radius:16px; max-width:640px; width:100%; max-height:88vh; overflow:auto; padding:26px;}
+  .modal-actions{display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;}
+  .btn-grafico{background:var(--surface-2, #F7E9DA); border:1px solid var(--line); color:var(--accent-ink); border-radius:8px; padding:5px 11px; font-size:12px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:5px;}
+  .btn-grafico:hover{background:var(--line);}
+  .barra-grafico-linha{margin-bottom:10px;}
+  .barra-grafico-linha .rotulo{display:flex; justify-content:space-between; font-size:12.5px; margin-bottom:3px;}
+  .barra-grafico-fundo{background:var(--surface-2, #F7E9DA); border-radius:6px; height:14px; overflow:hidden;}
+  .barra-grafico-preenchimento{height:100%; border-radius:6px; background:var(--accent);}
   .card-title{ display:block; font-size:11.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid var(--line); }
   table{ width:100%; border-collapse:collapse; font-size:12.5px; }
   thead th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:750; padding:10px; border-bottom:1px solid var(--line); white-space:nowrap; }
@@ -113,6 +123,7 @@
   </header>
   <main id="mainContent"></main>
 </div>
+<div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBox"></div></div>
 
 <script>
 (function(){
@@ -190,6 +201,56 @@
   function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
   function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
   function semPagamentoLancado(o){ return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
+
+  /* ================= MODAL DE GRÁFICO (reutilizável em qualquer seção) ================= */
+  function closeModal(){
+    document.getElementById("modalOverlay").classList.remove("show");
+    document.getElementById("modalBox").innerHTML = "";
+    if(history.state && history.state.modalAberto) history.back();
+  }
+  function openModal(html){
+    document.getElementById("modalBox").innerHTML = html;
+    document.getElementById("modalOverlay").classList.add("show");
+    history.pushState({ modalAberto:true }, "");
+  }
+  window.addEventListener("popstate", ()=>{
+    const overlay = document.getElementById("modalOverlay");
+    if(overlay && overlay.classList.contains("show")) history.pushState({ modalAberto:true }, "");
+  });
+  document.addEventListener("keydown", (e)=>{
+    if(e.key === "Escape"){
+      const overlay = document.getElementById("modalOverlay");
+      if(overlay && overlay.classList.contains("show")){ e.preventDefault(); e.stopPropagation(); }
+    }
+  });
+  /**
+   * Gráfico de barra horizontal simples (sem biblioteca externa), pra comparar itens.
+   * itens: [{ nome, valor }], formatoValor: função opcional pra formatar o número exibido.
+   */
+  function barrasHtml(itens, formatoValor){
+    if(!itens || itens.length===0) return `<p style="color:var(--ink-faint,#8A6A78); font-size:13px;">Sem dados suficientes ainda.</p>`;
+    const fmt = formatoValor || (v=> (Number(v)||0).toLocaleString("pt-BR"));
+    const max = Math.max(...itens.map(i=>Number(i.valor)||0), 1);
+    return itens.map(i=>{
+      const pct = Math.max((Number(i.valor)||0)/max*100, 2);
+      return `
+        <div class="barra-grafico-linha">
+          <div class="rotulo"><span>${escapeHtml(i.nome)}</span><span><b>${fmt(i.valor)}</b></span></div>
+          <div class="barra-grafico-fundo"><div class="barra-grafico-preenchimento" style="width:${pct}%;"></div></div>
+        </div>
+      `;
+    }).join("");
+  }
+  /** Abre o modal já com o título e o gráfico de barras montado a partir de uma lista de {nome, valor}. */
+  function abrirGraficoBarras(titulo, subtitulo, itens, formatoValor){
+    openModal(`
+      <h3 style="margin:0 0 4px;">📊 ${escapeHtml(titulo)}</h3>
+      ${subtitulo ? `<p style="color:var(--muted,#7A5A68); font-size:13px; margin:0 0 16px;">${escapeHtml(subtitulo)}</p>` : ''}
+      <div>${barrasHtml(itens, formatoValor)}</div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharGrafico">Fechar</button></div>
+    `);
+    document.getElementById("btnFecharGrafico").addEventListener("click", closeModal);
+  }
 
   /* ================= LOGIN ================= */
   /* ================= MODO EMBUTIDO ================= */
@@ -580,7 +641,7 @@
       <p class="section-sub">Curva ABC, avisos de dados incompletos, metas do mês e um espaço pra perguntar qualquer coisa sobre os dados (respondido por IA).</p>
 
       <div class="card" style="padding:18px; margin-bottom:20px;">
-        <span class="card-title">Curva ABC de produtos</span> <span style="color:var(--ink-faint); font-size:12px;">(por faturamento nas vendas do PDV)</span>
+        <span class="card-title">Curva ABC de produtos <button class="btn-grafico" id="btnGraficoAbcProdutos">📊 Ver gráfico</button></span> <span style="color:var(--ink-faint); font-size:12px;">(por faturamento nas vendas do PDV)</span>
         <table style="margin-top:10px;">
           <thead><tr><th>Produto</th><th>Faturamento</th><th>% acumulado</th><th>Classe</th></tr></thead>
           <tbody>
@@ -597,7 +658,7 @@
       </div>
 
       <div class="card" style="padding:18px; margin-bottom:20px;">
-        <span class="card-title">Curva ABC de vendedoras</span> <span style="color:var(--ink-faint); font-size:12px;">(por faturamento em Vendas + O.S.)</span>
+        <span class="card-title">Curva ABC de vendedoras <button class="btn-grafico" id="btnGraficoAbcVendedoras">📊 Ver gráfico</button></span> <span style="color:var(--ink-faint); font-size:12px;">(por faturamento em Vendas + O.S.)</span>
         <table style="margin-top:10px;">
           <thead><tr><th>Vendedora</th><th>Faturamento</th><th>% acumulado</th><th>Classe</th></tr></thead>
           <tbody>
@@ -614,7 +675,7 @@
       </div>
 
       <div class="card" style="padding:18px; margin-bottom:20px;">
-        <span class="card-title">Orçamentos por vendedora</span> <span style="color:var(--ink-faint); font-size:12px;">(status e conversão)</span>
+        <span class="card-title">Orçamentos por vendedora <button class="btn-grafico" id="btnGraficoOrcamentos">📊 Ver gráfico</button></span> <span style="color:var(--ink-faint); font-size:12px;">(status e conversão)</span>
         <table style="margin-top:10px;">
           <thead><tr><th>Vendedora</th><th>Total</th><th>Valor</th><th>Aprovados</th><th>Recusados</th><th>Conversão</th></tr></thead>
           <tbody>
@@ -737,6 +798,20 @@
       }
     });
 
+    document.getElementById("btnGraficoAbcProdutos").addEventListener("click", ()=>{
+      const itens = abc.slice(0,15).map(item=>({ nome:item.produto, valor:item.total }));
+      abrirGraficoBarras("Curva ABC de produtos", "Por faturamento nas vendas do PDV — top 15", itens, fmtMoeda);
+    });
+    document.getElementById("btnGraficoAbcVendedoras").addEventListener("click", ()=>{
+      const itens = abcVend.map(item=>({ nome:item.vendedora, valor:item.total }));
+      abrirGraficoBarras("Curva ABC de vendedoras", "Por faturamento em Vendas + O.S.", itens, fmtMoeda);
+    });
+    document.getElementById("btnGraficoOrcamentos").addEventListener("click", ()=>{
+      const met = metricasOrcamentosPorVendedora();
+      const itens = Object.entries(met).map(([nome,m])=>({ nome, valor:m.total })).sort((a,b)=>b.valor-a.valor);
+      abrirGraficoBarras("Orçamentos por vendedora", "Quantidade de orçamentos lançados por cada uma", itens);
+    });
+
     verificarAlertaDeMetas(metas, totaisMes, fracaoDoMes);
     verificarMonitoramentoIA(abc, abcVend, avisos, metas, totaisMes);
   }
@@ -821,7 +896,7 @@
     const lojas = (ordersConfig && ordersConfig.lojas) || [];
 
     el.innerHTML = `
-      <h2 class="section-title">💰 Fator (F) por vendedora</h2>
+      <h2 class="section-title">💰 Fator (F) por vendedora <button class="btn-grafico" id="btnGraficoFator">📊 Ver gráfico</button></h2>
       <p class="section-sub">Calculado a partir do produto vendido em cada ordem (Configurações → Categorias/Subcategorias/Produtos no Painel de Ordens).</p>
       <div class="filters">
         <select id="fatLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
@@ -884,6 +959,17 @@
       filtrosFator = { loja:"", dataIni:"", dataFim:"" };
       renderSecaoFator();
     });
+    document.getElementById("btnGraficoFator").addEventListener("click", ()=>{
+      const lista = ordensComFator();
+      const porVendedora = new Map();
+      lista.forEach(o=>{
+        const nome = o.vendedora || "—";
+        const fatorValor = (Number(o.valorTotal)||0) * (Number(o.fatorPercentual)||0) / 100;
+        porVendedora.set(nome, (porVendedora.get(nome)||0) + fatorValor);
+      });
+      const itens = [...porVendedora.entries()].map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      abrirGraficoBarras("Fator (F) por vendedora", `${lista.length} ordem(ns) com fator, considerando os filtros atuais`, itens, fmtMoeda);
+    });
 
     atualizar();
   }
@@ -893,7 +979,7 @@
     const lojas = (ordersConfig && ordersConfig.lojas) || [];
 
     el.innerHTML = `
-      <h2 class="section-title">💳 Recebido / A receber (O.S. + Vendas)</h2>
+      <h2 class="section-title">💳 Recebido / A receber (O.S. + Vendas) <button class="btn-grafico" id="btnGraficoPagamentos">📊 Ver gráfico</button></h2>
       <p class="section-sub">Visão financeira combinada dos dois módulos que lançam pagamento.</p>
       <div class="kpis" id="kpisPagamentos"></div>
       <div class="filters">
@@ -956,6 +1042,24 @@
       filtrosPagamentos = { modulo:"", loja:"", dataIni:"", dataFim:"", semPagamento:false };
       renderSecaoPagamentos();
     });
+    document.getElementById("btnGraficoPagamentos").addEventListener("click", ()=>{
+      const lista = filtrarPagamentos();
+      const recebido = lista.reduce((acc,x)=> acc + valorRecebidoDe(x), 0);
+      const aReceber = lista.reduce((acc,x)=> acc + valorAReceberDe(x), 0);
+      const porLoja = {};
+      lista.forEach(x=>{ const l=x.loja||"—"; porLoja[l]=(porLoja[l]||0)+valorRecebidoDe(x)+valorAReceberDe(x); });
+      const itensLoja = Object.entries(porLoja).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      openModal(`
+        <h3 style="margin:0 0 4px;">📊 Recebido / A receber</h3>
+        <p style="color:var(--muted,#7A5A68); font-size:13px; margin:0 0 14px;">${lista.length} lançamento(ns), considerando os filtros atuais</p>
+        <b style="font-size:12.5px;">Recebido vs. a receber</b>
+        <div style="margin-top:8px; margin-bottom:18px;">${barrasHtml([{nome:"Recebido",valor:recebido},{nome:"A receber",valor:aReceber}], fmtMoeda)}</div>
+        <b style="font-size:12.5px;">Total por loja</b>
+        <div style="margin-top:8px;">${barrasHtml(itensLoja, fmtMoeda)}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharGrafico">Fechar</button></div>
+      `);
+      document.getElementById("btnFecharGrafico").addEventListener("click", closeModal);
+    });
 
     atualizar();
   }
@@ -966,7 +1070,7 @@
     const servicos = (ordersConfig && ordersConfig.serviceTypes) || [];
 
     el.innerHTML = `
-      <h2 class="section-title">🧾 Ordens de Serviço</h2>
+      <h2 class="section-title">🧾 Ordens de Serviço <button class="btn-grafico" id="btnGraficoOrdens">📊 Ver gráfico</button></h2>
       <p class="section-sub">Dados do Painel de Ordens. Rascunhos não entram nas contagens.</p>
       <div class="kpis" id="kpisOrdens"></div>
       <div class="filters">
@@ -1039,6 +1143,25 @@
       filtrosOrdens = { loja:"", status:"", servico:"", dataIni:"", dataFim:"", busca:"" };
       renderSecaoOrdens(mostraFinanceiro);
     });
+    document.getElementById("btnGraficoOrdens").addEventListener("click", ()=>{
+      const naoRascunho = orders.filter(o=>o.status!=="rascunho");
+      const porStatus = {};
+      naoRascunho.forEach(o=>{ const s=o.status||"—"; porStatus[s]=(porStatus[s]||0)+1; });
+      const itensStatus = Object.entries(porStatus).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      const porLoja = {};
+      naoRascunho.forEach(o=>{ const l=o.loja||"—"; porLoja[l]=(porLoja[l]||0)+1; });
+      const itensLoja = Object.entries(porLoja).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      openModal(`
+        <h3 style="margin:0 0 4px;">📊 Ordens de Serviço</h3>
+        <p style="color:var(--muted,#7A5A68); font-size:13px; margin:0 0 14px;">${naoRascunho.length} ordens (sem contar rascunhos)</p>
+        <b style="font-size:12.5px;">Por status</b>
+        <div style="margin-top:8px; margin-bottom:18px;">${barrasHtml(itensStatus)}</div>
+        <b style="font-size:12.5px;">Por loja</b>
+        <div style="margin-top:8px;">${barrasHtml(itensLoja)}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharGrafico">Fechar</button></div>
+      `);
+      document.getElementById("btnFecharGrafico").addEventListener("click", closeModal);
+    });
 
     atualizar();
   }
@@ -1048,7 +1171,7 @@
     const lojas = (ordersConfig && ordersConfig.lojas) || [];
 
     el.innerHTML = `
-      <h2 class="section-title">🛒 Vendas (PDV)</h2>
+      <h2 class="section-title">🛒 Vendas (PDV) <button class="btn-grafico" id="btnGraficoVendas">📊 Ver gráfico</button></h2>
       <p class="section-sub">Dados do módulo de Vendas.</p>
       <div class="kpis" id="kpisVendas"></div>
       <div class="filters">
@@ -1107,6 +1230,25 @@
       filtrosVendas = { loja:"", dataIni:"", dataFim:"", busca:"", semPagamento:false };
       renderSecaoVendas(mostraFinanceiro);
     });
+    document.getElementById("btnGraficoVendas").addEventListener("click", ()=>{
+      const porLoja = {}, porVendedora = {};
+      vendas.forEach(v=>{
+        const l=v.loja||"—"; porLoja[l]=(porLoja[l]||0)+(Number(v.valorTotal)||0);
+        const vd=v.vendedora||"—"; porVendedora[vd]=(porVendedora[vd]||0)+(Number(v.valorTotal)||0);
+      });
+      const itensLoja = Object.entries(porLoja).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      const itensVend = Object.entries(porVendedora).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      openModal(`
+        <h3 style="margin:0 0 4px;">📊 Vendas (PDV)</h3>
+        <p style="color:var(--muted,#7A5A68); font-size:13px; margin:0 0 14px;">Faturamento total: ${fmtMoeda(vendas.reduce((a,v)=>a+(Number(v.valorTotal)||0),0))}</p>
+        <b style="font-size:12.5px;">Por loja</b>
+        <div style="margin-top:8px; margin-bottom:18px;">${barrasHtml(itensLoja, fmtMoeda)}</div>
+        <b style="font-size:12.5px;">Por vendedora</b>
+        <div style="margin-top:8px;">${barrasHtml(itensVend, fmtMoeda)}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharGrafico">Fechar</button></div>
+      `);
+      document.getElementById("btnFecharGrafico").addEventListener("click", closeModal);
+    });
 
     atualizar();
   }
@@ -1116,7 +1258,7 @@
     const lojas = (transfConfig && transfConfig.stores) || [];
 
     el.innerHTML = `
-      <h2 class="section-title">🔁 Transferências e Reposições</h2>
+      <h2 class="section-title">🔁 Transferências e Reposições <button class="btn-grafico" id="btnGraficoTransf">📊 Ver gráfico</button></h2>
       <p class="section-sub">Dados do app de Transferências e Reposições entre lojas.</p>
       <div class="kpis" id="kpisTransf"></div>
       <div class="filters">
@@ -1175,6 +1317,27 @@
     document.getElementById("btnLimparFiltroTransf").addEventListener("click", ()=>{
       filtrosTransf = { loja:"", tipo:"", status:"", dataIni:"", dataFim:"" };
       renderSecaoTransf();
+    });
+    document.getElementById("btnGraficoTransf").addEventListener("click", ()=>{
+      const lista = filtrarTransf();
+      const porStatus = {}, porLoja = {};
+      const labelStatus = { OK:"OK", ERRO:"Pendência", JUST:"Justificado", PEND:"Em aberto" };
+      lista.forEach(r=>{
+        const s = labelStatus[r.__status] || r.__status || "—"; porStatus[s]=(porStatus[s]||0)+1;
+        const l = r.__loja || "—"; porLoja[l]=(porLoja[l]||0)+1;
+      });
+      const itensStatus = Object.entries(porStatus).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      const itensLoja = Object.entries(porLoja).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+      openModal(`
+        <h3 style="margin:0 0 4px;">📊 Transferências e Reposições</h3>
+        <p style="color:var(--muted,#7A5A68); font-size:13px; margin:0 0 14px;">${lista.length} registros (considerando os filtros atuais)</p>
+        <b style="font-size:12.5px;">Por status</b>
+        <div style="margin-top:8px; margin-bottom:18px;">${barrasHtml(itensStatus)}</div>
+        <b style="font-size:12.5px;">Por loja</b>
+        <div style="margin-top:8px;">${barrasHtml(itensLoja)}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharGrafico">Fechar</button></div>
+      `);
+      document.getElementById("btnFecharGrafico").addEventListener("click", closeModal);
     });
 
     atualizar();

@@ -201,7 +201,9 @@ function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOStri
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
+function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='gerente' ? 'Gerente' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
+/** Só diretoria/gerente podem criar, editar ou excluir no DP — vendedora/oficina só visualizam a própria ficha. */
+function podeEditarDP(){ return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente'); }
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -315,9 +317,9 @@ async function doLogin(){
   btn.disabled = true;
   const r = await gatewayLogin(pass);
   btn.disabled = false;
-  if(!r || !r.ok || r.user.nivel !== 'diretoria'){ err.classList.add('show'); return; }
+  if(!r || !r.ok){ err.classList.add('show'); return; }
   __gatewaySenha = pass;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass, funcionarioId:r.user.funcionarioId||null };
   await loadAll();
   enterApp();
 }
@@ -383,19 +385,20 @@ function renderView(){
   else if(currentTab==='atestados') renderRegistros(main, 'atestado');
 }
 
-function nomeFuncionario(id){ const f = funcionarios.find(x=>x.id===id); return f ? f.nome : '—'; }
+function nomeFuncionario(id){ const f = funcionarios.find(x=>x.funcionarioId===id || x.id===id); return f ? f.nome : '—'; }
 function funcionarioOptionsHtml(selected){
-  return `<option value="">Selecione</option>` + funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.id}" ${selected===f.id?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
+  return `<option value="">Selecione</option>` + funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.funcionarioId||f.id}" ${selected===(f.funcionarioId||f.id)?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
 }
 
 /* ============================================================
    FUNCIONÁRIOS (cadastro completo)
    ============================================================ */
 function renderFuncionarios(main){
+  const podeEditar = podeEditarDP();
   main.innerHTML = `
     <div class="page-head">
       <h1 class="page-title">Funcionários</h1>
-      <p class="page-sub">Lista de todos os funcionários cadastrados. Pra adicionar um novo, use o módulo Cadastro → Funcionários — aqui só dá pra ver/editar o perfil de RH de quem já existe.</p>
+      <p class="page-sub">${podeEditar ? 'Lista de todos os funcionários cadastrados. Pra adicionar um novo, use o módulo Cadastro → Funcionários — aqui só dá pra ver/editar o perfil de RH de quem já existe.' : 'Suas informações cadastradas.'}</p>
     </div>
     <div class="card" style="padding:14px 18px;">
       <table>
@@ -406,7 +409,7 @@ function renderFuncionarios(main){
   `;
   function draw(){
     const tbody = document.getElementById('tbodyFunc');
-    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">Nenhum funcionário cadastrado ainda. Cadastre em Cadastro → Funcionários.</td></tr>`; return; }
+    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">${podeEditar?'Nenhum funcionário cadastrado ainda. Cadastre em Cadastro → Funcionários.':'Nenhuma informação encontrada.'}</td></tr>`; return; }
     tbody.innerHTML = funcionarios.slice().reverse().map(f=>`
       <tr>
         <td><b>${escapeHtml(f.nome)}</b></td>
@@ -415,7 +418,7 @@ function renderFuncionarios(main){
         <td>${fmtDate(f.dataAdmissao)}</td>
         <td><span class="badge ${f.status==='desligado'?'badge-erro':'badge-ok'}">${f.status==='desligado'?'Desligado':'Ativo'}</span></td>
         <td>
-          <button class="icon-btn" data-verfunc="${f.id}" title="Ver/editar">✎</button>
+          <button class="icon-btn" data-verfunc="${f.id}" title="${podeEditar?'Ver/editar':'Ver'}">${podeEditar?'✎':'👁'}</button>
         </td>
       </tr>
     `).join('');
@@ -428,6 +431,7 @@ function renderFuncionarios(main){
 const ABAS_FUNC = ['Pessoais','Profissionais','Bancários','Acesso'];
 function abrirFuncionarioModal(f, onSalvarExtra){
   const editando = !!f;
+  const podeEditar = podeEditarDP();
   const d = {
     nome: f?f.nome:'', cpf: f?f.cpf:'', rg: f?f.rg:'', dataNascimento: f?f.dataNascimento:'', estadoCivil: f?f.estadoCivil:'',
     telefone: f?f.telefone:'', email: f?f.email:'', endereco: f?f.endereco:'', numero: f?f.numero:'', complemento: f?f.complemento:'',
@@ -440,12 +444,12 @@ function abrirFuncionarioModal(f, onSalvarExtra){
   };
   let abaAtiva = 'Pessoais';
   openModal(`
-    <div class="section-label">${editando?'Editar funcionário':'Novo funcionário'}</div>
+    <div class="section-label">${podeEditar ? (editando?'Editar funcionário':'Novo funcionário') : 'Meus dados'}</div>
     <div class="mini-tabs" id="funcAbas">${ABAS_FUNC.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fatab="${a}">${a}</button>`).join('')}</div>
     <div id="funcAbaBody"></div>
     <div class="modal-actions">
-      <button class="btn btn-accent" id="btnSalvarFunc">Salvar</button>
-      <button class="btn btn-ghost" id="btnCancelarFunc">Cancelar</button>
+      ${podeEditar ? `<button class="btn btn-accent" id="btnSalvarFunc">Salvar</button>` : ''}
+      <button class="btn btn-ghost" id="btnCancelarFunc">${podeEditar?'Cancelar':'Fechar'}</button>
     </div>
   `);
   function renderAbas(){
@@ -536,11 +540,13 @@ function abrirFuncionarioModal(f, onSalvarExtra){
       const campo = el.id.replace('fu_','');
       el.addEventListener('input', ()=>{ d[campo] = el.value; });
       el.addEventListener('change', ()=>{ d[campo] = el.value; });
+      if(!podeEditar) el.disabled = true;
     });
   }
   renderCorpo(); renderAbas();
 
   document.getElementById('btnCancelarFunc').addEventListener('click', closeModal);
+  if(document.getElementById('btnSalvarFunc'))
   document.getElementById('btnSalvarFunc').addEventListener('click', async ()=>{
     if(!d.nome || !d.nome.trim()){ abaAtiva='Pessoais'; renderCorpo(); renderAbas(); showToast('Informe o nome do funcionário.'); return; }
     const dados = { id: f?f.id:uid('func'), ...d, salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), criadoEm: f?f.criadoEm:Date.now() };
@@ -626,16 +632,17 @@ const CAMPOS_POR_TIPO = {
 
 function renderRegistros(main, tipo){
   const meta = CAMPOS_POR_TIPO[tipo];
+  const podeEditar = podeEditarDP();
   main.innerHTML = `
     <div class="page-head" style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:10px;">
       <div>
         <h1 class="page-title">${meta.tituloPlural}</h1>
-        <p class="page-sub">Histórico por funcionário.</p>
+        <p class="page-sub">${podeEditar ? 'Histórico por funcionário.' : 'Seu histórico.'}</p>
       </div>
-      <button class="btn btn-accent" id="btnNovoRegistro">+ Novo</button>
+      ${podeEditar ? `<button class="btn btn-accent" id="btnNovoRegistro">+ Novo</button>` : ''}
     </div>
     <div class="filters">
-      <select id="fFunc"><option value="">Todos os funcionários</option>${funcionarios.map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select>
+      <select id="fFunc"><option value="">Todos os funcionários</option>${funcionarios.map(f=>`<option value="${f.funcionarioId||f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select>
     </div>
     <div class="card" style="padding:14px 18px;">
       <table>
@@ -679,12 +686,12 @@ function renderRegistros(main, tipo){
         ${meta.colunas.map(c=>`<td>${valorFmt(r,c)}</td>`).join('')}
         ${tipo==='aviso' ? `<td><span class="badge ${st.classe}">${st.texto}</span></td>` : ''}
         <td>
-          <button class="icon-btn" data-verreg="${r.id}" title="Ver/editar">✎</button>
-          ${tipo==='aviso' ? `
+          <button class="icon-btn" data-verreg="${r.id}" title="${podeEditar?'Ver/editar':'Ver'}">${podeEditar?'✎':'👁'}</button>
+          ${tipo==='aviso' && podeEditar ? `
             <button class="icon-btn icon-btn-wa" data-notwa="${r.id}" title="Notificar por WhatsApp">💬</button>
             <button class="icon-btn" data-notemail="${r.id}" title="Notificar por e-mail">✉️</button>
           ` : ''}
-          <button class="icon-btn" data-delreg="${r.id}" title="Excluir" style="color:var(--danger);">✕</button>
+          ${podeEditar ? `<button class="icon-btn" data-delreg="${r.id}" title="Excluir" style="color:var(--danger);">✕</button>` : ''}
         </td>
       </tr>
     `;
@@ -703,7 +710,7 @@ function renderRegistros(main, tipo){
   }
   draw();
   document.getElementById('fFunc').addEventListener('change', draw);
-  document.getElementById('btnNovoRegistro').addEventListener('click', ()=> abrirRegistroModal(tipo, null, draw));
+  if(document.getElementById('btnNovoRegistro')) document.getElementById('btnNovoRegistro').addEventListener('click', ()=> abrirRegistroModal(tipo, null, draw));
 }
 
 /** O telefone usado pra notificar é sempre o celular particular — nunca o fixo ou o da loja. */
@@ -750,18 +757,20 @@ async function notificarPorEmail(registro, redesenhar, botao){
 function abrirRegistroModal(tipo, r, onSalvo){
   const meta = CAMPOS_POR_TIPO[tipo];
   const editando = !!r;
+  const podeEditar = podeEditarDP();
   const funcionarioAtual = r ? funcionarios.find(f=>f.id===r.funcionarioId) : null;
   openModal(`
-    <div class="section-label">${editando?'Editar':'Novo'} — ${meta.titulo}</div>
-    <div class="field"><label>Funcionário</label><select id="rg_funcionarioId">${funcionarioOptionsHtml(r?r.funcionarioId:'')}</select></div>
+    <div class="section-label">${podeEditar ? ((editando?'Editar':'Novo')+' — '+meta.titulo) : meta.titulo}</div>
+    <div class="field"><label>Funcionário</label><select id="rg_funcionarioId" ${podeEditar?'':'disabled'}>${funcionarioOptionsHtml(r?r.funcionarioId:'')}</select></div>
     ${meta.campos.map(c=>{
       const val = r ? (r[c.id]!==undefined?r[c.id]:'') : '';
-      if(c.tipo==='textarea') return `<div class="field"><label>${c.label}</label><textarea id="rg_${c.id}" rows="2">${escapeHtml(val)}</textarea></div>`;
-      if(c.tipo==='select') return `<div class="field"><label>${c.label}</label><select id="rg_${c.id}">${c.opcoes.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
-      if(c.tipo==='number') return `<div class="field"><label>${c.label}</label><input type="number" step="0.01" id="rg_${c.id}" value="${val}"></div>`;
-      if(c.tipo==='date') return `<div class="field"><label>${c.label}</label><input type="date" id="rg_${c.id}" value="${val||''}"></div>`;
-      if(c.tipo==='month') return `<div class="field"><label>${c.label}</label><input type="month" id="rg_${c.id}" value="${val||''}"></div>`;
-      return `<div class="field"><label>${c.label}</label><input id="rg_${c.id}" value="${escapeHtml(val)}"></div>`;
+      const dis = podeEditar?'':'disabled';
+      if(c.tipo==='textarea') return `<div class="field"><label>${c.label}</label><textarea id="rg_${c.id}" rows="2" ${dis}>${escapeHtml(val)}</textarea></div>`;
+      if(c.tipo==='select') return `<div class="field"><label>${c.label}</label><select id="rg_${c.id}" ${dis}>${c.opcoes.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
+      if(c.tipo==='number') return `<div class="field"><label>${c.label}</label><input type="number" step="0.01" id="rg_${c.id}" value="${val}" ${dis}></div>`;
+      if(c.tipo==='date') return `<div class="field"><label>${c.label}</label><input type="date" id="rg_${c.id}" value="${val||''}" ${dis}></div>`;
+      if(c.tipo==='month') return `<div class="field"><label>${c.label}</label><input type="month" id="rg_${c.id}" value="${val||''}" ${dis}></div>`;
+      return `<div class="field"><label>${c.label}</label><input id="rg_${c.id}" value="${escapeHtml(val)}" ${dis}></div>`;
     }).join('')}
     ${tipo==='aviso' && editando ? `
       <div class="section-label" style="margin-top:16px;">Status da notificação</div>
@@ -770,14 +779,15 @@ function abrirRegistroModal(tipo, r, onSalvo){
           : r.notificadoEm ? `<span class="badge badge-wait">Notificado</span> — em ${new Date(r.notificadoEm).toLocaleString('pt-BR')}, aguardando confirmação`
           : `<span class="badge badge-loja">Pendente</span> — ainda não foi notificado`}
       </p>
-      <p class="muted" style="margin-top:-4px;">Pra notificar, use os botões 💬/✉️ na lista de advertências.</p>
+      ${podeEditar ? `<p class="muted" style="margin-top:-4px;">Pra notificar, use os botões 💬/✉️ na lista de advertências.</p>` : ''}
     ` : ''}
     <div class="modal-actions">
-      <button class="btn btn-accent" id="btnSalvarReg">Salvar</button>
-      <button class="btn btn-ghost" id="btnCancelarReg">Cancelar</button>
+      ${podeEditar ? `<button class="btn btn-accent" id="btnSalvarReg">Salvar</button>` : ''}
+      <button class="btn btn-ghost" id="btnCancelarReg">${podeEditar?'Cancelar':'Fechar'}</button>
     </div>
   `);
   document.getElementById('btnCancelarReg').addEventListener('click', closeModal);
+  if(document.getElementById('btnSalvarReg'))
   document.getElementById('btnSalvarReg').addEventListener('click', async ()=>{
     const funcionarioId = document.getElementById('rg_funcionarioId').value;
     if(!funcionarioId){ showToast('Selecione o funcionário.'); return; }
