@@ -266,6 +266,28 @@ async function registrosGet(){
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar registros', e); return []; }
 }
+let vendasPdvCache = null, ordensEntreguesCache = null;
+/** Vendas do PDV — carregado sob demanda, só quando a aba Vendas é aberta. */
+async function vendasPdvGet(){
+  if(vendasPdvCache !== null) return vendasPdvCache;
+  try{
+    const { data, error } = await supabaseClient.from('vendas_pdv').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    vendasPdvCache = (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar vendas do PDV', e); vendasPdvCache = []; }
+  return vendasPdvCache;
+}
+/** O.S. entregues — carregado sob demanda, só quando a aba Vendas é aberta. */
+async function ordensEntreguesGet(){
+  if(ordensEntreguesCache !== null) return ordensEntreguesCache;
+  try{
+    const { data, error } = await supabaseClient.from('painel_ordens_kv').select('value').eq('key','orders').maybeSingle();
+    if(error) throw error;
+    const todasOrdens = Array.isArray(data && data.value) ? data.value : [];
+    ordensEntreguesCache = todasOrdens.filter(o=>o.status==='entregue');
+  }catch(e){ console.error('erro ao carregar O.S. entregues', e); ordensEntreguesCache = []; }
+  return ordensEntreguesCache;
+}
 async function registroSalvar(r){
   try{
     const { error } = await supabaseClient.from('dp_registros').upsert({ id: r.id, payload: r });
@@ -378,7 +400,7 @@ function renderView(){
   const main = document.getElementById('mainContent');
   main.innerHTML = '';
   if(currentTab==='funcionarios') renderFuncionarios(main);
-  else if(currentTab==='vendas') renderRegistros(main, 'vendaspg');
+  else if(currentTab==='vendas') renderVendasDP(main);
   else if(currentTab==='pagamentos') renderRegistros(main, 'pagamento');
   else if(currentTab==='ferias') renderRegistros(main, 'ferias');
   else if(currentTab==='avisos') renderRegistros(main, 'aviso');
@@ -393,6 +415,80 @@ function funcionarioOptionsHtml(selected){
 /* ============================================================
    FUNCIONÁRIOS (cadastro completo)
    ============================================================ */
+/** Aba Vendas: total vendido por funcionário direto do PDV e das O.S. entregues (dado real, não depende de sync manual). */
+async function renderVendasDP(main){
+  main.innerHTML = `<div class="page-head"><h1 class="page-title">Vendas</h1><p class="page-sub">Carregando...</p></div>`;
+  const podeVerTodos = podeEditarDP();
+  const [vendasPdv, ordensEntregues] = await Promise.all([vendasPdvGet(), ordensEntreguesGet()]);
+  let mesFiltro = new Date().toISOString().slice(0,7);
+
+  function desenhar(){
+    const vendasDoMes = vendasPdv.filter(v=> (v.data||'').startsWith(mesFiltro));
+    const ordensDoMes = ordensEntregues.filter(o=> (o.data||'').startsWith(mesFiltro));
+    let listaFuncionarios = funcionarios.filter(f=>f.status!=='desligado');
+    // vendedora/oficina só podem ver a própria linha aqui — não o comparativo de todo mundo
+    if(!podeVerTodos){
+      const meuNome = (currentUser && currentUser.nome || '').trim().toLowerCase();
+      listaFuncionarios = listaFuncionarios.filter(f=> (f.nome||'').trim().toLowerCase()===meuNome);
+    }
+    const linhas = listaFuncionarios.map(f=>{
+      const nomeLower = (f.nome||'').trim().toLowerCase();
+      const minhasVendas = vendasDoMes.filter(v=> (v.vendedora||'').trim().toLowerCase()===nomeLower);
+      const minhasOrdens = ordensDoMes.filter(o=> (o.vendedora||'').trim().toLowerCase()===nomeLower);
+      const totalPdv = minhasVendas.reduce((acc,v)=> acc + (Number(v.valorTotal)||0), 0);
+      const totalOs = minhasOrdens.reduce((acc,o)=> acc + (Number(o.valorTotal)||0), 0);
+      return { nome:f.nome, qtdPdv:minhasVendas.length, totalPdv, qtdOs:minhasOrdens.length, totalOs, total:totalPdv+totalOs };
+    }).sort((a,b)=>b.total-a.total);
+
+    const historicoConferencias = podeVerTodos
+      ? registros.filter(r=>r.tipo==='vendaspg').filter(r=> r.mesReferencia===mesFiltro).slice().reverse()
+      : [];
+
+    main.innerHTML = `
+      <div class="page-head">
+        <h1 class="page-title">Vendas</h1>
+        <p class="page-sub">${podeVerTodos ? 'Direto do PDV e das O.S. entregues — atualizado em tempo real, não depende de conferência manual.' : 'Suas vendas, direto do PDV e das O.S. entregues.'}</p>
+      </div>
+      <div class="card" style="max-width:220px; padding:14px 18px;">
+        <div class="field" style="margin-bottom:0;"><label>Mês</label><input type="month" id="vdp_mes" value="${mesFiltro}"></div>
+      </div>
+      <div class="card" style="padding:14px 18px;">
+        <table>
+          <thead><tr><th>Funcionário</th><th>Vendas PDV</th><th>Valor PDV</th><th>O.S. entregues</th><th>Valor O.S.</th><th>Total</th></tr></thead>
+          <tbody>
+            ${linhas.length===0 ? `<tr><td colspan="6" class="empty">Nenhum funcionário cadastrado ainda.</td></tr>` : linhas.map(l=>`
+              <tr>
+                <td><b>${escapeHtml(l.nome)}</b></td>
+                <td>${l.qtdPdv}</td>
+                <td>${fmtMoeda(l.totalPdv)}</td>
+                <td>${l.qtdOs}</td>
+                <td>${fmtMoeda(l.totalOs)}</td>
+                <td><b>${fmtMoeda(l.total)}</b></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${historicoConferencias.length>0 ? `
+        <div class="card" style="padding:14px 18px;">
+          <div class="section-label" style="border:none; padding:0; margin-bottom:10px;">Conferências do Venda PG nesse mês <span class="muted" style="text-transform:none; font-weight:400;">(por categoria, confirmadas pela diretoria)</span></div>
+          <table>
+            <thead><tr><th>Funcionário</th><th>Loja</th><th>Total (categorias)</th></tr></thead>
+            <tbody>
+              ${historicoConferencias.map(r=>{
+                const total = ['alianca','fabricacao','servico','represOuro','represPrata','relogio'].reduce((acc,c)=> acc + (Number(r[c])||0), 0);
+                return `<tr><td>${escapeHtml(nomeFuncionario(r.funcionarioId))}</td><td>${escapeHtml(r.loja||'—')}</td><td>${fmtMoeda(total)}</td></tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : ''}
+    `;
+    document.getElementById('vdp_mes').addEventListener('change', e=>{ mesFiltro = e.target.value; desenhar(); });
+  }
+  desenhar();
+}
+
 function renderFuncionarios(main){
   const podeEditar = podeEditarDP();
   main.innerHTML = `

@@ -91,6 +91,12 @@
   .badge.just{ background:var(--just-soft); color:var(--just); }
   .empty{ text-align:center; padding:36px 20px; color:var(--ink-faint); font-size:13px; }
   .locked-note{ background:var(--accent-soft); color:var(--accent-ink); padding:11px 13px; border-radius:8px; font-size:12.5px; margin-bottom:16px; }
+  .alerta-rh-banner{ border-radius:10px; padding:13px 16px; margin-bottom:16px; font-size:13px; line-height:1.6; }
+  .alerta-rh-urgente{ background:#FBE7E5; color:#B3261E; border:1px solid #f2b8b5; }
+  .alerta-rh-atencao{ background:#FFF4DE; color:#8A5A00; border:1px solid #f2d99b; }
+  .alerta-rh-aviso{ background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line); }
+  .alerta-rh-banner b{ display:block; margin-bottom:4px; }
+  .alerta-rh-banner ul{ margin:0; padding-left:18px; }
   html.embedded #view-login{ display:none !important; }
   html.embedded header.topbar{ display:none !important; }
   .alerta-meta-popup{ position:fixed; top:18px; right:18px; max-width:360px; background:#fff; border:1px solid var(--danger); border-left:5px solid var(--danger); border-radius:10px; padding:14px 16px; box-shadow:0 20px 45px -18px rgba(0,0,0,0.35); z-index:80; font-size:13px; }
@@ -189,6 +195,88 @@
   let configCompleto = null;
   let ordersConfig = null;
   let orders = [];
+  let dpFuncionariosCache = null;
+
+  /** Carrega o perfil de RH dos funcionários (dp_funcionarios) — só usado pelo alerta de RH, diretoria/gerente. */
+  async function dpFuncionariosGetDash(){
+    if(dpFuncionariosCache !== null) return dpFuncionariosCache;
+    try{
+      const { data, error } = await supabaseClient.from("dp_funcionarios").select("id,payload").order("created_at",{ascending:true});
+      if(error) throw error;
+      dpFuncionariosCache = (data||[]).map(r=>r.payload);
+    }catch(e){ console.error("erro ao carregar perfis de RH", e); dpFuncionariosCache = []; }
+    return dpFuncionariosCache;
+  }
+  function diasEntre(dataFutura){
+    const hoje = new Date(); hoje.setHours(0,0,0,0);
+    const alvo = new Date(dataFutura+"T00:00:00");
+    return Math.round((alvo - hoje) / 86400000);
+  }
+  function somarDias(dataStr, dias){
+    const d = new Date(dataStr+"T00:00:00");
+    d.setDate(d.getDate() + Number(dias||0));
+    return d.toISOString().slice(0,10);
+  }
+  /**
+   * Monta o banner de alertas de RH no topo do Dashboard: avisa 60/30/10 dias antes de um
+   * funcionário completar 1 ano de registro (direito a férias), e 10/5/1 dias antes de vencer
+   * cada período de experiência (a CLT permite até 2). Só diretoria/gerente veem isso.
+   */
+  async function renderAlertasRH(){
+    const el = document.getElementById("secAlertasRH");
+    if(!el) return;
+    const funcionariosRH = await dpFuncionariosGetDash();
+    const ativos = funcionariosRH.filter(f=>f.status!=="desligado");
+
+    const alertasFerias = [];
+    ativos.forEach(f=>{
+      if(!f.dataAdmissao) return;
+      const umAno = somarDias(f.dataAdmissao, 365);
+      const dias = diasEntre(umAno);
+      if(dias>=0 && dias<=60) alertasFerias.push({ nome:f.nome, dias });
+    });
+
+    const alertasExperiencia = [];
+    ativos.forEach(f=>{
+      [[f.experiencia1Data,f.experiencia1Dias,"1"],[f.experiencia2Data,f.experiencia2Dias,"2"]].forEach(([data,duracao,numero])=>{
+        if(!data || !duracao) return;
+        const vencimento = somarDias(data, duracao);
+        const dias = diasEntre(vencimento);
+        if(dias>=0 && dias<=10) alertasExperiencia.push({ nome:f.nome, dias, numero });
+      });
+    });
+
+    if(alertasFerias.length===0 && alertasExperiencia.length===0){ el.innerHTML = ""; return; }
+
+    function classeUrgencia(dias, limiarUrgente, limiarAtencao){
+      if(dias<=limiarUrgente) return "alerta-rh-urgente";
+      if(dias<=limiarAtencao) return "alerta-rh-atencao";
+      return "alerta-rh-aviso";
+    }
+    let html = "";
+    if(alertasFerias.length>0){
+      alertasFerias.sort((a,b)=>a.dias-b.dias);
+      const maisUrgente = alertasFerias[0];
+      html += `
+        <div class="alerta-rh-banner ${classeUrgencia(maisUrgente.dias,10,30)}">
+          <b>🏖️ Férias — completando 1 ano de registro</b>
+          <ul>${alertasFerias.map(a=>`<li>${escapeHtml(a.nome)} — ${a.dias===0?"completa hoje":`em ${a.dias} dia(s)`}</li>`).join("")}</ul>
+        </div>
+      `;
+    }
+    if(alertasExperiencia.length>0){
+      alertasExperiencia.sort((a,b)=>a.dias-b.dias);
+      const maisUrgente = alertasExperiencia[0];
+      html += `
+        <div class="alerta-rh-banner ${classeUrgencia(maisUrgente.dias,1,5)}">
+          <b>⏳ Período de experiência vencendo</b>
+          <ul>${alertasExperiencia.map(a=>`<li>${escapeHtml(a.nome)} — experiência ${a.numero} ${a.dias===0?"vence hoje":`vence em ${a.dias} dia(s)`}</li>`).join("")}</ul>
+        </div>
+      `;
+    }
+    el.innerHTML = html;
+  }
+
   let transfConfig = null;
   let transferencias = [];
   let reposicoes = [];
@@ -500,13 +588,14 @@
 
   function renderDashboard(){
     const main = document.getElementById("mainContent");
-    const mostraFinanceiro = currentUser.nivel === "diretoria";
+    const mostraFinanceiro = currentUser.nivel === "diretoria" || currentUser.nivel === "gerente";
     const mostraTransf = currentUser.nivel !== "oficina";
 
     main.innerHTML = `
       ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições/Vendas.</div>` : ""}
       ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento) nem o Fator (F).</div>` : ""}
 
+      ${mostraFinanceiro ? `<div id="secAlertasRH"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secInteligencia"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secPagamentos"></div>` : ""}
       <div class="section" id="secOrdens"></div>
@@ -515,6 +604,7 @@
       ${mostraFinanceiro ? `<div class="section" id="secFator"></div>` : ""}
     `;
 
+    if(mostraFinanceiro) renderAlertasRH();
     if(mostraFinanceiro) renderSecaoInteligencia();
     if(mostraFinanceiro) renderSecaoPagamentos();
     renderSecaoOrdens(mostraFinanceiro);
