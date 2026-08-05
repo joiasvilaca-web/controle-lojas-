@@ -599,6 +599,7 @@ const SIDEBAR_MODULES = [
   { id:'conciliacao', label:'Conciliação de Cartão', icon:'🔄', src:'conciliacao.html' },
   { id:'dp', label:'Departamento Pessoal', icon:'👤', src:'dp.html' },
   { id:'ia', label:'Inteligência Artificial', icon:'🤖', src:'ia.html' },
+  { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'config', label:'Cadastro', icon:'⚙️', src:null },
 ];
@@ -931,6 +932,7 @@ function buildCfgTabs(){
 
 function renderCfgTab(tab){
   const body = document.getElementById('cfgBody');
+  if(tab==='clientes') return renderClientesTab(body);
   if(tab==='lojas') return renderLojasTab(body);
   if(tab==='funcionarios') return renderFuncionariosTab(body);
   if(tab==='produtos') return renderProdutosTab(body);
@@ -942,6 +944,153 @@ function renderCfgTab(tab){
   if(tab==='statusOrcamento') return renderStatusOrcamentoTab(body);
   if(tab==='acessos') return renderAcessosTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
+}
+
+/* ---------- CLIENTES (Cadastro) ---------- */
+let clientesCacheIdx = null;
+async function carregarClientesParaCadastro(){
+  const r = await gatewayCall({ op:'selectAll', table:'clientes_cadastro' });
+  return (r.data||[]).map(row=>row.payload).filter(Boolean);
+}
+function renderClientesTab(body){
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:18px;padding-bottom:14px;border-bottom:1.5px solid var(--line);">
+      <div><h2 style="margin:0 0 4px;font-size:20px;">Clientes</h2><p style="margin:0;color:var(--muted);font-size:13px;">Cadastro compartilhado com Vendas e O.S.</p></div>
+      <button class="btn btn-accent" id="cfgBtnNovoCliente">+ Novo cliente</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone ou CPF..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;"><div id="cfgClientesTable" style="overflow-x:auto;"></div></div>
+  `;
+  document.getElementById('cfgBtnNovoCliente').addEventListener('click', ()=> openClienteModalCadastro(null));
+  document.getElementById('cfgCliBusca').addEventListener('input', ()=> renderClientesTable(null));
+
+  carregarClientesParaCadastro().then(lista=>{
+    clientesCacheIdx = lista;
+    renderClientesTable(lista);
+  });
+}
+function onlyDigitsCli(s){ return String(s||'').replace(/\D/g,''); }
+function renderClientesTable(lista){
+  if(!lista) lista = clientesCacheIdx || [];
+  const q = (document.getElementById('cfgCliBusca')||{}).value||'';
+  let l = [...lista];
+  if(q){
+    const qd = onlyDigitsCli(q);
+    l = l.filter(c=>(c.nome||'').toLowerCase().includes(q.toLowerCase())||(qd&&onlyDigitsCli(c.telefone).includes(qd))||(qd&&onlyDigitsCli(c.cpf).includes(qd)));
+  }
+  l.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+  const el = document.getElementById('cfgClientesTable');
+  if(!el) return;
+  if(l.length===0){ el.innerHTML='<div style="padding:32px;text-align:center;color:var(--muted);">Nenhum cliente encontrado.</div>'; return; }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead><tr>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nome</th>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Telefone</th>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">E-mail</th>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nascimento</th>
+      <th style="padding:10px 14px;border-bottom:1.5px solid var(--line);"></th>
+    </tr></thead><tbody>
+    ${l.map(c=>`
+      <tr style="border-bottom:1px solid var(--line);">
+        <td style="padding:10px 14px;"><b>${escapeHtml(c.nome)}</b>${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}</td>
+        <td style="padding:10px 14px;">${escapeHtml(c.telefone||'—')}</td>
+        <td style="padding:10px 14px;">${escapeHtml(c.email||'—')}</td>
+        <td style="padding:10px 14px;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
+        <td style="padding:10px 14px;white-space:nowrap;">
+          <button class="btn btn-sm btn-ghost" data-cfgedi="${escapeHtml(c.id)}">✎</button>
+          <button class="btn btn-sm" style="background:var(--danger-soft);color:var(--danger);border:none;" data-cfgdel="${escapeHtml(c.id)}">🗑</button>
+        </td>
+      </tr>
+    `).join('')}
+    </tbody></table>`;
+  el.querySelectorAll('[data-cfgedi]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgedi))));
+  el.querySelectorAll('[data-cfgdel]').forEach(b=>b.addEventListener('click',()=> deletarClienteCadastro(b.dataset.cfgdel)));
+}
+function clienteModalHtml(c){
+  c = c||{};
+  return `
+    <div class="grid-2">
+      <div class="field"><label>Nome *</label><input id="ccNome" value="${escapeHtml(c.nome||'')}"></div>
+      <div class="field"><label>CPF</label><input id="ccCpf" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field"><label>Telefone</label><input id="ccTel" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>E-mail</label><input type="email" id="ccEmail" value="${escapeHtml(c.email||'')}"></div>
+      <div class="field"><label>Data de nascimento</label><input type="date" id="ccNasc" value="${c.dataNascimento||''}"></div>
+      <div class="field"><label>CEP</label><input id="ccCep" value="${escapeHtml(c.cep||'')}"></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Endereço</label><input id="ccEnder" value="${escapeHtml(c.endereco||'')}"></div>
+      <div class="field"><label>Número</label><input id="ccNum" value="${escapeHtml(c.numero||'')}"></div>
+      <div class="field"><label>Complemento</label><input id="ccComp" value="${escapeHtml(c.complemento||'')}"></div>
+      <div class="field"><label>Bairro</label><input id="ccBairro" value="${escapeHtml(c.bairro||'')}"></div>
+      <div class="field"><label>Cidade</label><input id="ccCidade" value="${escapeHtml(c.cidade||'')}"></div>
+      <div class="field"><label>Estado</label><input id="ccEstado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
+    </div>`;
+}
+function openClienteModalCadastro(cli){
+  openModal(`
+    <h3 style="margin:0 0 16px;">${cli?'Editar cliente':'Novo cliente'}</h3>
+    ${clienteModalHtml(cli)}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="ccCancelar">Cancelar</button>
+      <button class="btn btn-accent" id="ccSalvar">Salvar</button>
+    </div>
+  `);
+  document.getElementById('ccCancelar').addEventListener('click', closeModal);
+  // CEP auto-fill
+  document.getElementById('ccCep').addEventListener('blur', async ()=>{
+    const d = document.getElementById('ccCep').value.replace(/\D/g,'');
+    if(d.length!==8) return;
+    try{
+      const res = await fetch(`https://viacep.com.br/ws/${d}/json/`);
+      const data = await res.json();
+      if(!data.erro){
+        document.getElementById('ccEnder').value = data.logradouro||'';
+        document.getElementById('ccBairro').value = data.bairro||'';
+        document.getElementById('ccCidade').value = data.localidade||'';
+        document.getElementById('ccEstado').value = data.uf||'';
+        showToast('CEP preenchido!');
+      }
+    }catch(e){}
+  });
+  document.getElementById('ccSalvar').addEventListener('click', async ()=>{
+    const nome = document.getElementById('ccNome').value.trim();
+    if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    const novo = {
+      id: cli?.id || ('cli_'+Math.random().toString(36).slice(2)+Date.now().toString(36)),
+      nome, cpf: document.getElementById('ccCpf').value.trim(),
+      telefone: document.getElementById('ccTel').value.trim(),
+      email: document.getElementById('ccEmail').value.trim(),
+      dataNascimento: document.getElementById('ccNasc').value,
+      cep: document.getElementById('ccCep').value.trim(),
+      endereco: document.getElementById('ccEnder').value.trim(),
+      numero: document.getElementById('ccNum').value.trim(),
+      complemento: document.getElementById('ccComp').value.trim(),
+      bairro: document.getElementById('ccBairro').value.trim(),
+      cidade: document.getElementById('ccCidade').value.trim(),
+      estado: document.getElementById('ccEstado').value.trim().toUpperCase(),
+      ...(cli||{}), // preserva campos extras (ultimoAniversarioEnviado, etc.)
+      nome, cpf: document.getElementById('ccCpf').value.trim(), // sobrescreve o que o cli anterior tinha
+    };
+    const r = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:novo.id, payload:novo } } });
+    if(r.error){ showToast('Erro ao salvar.'); return; }
+    if(clientesCacheIdx){
+      const idx = clientesCacheIdx.findIndex(x=>x.id===novo.id);
+      if(idx>=0) clientesCacheIdx[idx]=novo; else clientesCacheIdx.push(novo);
+    }
+    showToast('Cliente salvo!');
+    closeModal();
+    renderClientesTable(null);
+  });
+}
+async function deletarClienteCadastro(id){
+  if(!confirm('Excluir este cliente? Esta ação não pode ser desfeita.')) return;
+  const r = await gatewayCall({ op:'delete', table:'clientes_cadastro', params:{ column:'id', value:id } });
+  if(r.error){ showToast('Erro ao excluir.'); return; }
+  if(clientesCacheIdx) clientesCacheIdx = clientesCacheIdx.filter(x=>x.id!==id);
+  showToast('Cliente excluído.');
+  renderClientesTable(null);
 }
 
 /* ---------- LOJAS ---------- */
@@ -2358,8 +2507,14 @@ const MODULOS_APP = {
   ]},
   dp: { nome:'Departamento Pessoal', abas:[] },
   ia: { nome:'Inteligência Artificial', abas:[] },
+  marketing: { nome:'Marketing', abas:[
+    { id:'aniversario', label:'Aniversário' },
+    { id:'orcamentos', label:'Orçamentos' },
+    { id:'maladire', label:'Mala Direta' },
+  ]},
   dashboard: { nome:'Dashboard', abas:[] },
   config: { nome:'Cadastro', abas:[
+    { id:'clientes', label:'Clientes' },
     { id:'lojas', label:'Lojas' },
     { id:'funcionarios', label:'Funcionários' },
     { id:'produtos', label:'Categoria' },
@@ -2387,6 +2542,7 @@ function permissoesPadrao(nivel){
       conciliacao:{ ativo:true, abas:todasAbas('conciliacao') },
       dp:{ ativo:true },
       ia:{ ativo:true },
+      marketing:{ ativo:true, abas:todasAbas('marketing') },
       dashboard:{ ativo:true }, config:{ ativo:true, abas:todasAbas('config') },
     };
   }
@@ -2400,6 +2556,7 @@ function permissoesPadrao(nivel){
       conciliacao:{ ativo:false, abas:{} },
       dp:{ ativo:true },
       ia:{ ativo:true },
+      marketing:{ ativo:false, abas:{} },
       dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
     };
   }
@@ -2413,7 +2570,8 @@ function permissoesPadrao(nivel){
     conciliacao:{ ativo:false, abas:{} },
     dp:{ ativo:true },
     ia:{ ativo:true },
-    dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
+    marketing:{ ativo:true, abas:todasAbas('marketing') },
+    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, lojas:false, funcionarios:false, produtos:false, joias:false, estoque:false, servicos:false, pagamento:false, impressao:false, statusOrcamento:false, acessos:false, mensagens:false } },
   };
 }
 function permissoesDoUsuario(u){
