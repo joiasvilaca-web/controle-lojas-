@@ -765,29 +765,139 @@
       </div>
 
       <div class="card" style="padding:18px; margin-bottom:20px;">
-        <span class="card-title">Orçamentos por vendedora <button class="btn-grafico" id="btnGraficoOrcamentos">📊 Ver gráfico</button></span> <span style="color:var(--ink-faint); font-size:12px;">(status e conversão)</span>
-        <table style="margin-top:10px;">
-          <thead><tr><th>Vendedora</th><th>Total</th><th>Valor</th><th>Aprovados</th><th>Recusados</th><th>Conversão</th></tr></thead>
-          <tbody>
-            ${(()=>{
-              const met = metricasOrcamentosPorVendedora();
-              const nomes = Object.keys(met).sort((a,b)=> met[b].total - met[a].total);
-              if(nomes.length===0) return `<tr><td colspan="6" style="color:var(--ink-faint);">Nenhum orçamento registrado ainda.</td></tr>`;
-              return nomes.map(nome=>{
-                const m = met[nome];
-                const conversao = m.total>0 ? (m.aprovados/m.total*100) : 0;
-                return `<tr>
-                  <td>${escapeHtml(nome)}</td>
-                  <td>${m.total}</td>
-                  <td>${fmtMoeda(m.valorTotal)}</td>
-                  <td>${m.aprovados}</td>
-                  <td>${m.recusados}</td>
-                  <td><span class="badge ${conversao>=50?'ok':conversao>0?'wait':'erro'}">${conversao.toFixed(0)}%</span></td>
-                </tr>`;
-              }).join("");
-            })()}
-          </tbody>
-        </table>
+        <span class="card-title">📋 Orçamentos — Análise de Conversão <button class="btn-grafico" id="btnGraficoOrcamentos">📊 Ver gráfico</button></span>
+        <div style="margin-top:12px;">
+          ${(()=>{
+            const todos = orcamentos;
+            const total = todos.length;
+            if(total===0) return `<div style="color:var(--ink-faint);font-size:13px;">Nenhum orçamento registrado ainda.</div>`;
+
+            const statusL = statusListDash();
+            const encerrados = statusL.filter(s=>s.encerra);
+            const aprovados = todos.filter(o=> encerrados.some(s=>s.id===o.status && s.nome.toLowerCase().includes('aprov')));
+            const recusados = todos.filter(o=> encerrados.some(s=>s.id===o.status && !s.nome.toLowerCase().includes('aprov')));
+            const abertos = todos.filter(o=>{ const si = statusInfoDeDash(o.status); return si && !si.encerra; });
+            const taxaConversao = total>0 ? (aprovados.length/total*100) : 0;
+            const valorAprovado = aprovados.reduce((a,o)=>a+(Number(o.valorTotal)||0),0);
+            const valorAberto = abertos.reduce((a,o)=>a+(Number(o.valorTotal)||0),0);
+            const ticketMedio = aprovados.length>0 ? valorAprovado/aprovados.length : 0;
+            const dias = o=>{ const d=o.criadoEm||o.data; if(!d) return 0; return Math.floor((Date.now()-new Date(d).getTime())/86400000); };
+            const tempoMedioFechamento = aprovados.length>0 ? (aprovados.reduce((a,o)=>a+dias(o),0)/aprovados.length).toFixed(1) : '—';
+
+            // Contagem por status
+            const porStatus = {};
+            todos.forEach(o=>{ const si=statusInfoDeDash(o.status); const k=(si&&si.nome)||o.status||'—'; porStatus[k]=(porStatus[k]||0)+1; });
+
+            // KPI cards
+            const kpiHtml = `
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;">
+                <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:22px;font-weight:800;color:var(--ink);">${total}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;">Total</div>
+                </div>
+                <div style="background:var(--ok-soft);border:1px solid #a8dfc0;border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:22px;font-weight:800;color:var(--ok);">${aprovados.length}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ok);text-transform:uppercase;letter-spacing:.05em;">Aprovados</div>
+                </div>
+                <div style="background:var(--danger-soft);border:1px solid #f5b8b8;border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:22px;font-weight:800;color:var(--danger);">${recusados.length}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--danger);text-transform:uppercase;letter-spacing:.05em;">Recusados</div>
+                </div>
+                <div style="background:var(--wait-soft);border:1px solid #f5d08a;border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:22px;font-weight:800;color:var(--wait);">${abertos.length}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--wait);text-transform:uppercase;letter-spacing:.05em;">Em aberto</div>
+                </div>
+                <div style="background:var(--surface-2);border:2px solid var(--accent-soft);border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:22px;font-weight:800;color:var(--accent);">${taxaConversao.toFixed(0)}%</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;">Conversão</div>
+                </div>
+                <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:15px;font-weight:800;color:var(--ink);">${fmtMoeda(valorAprovado)}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;">Valor aprovado</div>
+                </div>
+                <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:15px;font-weight:800;color:var(--wait);">${fmtMoeda(valorAberto)}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;">Em aberto (R$)</div>
+                </div>
+                <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:15px;font-weight:800;color:var(--ink);">${fmtMoeda(ticketMedio)}</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;">Ticket médio</div>
+                </div>
+                <div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;text-align:center;">
+                  <div style="font-size:22px;font-weight:800;color:var(--ink);">${tempoMedioFechamento}d</div>
+                  <div style="font-size:11px;font-weight:700;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;">Tempo médio</div>
+                </div>
+              </div>`;
+
+            // Distribuição por status (barra visual)
+            const distHtml = `
+              <div style="margin-bottom:16px;">
+                <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:8px;">Distribuição por status</div>
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                  ${Object.entries(porStatus).sort((a,b)=>b[1]-a[1]).map(([nome,qtd])=>{
+                    const pct = total>0?(qtd/total*100):0;
+                    const cor = nome.toLowerCase().includes('aprov')?'var(--ok)':nome.toLowerCase().includes('recus')?'var(--danger)':'var(--wait)';
+                    return `<div style="display:flex;align-items:center;gap:8px;font-size:13px;">
+                      <div style="width:110px;flex-shrink:0;font-weight:600;color:var(--ink-soft);">${escapeHtml(nome)}</div>
+                      <div style="flex:1;background:var(--line);border-radius:4px;height:12px;overflow:hidden;">
+                        <div style="height:100%;width:${pct.toFixed(1)}%;background:${cor};border-radius:4px;"></div>
+                      </div>
+                      <div style="width:50px;text-align:right;font-weight:700;">${qtd} <span style="color:var(--ink-faint);font-weight:400;font-size:11px;">(${pct.toFixed(0)}%)</span></div>
+                    </div>`;
+                  }).join('')}
+                </div>
+              </div>`;
+
+            // Ranking de conversão por vendedora
+            const met = metricasOrcamentosPorVendedora();
+            const vendNomes = Object.keys(met).sort((a,b)=>{
+              const ca = met[a].total>0?(met[a].aprovados/met[a].total):0;
+              const cb = met[b].total>0?(met[b].aprovados/met[b].total):0;
+              return cb-ca;
+            });
+            const rankHtml = vendNomes.length===0 ? '' : `
+              <div>
+                <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:8px;">Ranking de conversão por vendedora</div>
+                <table style="width:100%;">
+                  <thead><tr>
+                    <th style="text-align:left;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">#</th>
+                    <th style="text-align:left;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Vendedora</th>
+                    <th style="text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Total</th>
+                    <th style="text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Aprov.</th>
+                    <th style="text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Recus.</th>
+                    <th style="text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Em aberto</th>
+                    <th style="text-align:right;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Valor aprov.</th>
+                    <th style="text-align:center;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);padding:6px 8px;border-bottom:1.5px solid var(--line);">Conversão</th>
+                  </tr></thead>
+                  <tbody>
+                    ${vendNomes.map((nome,i)=>{
+                      const m = met[nome];
+                      const conv = m.total>0?(m.aprovados/m.total*100):0;
+                      const emAberto = m.total - m.aprovados - m.recusados;
+                      const medalha = i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
+                      return `<tr style="border-bottom:1px solid var(--line);">
+                        <td style="padding:8px 8px;font-size:13px;">${medalha||'#'+(i+1)}</td>
+                        <td style="padding:8px 8px;font-size:13px;font-weight:600;">${escapeHtml(nome)}</td>
+                        <td style="padding:8px 8px;font-size:13px;text-align:center;">${m.total}</td>
+                        <td style="padding:8px 8px;font-size:13px;text-align:center;color:var(--ok);font-weight:700;">${m.aprovados}</td>
+                        <td style="padding:8px 8px;font-size:13px;text-align:center;color:var(--danger);">${m.recusados}</td>
+                        <td style="padding:8px 8px;font-size:13px;text-align:center;color:var(--wait);">${emAberto}</td>
+                        <td style="padding:8px 8px;font-size:13px;text-align:right;">${fmtMoeda(m.valorTotal)}</td>
+                        <td style="padding:8px 8px;text-align:center;">
+                          <span class="badge ${conv>=60?'ok':conv>=30?'wait':'erro'}">${conv.toFixed(0)}%</span>
+                          <div style="background:var(--line);border-radius:3px;height:4px;margin-top:3px;width:60px;margin-left:auto;margin-right:auto;overflow:hidden;">
+                            <div style="height:100%;width:${conv.toFixed(0)}%;background:${conv>=60?'var(--ok)':conv>=30?'var(--wait)':'var(--danger)'};border-radius:3px;"></div>
+                          </div>
+                        </td>
+                      </tr>`;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>`;
+
+            return kpiHtml + distHtml + rankHtml;
+          })()}
+        </div>
       </div>
 
       <div class="card" style="padding:18px; margin-bottom:20px;">
@@ -898,8 +1008,11 @@
     });
     document.getElementById("btnGraficoOrcamentos").addEventListener("click", ()=>{
       const met = metricasOrcamentosPorVendedora();
-      const itens = Object.entries(met).map(([nome,m])=>({ nome, valor:m.total })).sort((a,b)=>b.valor-a.valor);
-      abrirGraficoBarras("Orçamentos por vendedora", "Quantidade de orçamentos lançados por cada uma", itens);
+      const itens = Object.entries(met).map(([nome,m])=>({
+        nome: nome + ` (${m.total>0?(m.aprovados/m.total*100).toFixed(0):0}%)`,
+        valor: m.aprovados
+      })).sort((a,b)=>b.valor-a.valor);
+      abrirGraficoBarras("Ranking de conversão por vendedora", "Quantidade de orçamentos aprovados por cada vendedora", itens);
     });
 
     verificarAlertaDeMetas(metas, totaisMes, fracaoDoMes);

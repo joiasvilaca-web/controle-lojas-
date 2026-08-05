@@ -933,6 +933,7 @@ function buildCfgTabs(){
 function renderCfgTab(tab){
   const body = document.getElementById('cfgBody');
   if(tab==='clientes') return renderClientesTab(body);
+  if(tab==='produto') return renderProdutoUnificadoTab(body);
   if(tab==='lojas') return renderLojasTab(body);
   if(tab==='funcionarios') return renderFuncionariosTab(body);
   if(tab==='produtos') return renderProdutosTab(body);
@@ -1584,8 +1585,240 @@ function cargoLabelPrincipal(cargos){
 }
 
 /* ---------- PRODUTOS (ÓTICA: categorias/subcategorias/fator) ---------- */
+/* ============================================================
+   PRODUTO UNIFICADO — Categorias + Subcategorias + Joias/Metais + Estoque/Composição
+   Substitui as 3 abas separadas (Categoria, Joias & Metais, Produtos & Estoque).
+   ============================================================ */
+async function renderProdutoUnificadoTab(main){
+  // Carrega produtos do estoque se necessário
+  if(!produtosEstoqueCarregado){
+    produtosEstoque = await produtosEstoqueGet();
+    produtosEstoqueCarregado = true;
+  }
+
+  const subAbas = [
+    { id:'cadastro', label:'📦 Produtos & Estoque' },
+    { id:'categorias', label:'🏷️ Categorias' },
+    { id:'subcategorias', label:'🔖 Subcategorias' },
+    { id:'joias', label:'💎 Joias & Metais' },
+  ];
+  let subAbaAtiva = 'cadastro';
+
+  function renderSubAbas(){
+    main.innerHTML = `
+      <div style="display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap;border-bottom:1.5px solid var(--line);padding-bottom:0;">
+        ${subAbas.map(a=>`<button data-psa="${a.id}" style="padding:8px 14px;border:none;background:transparent;font-size:13px;font-weight:600;color:${subAbaAtiva===a.id?'var(--accent)':'var(--ink-faint)'};border-bottom:${subAbaAtiva===a.id?'2.5px solid var(--accent)':'2.5px solid transparent'};margin-bottom:-2px;border-radius:6px 6px 0 0;cursor:pointer;">${a.label}</button>`).join('')}
+      </div>
+      <div id="produtoSubConteudo"></div>
+    `;
+    main.querySelectorAll('[data-psa]').forEach(b=>b.addEventListener('click', ()=>{ subAbaAtiva=b.dataset.psa; renderSubAbas(); }));
+    const conteudo = document.getElementById('produtoSubConteudo');
+    if(subAbaAtiva==='cadastro') renderProdutoCadastro(conteudo);
+    if(subAbaAtiva==='categorias') renderProdutoCategorias(conteudo);
+    if(subAbaAtiva==='subcategorias') renderProdutoSubcategorias(conteudo);
+    if(subAbaAtiva==='joias') renderProdutoJoiasMetais(conteudo);
+  }
+
+  // --- SUB-ABA: Produtos & Estoque (com composição) ---
+  function renderProdutoCadastro(el){
+    const cats = config.produtosOtica.categorias||[];
+    const subs = config.produtosOtica.subcategorias||[];
+    el.innerHTML = `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div class="section-label">Produtos, insumos e matérias-primas</div>
+            <p class="muted" style="margin:2px 0 0;font-size:12px;">Cadastro completo com categoria, subcategoria, joias/metais, composição e estoque.</p>
+          </div>
+          <button class="btn btn-accent btn-sm" id="btnNovoProdutoUnif">+ Novo produto</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <input type="text" id="peUnifBusca" placeholder="Buscar produto..." style="flex:1;min-width:160px;padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+          <select id="peUnifFiltroCat" style="padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+            <option value="">Todas as categorias</option>
+            ${cats.map(c=>`<option value="${escapeHtml(c.id||c.nome)}">${escapeHtml(c.nome)}</option>`).join('')}
+          </select>
+        </div>
+        <div id="peUnifRows"></div>
+      </div>
+    `;
+    function renderRows(){
+      const q = (document.getElementById('peUnifBusca')||{}).value||'';
+      const catSel = (document.getElementById('peUnifFiltroCat')||{}).value||'';
+      let lista = [...produtosEstoque];
+      if(q) lista = lista.filter(p=>(p.nome||'').toLowerCase().includes(q.toLowerCase())||(p.codigoInterno||'').toLowerCase().includes(q.toLowerCase()));
+      if(catSel) lista = lista.filter(p=>p.categoriaId===catSel||p.categoria===catSel);
+      lista.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+      const wrap = document.getElementById('peUnifRows');
+      if(!wrap) return;
+      if(lista.length===0){ wrap.innerHTML=`<div class="empty">Nenhum produto encontrado.</div>`; return; }
+      const catNome = (id)=> cats.find(c=>c.id===id||c.nome===id)?.nome||'';
+      const subNome = (id)=> subs.find(s=>s.id===id||s.nome===id)?.nome||'';
+      wrap.innerHTML = lista.map(p=>`
+        <div class="code-list-item" style="flex-wrap:wrap;gap:8px;">
+          <div style="flex:1;min-width:180px;">
+            <b>${escapeHtml(p.nome)}</b>
+            ${p.codigoInterno?`<span class="muted" style="font-size:11px;"> · #${escapeHtml(p.codigoInterno)}</span>`:''}
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
+              ${catNome(p.categoriaId||p.categoria)?`<span class="chip">${escapeHtml(catNome(p.categoriaId||p.categoria))}</span>`:''}
+              ${subNome(p.subcategoriaId||p.subcategoria)?`<span class="chip">${escapeHtml(subNome(p.subcategoriaId||p.subcategoria))}</span>`:''}
+              <span class="chip">${Number(p.estoque||0)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
+              ${p.composicao&&p.composicao.length>0?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Composição: ${p.composicao.length}</span>`:'<span class="chip">Matéria-prima</span>'}
+              ${p.vendavel===false?`<span class="chip">Só interno</span>`:`<span class="chip" style="background:var(--ok-soft);color:var(--ok);">Vendável</span>`}
+              ${p.precoVenda!=null?`<span class="chip" style="background:var(--accent);color:#fff;">R$ ${Number(p.precoVenda).toFixed(2)}</span>`:''}
+            </div>
+          </div>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <button class="icon-btn" data-petiqueta="${escapeHtml(p.id)}" title="Etiqueta">🏷️</button>
+            <button class="icon-btn" data-pedit="${escapeHtml(p.id)}" title="Editar">✎</button>
+            <button class="icon-btn" data-pdel="${escapeHtml(p.id)}" title="Remover">✕</button>
+          </div>
+        </div>
+      `).join('');
+      wrap.querySelectorAll('[data-petiqueta]').forEach(b=>b.addEventListener('click',()=>imprimirEtiquetaProduto(produtosEstoque.find(p=>p.id===b.dataset.petiqueta))));
+      wrap.querySelectorAll('[data-pedit]').forEach(b=>b.addEventListener('click',()=>abrirProdutoEstoqueModal(produtosEstoque.find(p=>p.id===b.dataset.pedit))));
+      wrap.querySelectorAll('[data-pdel]').forEach(b=>b.addEventListener('click',async()=>{
+        const p = produtosEstoque.find(x=>x.id===b.dataset.pdel);
+        if(!p) return;
+        const usadoEmComp = produtosEstoque.some(x=>x.id!==p.id&&(x.composicao||[]).some(c=>c.insumoId===p.id));
+        if(usadoEmComp){ showToast('Esse item é usado na composição de outro produto.'); return; }
+        const ok = await produtoEstoqueExcluir(p.id);
+        if(ok){ produtosEstoque=produtosEstoque.filter(x=>x.id!==p.id); renderRows(); showToast('Removido.'); }
+      }));
+    }
+    document.getElementById('peUnifBusca').addEventListener('input', renderRows);
+    document.getElementById('peUnifFiltroCat').addEventListener('change', renderRows);
+    document.getElementById('btnNovoProdutoUnif').addEventListener('click', ()=>{
+      abrirProdutoEstoqueModal(null, ()=>renderRows());
+    });
+    renderRows();
+  }
+
+  // --- SUB-ABA: Categorias ---
+  function renderProdutoCategorias(el){
+    const cats = config.produtosOtica.categorias;
+    el.innerHTML = `
+      <div class="card">
+        <div class="section-label">Categorias de produto</div>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px;">Ex: Anéis, Colares, Brincos, Pulseiras…</p>
+        <div id="catRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:160px;margin-bottom:0;"><input id="cat2_nome" placeholder="Nome da categoria"></div>
+          <div class="field" style="flex:2;min-width:200px;margin-bottom:0;"><input id="cat2_desc" placeholder="Descrição (opcional)"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddCat2">+ Adicionar</button>
+        </div>
+      </div>
+    `;
+    function renderCats(){
+      const wrap = document.getElementById('catRows2');
+      wrap.innerHTML = cats.length===0?`<div class="empty">Nenhuma categoria.</div>`:cats.map((c,i)=>`
+        <div class="code-list-item">
+          <div><b>${escapeHtml(c.nome)}</b>${c.descricao?` <span class="muted">— ${escapeHtml(c.descricao)}</span>`:''}</div>
+          <button class="icon-btn" data-delcat="${i}">✕</button>
+        </div>`).join('');
+      wrap.querySelectorAll('[data-delcat]').forEach(b=>b.addEventListener('click',async()=>{
+        cats.splice(Number(b.dataset.delcat),1); await configSave(); renderCats(); showToast('Categoria removida.');
+      }));
+    }
+    renderCats();
+    document.getElementById('btnAddCat2').addEventListener('click', async ()=>{
+      const nome = document.getElementById('cat2_nome').value.trim();
+      if(!nome) return;
+      if(!config.produtosOtica.categorias) config.produtosOtica.categorias=[];
+      config.produtosOtica.categorias.push({ id:'cat_'+Date.now(), nome, descricao: document.getElementById('cat2_desc').value.trim() });
+      await configSave(); document.getElementById('cat2_nome').value=''; document.getElementById('cat2_desc').value='';
+      renderCats(); showToast('Categoria adicionada.');
+    });
+  }
+
+  // --- SUB-ABA: Subcategorias ---
+  function renderProdutoSubcategorias(el){
+    const subs = config.produtosOtica.subcategorias;
+    el.innerHTML = `
+      <div class="card">
+        <div class="section-label">Subcategorias de produto</div>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px;">Ex: Solitário, Aparador, Meia-aliança, Riviera…</p>
+        <div id="subRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:160px;margin-bottom:0;"><input id="sub2_nome" placeholder="Nome da subcategoria"></div>
+          <div class="field" style="flex:2;min-width:200px;margin-bottom:0;"><input id="sub2_desc" placeholder="Descrição (opcional)"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddSub2">+ Adicionar</button>
+        </div>
+      </div>
+    `;
+    function renderSubs(){
+      const wrap = document.getElementById('subRows2');
+      wrap.innerHTML = subs.length===0?`<div class="empty">Nenhuma subcategoria.</div>`:subs.map((s,i)=>`
+        <div class="code-list-item">
+          <div><b>${escapeHtml(s.nome)}</b>${s.descricao?` <span class="muted">— ${escapeHtml(s.descricao)}</span>`:''}</div>
+          <button class="icon-btn" data-delsub="${i}">✕</button>
+        </div>`).join('');
+      wrap.querySelectorAll('[data-delsub]').forEach(b=>b.addEventListener('click',async()=>{
+        subs.splice(Number(b.dataset.delsub),1); await configSave(); renderSubs(); showToast('Subcategoria removida.');
+      }));
+    }
+    renderSubs();
+    document.getElementById('btnAddSub2').addEventListener('click', async ()=>{
+      const nome = document.getElementById('sub2_nome').value.trim();
+      if(!nome) return;
+      if(!config.produtosOtica.subcategorias) config.produtosOtica.subcategorias=[];
+      config.produtosOtica.subcategorias.push({ id:'sub_'+Date.now(), nome, descricao: document.getElementById('sub2_desc').value.trim() });
+      await configSave(); document.getElementById('sub2_nome').value=''; document.getElementById('sub2_desc').value='';
+      renderSubs(); showToast('Subcategoria adicionada.');
+    });
+  }
+
+  // --- SUB-ABA: Joias & Metais ---
+  function renderProdutoJoiasMetais(el){
+    el.innerHTML = `
+      <div class="card">
+        <div class="section-label">Produtos de joalheria</div>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px;">Lista de produtos usados em Transferências e Reposições.</p>
+        <div id="joiaRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <div class="field" style="flex:1;margin-bottom:0;"><input id="joia2_nome" placeholder="Nome do produto"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddJoia2">+ Adicionar</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-label">Metais</div>
+        <div id="metalRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <div class="field" style="flex:1;margin-bottom:0;"><input id="metal2_nome" placeholder="Nome do metal"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddMetal2">+ Adicionar</button>
+        </div>
+      </div>
+    `;
+    function renderJoias(){ document.getElementById('joiaRows2').innerHTML = chipListEditable(config.joiasProdutos,'deljoia2');
+      document.querySelectorAll('[data-deljoia2]').forEach(b=>b.addEventListener('click',async()=>{
+        if(config.joiasProdutos.length<=1){showToast('Mantenha ao menos um.');return;}
+        config.joiasProdutos.splice(Number(b.dataset.deljoia2),1); await configSave(); renderJoias(); showToast('Removido.');
+      }));
+    }
+    function renderMetais(){ document.getElementById('metalRows2').innerHTML = chipListEditable(config.metais,'delmetal2');
+      document.querySelectorAll('[data-delmetal2]').forEach(b=>b.addEventListener('click',async()=>{
+        if(config.metais.length<=1){showToast('Mantenha ao menos um.');return;}
+        config.metais.splice(Number(b.dataset.delmetal2),1); await configSave(); renderMetais(); showToast('Removido.');
+      }));
+    }
+    renderJoias(); renderMetais();
+    document.getElementById('btnAddJoia2').addEventListener('click',async()=>{
+      const v=document.getElementById('joia2_nome').value.trim(); if(!v) return;
+      if(config.joiasProdutos.includes(v)){showToast('Já cadastrado.');return;}
+      config.joiasProdutos.push(v); await configSave(); document.getElementById('joia2_nome').value=''; renderJoias(); showToast('Produto cadastrado.');
+    });
+    document.getElementById('btnAddMetal2').addEventListener('click',async()=>{
+      const v=document.getElementById('metal2_nome').value.trim(); if(!v) return;
+      if(config.metais.includes(v)){showToast('Já cadastrado.');return;}
+      config.metais.push(v); await configSave(); document.getElementById('metal2_nome').value=''; renderMetais(); showToast('Metal cadastrado.');
+    });
+  }
+
+  renderSubAbas();
+}
+
+/* ---------- CATEGORIA / SUBCATEGORIA (abas legado — mantidas pra compatibilidade com código existente) ---------- */
 function renderProdutosTab(main){
-  const cats = config.produtosOtica.categorias;
   const subs = config.produtosOtica.subcategorias;
   main.innerHTML = `
     <div class="card">
@@ -2515,11 +2748,9 @@ const MODULOS_APP = {
   dashboard: { nome:'Dashboard', abas:[] },
   config: { nome:'Cadastro', abas:[
     { id:'clientes', label:'Clientes' },
+    { id:'produto', label:'Produto' },
     { id:'lojas', label:'Lojas' },
     { id:'funcionarios', label:'Funcionários' },
-    { id:'produtos', label:'Categoria' },
-    { id:'joias', label:'Joias & Metais' },
-    { id:'estoque', label:'Produtos & Estoque' },
     { id:'servicos', label:'Tipos de Serviço' },
     { id:'pagamento', label:'Formas de Pagamento' },
     { id:'impressao', label:'Impressão & Etiquetas' },
