@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#2B0F1F;
@@ -1012,7 +1013,7 @@ function renderClientesTab(body){
   body.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:18px;padding-bottom:14px;border-bottom:1.5px solid var(--line);">
       <div><h2 style="margin:0 0 4px;font-size:20px;">Clientes</h2><p style="margin:0;color:var(--muted);font-size:13px;">Cadastro compartilhado com Vendas e O.S.</p></div>
-      <button class="btn btn-accent" id="cfgBtnNovoCliente">+ Novo cliente</button>
+      <div style="display:flex;gap:8px;"><button class="btn btn-ghost" id="cfgBtnImportarClientes">📥 Importar clientes</button><button class="btn btn-accent" id="cfgBtnNovoCliente">+ Novo cliente</button></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone ou CPF..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
@@ -1020,6 +1021,7 @@ function renderClientesTab(body){
     <div class="card" style="padding:0;overflow:hidden;"><div id="cfgClientesTable" style="overflow-x:auto;"></div></div>
   `;
   document.getElementById('cfgBtnNovoCliente').addEventListener('click', ()=> openClienteModalCadastro(null));
+  document.getElementById('cfgBtnImportarClientes').addEventListener('click', ()=> openImportarClientesCadastro());
   document.getElementById('cfgCliBusca').addEventListener('input', ()=> renderClientesTable(null));
 
   carregarClientesParaCadastro().then(lista=>{
@@ -1084,15 +1086,350 @@ function clienteModalHtml(c){
       <div class="field"><label>Estado</label><input id="ccEstado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
     </div>`;
 }
+/* ============================================================
+   IMPORTAÇÃO DE CLIENTES (planilha) — vive só aqui no Cadastro
+   ============================================================ */
+const CAMPOS_IMPORTACAO_CLI = [
+  { key:'nome', label:'Nome' },{ key:'telefone', label:'Telefone' },{ key:'email', label:'E-mail' },
+  { key:'cpf', label:'CPF' },{ key:'dataNascimento', label:'Data de nascimento' },{ key:'cep', label:'CEP' },
+  { key:'endereco', label:'Endereço' },{ key:'numero', label:'Número' },{ key:'complemento', label:'Complemento' },
+  { key:'bairro', label:'Bairro' },{ key:'cidade', label:'Cidade' },{ key:'estado', label:'Estado' },
+];
+function onlyDigitsCli(s){ return (s||'').toString().replace(/\D/g,''); }
+function normalizarTextoCli(s){ return (s||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim(); }
+function sugerirCampoImportacaoCli(header){
+  const h = normalizarTextoCli(header);
+  if(!h) return '';
+  if(/^(nome|cliente|nome completo|nome do cliente)$/.test(h)) return 'nome';
+  if(/telefone|celular|whatsapp|^fone$|contato/.test(h)) return 'telefone';
+  if(/e-?mail/.test(h)) return 'email';
+  if(/^cpf$/.test(h)) return 'cpf';
+  if(/nasc|aniversario/.test(h)) return 'dataNascimento';
+  if(/^cep$/.test(h)) return 'cep';
+  if(/endereco|logradouro|^rua$/.test(h)) return 'endereco';
+  if(/numero|^n[o.]?$/.test(h)) return 'numero';
+  if(/complemento/.test(h)) return 'complemento';
+  if(/bairro/.test(h)) return 'bairro';
+  if(/cidade|municipio/.test(h)) return 'cidade';
+  if(/^(estado|uf)$/.test(h)) return 'estado';
+  return '';
+}
+function parseDataParaISOCli(val){
+  if(val===undefined||val===null||val==='') return '';
+  if(typeof val==='number'){
+    const ms = Math.round((val-25569)*86400*1000);
+    const date = new Date(ms);
+    if(isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0,10);
+  }
+  const s = String(val).trim();
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if(m){ let [,d,mo,y]=m; if(y.length===2) y=(Number(y)>30?'19':'20')+y; return `${y.padStart(4,'0')}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`; }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return m[0].slice(0,10);
+  return '';
+}
+function findClienteIndexCadastro(telefone, cpf){
+  const lista = clientesCacheIdx||[];
+  const tel = onlyDigitsCli(telefone||'');
+  const cpfD = onlyDigitsCli(cpf||'');
+  return lista.findIndex(c=> (tel && onlyDigitsCli(c.telefone)===tel) || (cpfD && onlyDigitsCli(c.cpf)===cpfD));
+}
+function openImportarClientesCadastro(){
+  openModal(`
+    <h3>Importar clientes</h3>
+    <p style="color:var(--muted);font-size:13px;">Envie uma planilha (.xlsx, .xls ou .csv). Você confere quais colunas correspondem a cada campo antes de importar — nada é salvo até você confirmar.</p>
+    <div class="field"><label>Arquivo</label><input type="file" id="cfgImportFile" accept=".xlsx,.xls,.csv"></div>
+    <div id="cfgImportMapping"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cfgImportCancel">Cancelar</button>
+      <button class="btn btn-accent" id="cfgImportConfirm" style="display:none;">Importar</button>
+    </div>
+  `);
+  document.getElementById('cfgImportCancel').addEventListener('click', closeModal);
+  let parsedHeaders=null, parsedRows=null;
+  document.getElementById('cfgImportFile').addEventListener('change', async e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    try{
+      const isCsv = /\.csv$/i.test(file.name);
+      let wb;
+      if(isCsv){ wb = XLSX.read(await file.text(), { type:'string' }); }
+      else{ wb = XLSX.read(await file.arrayBuffer(), { type:'array', cellDates:false }); }
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, defval:'' });
+      if(!matrix || matrix.length<2){ showToast('A planilha parece estar vazia.'); return; }
+      parsedHeaders = matrix[0].map(h=>String(h||'').trim());
+      parsedRows = matrix.slice(1).filter(r=>r.some(c=>c!==''));
+      const area = document.getElementById('cfgImportMapping');
+      area.innerHTML = `
+        <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-top:16px;margin-bottom:6px;">Confira o mapeamento das colunas</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Encontramos ${parsedRows.length} linha(s). A primeira linha de exemplo aparece embaixo de cada coluna.</div>
+        ${parsedHeaders.map((h,i)=>`
+          <div class="grid-2" style="margin-bottom:10px;align-items:center;">
+            <div style="font-size:13px;"><b>${escapeHtml(h||('Coluna '+(i+1)))}</b><div style="color:var(--muted);font-size:12px;">${escapeHtml(String((parsedRows[0]&&parsedRows[0][i]!==undefined)?parsedRows[0][i]:''))}</div></div>
+            <select data-cfgmapidx="${i}" style="padding:8px 10px;border:1px solid var(--line);border-radius:8px;">
+              <option value="">Ignorar coluna</option>
+              ${CAMPOS_IMPORTACAO_CLI.map(c=>`<option value="${c.key}" ${sugerirCampoImportacaoCli(h)===c.key?'selected':''}>${c.label}</option>`).join('')}
+            </select>
+          </div>`).join('')}
+      `;
+      document.getElementById('cfgImportConfirm').style.display='';
+    }catch(err){ console.error(err); showToast('Não foi possível ler o arquivo. Use .xlsx, .xls ou .csv.'); }
+  });
+  document.getElementById('cfgImportConfirm').addEventListener('click', async ()=>{
+    if(!parsedRows){ showToast('Escolha um arquivo primeiro.'); return; }
+    const mapeamento = parsedHeaders.map((h,i)=>{ const sel=document.querySelector(`[data-cfgmapidx="${i}"]`); return sel?sel.value:''; });
+    if(!mapeamento.includes('nome')){ showToast('Marque ao menos uma coluna como "Nome".'); return; }
+    let novos=0, atualizados=0, ignorados=0;
+    const afetados=[];
+    for(const row of parsedRows){
+      const obj={};
+      parsedHeaders.forEach((h,i)=>{
+        const campo=mapeamento[i]; if(!campo) return;
+        let val=row[i];
+        if(campo==='dataNascimento') val=parseDataParaISOCli(val);
+        else val=(val===undefined||val===null)?'':String(val).trim();
+        if(val) obj[campo]=val;
+      });
+      if(!obj.nome){ ignorados++; continue; }
+      const idx=findClienteIndexCadastro(obj.telefone, obj.cpf);
+      if(idx===-1){
+        const novo={ id:'cli_'+Math.random().toString(36).slice(2)+Date.now().toString(36), nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'', ...obj, criadoEm:Date.now() };
+        clientesCacheIdx.unshift(novo); afetados.push(novo); novos++;
+      }else{
+        const ex=clientesCacheIdx[idx];
+        Object.keys(obj).forEach(k=>{ ex[k]=obj[k]; });
+        afetados.push(ex); atualizados++;
+      }
+    }
+    for(const c of afetados){ await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:c.id, payload:c } } }); }
+    closeModal();
+    renderClientesTable(null);
+    showToast(`Importação concluída: ${novos} novo(s), ${atualizados} atualizado(s), ${ignorados} ignorado(s).`);
+  });
+}
+
+/* ============================================================
+   CRÉDITO / FIADO / HISTÓRICO do cliente (Cadastro)
+   ============================================================ */
+async function validarSenhaGerencia(senha){
+  const r = await gatewayCall({ op:'login', senha });
+  if(r && r.ok && r.user && (r.user.nivel==='diretoria'||r.user.nivel==='gerente')) return r.user;
+  return null;
+}
+function fmtMoedaCli(v){ return 'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function saldoDevedorCliente(c){
+  return (c.fiadoDebitos||[]).reduce((a,d)=>a+Math.max(0,(Number(d.valor)||0)-(Number(d.valorPago)||0)),0);
+}
+async function salvarClienteCadastro(c){
+  const r = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:c.id, payload:c } } });
+  if(clientesCacheIdx){
+    const i = clientesCacheIdx.findIndex(x=>x.id===c.id);
+    if(i>=0) clientesCacheIdx[i]=c;
+  }
+  return !r.error;
+}
+function autorizadoPorNome(u){ return (u&&u.nome)||''; }
+function abrirCreditoModal(cli){
+  const movs=(cli.creditoMovimentos||[]).slice().reverse();
+  openModal(`
+    <h3 style="margin:0 0 6px;">💳 Crédito — ${escapeHtml(cli.nome)}</h3>
+    <div style="font-size:22px;font-weight:800;color:var(--ok);margin-bottom:14px;">Saldo: ${fmtMoedaCli(cli.credito||0)}</div>
+    <div class="grid-2">
+      <div class="field"><label>Valor a adicionar (R$)</label><input type="number" id="crValor" step="0.01" min="0.01"></div>
+      <div class="field"><label>Forma de pagamento da recarga</label>
+        <select id="crForma">${(config.formasPagamento||[]).map(f=>`<option value="${escapeHtml(f.id)}">${escapeHtml(f.nome)}</option>`).join('')}</select>
+      </div>
+      <div class="field" style="grid-column:1/-1;"><label>Observação</label><input id="crObs" placeholder="Ex: vale-presente, adiantamento..."></div>
+      <div class="field" style="grid-column:1/-1;"><label>🔒 Senha de gerente ou diretor</label><input type="password" id="crSenha" autocomplete="new-password"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="crFechar">Fechar</button>
+      <button class="btn btn-accent" id="crAdicionar">Adicionar crédito</button>
+    </div>
+    ${movs.length>0?`
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-top:16px;margin-bottom:6px;">Movimentações</div>
+      <div style="max-height:180px;overflow-y:auto;">
+        ${movs.map(m=>`<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line);">
+          <span>${escapeHtml(m.data)} — ${escapeHtml(m.obs||m.tipo||'')}</span>
+          <b style="color:${m.valor>=0?'var(--ok)':'var(--danger)'};">${m.valor>=0?'+':''}${fmtMoedaCli(m.valor)}</b>
+        </div>`).join('')}
+      </div>`:''}
+  `);
+  document.getElementById('crFechar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
+  document.getElementById('crAdicionar').addEventListener('click', async ()=>{
+    const valor=parseFloat(document.getElementById('crValor').value);
+    const senha=document.getElementById('crSenha').value;
+    if(isNaN(valor)||valor<=0){ showToast('Informe um valor válido.'); return; }
+    if(!senha){ showToast('Digite a senha de gerente ou diretor.'); return; }
+    const autorizador=await validarSenhaGerencia(senha);
+    if(!autorizador){ showToast('Senha inválida — apenas gerente ou diretor podem adicionar crédito.'); return; }
+    const formaId=document.getElementById('crForma').value;
+    const obs=document.getElementById('crObs').value.trim();
+    cli.credito=(Number(cli.credito)||0)+valor;
+    if(!cli.creditoMovimentos) cli.creditoMovimentos=[];
+    cli.creditoMovimentos.push({ data:new Date().toISOString().slice(0,10), valor, obs, tipo:'recarga', autorizadoPor:autorizador.nome });
+    await salvarClienteCadastro(cli);
+    const reg={ id:'venda_'+Math.random().toString(36).slice(2)+Date.now().toString(36),
+      tipo:'recargaCredito', loja:'', lojaId:'', vendedora:autorizadoPorNome(autorizador), data:new Date().toISOString().slice(0,10),
+      cliente:cli.nome, telefone:cli.telefone||'', itens:[{ produtoNome:'Recarga de crédito', qtd:1, valor }],
+      valorTotal:valor, pagamentos:[{ formaId, valor }], status:'ativa', criadoPor:autorizador.nome, criadoEm:Date.now() };
+    await gatewayCall({ op:'upsert', table:'vendas_pdv', params:{ row:{ id:reg.id, payload:reg, updated_at:new Date().toISOString() } } });
+    showToast('Crédito adicionado e lançado no caixa!');
+    closeModal(); openClienteModalCadastro(cli);
+  });
+}
+function abrirDebitosModal(cli){
+  const debitos=(cli.fiadoDebitos||[]);
+  const totalDevedor=saldoDevedorCliente(cli);
+  openModal(`
+    <h3 style="margin:0 0 6px;">📄 Débitos (fiado) — ${escapeHtml(cli.nome)}</h3>
+    <div style="font-size:22px;font-weight:800;color:${totalDevedor>0?'var(--danger)':'var(--ok)'};margin-bottom:14px;">Saldo devedor: ${fmtMoedaCli(totalDevedor)}</div>
+    ${debitos.length===0?'<p style="color:var(--muted);">Nenhum fiado registrado.</p>':`
+      <div style="max-height:300px;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead><tr>
+            <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Origem</th>
+            <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Data</th>
+            <th style="text-align:right;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Valor</th>
+            <th style="text-align:right;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Pago</th>
+            <th style="text-align:right;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Resta</th>
+            <th style="padding:6px 8px;border-bottom:1.5px solid var(--line);"></th>
+          </tr></thead>
+          <tbody>${debitos.map((d,i)=>{
+            const resta=Math.max(0,(Number(d.valor)||0)-(Number(d.valorPago)||0));
+            return `<tr style="border-bottom:1px solid var(--line);">
+              <td style="padding:8px;">${escapeHtml(d.origem||'')} ${escapeHtml(String(d.numero||'').slice(0,10))}${d.loja?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(d.loja)}</div>`:''}</td>
+              <td style="padding:8px;">${escapeHtml(d.data||'—')}</td>
+              <td style="padding:8px;text-align:right;">${fmtMoedaCli(d.valor)}</td>
+              <td style="padding:8px;text-align:right;color:var(--ok);">${fmtMoedaCli(d.valorPago||0)}</td>
+              <td style="padding:8px;text-align:right;font-weight:700;color:${resta>0?'var(--danger)':'var(--ok)'};">${fmtMoedaCli(resta)}</td>
+              <td style="padding:8px;text-align:right;">${resta>0?`<button class="btn btn-sm btn-accent" data-receber="${i}">Receber</button>`:'<span style="color:var(--ok);font-weight:700;">✓ Quitado</span>'}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>`}
+    <div class="modal-actions"><button class="btn btn-ghost" id="dbFechar">Fechar</button></div>
+  `);
+  document.getElementById('dbFechar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
+  document.querySelectorAll('[data-receber]').forEach(b=>b.addEventListener('click', ()=> abrirReceberFiado(cli, Number(b.dataset.receber))));
+}
+function abrirReceberFiado(cli, idx){
+  const d=cli.fiadoDebitos[idx];
+  const resta=Math.max(0,(Number(d.valor)||0)-(Number(d.valorPago)||0));
+  openModal(`
+    <h3 style="margin:0 0 12px;">Receber pagamento — fiado</h3>
+    <p style="font-size:13.5px;">${escapeHtml(d.origem||'')} ${escapeHtml(String(d.numero||'').slice(0,10))} · restam <b>${fmtMoedaCli(resta)}</b></p>
+    <div class="grid-2">
+      <div class="field"><label>Valor recebido (R$)</label><input type="number" id="rfValor" step="0.01" min="0.01" max="${resta}" value="${resta.toFixed(2)}"></div>
+      <div class="field"><label>Forma de pagamento</label>
+        <select id="rfForma">${(config.formasPagamento||[]).map(f=>`<option value="${escapeHtml(f.id)}">${escapeHtml(f.nome)}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="rfCancelar">Cancelar</button>
+      <button class="btn btn-accent" id="rfConfirmar">Confirmar recebimento</button>
+    </div>
+  `);
+  document.getElementById('rfCancelar').addEventListener('click', ()=>{ closeModal(); abrirDebitosModal(cli); });
+  document.getElementById('rfConfirmar').addEventListener('click', async ()=>{
+    const valor=parseFloat(document.getElementById('rfValor').value);
+    if(isNaN(valor)||valor<=0||valor>resta+0.001){ showToast('Valor inválido.'); return; }
+    const formaId=document.getElementById('rfForma').value;
+    d.valorPago=(Number(d.valorPago)||0)+valor;
+    if(!d.pagamentos) d.pagamentos=[];
+    d.pagamentos.push({ data:new Date().toISOString().slice(0,10), valor, formaId, recebidoPor:(currentUser&&currentUser.nome)||'' });
+    await salvarClienteCadastro(cli);
+    const reg={ id:'venda_'+Math.random().toString(36).slice(2)+Date.now().toString(36),
+      tipo:'recebimentoFiado', loja:d.loja||'', lojaId:'', vendedora:(currentUser&&currentUser.nome)||'', data:new Date().toISOString().slice(0,10),
+      cliente:cli.nome, telefone:cli.telefone||'', itens:[{ produtoNome:`Recebimento fiado (${d.origem||''} ${String(d.numero||'').slice(0,10)})`, qtd:1, valor }],
+      valorTotal:valor, pagamentos:[{ formaId, valor }], refFiado:{ clienteId:cli.id, debitoId:d.id }, status:'ativa',
+      criadoPor:(currentUser&&currentUser.nome)||'', criadoEm:Date.now() };
+    await gatewayCall({ op:'upsert', table:'vendas_pdv', params:{ row:{ id:reg.id, payload:reg, updated_at:new Date().toISOString() } } });
+    showToast('Recebimento registrado no caixa!');
+    closeModal(); abrirDebitosModal(cli);
+  });
+}
+async function abrirHistoricoCliente(cli){
+  openModal(`<h3 style="margin:0 0 12px;">📋 Histórico — ${escapeHtml(cli.nome)}</h3><div id="histCliBody"><p style="color:var(--muted);">Carregando…</p></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="histFechar">Fechar</button></div>`);
+  document.getElementById('histFechar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
+  const tel=onlyDigitsCli(cli.telefone||'');
+  const nomeL=(cli.nome||'').trim().toLowerCase();
+  const bate=(item)=>{
+    const mesmoTel = tel && onlyDigitsCli(item.telefone||'')===tel;
+    const mesmoNome = nomeL && (item.cliente||'').trim().toLowerCase()===nomeL;
+    return mesmoTel||mesmoNome;
+  };
+  const linhas=[];
+  try{
+    const rV = await gatewayCall({ op:'selectAll', table:'vendas_pdv' });
+    const vendas=(rV.data||[]).map(r=>r.payload).filter(Boolean).filter(bate);
+    for(const v of vendas){
+      const itens=Array.isArray(v.itens)&&v.itens.length>0?v.itens:[{ produtoNome:(v.tipo==='recargaCredito'?'Recarga de crédito':v.tipo==='recebimentoFiado'?'Recebimento fiado':'Venda'), qtd:1, valor:v.valorTotal }];
+      for(const it of itens){
+        linhas.push({ tipo:v.tipo==='recargaCredito'?'Crédito':v.tipo==='recebimentoFiado'?'Fiado (pgto)':'Venda', numero:String(v.id||'').slice(-8), data:v.data||'', valor:(Number(it.valor)||0)*(Number(it.qtd)||1), produto:it.produtoNome||it.produto||it.nome||'—', loja:v.loja||'—' });
+      }
+    }
+  }catch(e){}
+  try{
+    const rO = await gatewayCall({ op:'selectOne', table:'painel_ordens_kv', params:{ column:'key', value:'orders' } });
+    const orders=(rO.data&&rO.data.value)||[];
+    for(const o of orders.filter(bate)){
+      linhas.push({ tipo:'O.S.', numero:String(o.via||o.id||'').slice(0,12), data:o.data||'', valor:Number(o.valorTotal)||0, produto:o.descricao||o.produtoNome||'Serviço', loja:o.loja||o.lojaNome||'—' });
+    }
+  }catch(e){}
+  linhas.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  const total=linhas.reduce((a,l)=>a+l.valor,0);
+  const body=document.getElementById('histCliBody');
+  if(!body) return;
+  if(linhas.length===0){ body.innerHTML='<p style="color:var(--muted);">Nenhuma compra ou O.S. encontrada pra este cliente.</p>'; return; }
+  body.innerHTML=`
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:8px;">${linhas.length} movimentação(ões) — total ${fmtMoedaCli(total)}</div>
+    <div style="max-height:340px;overflow-y:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Tipo</th>
+          <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Número</th>
+          <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Data</th>
+          <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Produto</th>
+          <th style="text-align:left;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Loja</th>
+          <th style="text-align:right;padding:6px 8px;font-size:11px;text-transform:uppercase;color:var(--muted);border-bottom:1.5px solid var(--line);">Valor</th>
+        </tr></thead>
+        <tbody>${linhas.map(l=>`<tr style="border-bottom:1px solid var(--line);">
+          <td style="padding:7px 8px;">${escapeHtml(l.tipo)}</td>
+          <td style="padding:7px 8px;font-family:monospace;font-size:11.5px;">${escapeHtml(l.numero)}</td>
+          <td style="padding:7px 8px;">${l.data?l.data.split('-').reverse().join('/'):'—'}</td>
+          <td style="padding:7px 8px;">${escapeHtml(l.produto)}</td>
+          <td style="padding:7px 8px;">${escapeHtml(l.loja)}</td>
+          <td style="padding:7px 8px;text-align:right;font-weight:600;">${fmtMoedaCli(l.valor)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
 function openClienteModalCadastro(cli){
+  const resumoExtras = cli ? `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px;padding-top:12px;border-top:1px solid var(--line);">
+      <button class="btn btn-ghost btn-sm" id="ccBtnCredito">💳 Crédito: <b style="color:var(--ok);">&nbsp;${fmtMoedaCli(cli.credito||0)}</b></button>
+      <button class="btn btn-ghost btn-sm" id="ccBtnDebitos">📄 Débitos: <b style="color:${saldoDevedorCliente(cli)>0?'var(--danger)':'var(--ok)'};">&nbsp;${fmtMoedaCli(saldoDevedorCliente(cli))}</b></button>
+      <button class="btn btn-ghost btn-sm" id="ccBtnHistorico">📋 Histórico de compras e O.S.</button>
+    </div>` : '';
   openModal(`
     <h3 style="margin:0 0 16px;">${cli?'Editar cliente':'Novo cliente'}</h3>
     ${clienteModalHtml(cli)}
+    ${resumoExtras}
     <div class="modal-actions">
       <button class="btn btn-ghost" id="ccCancelar">Cancelar</button>
       <button class="btn btn-accent" id="ccSalvar">Salvar</button>
     </div>
   `);
+  if(cli){
+    document.getElementById('ccBtnCredito').addEventListener('click', ()=>{ closeModal(); abrirCreditoModal(cli); });
+    document.getElementById('ccBtnDebitos').addEventListener('click', ()=>{ closeModal(); abrirDebitosModal(cli); });
+    document.getElementById('ccBtnHistorico').addEventListener('click', ()=>{ closeModal(); abrirHistoricoCliente(cli); });
+  }
   document.getElementById('ccCancelar').addEventListener('click', closeModal);
   // CEP auto-fill
   document.getElementById('ccCep').addEventListener('blur', async ()=>{
@@ -2796,7 +3133,6 @@ const MODULOS_APP = {
   ia: { nome:'Inteligência Artificial', abas:[] },
   gastos: { nome:'Gastos', abas:[
     { id:'lancamentos', label:'Lançamentos' },
-    { id:'fixos', label:'Despesas Fixas' },
     { id:'agenda', label:'Agenda' },
   ]},
   marketing: { nome:'Marketing', abas:[
@@ -2862,7 +3198,7 @@ function permissoesPadrao(nivel){
     conciliacao:{ ativo:false, abas:{} },
     dp:{ ativo:true },
     ia:{ ativo:true },
-    gastos:{ ativo:true, abas:{ lancamentos:true, fixos:false, agenda:true } },
+    gastos:{ ativo:true, abas:{ lancamentos:true, agenda:true } },
     marketing:{ ativo:true, abas:todasAbas('marketing') },
     dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, lojas:false, funcionarios:false, servicos:false, pagamento:false, impressao:false, statusOrcamento:false, acessos:false, mensagens:false } },
   };

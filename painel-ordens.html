@@ -1412,6 +1412,7 @@ function buildMessage(order){
 function printOrder(order){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
+  paymentTypesMap['__credito'] = 'Crédito do cliente'; paymentTypesMap['__fiado'] = 'Fiado';
   const imp = (config.impressao && config.impressao.os) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 
@@ -1926,7 +1927,7 @@ function mountPagamentos(container, holder){
     const wrap = container.querySelector('#pagRows');
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="grid-2" style="margin-bottom:6px;">
-        <select data-pagform="${i}">${(config.paymentTypes||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}</select>
+        <select data-pagform="${i}">${(config.paymentTypes||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>💳 Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>📝 Fiado</option></select>
         <div style="display:flex; gap:6px;">
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
           <button type="button" class="icon-btn" data-pagdel="${i}" title="Remover">✕</button>
@@ -1969,7 +1970,9 @@ function mountPagamentos(container, holder){
 }
 
 /** Soma já paga de uma ordem/venda (a partir dos pagamentos lançados). */
-function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
+function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
+/* Fiado/crédito não entram como recebido: fiado movimenta o caixa só quando as parcelas
+   são pagas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
 /** Valor ainda pendente (nunca negativo). */
 function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
 /** true quando NENHUMA informação de pagamento foi lançada — dispara o aviso vermelho e o filtro. */
@@ -2303,9 +2306,6 @@ function tabsForLevel(){
   }
   t.push({ id:'painel', label:'Painel', icon:'📋' });
   t.push({ id:'agenda', label:'Agenda', icon:'🗓️' });
-  if(currentUser.nivel!=='oficina'){
-    t.push({ id:'clientes', label:'Clientes', icon:'👤' });
-  }
   if(currentUser.nivel==='oficina' || currentUser.nivel==='diretoria'){
     t.push({ id:'codigo', label:'Código', icon:'🔑' });
   }
@@ -2350,7 +2350,6 @@ function renderView(){
   if(currentTab==='nova') renderNovaOrdem(main);
   else if(currentTab==='painel') renderPainel(main);
   else if(currentTab==='agenda') renderAgenda(main);
-  else if(currentTab==='clientes') renderClientes(main);
   else if(currentTab==='codigo') renderGerarCodigo(main);
 }
 
@@ -2720,6 +2719,34 @@ function renderNovaOrdem(main){
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
     };
+    // ===== Crédito do cliente / Fiado =====
+    const pagsCreditoOS = (novaOrdem.pagamentos||[]).filter(p=>p.formaId==='__credito');
+    const pagsFiadoOS = (novaOrdem.pagamentos||[]).filter(p=>p.formaId==='__fiado');
+    if(pagsCreditoOS.length>0 || pagsFiadoOS.length>0){
+      const telD = onlyDigits(novaOrdem.telefone||'');
+      const nomeL = (novaOrdem.cliente||'').trim().toLowerCase();
+      const cliCad = clientes.find(c=> (telD && onlyDigits(c.telefone||'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+      if(!cliCad){
+        showToast('Pra usar Crédito ou Fiado, o cliente precisa estar no cadastro (selecione pela busca).');
+        return;
+      }
+      const totalCred = pagsCreditoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
+      if(totalCred>0 && (Number(cliCad.credito)||0) < totalCred - 0.001){
+        showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(cliCad.credito)||0).toFixed(2)}.`);
+        return;
+      }
+      if(totalCred>0){
+        cliCad.credito = (Number(cliCad.credito)||0) - totalCred;
+        if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
+        cliCad.creditoMovimentos.push({ data: dt, valor: -totalCred, tipo:'uso', obs:`O.S. ${via}` });
+      }
+      const totalFia = pagsFiadoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
+      if(totalFia>0){
+        if(!cliCad.fiadoDebitos) cliCad.fiadoDebitos = [];
+        cliCad.fiadoDebitos.push({ id:'fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36), origem:'O.S.', numero:via, data:dt, valor:totalFia, valorPago:0, loja:loja||'' });
+      }
+      await salvarUmCliente(cliCad);
+    }
     orders.unshift(novaOrdem);
     await saveOrders();
     await upsertClienteFromOrder(cli);
@@ -3414,318 +3441,6 @@ function openDayModal(iso){
   document.getElementById('dayClose').addEventListener('click', closeModal);
 }
 
-/* ============================================================
-   CLIENTES (cadastro + mala direta de aniversário)
-   ============================================================ */
-function renderClientes(main){
-  main.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1 class="page-title">Clientes</h1>
-        <p class="page-sub">Cadastro para acompanhamento, edição e mala direta de aniversário.</p>
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn btn-ghost" id="btnImportarClientes">📥 Importar clientes</button>
-        <button class="btn btn-accent" id="btnNovoCliente">+ Novo cliente</button>
-      </div>
-    </div>
-
-    <div id="aniversarioCard"></div>
-
-    <div class="filters">
-      <input type="text" id="clienteBusca" placeholder="Buscar por nome, telefone ou CPF...">
-    </div>
-    <div class="card" style="padding:14px 18px; overflow-x:auto;">
-      <div id="clientesTableWrap"></div>
-    </div>
-  `;
-
-  function renderAniversarioCard(){
-    const card = document.getElementById('aniversarioCard');
-    const hoje = new Date();
-    const mes = hoje.getMonth()+1, dia = hoje.getDate();
-    const aniversariantes = clientes.filter(c=>{
-      if(!c.dataNascimento) return false;
-      const partes = c.dataNascimento.split('-').map(Number);
-      const m = partes[1], d = partes[2];
-      return m===mes && d===dia;
-    });
-    if(aniversariantes.length===0){
-      card.innerHTML = `
-        <div class="card" style="margin-bottom:16px;">
-          <div class="section-label">🎂 Aniversariantes de hoje</div>
-          <div class="muted">Nenhum aniversariante hoje.</div>
-        </div>`;
-      return;
-    }
-    card.innerHTML = `
-      <div class="card" style="border-color:var(--encaixe); background:var(--encaixe-soft); margin-bottom:16px;">
-        <div class="section-label" style="color:var(--encaixe); margin-bottom:10px;">🎂 Aniversariantes de hoje (${aniversariantes.length})</div>
-        <div style="display:flex; flex-direction:column; gap:8px;">
-          ${aniversariantes.map(c=>{
-            const jaEnviado = c.ultimoAniversarioEnviado === hoje.getFullYear();
-            return `
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:9px 12px; flex-wrap:wrap;">
-              <div style="font-size:13px;"><b>${escapeHtml(c.nome)}</b><span class="muted"> · ${escapeHtml(c.telefone||'sem telefone')}</span></div>
-              <div style="display:flex; gap:6px; align-items:center;">
-                ${jaEnviado ? `<span class="badge" style="background:var(--ok-soft); color:var(--ok);">✓ Enviado</span>` : ''}
-                <button class="icon-btn icon-btn-wa" data-aniverswa="${c.id}" title="Enviar WhatsApp">${waIconSvg()}</button>
-                <button class="icon-btn" data-aniversmail="${c.id}" title="Enviar e-mail">✉️</button>
-              </div>
-            </div>
-          `;}).join('')}
-        </div>
-      </div>
-    `;
-    card.querySelectorAll('[data-aniverswa]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        await sendWhatsAppCliente(clientes.find(x=>x.id===b.dataset.aniverswa));
-        renderAniversarioCard();
-      });
-    });
-    card.querySelectorAll('[data-aniversmail]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        await sendEmailCliente(clientes.find(x=>x.id===b.dataset.aniversmail));
-        renderAniversarioCard();
-      });
-    });
-  }
-  renderAniversarioCard();
-
-  const buscaInp = document.getElementById('clienteBusca');
-
-  function renderTable(){
-    let list = [...clientes];
-    const q = buscaInp.value.trim().toLowerCase();
-    if(q){
-      const qDigits = onlyDigits(q);
-      const qCpf = onlyDigitsCpf(q);
-      list = list.filter(c=>
-        (c.nome||'').toLowerCase().includes(q) ||
-        (qDigits && onlyDigits(c.telefone).includes(qDigits)) ||
-        (qCpf && onlyDigitsCpf(c.cpf).includes(qCpf))
-      );
-    }
-    list.sort((a,b)=> (a.nome||'').localeCompare(b.nome||''));
-
-    const wrap = document.getElementById('clientesTableWrap');
-    if(list.length===0){
-      wrap.innerHTML = `<div class="empty">Nenhum cliente encontrado.</div>`;
-      return;
-    }
-    wrap.innerHTML = `
-      <table>
-        <thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th><th>CPF</th><th>Nascimento</th><th>Ações</th></tr></thead>
-        <tbody>
-          ${list.map(c=>`
-            <tr>
-              <td><b>${escapeHtml(c.nome)}</b>${enderecoCompleto(c)?`<div class="muted" style="margin-top:2px;">${escapeHtml(enderecoCompleto(c))}</div>`:''}</td>
-              <td>${escapeHtml(c.telefone||'—')}</td>
-              <td>${escapeHtml(c.email||'—')}</td>
-              <td>${escapeHtml(c.cpf||'—')}</td>
-              <td>${c.dataNascimento?fmtDate(c.dataNascimento):'—'}</td>
-              <td style="white-space:nowrap;">
-                <button class="icon-btn" data-editcli="${c.id}" title="Editar">✎</button>
-                <button class="icon-btn" data-delcli="${c.id}" title="Excluir">🗑</button>
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
-    wrap.querySelectorAll('[data-editcli]').forEach(b=>{
-      b.addEventListener('click', ()=> openClienteModal(clientes.find(x=>x.id===b.dataset.editcli)) );
-    });
-    wrap.querySelectorAll('[data-delcli]').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        const clienteId = b.dataset.delcli;
-        openModal(`
-          <h3>Excluir cliente</h3>
-          <p>Tem certeza que deseja excluir este cliente do cadastro? Essa ação não pode ser desfeita.</p>
-          <div class="modal-actions">
-            <button class="btn btn-ghost" id="cliDelCancel">Cancelar</button>
-            <button class="btn btn-danger" id="cliDelConfirm">Excluir</button>
-          </div>
-        `);
-        document.getElementById('cliDelCancel').addEventListener('click', closeModal);
-        document.getElementById('cliDelConfirm').addEventListener('click', async ()=>{
-          clientes = clientes.filter(x=>x.id!==clienteId);
-          await excluirCliente(clienteId);
-          closeModal();
-          renderAniversarioCard();
-          renderTable();
-          showToast('Cliente excluído.');
-        });
-      });
-    });
-  }
-  buscaInp.addEventListener('input', renderTable);
-  renderTable();
-
-  document.getElementById('btnNovoCliente').addEventListener('click', ()=> openClienteModal(null) );
-  document.getElementById('btnImportarClientes').addEventListener('click', ()=> openImportarClientesModal() );
-
-  function openImportarClientesModal(){
-    openModal(`
-      <h3>Importar clientes</h3>
-      <p class="muted">Envie uma planilha (.xlsx, .xls ou .csv) exportada do outro sistema. Você confere e ajusta quais colunas correspondem a cada campo antes de importar — nada é salvo até você confirmar.</p>
-      <div class="field"><label>Arquivo</label><input type="file" id="importFileInput" accept=".xlsx,.xls,.csv"></div>
-      <div id="importMappingArea"></div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" id="importCancel">Cancelar</button>
-        <button class="btn btn-accent" id="importConfirm" style="display:none;">Importar</button>
-      </div>
-    `);
-    document.getElementById('importCancel').addEventListener('click', closeModal);
-
-    let parsedHeaders = null, parsedRows = null;
-
-    document.getElementById('importFileInput').addEventListener('change', async (e)=>{
-      const file = e.target.files[0];
-      if(!file) return;
-      try{
-        const isCsv = /\.csv$/i.test(file.name);
-        let wb;
-        if(isCsv){
-          const text = await file.text();
-          wb = XLSX.read(text, { type: 'string' });
-        }else{
-          const buf = await file.arrayBuffer();
-          wb = XLSX.read(buf, { type: 'array', cellDates: false });
-        }
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
-        if(!matrix || matrix.length < 2){
-          showToast('A planilha parece estar vazia.');
-          return;
-        }
-        parsedHeaders = matrix[0].map(h=>String(h||'').trim());
-        parsedRows = matrix.slice(1).filter(r=> r.some(c=>c!==''));
-        renderMapping();
-      }catch(err){
-        console.error('Erro ao ler planilha:', err);
-        showToast('Não foi possível ler esse arquivo. Confira se o formato é .xlsx, .xls ou .csv.');
-      }
-    });
-
-    function renderMapping(){
-      const area = document.getElementById('importMappingArea');
-      area.innerHTML = `
-        <div class="section-label" style="margin-top:18px;">Confira o mapeamento das colunas</div>
-        <div class="group-hint" style="margin-bottom:12px;">Encontramos ${parsedRows.length} linha(s). Ajuste abaixo se alguma coluna não foi identificada corretamente — a primeira linha de exemplo aparece embaixo de cada nome.</div>
-        ${parsedHeaders.map((h,i)=>`
-          <div class="grid-2" style="margin-bottom:10px; align-items:center;">
-            <div style="font-size:13px;"><b>${escapeHtml(h||('Coluna '+(i+1)))}</b><div class="muted">${escapeHtml(String((parsedRows[0]&&parsedRows[0][i]!==undefined)?parsedRows[0][i]:''))}</div></div>
-            <select data-mapidx="${i}">
-              <option value="">Ignorar coluna</option>
-              ${CAMPOS_IMPORTACAO.map(c=>`<option value="${c.key}" ${sugerirCampoImportacao(h)===c.key?'selected':''}>${c.label}</option>`).join('')}
-            </select>
-          </div>
-        `).join('')}
-      `;
-      document.getElementById('importConfirm').style.display = '';
-    }
-
-    document.getElementById('importConfirm').addEventListener('click', async ()=>{
-      if(!parsedRows){ showToast('Escolha um arquivo primeiro.'); return; }
-      const mapeamento = parsedHeaders.map((h,i)=>{
-        const sel = document.querySelector(`[data-mapidx="${i}"]`);
-        return sel ? sel.value : '';
-      });
-      if(!mapeamento.includes('nome')){
-        showToast('Marque ao menos uma coluna como "Nome" para continuar.');
-        return;
-      }
-      const resumo = await processarImportacaoClientes(parsedHeaders, parsedRows, mapeamento);
-      closeModal();
-      renderAniversarioCard();
-      renderTable();
-      showToast(`Importação concluída: ${resumo.novos} novo(s), ${resumo.atualizados} atualizado(s), ${resumo.ignorados} ignorado(s).`);
-    });
-  }
-
-  /** Junta O.S., Vendas e Orçamentos do mesmo cliente (por telefone ou nome), mais recente primeiro. */
-  function historicoTransacoesDoCliente(cliente){
-    if(!cliente) return [];
-    const telDigits = onlyDigits(cliente.telefone||'');
-    const nomeLower = (cliente.nome||'').trim().toLowerCase();
-    const bate = (item)=>{
-      const mesmoTelefone = telDigits && onlyDigits(item.telefone||'') === telDigits;
-      const mesmoNome = nomeLower && (item.cliente||'').trim().toLowerCase() === nomeLower;
-      return mesmoTelefone || mesmoNome;
-    };
-    const doOs = orders.filter(bate).map(o=>({ tipo:'O.S.', data:o.data, valor:Number(o.valorTotal)||0, status:statusLabel(o.status), ref:o.via||o.id }));
-    const doVendas = vendasParaHistorico.filter(bate).map(v=>({ tipo:'Venda', data:v.data, valor:Number(v.valorTotal)||0, status:'—', ref:v.id }));
-    const doOrc = orcamentos.filter(bate).map(o=>{
-      const info = statusInfoDe(o.status);
-      return { tipo:'Orçamento', data:o.data, valor:Number(o.valorTotal)||0, status: info?info.nome:o.status, ref:o.id };
-    });
-    return [...doOs, ...doVendas, ...doOrc].sort((a,b)=> (b.data||'').localeCompare(a.data||''));
-  }
-
-  function openClienteModal(cliente){
-    const editing = !!cliente;
-    const c = cliente || { nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'' };
-    const historico = editing ? historicoTransacoesDoCliente(c) : [];
-    const totalGasto = historico.reduce((acc,h)=> acc + h.valor, 0);
-    openModal(`
-      <h3>${editing?'Editar cliente':'Novo cliente'}</h3>
-      ${clienteFieldsHtml('cli', c)}
-      ${editing ? `
-        <div class="section-label" style="margin-top:18px;">Histórico de transações ${historico.length>0?`<span class="muted" style="text-transform:none; font-weight:400;">— total ${fmtMoeda(totalGasto)} em ${historico.length} registro(s)</span>`:''}</div>
-        <div style="max-height:220px; overflow-y:auto;">
-          ${historico.length===0 ? `<p class="muted">Nenhuma O.S., venda ou orçamento encontrado pra este cliente ainda.</p>` : `
-            <table>
-              <thead><tr><th>Tipo</th><th>Data</th><th>Valor</th><th>Status</th></tr></thead>
-              <tbody>${historico.map(h=>`<tr><td>${escapeHtml(h.tipo)}</td><td>${fmtDate(h.data)}</td><td>${fmtMoeda(h.valor)}</td><td>${escapeHtml(h.status)}</td></tr>`).join('')}</tbody>
-            </table>
-          `}
-        </div>
-      ` : ''}
-      <div class="modal-actions">
-        <button class="btn btn-ghost" id="cliCancel">Cancelar</button>
-        <button class="btn btn-accent" id="cliSave">Salvar</button>
-      </div>
-    `);
-    wireClienteFields('cli', {});
-    document.getElementById('cliCancel').addEventListener('click', closeModal);
-    document.getElementById('cliSave').addEventListener('click', async ()=>{
-      const nome = document.getElementById('cli_cliente').value.trim();
-      if(!nome){ showToast('Informe o nome do cliente.'); return; }
-      const patch = {
-        nome,
-        telefone: document.getElementById('cli_telefone').value.trim(),
-        email: document.getElementById('cli_email').value.trim(),
-        cpf: document.getElementById('cli_cpf').value.trim(),
-        dataNascimento: document.getElementById('cli_nascimento').value,
-        cep: document.getElementById('cli_cep').value.trim(),
-        endereco: document.getElementById('cli_endereco').value.trim(),
-        numero: document.getElementById('cli_numero').value.trim(),
-        complemento: document.getElementById('cli_complemento').value.trim(),
-        bairro: document.getElementById('cli_bairro').value.trim(),
-        cidade: document.getElementById('cli_cidade').value.trim(),
-        estado: document.getElementById('cli_estado').value.trim(),
-      };
-      let clienteFinal;
-      if(editing){
-        Object.assign(cliente, patch);
-        clienteFinal = cliente;
-      } else {
-        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
-        clientes.unshift(clienteFinal);
-      }
-      await salvarUmCliente(clienteFinal);
-      closeModal();
-      renderAniversarioCard();
-      renderTable();
-      showToast(editing ? 'Cliente atualizado.' : 'Cliente cadastrado.');
-    });
-  }
-}
-
-/* ============================================================
-   GERAR CÓDIGO (oficina / diretoria)
-   ============================================================ */
 function renderGerarCodigo(main){
   main.innerHTML = `
     <div class="page-head">
