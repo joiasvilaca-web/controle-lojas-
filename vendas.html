@@ -216,7 +216,7 @@ function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOStri
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='gerente' ? 'Gerente' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
+function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -699,7 +699,7 @@ function mountPagamentos(container, holder){
     const wrap = container.querySelector('#pagRows');
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="grid-2" style="margin-bottom:6px;">
-        <select data-pagform="${i}">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>💳 Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>📝 Fiado</option></select>
+        <select data-pagform="${i}">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}</select>
         <div style="display:flex; gap:6px;">
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
           <button type="button" class="icon-btn" data-pagdel="${i}" title="Remover">✕</button>
@@ -736,9 +736,7 @@ function mountPagamentos(container, holder){
 
   draw();
 }
-function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
-/* Fiado e crédito não movimentam o caixa na venda: o fiado só entra quando as parcelas são
-   recebidas (Cadastro → Clientes → Débitos) e o crédito entrou quando foi recarregado. */
+function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
 function valorAReceberDe(v){ return Math.max(0, (Number(v.valorTotal)||0) - valorRecebidoDe(v)); }
 function semPagamentoLancado(v){ return !v.valorTotal && (!v.pagamentos || v.pagamentos.length===0); }
 
@@ -1102,41 +1100,8 @@ function renderNovaVenda(main){
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
     };
-    // ===== Crédito do cliente / Fiado =====
-    const pagsCredito = (venda.pagamentos||[]).filter(p=>p.formaId==='__credito');
-    const pagsFiado = (venda.pagamentos||[]).filter(p=>p.formaId==='__fiado');
-    let clienteCadastro = null;
-    if(pagsCredito.length>0 || pagsFiado.length>0){
-      const telD = (venda.telefone||'').replace(/\D/g,'');
-      const nomeL = (venda.cliente||'').trim().toLowerCase();
-      clienteCadastro = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
-      if(!clienteCadastro){
-        showToast('Pra usar Crédito ou Fiado, selecione um cliente já cadastrado (busque pela lupa).');
-        return;
-      }
-      const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
-      if(totalCredito>0 && (Number(clienteCadastro.credito)||0) < totalCredito - 0.001){
-        showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(clienteCadastro.credito)||0).toFixed(2)}.`);
-        return;
-      }
-    }
     const ok = await vendaSalvar(venda);
     if(ok){
-      // Debitar crédito e registrar fiado no cadastro do cliente
-      if(clienteCadastro){
-        const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
-        if(totalCredito>0){
-          clienteCadastro.credito = (Number(clienteCadastro.credito)||0) - totalCredito;
-          if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
-          clienteCadastro.creditoMovimentos.push({ data: venda.data, valor: -totalCredito, tipo:'uso', obs:`Venda ${String(venda.id).slice(-8)}` });
-        }
-        const totalFiado = pagsFiado.reduce((a,p)=>a+(Number(p.valor)||0),0);
-        if(totalFiado>0){
-          if(!clienteCadastro.fiadoDebitos) clienteCadastro.fiadoDebitos = [];
-          clienteCadastro.fiadoDebitos.push({ id:'fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36), origem:'Venda', numero:String(venda.id).slice(-8), data:venda.data, valor:totalFiado, valorPago:0, loja:venda.loja||'' });
-        }
-        if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteCadastro);
-      }
       await aplicarConsumosEstoque(reservas);
       vendas.unshift(venda);
       showToast('Venda lançada com sucesso.');
@@ -1245,7 +1210,7 @@ function renderVendas(main){
 
 function abrirDetalheVenda(v){
   if(!v) return;
-  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; }); paymentTypesMap['__credito']='Crédito do cliente'; paymentTypesMap['__fiado']='Fiado';
+  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; });
   const nomeLoja = (id)=> { const l = (config.lojas||[]).find(x=>x.id===id); return l ? l.nome : '—'; };
   openModal(`
     <h3>Venda — ${escapeHtml(v.cliente || 'cliente não identificado')}</h3>
@@ -1311,7 +1276,7 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
 }
 
 function printVenda(v){
-  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; }); paymentTypesMap['__credito']='Crédito do cliente'; paymentTypesMap['__fiado']='Fiado';
+  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; });
   const imp = (config.impressao && config.impressao.vendas) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 

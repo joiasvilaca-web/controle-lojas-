@@ -648,7 +648,7 @@ function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function statusLabel(s){ return s==='aguardando'?'Aguardando':s==='pronto'?'Pronto':s==='entregue'?'Entregue':s==='rascunho'?'Rascunho':'Cancelado'; }
-function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='gerente' ? 'Gerente' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
+function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function serviceColor(id){
   const i = config.serviceTypes.findIndex(s=>s.id===id);
   return COLOR_PALETTE[(i<0?0:i) % COLOR_PALETTE.length];
@@ -1412,7 +1412,6 @@ function buildMessage(order){
 function printOrder(order){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
-  paymentTypesMap['__credito'] = 'Crédito do cliente'; paymentTypesMap['__fiado'] = 'Fiado';
   const imp = (config.impressao && config.impressao.os) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 
@@ -1927,7 +1926,7 @@ function mountPagamentos(container, holder){
     const wrap = container.querySelector('#pagRows');
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="grid-2" style="margin-bottom:6px;">
-        <select data-pagform="${i}">${(config.paymentTypes||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>💳 Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>📝 Fiado</option></select>
+        <select data-pagform="${i}">${(config.paymentTypes||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}</select>
         <div style="display:flex; gap:6px;">
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
           <button type="button" class="icon-btn" data-pagdel="${i}" title="Remover">✕</button>
@@ -1970,9 +1969,7 @@ function mountPagamentos(container, holder){
 }
 
 /** Soma já paga de uma ordem/venda (a partir dos pagamentos lançados). */
-function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
-/* Fiado/crédito não entram como recebido: fiado movimenta o caixa só quando as parcelas
-   são pagas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
+function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
 /** Valor ainda pendente (nunca negativo). */
 function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
 /** true quando NENHUMA informação de pagamento foi lançada — dispara o aviso vermelho e o filtro. */
@@ -2723,34 +2720,6 @@ function renderNovaOrdem(main){
       fotos: tempFotoHolder.fotos,
       criadoEm: Date.now()
     };
-    // ===== Crédito do cliente / Fiado =====
-    const pagsCreditoOS = (novaOrdem.pagamentos||[]).filter(p=>p.formaId==='__credito');
-    const pagsFiadoOS = (novaOrdem.pagamentos||[]).filter(p=>p.formaId==='__fiado');
-    if(pagsCreditoOS.length>0 || pagsFiadoOS.length>0){
-      const telD = onlyDigits(novaOrdem.telefone||'');
-      const nomeL = (novaOrdem.cliente||'').trim().toLowerCase();
-      const cliCad = clientes.find(c=> (telD && onlyDigits(c.telefone||'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
-      if(!cliCad){
-        showToast('Pra usar Crédito ou Fiado, o cliente precisa estar no cadastro (selecione pela busca).');
-        return;
-      }
-      const totalCred = pagsCreditoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
-      if(totalCred>0 && (Number(cliCad.credito)||0) < totalCred - 0.001){
-        showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(cliCad.credito)||0).toFixed(2)}.`);
-        return;
-      }
-      if(totalCred>0){
-        cliCad.credito = (Number(cliCad.credito)||0) - totalCred;
-        if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-        cliCad.creditoMovimentos.push({ data: dt, valor: -totalCred, tipo:'uso', obs:`O.S. ${via}` });
-      }
-      const totalFia = pagsFiadoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
-      if(totalFia>0){
-        if(!cliCad.fiadoDebitos) cliCad.fiadoDebitos = [];
-        cliCad.fiadoDebitos.push({ id:'fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36), origem:'O.S.', numero:via, data:dt, valor:totalFia, valorPago:0, loja:loja||'' });
-      }
-      await salvarUmCliente(cliCad);
-    }
     orders.unshift(novaOrdem);
     await saveOrders();
     await upsertClienteFromOrder(cli);
@@ -3456,7 +3425,7 @@ function renderClientes(main){
         <p class="page-sub">Cadastro para acompanhamento, edição e mala direta de aniversário.</p>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <!-- Importação de clientes agora fica em Cadastro → Clientes -->
+        <button class="btn btn-ghost" id="btnImportarClientes">📥 Importar clientes</button>
         <button class="btn btn-accent" id="btnNovoCliente">+ Novo cliente</button>
       </div>
     </div>
@@ -3594,7 +3563,7 @@ function renderClientes(main){
   renderTable();
 
   document.getElementById('btnNovoCliente').addEventListener('click', ()=> openClienteModal(null) );
-  // Importação de clientes movida para Cadastro → Clientes
+  document.getElementById('btnImportarClientes').addEventListener('click', ()=> openImportarClientesModal() );
 
   function openImportarClientesModal(){
     openModal(`
