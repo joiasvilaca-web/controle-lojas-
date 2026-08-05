@@ -595,6 +595,7 @@ const SIDEBAR_MODULES = [
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'vendas', label:'Vendas', icon:'🛒', src:null },
   { id:'orcamentos', label:'Orçamentos', icon:'📝', src:'orcamentos.html' },
+  { id:'gastos', label:'Gastos', icon:'💸', src:'gastos.html' },
   { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
   { id:'dp', label:'Departamento Pessoal', icon:'👤', src:'dp.html' },
   { id:'transferencias', label:'Transferências', icon:'🔁', src:'transferencias-reposicoes.html' },
@@ -686,12 +687,60 @@ document.getElementById('btnLogoutShell').addEventListener('click', ()=>{
   document.getElementById('loginView').style.display = 'flex';
 });
 
+/* Alerta de gastos ao abrir o sistema — mostra popup com contas vencendo hoje e vencidas */
+async function verificarAlertaGastos(){
+  try{
+    const r = await gatewayCall({ op:'selectAll', table:'gastos' });
+    const todos = (r.data||[]).map(x=>x.payload).filter(Boolean);
+    const hj = new Date().toISOString().slice(0,10);
+    const vencidos = todos.filter(g=>!g.pago && g.vencimento && g.vencimento < hj);
+    const hoje = todos.filter(g=>!g.pago && g.vencimento === hj);
+    if(vencidos.length===0 && hoje.length===0) return;
+    const fmtMoeda = v=>'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const fmtData = d=>{ if(!d) return '—'; const [y,m,di]=d.split('-'); return `${di}/${m}/${y}`; };
+    const totalVenc = vencidos.reduce((a,g)=>a+Number(g.valor||0),0);
+    const totalHoje = hoje.reduce((a,g)=>a+Number(g.valor||0),0);
+    openModal(`
+      <div style="text-align:center;margin-bottom:16px;">
+        <div style="font-size:32px;margin-bottom:8px;">🔔</div>
+        <h3 style="margin:0 0 4px;color:var(--accent);">Lembrete de contas</h3>
+        <p style="margin:0;color:var(--muted);font-size:13px;">Atualizado ao entrar no sistema</p>
+      </div>
+      ${vencidos.length>0?`
+        <div style="background:var(--danger-soft);border:1px solid #f5b8b8;border-radius:10px;padding:14px;margin-bottom:12px;">
+          <div style="font-weight:700;font-size:13.5px;color:var(--danger);margin-bottom:8px;">⚠️ ${vencidos.length} conta(s) VENCIDA(S) — ${fmtMoeda(totalVenc)}</div>
+          ${vencidos.slice(0,5).map(g=>`
+            <div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;border-bottom:1px solid #f5b8b8;">
+              <span>${escapeHtml(g.descricao)}</span>
+              <span style="color:var(--danger);font-weight:700;">${fmtData(g.vencimento)} · ${fmtMoeda(g.valor)}</span>
+            </div>`).join('')}
+          ${vencidos.length>5?`<div style="font-size:11px;color:var(--danger);margin-top:6px;">… e mais ${vencidos.length-5} vencida(s)</div>`:''}
+        </div>`:''}
+      ${hoje.length>0?`
+        <div style="background:var(--wait-soft);border:1px solid #f5c842;border-radius:10px;padding:14px;margin-bottom:12px;">
+          <div style="font-weight:700;font-size:13.5px;color:var(--wait);margin-bottom:8px;">📅 ${hoje.length} conta(s) vencem HOJE — ${fmtMoeda(totalHoje)}</div>
+          ${hoje.map(g=>`
+            <div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;border-bottom:1px solid #f5c842;">
+              <span>${escapeHtml(g.descricao)}</span>
+              <span style="color:var(--wait);font-weight:700;">${fmtMoeda(g.valor)}</span>
+            </div>`).join('')}
+        </div>`:''}
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
+        <button class="btn btn-accent" onclick="closeModal();selecionarModulo('gastos')">📋 Ver Gastos</button>
+      </div>
+    `);
+  }catch(e){ /* silencioso — não quebra o login */ }
+}
+
 function enterShell(moduloInicial){
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('shellView').style.display = 'flex';
   document.getElementById('shellWhoName').textContent = currentUser.nome;
   document.getElementById('shellWhoLevel').textContent = levelLabel(currentUser.nivel);
   buildSidebar();
+  // Alerta de contas vencendo hoje (módulo Gastos) — aparece sempre ao logar
+  verificarAlertaGastos();
   const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
   if(permitidos.length===0){
     document.getElementById('moduleIframesWrap').innerHTML = '';
@@ -2739,6 +2788,11 @@ const MODULOS_APP = {
   ]},
   dp: { nome:'Departamento Pessoal', abas:[] },
   ia: { nome:'Inteligência Artificial', abas:[] },
+  gastos: { nome:'Gastos', abas:[
+    { id:'lancamentos', label:'Lançamentos' },
+    { id:'fixos', label:'Despesas Fixas' },
+    { id:'agenda', label:'Agenda' },
+  ]},
   marketing: { nome:'Marketing', abas:[
     { id:'aniversario', label:'Aniversário' },
     { id:'orcamentos', label:'Orçamentos' },
@@ -2772,6 +2826,7 @@ function permissoesPadrao(nivel){
       conciliacao:{ ativo:true, abas:todasAbas('conciliacao') },
       dp:{ ativo:true },
       ia:{ ativo:true },
+      gastos:{ ativo:true, abas:todasAbas('gastos') },
       marketing:{ ativo:true, abas:todasAbas('marketing') },
       dashboard:{ ativo:true }, config:{ ativo:true, abas:todasAbas('config') },
     };
@@ -2786,6 +2841,7 @@ function permissoesPadrao(nivel){
       conciliacao:{ ativo:false, abas:{} },
       dp:{ ativo:true },
       ia:{ ativo:true },
+      gastos:{ ativo:false, abas:{} },
       marketing:{ ativo:false, abas:{} },
       dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
     };
@@ -2800,6 +2856,7 @@ function permissoesPadrao(nivel){
     conciliacao:{ ativo:false, abas:{} },
     dp:{ ativo:true },
     ia:{ ativo:true },
+    gastos:{ ativo:true, abas:{ lancamentos:true, fixos:false, agenda:true } },
     marketing:{ ativo:true, abas:todasAbas('marketing') },
     dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, lojas:false, funcionarios:false, servicos:false, pagamento:false, impressao:false, statusOrcamento:false, acessos:false, mensagens:false } },
   };
