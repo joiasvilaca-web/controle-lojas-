@@ -166,7 +166,8 @@ function gastosCfg(){
   return gc;
 }
 async function salvarConfigGastos(){
-  await gw({ op:'saveConfig', params:{ payload: config } });
+  const r = await gw({ op:'mergeConfigKey', params:{ key:'gastosConfig', value: gastosCfg() } });
+  if(r && r.error) showToast('⚠️ Não foi possível salvar a configuração de gastos: '+r.error, 4500);
 }
 function statusDe(id){ const gc=gastosCfg(); return gc.status.find(s=>s.id===id) || gc.status[0]; }
 function ehPago(g){ return !!(statusDe(g.status).tipoPago); }
@@ -175,8 +176,16 @@ function ehPago(g){ return !!(statusDe(g.status).tipoPago); }
 async function gw(body){
   try{
     const r = await fetch(GATEWAY_URL,{method:'POST',headers:{'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY},body:JSON.stringify({senha:__gatewaySenha,...body})});
-    return await r.json();
-  }catch(e){return{error:'Sem conexão'};}
+    const out = await r.json();
+    if(out && out.error && (body.op==='upsert'||body.op==='delete')){
+      console.error('Falha ao gravar no banco:', out.error, body);
+      showToast('⚠️ ERRO AO SALVAR: '+String(out.error).slice(0,120), 5000);
+    }
+    return out;
+  }catch(e){
+    if(body.op==='upsert'||body.op==='delete') showToast('⚠️ SEM CONEXÃO — o lançamento NÃO foi salvo!', 5000);
+    return{error:'Sem conexão'};
+  }
 }
 const esc = s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const fmtMoeda = v=>'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});

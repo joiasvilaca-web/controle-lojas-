@@ -553,14 +553,19 @@ document.addEventListener('keydown', (e)=>{
   }
 });
 
+let __configCarregadaOk = false; // trava: só deixa salvar se a config REAL foi carregada
 async function configGet(){
   try{
     const { data, error } = await supabaseClient.from('gestao_config').select('payload').eq('id','config').maybeSingle();
     if(error) throw error;
-    return data ? data.payload : null;
-  }catch(e){ console.error('erro ao carregar config', e); return null; }
+    return { ok:true, payload: data ? data.payload : null };
+  }catch(e){ console.error('erro ao carregar config', e); return { ok:false, payload:null }; }
 }
 async function configSave(){
+  if(!__configCarregadaOk){
+    showToast('A configuração não carregou corretamente — recarregue a página antes de salvar.');
+    return false;
+  }
   try{
     const { error } = await supabaseClient.from('gestao_config').upsert({ id:'config', payload: config, updated_at: new Date().toISOString() });
     if(error) throw error;
@@ -575,8 +580,21 @@ const DEFAULTS = {
 };
 
 async function loadConfig(){
-  config = await configGet();
-  if(!config){ config = JSON.parse(JSON.stringify(DEFAULTS)); await configSave(); }
+  const r = await configGet();
+  if(!r.ok){
+    // ERRO DE REDE/SERVIDOR: usa defaults SÓ EM MEMÓRIA, nunca grava por cima da config real.
+    config = JSON.parse(JSON.stringify(DEFAULTS));
+    __configCarregadaOk = false;
+    showToast('⚠️ Não foi possível carregar as configurações. Alterações estão bloqueadas — recarregue a página.', 6000);
+  } else if(r.payload === null){
+    // Config genuinamente não existe ainda (primeira vez): cria os defaults.
+    config = JSON.parse(JSON.stringify(DEFAULTS));
+    __configCarregadaOk = true;
+    await configSave();
+  } else {
+    config = r.payload;
+    __configCarregadaOk = true;
+  }
   for(const k in DEFAULTS){ if(config[k]===undefined) config[k] = JSON.parse(JSON.stringify(DEFAULTS[k])); }
   if(!config.produtosOtica) config.produtosOtica = { categorias:[], subcategorias:[], produtos:[] };
   if(!config.produtosOtica.categorias) config.produtosOtica.categorias = [];
