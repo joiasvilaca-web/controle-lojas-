@@ -261,15 +261,33 @@ window.addEventListener('load', ()=>{ parent.postMessage({ type:'ready', modulo:
 // ============================================================
 //  CARGA DE DADOS
 // ============================================================
+
+/**
+ * Lê uma tabela inteira, em páginas. O servidor devolve no máximo 1000 linhas por
+ * requisição — com clientes_cadastro (dezenas de milhares de linhas) isso fazia o app
+ * trabalhar com uma lista truncada. Era por isso que os clientes importados não
+ * apareciam aqui no Marketing: só chegavam os mais antigos.
+ */
+async function gatewaySelectTudo(table){
+  const linhas = [];
+  for(let pagina=0; pagina<500; pagina++){
+    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 1000 } });
+    if(!r || r.error){ console.error('erro lendo '+table, r && r.error); break; }
+    const lote = r.data || [];
+    linhas.push(...lote);
+    if(r.fim || lote.length === 0) break;
+  }
+  return linhas;
+}
 async function loadAll(){
-  const [rConfig, rClientes, rOrc, rMsgs] = await Promise.all([
+  const [rConfig, linhasClientes, rOrc, rMsgs] = await Promise.all([
     gatewayCall({ op:'getConfig' }),
-    gatewayCall({ op:'selectAll', table:'clientes_cadastro' }),
+    gatewaySelectTudo('clientes_cadastro'),
     gatewayCall({ op:'selectAll', table:'orcamentos' }),
     gatewayCall({ op:'selectAll', table:'marketing_mensagens' }).catch(()=>({ data:[] })),
   ]);
   config = rConfig.data || {};
-  clientes = (rClientes.data||[]).map(r=>r.payload).filter(Boolean);
+  clientes = linhasClientes.map(r=>r.payload).filter(Boolean);
   orcamentos = (rOrc.data||[]).map(r=>r.payload).filter(Boolean);
   mensagensSalvas = (rMsgs.data||[]).map(r=>r.payload).filter(Boolean);
 

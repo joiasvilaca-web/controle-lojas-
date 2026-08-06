@@ -1017,16 +1017,35 @@ function renderCfgTab(tab){
 }
 
 /* ---------- CLIENTES (Cadastro) ---------- */
+/**
+ * Lê uma tabela inteira, em páginas. O servidor devolve no máximo 1000 linhas por
+ * requisição — com clientes_cadastro (dezenas de milhares de linhas) isso fazia o app
+ * trabalhar com uma lista truncada: o Marketing só enxergava os clientes mais antigos
+ * e a importação comparava duplicados contra uma lista incompleta.
+ */
+async function gatewaySelectTudo(table, aoProgredir){
+  const linhas = [];
+  for(let pagina=0; pagina<500; pagina++){
+    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 1000 } });
+    if(!r || r.error){ console.error('erro lendo '+table, r && r.error); break; }
+    const lote = r.data || [];
+    linhas.push(...lote);
+    if(aoProgredir) aoProgredir(linhas.length);
+    if(r.fim || lote.length === 0) break;
+  }
+  return linhas;
+}
+
 let clientesCacheIdx = null;
 async function carregarClientesParaCadastro(){
-  const r = await gatewayCall({ op:'selectAll', table:'clientes_cadastro' });
-  return (r.data||[]).map(row=>row.payload).filter(Boolean);
+  const linhas = await gatewaySelectTudo('clientes_cadastro');
+  return linhas.map(row=>row.payload).filter(Boolean);
 }
 function renderClientesTab(body){
   body.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:18px;padding-bottom:14px;border-bottom:1.5px solid var(--line);">
       <div><h2 style="margin:0 0 4px;font-size:20px;">Clientes</h2><p style="margin:0;color:var(--muted);font-size:13px;">Cadastro compartilhado com Vendas e O.S.</p></div>
-      <div style="display:flex;gap:8px;"><button class="btn btn-ghost" id="cfgBtnImportarClientes">📥 Importar clientes</button><button class="btn btn-accent" id="cfgBtnNovoCliente">+ Novo cliente</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" id="cfgBtnMesclarClientes">🔗 Mesclar duplicados</button><button class="btn btn-ghost" id="cfgBtnImportarClientes">📥 Importar clientes</button><button class="btn btn-accent" id="cfgBtnNovoCliente">+ Novo cliente</button></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone ou CPF..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
@@ -1035,6 +1054,7 @@ function renderClientesTab(body){
   `;
   document.getElementById('cfgBtnNovoCliente').addEventListener('click', ()=> openClienteModalCadastro(null));
   document.getElementById('cfgBtnImportarClientes').addEventListener('click', ()=> openImportarClientesCadastro());
+  document.getElementById('cfgBtnMesclarClientes').addEventListener('click', ()=> openMesclarClientesCadastro());
   document.getElementById('cfgCliBusca').addEventListener('input', ()=> renderClientesTable(null));
 
   carregarClientesParaCadastro().then(lista=>{
@@ -1561,6 +1581,177 @@ async function deletarClienteCadastro(id){
   showToast('Cliente excluído.');
   renderClientesTable(null);
   avisarClientesAtualizados();
+}
+
+
+/* ---------- MESCLAR CLIENTES DUPLICADOS ---------- */
+/**
+ * Junta clientes repetidos num só registro. O critério padrão é o CPF; como boa parte
+ * da base não tem CPF preenchido, também dá pra usar o telefone (é lá que estão os
+ * duplicados que vieram das importações repetidas).
+ * Regra da mesclagem: fica o registro MAIS ANTIGO (preserva o histórico de vendas e
+ * O.S. já ligadas a ele) e ele recebe os campos que estiverem vazios nele e preenchidos
+ * nos outros. Crédito é somado; fiado e movimentos são concatenados. Nada é apagado
+ * antes de você conferir a prévia e confirmar.
+ */
+function chaveMesclagem(c, criterio){
+  const cpf = onlyDigitsCli(c.cpf);
+  const tel = onlyDigitsCli(c.telefone);
+  if(criterio==='cpf')      return cpf.length>=11 ? 'cpf:'+cpf : null;
+  if(criterio==='telefone') return tel.length>=8  ? 'tel:'+tel : null;
+  // 'ambos': CPF manda; sem CPF, cai no telefone
+  if(cpf.length>=11) return 'cpf:'+cpf;
+  if(tel.length>=8)  return 'tel:'+tel;
+  return null;
+}
+function agruparDuplicados(lista, criterio){
+  const mapa = new Map();
+  (lista||[]).forEach(c=>{
+    const k = chaveMesclagem(c, criterio);
+    if(!k) return;
+    if(!mapa.has(k)) mapa.set(k, []);
+    mapa.get(k).push(c);
+  });
+  const grupos = [];
+  mapa.forEach((itens, chave)=>{ if(itens.length>1) grupos.push({ chave, itens }); });
+  return grupos;
+}
+/** Monta o registro final de um grupo: base = mais antigo, completado pelos demais. */
+function mesclarGrupo(itens){
+  const CAMPOS = ['nome','telefone','email','cpf','dataNascimento','cep','endereco','numero',
+                  'complemento','bairro','cidade','estado'];
+  const ordenados = itens.slice().sort((a,b)=>(a.criadoEm||0)-(b.criadoEm||0));
+  const base = { ...ordenados[0] };
+  for(let i=1;i<ordenados.length;i++){
+    const outro = ordenados[i];
+    CAMPOS.forEach(campo=>{
+      const atual = (base[campo]===undefined||base[campo]===null) ? '' : String(base[campo]).trim();
+      const novo  = (outro[campo]===undefined||outro[campo]===null) ? '' : String(outro[campo]).trim();
+      if(!atual && novo) base[campo] = outro[campo]; // só preenche buraco, nunca sobrescreve
+    });
+    base.credito = (Number(base.credito)||0) + (Number(outro.credito)||0);
+    if(Array.isArray(outro.creditoMovimentos) && outro.creditoMovimentos.length)
+      base.creditoMovimentos = [...(base.creditoMovimentos||[]), ...outro.creditoMovimentos];
+    if(Array.isArray(outro.fiadoDebitos) && outro.fiadoDebitos.length)
+      base.fiadoDebitos = [...(base.fiadoDebitos||[]), ...outro.fiadoDebitos];
+    if(outro.ultimoAniversarioEnviado && !base.ultimoAniversarioEnviado)
+      base.ultimoAniversarioEnviado = outro.ultimoAniversarioEnviado;
+  }
+  return { manter: base, excluir: ordenados.slice(1).map(c=>c.id) };
+}
+
+function openMesclarClientesCadastro(){
+  if(!Array.isArray(clientesCacheIdx)){ showToast('A lista de clientes ainda está carregando. Aguarde e tente de novo.'); return; }
+  let criterio = 'cpf';
+  openModal(`
+    <h3>🔗 Mesclar clientes duplicados</h3>
+    <p style="color:var(--muted);font-size:13px;">Junta cadastros repetidos num só. Fica sempre o registro mais antigo — assim as vendas e O.S. já ligadas a ele continuam valendo — e ele recebe os dados que estiverem faltando nos outros. Nada é apagado sem a sua confirmação.</p>
+    <div class="field"><label>Comparar clientes por</label>
+      <select id="mescCriterio">
+        <option value="cpf">CPF</option>
+        <option value="telefone">Telefone</option>
+        <option value="ambos">CPF e, quem não tiver CPF, telefone</option>
+      </select>
+    </div>
+    <div id="mescPreview" style="margin-top:12px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="mescFechar">Fechar</button>
+      <button class="btn btn-accent" id="mescConfirmar" style="display:none;">Mesclar</button>
+    </div>
+  `);
+  document.getElementById('mescFechar').addEventListener('click', closeModal);
+
+  let gruposAtuais = [];
+  function analisar(){
+    criterio = document.getElementById('mescCriterio').value;
+    gruposAtuais = agruparDuplicados(clientesCacheIdx, criterio);
+    const totalRemovidos = gruposAtuais.reduce((a,g)=>a+g.itens.length-1, 0);
+    const wrap = document.getElementById('mescPreview');
+    const btn = document.getElementById('mescConfirmar');
+    if(gruposAtuais.length===0){
+      const dica = criterio==='cpf'
+        ? ' Vale lembrar que a maior parte da base está sem CPF preenchido — experimente comparar por telefone.'
+        : '';
+      wrap.innerHTML = `<div class="empty">Nenhum duplicado encontrado com esse critério.${dica}</div>`;
+      btn.style.display='none';
+      return;
+    }
+    const amostra = gruposAtuais.slice(0,5).map(g=>{
+      const ord = g.itens.slice().sort((a,b)=>(a.criadoEm||0)-(b.criadoEm||0));
+      return `<div class="code-list-item" style="display:block;">
+        <div><b>${escapeHtml(ord[0].nome||'(sem nome)')}</b> <span class="muted">— ${g.itens.length} cadastros</span></div>
+        <div class="muted" style="font-size:12px;">${escapeHtml(g.chave.startsWith('cpf:')?'CPF '+g.chave.slice(4):'Telefone '+g.chave.slice(4))}</div>
+      </div>`;
+    }).join('');
+    wrap.innerHTML = `
+      <div class="card" style="padding:12px 14px;">
+        <div style="font-weight:800;font-size:15px;margin-bottom:6px;">${gruposAtuais.length} cliente(s) com cadastro repetido</div>
+        <div style="font-size:13px;color:var(--muted);">${totalRemovidos} registro(s) serão juntados e removidos. Você fica com ${clientesCacheIdx.length - totalRemovidos} clientes.</div>
+      </div>
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:14px 0 6px;">Exemplos</div>
+      ${amostra}
+      ${gruposAtuais.length>5?`<div class="muted" style="font-size:12px;margin-top:6px;">...e mais ${gruposAtuais.length-5} caso(s).</div>`:''}
+    `;
+    btn.style.display='';
+  }
+  document.getElementById('mescCriterio').addEventListener('change', analisar);
+  analisar();
+
+  document.getElementById('mescConfirmar').addEventListener('click', async ()=>{
+    if(gruposAtuais.length===0) return;
+    const totalRemovidos = gruposAtuais.reduce((a,g)=>a+g.itens.length-1, 0);
+    if(!confirm(`Confirma juntar ${gruposAtuais.length} cliente(s) e remover ${totalRemovidos} cadastro(s) repetido(s)?\n\nEsta ação não pode ser desfeita.`)) return;
+
+    const btn = document.getElementById('mescConfirmar');
+    const btnFechar = document.getElementById('mescFechar');
+    const sel = document.getElementById('mescCriterio');
+    btn.disabled = true; btnFechar.disabled = true; sel.disabled = true;
+    const wrap = document.getElementById('mescPreview');
+    wrap.innerHTML = `
+      <div id="mescStatus" style="font-size:13px;font-weight:700;margin-bottom:8px;">Preparando...</div>
+      <div style="height:8px;background:var(--line);border-radius:99px;overflow:hidden;">
+        <div id="mescBarra" style="height:100%;width:0%;background:var(--accent,#7a1f3d);transition:width .15s;"></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px;">Não feche esta janela.</div>`;
+    const elStatus = document.getElementById('mescStatus');
+    const elBarra = document.getElementById('mescBarra');
+    const respirar = ()=> new Promise(r=>setTimeout(r,0));
+    function progresso(txt, pct){ elStatus.textContent = txt; elBarra.style.width = Math.max(0,Math.min(100,pct))+'%'; }
+
+    const manter = [], excluir = [];
+    gruposAtuais.forEach(g=>{ const r = mesclarGrupo(g.itens); manter.push(r.manter); excluir.push(...r.excluir); });
+
+    // 1) grava os registros já mesclados
+    let erros = 0;
+    for(let i=0;i<manter.length;i+=200){
+      const lote = manter.slice(i,i+200).map(c=>({ id:c.id, payload:c }));
+      const r = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row: lote } });
+      if(r && r.error){ erros++; console.error('erro ao salvar mesclados:', r.error); }
+      progresso(`Juntando dados: ${Math.min(i+200, manter.length)} de ${manter.length}...`, (i/Math.max(1,manter.length))*50);
+      await respirar();
+    }
+    // 2) só então remove os repetidos
+    let removidos = 0;
+    for(let i=0;i<excluir.length;i+=500){
+      const lote = excluir.slice(i,i+500);
+      const r = await gatewayCall({ op:'deleteMany', table:'clientes_cadastro', params:{ ids: lote } });
+      if(r && r.error){ erros++; console.error('erro ao remover repetidos:', r.error); }
+      else removidos += lote.length;
+      progresso(`Removendo repetidos: ${Math.min(i+500, excluir.length)} de ${excluir.length}...`, 50 + (i/Math.max(1,excluir.length))*50);
+      await respirar();
+    }
+
+    // 3) recarrega do servidor pra lista local ficar igual ao banco
+    progresso('Atualizando a lista...', 98);
+    await respirar();
+    clientesCacheIdx = await carregarClientesParaCadastro();
+    closeModal();
+    renderClientesTable(null);
+    avisarClientesAtualizados();
+    showToast(erros>0
+      ? `Mesclagem concluída com ${erros} erro(s). ${removidos} removido(s). Veja o console.`
+      : `Pronto: ${manter.length} cliente(s) juntado(s), ${removidos} cadastro(s) repetido(s) removido(s).`);
+  });
 }
 
 /* ---------- LOJAS ---------- */

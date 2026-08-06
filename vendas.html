@@ -178,6 +178,23 @@ async function gatewayCall(body){
 async function gatewayLogin(senhaTentativa){
   return gatewayCall({ op:'login', senha: senhaTentativa });
 }
+/**
+ * Lê a tabela inteira, em páginas de 1000. O servidor devolve no máximo 1000 linhas por
+ * requisição, então tabelas grandes (clientes_cadastro tem dezenas de milhares) vinham
+ * truncadas — a busca de cliente simplesmente não encontrava quem estava fora dessas
+ * primeiras mil linhas. Tabela pequena continua custando uma requisição só.
+ */
+async function gatewaySelectTudo(table){
+  const linhas = [];
+  for(let pagina=0; pagina<500; pagina++){
+    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 1000 } });
+    if(!r || r.error){ console.error('erro lendo '+table, r && r.error); return { data: linhas, error: r && r.error }; }
+    const lote = r.data || [];
+    linhas.push(...lote);
+    if(r.fim || lote.length === 0) break;
+  }
+  return { data: linhas, error: null };
+}
 const supabaseClient = {
   from(table){
     return {
@@ -195,7 +212,7 @@ const supabaseClient = {
               }
             };
           },
-          order(){ return gatewayCall({ op:'selectAll', table }); }
+          order(){ return gatewaySelectTudo(table); }
         };
       },
       upsert(row){
