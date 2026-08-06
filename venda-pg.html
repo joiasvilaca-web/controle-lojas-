@@ -247,9 +247,28 @@ const FATOR_PADRAO = [
   [5,6,7,8,9,10], [6,7,8,9,10,11], [7,8,9,10,11,12],
 ];
 
+/**
+ * Lista de quem vende, direto do cadastro central (Cadastro → Funcionários):
+ * Vendedora, Gerente e Diretor(a).
+ */
+function vendedorasDoCadastro(){
+  return (config.funcionarios||[]).filter(f=>{
+    const c = (Array.isArray(f.cargos) && f.cargos.length) ? f.cargos : (f.area?[f.area]:[]);
+    return c.includes('vendedora') || c.includes('gerente') || c.includes('diretor');
+  });
+}
+/** <option> de vendedora. Mantém um nome antigo que não esteja mais no cadastro, pra não perder lançamento já feito. */
+function vendedoraOptionsHtml(selected){
+  const lista = vendedorasDoCadastro();
+  const vazio = lista.length===0 ? `<option value="" disabled>Nenhum(a) cadastrado(a) em Cadastro → Funcionários</option>` : '';
+  const foraDoCadastro = selected && !lista.some(f=>f.nome===selected);
+  const extra = foraDoCadastro ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : '';
+  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
+}
+
 function novoRegistro(id, lojaId, mesAno){
   const lojas = (config.lojas||[]).map(l=>l.abreviacao);
-  const vendedorasIniciais = (config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>({
+  const vendedorasIniciais = vendedorasDoCadastro().map(f=>({
     id: uid('vpgv'), nome: f.nome,
     porLoja: Object.fromEntries(lojas.map(ab=>[ab,{bruto:null,devol:null}])),
     percVend: null, nivel: 1,
@@ -763,7 +782,7 @@ function renderPlanilha(){
     wrap.innerHTML = registro.vendedoras.map((v,vi)=>`
       <div style="border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
-          <input type="text" data-vnome="${vi}" value="${escapeHtml(v.nome)}" style="font-weight:800; max-width:220px;" ${podeDiretoria?'':'disabled'}>
+          <select data-vnome="${vi}" style="font-weight:800; max-width:220px;" ${podeDiretoria?'':'disabled'}>${vendedoraOptionsHtml(v.nome)}</select>
           <div style="display:flex; align-items:center; gap:8px;">
             <label class="muted" style="text-transform:none;">% Vend</label><input type="number" step="0.1" data-vperc="${vi}" value="${v.percVend??''}" style="width:80px;" ${podeDiretoria?'':'disabled'}>
             <label class="muted" style="text-transform:none;">Nível</label><select data-vnivel="${vi}" style="width:70px;" ${podeDiretoria?'':'disabled'}>${FATOR_PADRAO.map((_,i)=>`<option value="${i+1}" ${v.nivel===i+1?'selected':''}>${i+1}</option>`).join('')}</select>
@@ -781,7 +800,7 @@ function renderPlanilha(){
       </div>
     `).join('');
 
-    wrap.querySelectorAll('[data-vnome]').forEach(el=> el.addEventListener('input', ()=>{ registro.vendedoras[Number(el.dataset.vnome)].nome = el.value; }));
+    wrap.querySelectorAll('[data-vnome]').forEach(el=> el.addEventListener('change', ()=>{ registro.vendedoras[Number(el.dataset.vnome)].nome = el.value; drawItensRows(); recalcularItens(); }));
     wrap.querySelectorAll('[data-vperc]').forEach(el=> el.addEventListener('input', ()=>{ registro.vendedoras[Number(el.dataset.vperc)].percVend = el.value===''?null:parseFloat(el.value); }));
     wrap.querySelectorAll('[data-vnivel]').forEach(el=> el.addEventListener('change', ()=>{ registro.vendedoras[Number(el.dataset.vnivel)].nivel = Number(el.value); recalcularFatorIndividual(); }));
     wrap.querySelectorAll('[data-vdel]').forEach(el=> el.addEventListener('click', ()=>{
@@ -814,7 +833,7 @@ function renderPlanilha(){
     const elLT = document.getElementById('pg_vl_total_'+vi); if(elLT) elLT.textContent = fmtMoeda(tLiquiVendedoraTotal(v, lojas));
   }
   document.getElementById('btnAddVendedora').addEventListener('click', ()=>{
-    registro.vendedoras.push({ id: uid('vpgv'), nome:'Nova linha', porLoja: Object.fromEntries(lojas.map(ab=>[ab,{bruto:null,devol:null}])), percVend:null, nivel:1, itens: Object.fromEntries(CATEGORIAS.map(c=>[c.id,null])) });
+    registro.vendedoras.push({ id: uid('vpgv'), nome:'', porLoja: Object.fromEntries(lojas.map(ab=>[ab,{bruto:null,devol:null}])), percVend:null, nivel:1, itens: Object.fromEntries(CATEGORIAS.map(c=>[c.id,null])) });
     drawVendedorasBlocos(); recalcularItens();
   });
 

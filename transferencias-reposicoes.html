@@ -638,10 +638,14 @@
       if(lojas.length){ STORES.length = 0; STORES.push(...lojas.map(l=>l.abreviacao)); }
       if(Array.isArray(cfg.joiasProdutos) && cfg.joiasProdutos.length){ PRODUCTS.length = 0; PRODUCTS.push(...cfg.joiasProdutos); }
       if(Array.isArray(cfg.metais) && cfg.metais.length){ METALS.length = 0; METALS.push(...cfg.metais); }
-      state.funcionarios = (Array.isArray(cfg.funcionarios) ? cfg.funcionarios : []).map(f=>({
-        id: f.id, nome: f.nome,
-        cargo: (f.cargos||[]).includes("diretor") ? "diretor" : "vendedora"
-      }));
+      state.funcionarios = (Array.isArray(cfg.funcionarios) ? cfg.funcionarios : []).map(f=>{
+        const cargos = (Array.isArray(f.cargos) && f.cargos.length) ? f.cargos : (f.area ? [f.area] : []);
+        return {
+          id: f.id, nome: f.nome, cargos,
+          // mantido por compatibilidade com telas antigas que ainda leem "cargo" (um só)
+          cargo: cargos.includes("diretor") ? "diretor" : "vendedora"
+        };
+      });
     }catch(e){ console.error("Erro ao carregar configurações:", e); }
   }
 
@@ -960,14 +964,38 @@
     return `${rows}<button class="btn-add-item" type="button" data-action="add-item" data-arr="${arrKey}">${addLabel}</button>`;
   }
 
-  /** Monta as <option> de funcionários. cargo: 'vendedora' | 'diretor' | 'todos'. */
+  /** Cargos de um funcionário, sempre como array. */
+  function cargosDoFuncionario(f){
+    if(Array.isArray(f.cargos) && f.cargos.length) return f.cargos;
+    return f.cargo ? [f.cargo] : [];
+  }
+  /** Rótulo curto da função principal. */
+  function cargoLabelFuncionario(f){
+    const c = cargosDoFuncionario(f);
+    if(c.includes("diretor")) return "Diretor(a)";
+    if(c.includes("gerente")) return "Gerente";
+    if(c.includes("vendedora")) return "Vendedora";
+    if(c.includes("oficina")) return "Oficina";
+    return "Funcionário";
+  }
+  /**
+   * Monta as <option> de funcionários. cargo: 'vendedora' | 'diretor' | 'todos'.
+   * 'vendedora' = quem vende: Vendedora, Gerente e Diretor(a), conforme marcado em Cadastro → Funcionários.
+   */
   function funcionarioOptionsHtml(cargo, selected){
     let lista = state.funcionarios || [];
-    if(cargo !== "todos") lista = lista.filter(f=>f.cargo===cargo);
+    if(cargo === "vendedora"){
+      lista = lista.filter(f=>{
+        const c = cargosDoFuncionario(f);
+        return c.includes("vendedora") || c.includes("gerente") || c.includes("diretor");
+      });
+    } else if(cargo !== "todos"){
+      lista = lista.filter(f=>cargosDoFuncionario(f).includes(cargo));
+    }
     const naoEstaNaLista = selected && !lista.some(f=>f.nome===selected);
     const extra = naoEstaNaLista ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : "";
     const vazio = lista.length===0 ? `<option value="" disabled>Nenhum(a) cadastrado(a)</option>` : "";
-    return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?"selected":""}>${escapeHtml(f.nome)}${cargo==="todos"?` (${f.cargo==="vendedora"?"Vendedora":"Diretor(a)"})`:""}</option>`).join("");
+    return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?"selected":""}>${escapeHtml(f.nome)}${cargo==="todos"?` (${cargoLabelFuncionario(f)})`:""}</option>`).join("");
   }
 
   /** Uma lista simples de chips com botão de remover, usada nas listas editáveis de Configurações. */
@@ -1045,7 +1073,7 @@
         : state.funcionarios.map((f,i)=>`
           <div class="item-row-multi">
             <span style="flex:1;">${escapeHtml(f.nome)}</span>
-            <span class="chip" style="flex:0 0 auto;">${f.cargo==="vendedora"?"Vendedora":"Diretor(a)"}</span>
+            <span class="chip" style="flex:0 0 auto;">${cargoLabelFuncionario(f)}</span>
             <button class="btn-x" type="button" data-delfuncionario="${i}">×</button>
           </div>
         `).join("");

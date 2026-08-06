@@ -303,10 +303,46 @@ async function registroExcluir(id){
   }catch(e){ console.error('erro ao excluir registro', e); return false; }
 }
 
+/** Rótulo de cargo a partir dos cargos marcados em Cadastro → Funcionários. */
+function cargoLabelDosCargos(cargos){
+  const c = cargos || [];
+  if(c.includes('diretor')) return 'Diretor(a)';
+  if(c.includes('gerente')) return 'Gerente';
+  if(c.includes('vendedora')) return 'Vendedora';
+  if(c.includes('oficina')) return 'Oficina';
+  return '';
+}
+/**
+ * Junta o cadastro central (config.funcionarios, criado em Cadastro → Funcionários) com as
+ * fichas de RH (dp_funcionarios). Quem já tem ficha aparece com a ficha; quem foi cadastrado
+ * só com nome + função aparece aqui mesmo assim, com a ficha ainda em branco, pronta pra
+ * ser preenchida no ✎. Assim o DP nunca fica com uma lista menor que a do Cadastro.
+ */
+function mesclarFuncionariosDoCadastro(fichas, cfg){
+  const doCadastro = (cfg && Array.isArray(cfg.funcionarios)) ? cfg.funcionarios : [];
+  const jaTemFicha = new Set();
+  fichas.forEach(p=>{
+    if(p.funcionarioId) jaTemFicha.add(p.funcionarioId);
+    if(p.nome) jaTemFicha.add('nome:' + p.nome.trim().toLowerCase());
+  });
+  const pendentes = doCadastro
+    .filter(f=> !jaTemFicha.has(f.id) && !jaTemFicha.has('nome:' + (f.nome||'').trim().toLowerCase()))
+    .map(f=>({
+      id: 'dpf_' + f.id,          // id estável: ao salvar o ✎ vira uma ficha de verdade, sem duplicar
+      funcionarioId: f.id,
+      nome: f.nome,
+      cargo: cargoLabelDosCargos(f.cargos),
+      status: 'ativo',
+      semFicha: true,             // só pra mostrar o aviso na lista
+      criadoEm: Date.now(),
+    }));
+  return fichas.concat(pendentes);
+}
+
 async function loadAll(){
   config = await configGetUnificada();
   if(!config){ config = { lojas:[] }; }
-  funcionarios = await funcionariosGet();
+  funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
   registros = await registrosGet();
 }
 
@@ -508,7 +544,7 @@ function renderFuncionarios(main){
     if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">${podeEditar?'Nenhum funcionário cadastrado ainda. Cadastre em Cadastro → Funcionários.':'Nenhuma informação encontrada.'}</td></tr>`; return; }
     tbody.innerHTML = funcionarios.slice().reverse().map(f=>`
       <tr>
-        <td><b>${escapeHtml(f.nome)}</b></td>
+        <td><b>${escapeHtml(f.nome)}</b>${f.semFicha?` <span class="badge" style="margin-left:6px; font-size:11px;">ficha em branco</span>`:''}</td>
         <td>${escapeHtml(f.cargo||'—')}</td>
         <td>${escapeHtml(f.loja||'—')}</td>
         <td>${fmtDate(f.dataAdmissao)}</td>
@@ -645,7 +681,17 @@ function abrirFuncionarioModal(f, onSalvarExtra){
   if(document.getElementById('btnSalvarFunc'))
   document.getElementById('btnSalvarFunc').addEventListener('click', async ()=>{
     if(!d.nome || !d.nome.trim()){ abaAtiva='Pessoais'; renderCorpo(); renderAbas(); showToast('Informe o nome do funcionário.'); return; }
-    const dados = { id: f?f.id:uid('func'), ...d, salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), criadoEm: f?f.criadoEm:Date.now() };
+    // Espalha o registro original ANTES do formulário: assim o funcionarioId (elo com o
+    // cadastro central) e os campos que só existem no módulo Cadastro (foto, celulares,
+    // filhos, experiências, PIX...) não somem ao salvar por aqui.
+    const dados = {
+      ...(f||{}),
+      id: f?f.id:uid('func'),
+      ...d,
+      salario: d.salario===''||d.salario===null?null:parseFloat(d.salario),
+      criadoEm: f?f.criadoEm:Date.now(),
+    };
+    delete dados.semFicha; // marcação de tela; a partir daqui a ficha existe de verdade
     const ok = await funcionarioSalvar(dados);
     if(ok){
       const idx = funcionarios.findIndex(x=>x.id===dados.id);
