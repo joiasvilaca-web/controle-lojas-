@@ -641,7 +641,7 @@
       state.funcionarios = (Array.isArray(cfg.funcionarios) ? cfg.funcionarios : []).map(f=>{
         const cargos = (Array.isArray(f.cargos) && f.cargos.length) ? f.cargos : (f.area ? [f.area] : []);
         return {
-          id: f.id, nome: f.nome, cargos,
+          id: f.id, nome: f.nome, apelido: f.apelido||'', cargos,
           // mantido por compatibilidade com telas antigas que ainda leem "cargo" (um só)
           cargo: cargos.includes("diretor") ? "diretor" : "vendedora"
         };
@@ -969,6 +969,16 @@
     if(Array.isArray(f.cargos) && f.cargos.length) return f.cargos;
     return f.cargo ? [f.cargo] : [];
   }
+  /** Nome que aparece nas listas: apelido do cadastro, ou nome completo se não tiver. */
+  function nomeExibicaoFuncionario(f){
+    const ap = (f && f.apelido || '').trim();
+    return ap || (f && f.nome) || '';
+  }
+  function funcionarioBateComNome(f, nomeGravado){
+    const alvo = String(nomeGravado||'').trim().toLowerCase();
+    if(!alvo) return false;
+    return String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo;
+  }
   /** Rótulo curto da função principal. */
   function cargoLabelFuncionario(f){
     const c = cargosDoFuncionario(f);
@@ -992,10 +1002,15 @@
     } else if(cargo !== "todos"){
       lista = lista.filter(f=>cargosDoFuncionario(f).includes(cargo));
     }
-    const naoEstaNaLista = selected && !lista.some(f=>f.nome===selected);
-    const extra = naoEstaNaLista ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : "";
+    const equivalente = (state.funcionarios||[]).find(f=>funcionarioBateComNome(f, selected));
+    const sel = equivalente ? nomeExibicaoFuncionario(equivalente) : selected;
+    const naoEstaNaLista = sel && !lista.some(f=>nomeExibicaoFuncionario(f)===sel);
+    const extra = naoEstaNaLista ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)} (não cadastrado)</option>` : "";
     const vazio = lista.length===0 ? `<option value="" disabled>Nenhum(a) cadastrado(a)</option>` : "";
-    return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?"selected":""}>${escapeHtml(f.nome)}${cargo==="todos"?` (${cargoLabelFuncionario(f)})`:""}</option>`).join("");
+    return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>{
+      const n = nomeExibicaoFuncionario(f);
+      return `<option value="${escapeHtml(n)}" ${sel===n?"selected":""}>${escapeHtml(n)}${cargo==="todos"?` (${cargoLabelFuncionario(f)})`:""}</option>`;
+    }).join("");
   }
 
   /** Uma lista simples de chips com botão de remover, usada nas listas editáveis de Configurações. */
@@ -1072,7 +1087,7 @@
         ? `<div class="group-hint">Nenhum funcionário cadastrado.</div>`
         : state.funcionarios.map((f,i)=>`
           <div class="item-row-multi">
-            <span style="flex:1;">${escapeHtml(f.nome)}</span>
+            <span style="flex:1;">${escapeHtml(nomeExibicaoFuncionario(f))}</span>
             <span class="chip" style="flex:0 0 auto;">${cargoLabelFuncionario(f)}</span>
             <button class="btn-x" type="button" data-delfuncionario="${i}">×</button>
           </div>

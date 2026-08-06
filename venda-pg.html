@@ -257,19 +257,35 @@ function vendedorasDoCadastro(){
     return c.includes('vendedora') || c.includes('gerente') || c.includes('diretor');
   });
 }
+/** Nome que aparece nas listas: apelido do cadastro, ou nome completo se não tiver. */
+function nomeExibicaoFuncionario(f){
+  const ap = (f && f.apelido || '').trim();
+  return ap || (f && f.nome) || '';
+}
+/** Um nome lançado em mês anterior pode ser o nome completo; aqui bate com os dois. */
+function funcionarioBateComNome(f, nomeGravado){
+  const alvo = String(nomeGravado||'').trim().toLowerCase();
+  if(!alvo) return false;
+  return String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo;
+}
 /** <option> de vendedora. Mantém um nome antigo que não esteja mais no cadastro, pra não perder lançamento já feito. */
 function vendedoraOptionsHtml(selected){
   const lista = vendedorasDoCadastro();
   const vazio = lista.length===0 ? `<option value="" disabled>Nenhum(a) cadastrado(a) em Cadastro → Funcionários</option>` : '';
-  const foraDoCadastro = selected && !lista.some(f=>f.nome===selected);
-  const extra = foraDoCadastro ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : '';
-  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
+  const equivalente = selected ? lista.find(f=>funcionarioBateComNome(f, selected)) : null;
+  const sel = equivalente ? nomeExibicaoFuncionario(equivalente) : selected;
+  const foraDoCadastro = sel && !lista.some(f=>nomeExibicaoFuncionario(f)===sel);
+  const extra = foraDoCadastro ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)} (não cadastrado)</option>` : '';
+  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>{
+    const n = nomeExibicaoFuncionario(f);
+    return `<option value="${escapeHtml(n)}" ${sel===n?'selected':''}>${escapeHtml(n)}</option>`;
+  }).join('');
 }
 
 function novoRegistro(id, lojaId, mesAno){
   const lojas = (config.lojas||[]).map(l=>l.abreviacao);
   const vendedorasIniciais = vendedorasDoCadastro().map(f=>({
-    id: uid('vpgv'), nome: f.nome,
+    id: uid('vpgv'), nome: nomeExibicaoFuncionario(f),
     porLoja: Object.fromEntries(lojas.map(ab=>[ab,{bruto:null,devol:null}])),
     percVend: null, nivel: 1,
     itens: Object.fromEntries(CATEGORIAS.map(c=>[c.id,null])),
@@ -326,8 +342,9 @@ async function confirmarConferencia(senhaDigitada){
     for(const v of registro.vendedoras){
       const totalItens = totalItensVendedora(v);
       if(totalItens<=0) continue; // nada lançado, não manda registro vazio
-      const nomeLower = (v.nome||'').trim().toLowerCase();
-      const func = funcionariosDp.find(f=> (f.nome||'').trim().toLowerCase() === nomeLower);
+      // casa pelo nome completo OU pelo apelido — assim mês antigo (nome completo)
+      // e mês novo (apelido) caem no mesmo funcionário
+      const func = funcionariosDp.find(f=> funcionarioBateComNome(f, v.nome));
       if(!func){ semCorrespondencia.push(v.nome); continue; }
       const idFuncionarioLigado = func.funcionarioId || func.id;
       const loja = (config.lojas||[]).find(l=>l.id===registro.lojaId);

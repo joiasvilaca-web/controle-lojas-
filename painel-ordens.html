@@ -795,7 +795,7 @@ async function configSetUnificada(payload){
 }
 function mapFuncionarioParaLegado(f){
   const cargos = f.cargos || (f.area ? [f.area] : []);
-  return { id:f.id, nome:f.nome, cargos, area: cargos.includes('oficina') ? 'oficina' : 'vendedora' };
+  return { id:f.id, nome:f.nome, apelido:f.apelido||'', cargos, area: cargos.includes('oficina') ? 'oficina' : 'vendedora' };
 }
 function montarConfigLegadoApartirDoUnificado(u){
   return {
@@ -817,7 +817,7 @@ function montarConfigLegadoApartirDoUnificado(u){
 function montarUnificadoApartirDoConfigLegado(c){
   return {
     lojas: c.lojas || [],
-    funcionarios: (c.funcionarios||[]).map(f=>({ id:f.id, nome:f.nome, cargos: f.cargos || (f.area?[f.area]:[]) })),
+    funcionarios: (c.funcionarios||[]).map(f=>({ id:f.id, nome:f.nome, apelido:f.apelido||'', cargos: f.cargos || (f.area?[f.area]:[]) })),
     users: c.users || [],
     formasPagamento: c.paymentTypes || [],
     tiposServico: c.serviceTypes || [],
@@ -2360,6 +2360,22 @@ function funcionarioAtendeArea(f, area){
   if(area==='oficina') return cargos.includes('oficina');
   return cargos.includes('vendedora') || cargos.includes('gerente') || cargos.includes('diretor');
 }
+/** Nome que aparece nas listas dos módulos: o apelido do cadastro, ou o nome completo se não tiver. */
+function nomeExibicaoFuncionario(f){
+  const ap = (f && f.apelido || '').trim();
+  return ap || (f && f.nome) || '';
+}
+/** Um nome gravado numa O.S. antiga pode ser o nome completo; aqui bate com os dois. */
+function funcionarioBateComNome(f, nomeGravado){
+  const alvo = String(nomeGravado||'').trim().toLowerCase();
+  if(!alvo) return false;
+  return String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo;
+}
+/** Converte um nome gravado (completo ou apelido) pro apelido atual do cadastro. */
+function nomeGravadoParaExibicao(lista, nomeGravado){
+  const f = (lista||[]).find(x=>funcionarioBateComNome(x, nomeGravado));
+  return f ? nomeExibicaoFuncionario(f) : nomeGravado;
+}
 /** Rótulo curto da função principal, usado nas listas que misturam áreas. */
 function cargoLabelFuncionario(f){
   const cargos = cargosDoFuncionario(f);
@@ -2373,17 +2389,25 @@ function cargoLabelFuncionario(f){
 function funcionarioOptionsHtml(area, selected){
   const lista = (config.funcionarios||[]).filter(f=>funcionarioAtendeArea(f, area));
   const vazio = lista.length===0 ? `<option value="" disabled>Nenhum(a) ${area==='vendedora'?'vendedora':'ourives'} cadastrado(a)</option>` : '';
-  const naoEstaNaLista = selected && !lista.some(f=>f.nome===selected);
-  const extra = naoEstaNaLista ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : '';
-  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
+  const sel = nomeGravadoParaExibicao(config.funcionarios||[], selected);
+  const naoEstaNaLista = sel && !lista.some(f=>nomeExibicaoFuncionario(f)===sel);
+  const extra = naoEstaNaLista ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)} (não cadastrado)</option>` : '';
+  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>{
+    const n = nomeExibicaoFuncionario(f);
+    return `<option value="${escapeHtml(n)}" ${sel===n?'selected':''}>${escapeHtml(n)}</option>`;
+  }).join('');
 }
 /** Monta as <option> de TODOS os funcionários (vendedoras e ourives juntos), com a área indicada. */
 function funcionarioOptionsTodosHtml(selected){
   const lista = config.funcionarios||[];
   const vazio = lista.length===0 ? `<option value="" disabled>Nenhum funcionário cadastrado</option>` : '';
-  const naoEstaNaLista = selected && !lista.some(f=>f.nome===selected);
-  const extra = naoEstaNaLista ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} (não cadastrado)</option>` : '';
-  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>`<option value="${escapeHtml(f.nome)}" ${selected===f.nome?'selected':''}>${escapeHtml(f.nome)} (${cargoLabelFuncionario(f)})</option>`).join('');
+  const sel = nomeGravadoParaExibicao(lista, selected);
+  const naoEstaNaLista = sel && !lista.some(f=>nomeExibicaoFuncionario(f)===sel);
+  const extra = naoEstaNaLista ? `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)} (não cadastrado)</option>` : '';
+  return `<option value="">Selecione</option>${vazio}${extra}` + lista.map(f=>{
+    const n = nomeExibicaoFuncionario(f);
+    return `<option value="${escapeHtml(n)}" ${sel===n?'selected':''}>${escapeHtml(n)} (${cargoLabelFuncionario(f)})</option>`;
+  }).join('');
 }
 
 /* ============================================================
