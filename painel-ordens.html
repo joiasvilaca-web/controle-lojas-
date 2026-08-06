@@ -2208,6 +2208,10 @@ if(EMBEDDED){
       currentTab = ev.data.tabId;
       renderTabs();
       renderView();
+    } else if(ev.data.type === 'clientesAtualizados'){
+      // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
+      // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
+      if(__gatewaySenha){ clientes = await clientesGet(); }
     }
   });
 }
@@ -2501,25 +2505,44 @@ function renderNovaOrdem(main){
   const tempPagHolder = { valorTotal: null, pagamentos: [] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
 
+  // Guarda o registro completo do cliente escolhido, pra o ✎ abrir o cadastro preenchido.
+  let clienteSelecionadoNovaOrdem = null;
   function atualizarResumoClienteNovaOrdem(){
     const nome = document.getElementById('f_cliente').value;
     const tel = document.getElementById('f_telefone').value;
     const resumo = document.getElementById('f_clienteResumo');
     resumo.innerHTML = nome
-      ? `<b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}`
+      ? `<div style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
+           <div><b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}</div>
+           ${clienteSelecionadoNovaOrdem && clienteSelecionadoNovaOrdem.id ? `<button type="button" class="btn btn-ghost btn-sm" id="btnEditarClienteNovaOrdem" title="Editar cadastro deste cliente">✎ Editar cadastro</button>` : ''}
+         </div>`
       : `<span class="muted">Nenhum cliente selecionado ainda.</span>`;
+    const btnEd = document.getElementById('btnEditarClienteNovaOrdem');
+    if(btnEd) btnEd.addEventListener('click', abrirEdicaoClienteNovaOrdem);
+  }
+  function aplicarClienteNovaOrdem(clienteFinal){
+    clienteSelecionadoNovaOrdem = clienteFinal;
+    const map = { cliente:clienteFinal.nome, telefone:clienteFinal.telefone, email:clienteFinal.email,
+      cpf:clienteFinal.cpf, nascimento:clienteFinal.dataNascimento, cep:clienteFinal.cep, endereco:clienteFinal.endereco,
+      numero:clienteFinal.numero, complemento:clienteFinal.complemento, bairro:clienteFinal.bairro,
+      cidade:clienteFinal.cidade, estado:clienteFinal.estado };
+    Object.keys(map).forEach(campo=>{
+      const el = document.getElementById('f_'+campo);
+      if(el) el.value = map[campo] || '';
+    });
+    atualizarResumoClienteNovaOrdem();
+  }
+  /** O que for alterado aqui vale pro cadastro central, ou seja, pra todos os módulos. */
+  function abrirEdicaoClienteNovaOrdem(){
+    if(!clienteSelecionadoNovaOrdem) return;
+    abrirSeletorCliente((clienteFinal)=>{
+      aplicarClienteNovaOrdem(clienteFinal);
+      showToast('Cadastro do cliente atualizado.');
+    }, clienteSelecionadoNovaOrdem);
   }
   document.getElementById('btnSelecionarClienteNovaOrdem').addEventListener('click', ()=>{
     abrirSeletorCliente((clienteFinal)=>{
-      const map = { cliente:clienteFinal.nome, telefone:clienteFinal.telefone, email:clienteFinal.email,
-        cpf:clienteFinal.cpf, nascimento:clienteFinal.dataNascimento, cep:clienteFinal.cep, endereco:clienteFinal.endereco,
-        numero:clienteFinal.numero, complemento:clienteFinal.complemento, bairro:clienteFinal.bairro,
-        cidade:clienteFinal.cidade, estado:clienteFinal.estado };
-      Object.keys(map).forEach(campo=>{
-        const el = document.getElementById('f_'+campo);
-        if(el) el.value = map[campo] || '';
-      });
-      atualizarResumoClienteNovaOrdem();
+      aplicarClienteNovaOrdem(clienteFinal);
       mostrarOrcamentosAbertosModal(clienteFinal);
     });
   });
@@ -2834,6 +2857,7 @@ function openEditModalCompleto(order, opts){
     <p>${somenteLeitura ? 'Visualização somente — clique em "Editar" na tabela para alterar algo.' : 'Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.'}</p>
     <div style="margin-bottom:8px;">
       <button type="button" class="btn btn-ghost btn-sm" id="btnTrocarClienteEdit" ${somenteLeitura?'disabled':''}>🔍 Trocar cliente (buscar outro)</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnEditarCadastroClienteEdit" ${somenteLeitura?'disabled':''} title="Editar o cadastro deste cliente (vale para todos os módulos)">✎ Editar cadastro do cliente</button>
     </div>
     ${clienteFieldsHtml('e', order)}
     <div class="grid-2">
@@ -2890,6 +2914,37 @@ function openEditModalCompleto(order, opts){
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
   mountLocalizacao(document.getElementById('localContainerEdit'), order, somenteLeitura);
   wireClienteFields('e', { buscarClientePorCpf: true });
+  const btnEditarCadCliEdit = document.getElementById('btnEditarCadastroClienteEdit');
+  if(btnEditarCadCliEdit){
+    btnEditarCadCliEdit.addEventListener('click', ()=>{
+      // Acha o cliente no cadastro central pelo telefone/CPF que estão na ordem.
+      const telAtual = (document.getElementById('e_telefone')||{}).value || order.telefone || '';
+      const cpfAtual = (document.getElementById('e_cpf')||{}).value || order.cpf || '';
+      const idx = findClienteIndex(telAtual, cpfAtual);
+      if(idx === -1){
+        showToast('Esse cliente ainda não está no cadastro. Use "Trocar cliente" para buscar ou cadastrar.');
+        return;
+      }
+      // Igual ao "Trocar cliente": o app só tem um espaço de modal, então
+      // reabrimos a edição da ordem já com os dados atualizados.
+      abrirSeletorCliente((clienteFinal)=>{
+        order.cliente = clienteFinal.nome || '';
+        order.telefone = clienteFinal.telefone || '';
+        order.email = clienteFinal.email || '';
+        order.cpf = clienteFinal.cpf || '';
+        order.dataNascimento = clienteFinal.dataNascimento || '';
+        order.cep = clienteFinal.cep || '';
+        order.endereco = clienteFinal.endereco || '';
+        order.numero = clienteFinal.numero || '';
+        order.complemento = clienteFinal.complemento || '';
+        order.bairro = clienteFinal.bairro || '';
+        order.cidade = clienteFinal.cidade || '';
+        order.estado = clienteFinal.estado || '';
+        openEditModalCompleto(order, opts);
+        showToast('Cadastro do cliente atualizado — revise e salve a ordem.');
+      }, clientes[idx]);
+    });
+  }
   const btnTrocarClienteEdit = document.getElementById('btnTrocarClienteEdit');
   if(btnTrocarClienteEdit){
     btnTrocarClienteEdit.addEventListener('click', ()=>{

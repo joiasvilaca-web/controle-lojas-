@@ -834,6 +834,10 @@ if(EMBEDDED){
       currentTab = ev.data.tabId;
       renderTabs();
       renderView();
+    } else if(ev.data.type === 'clientesAtualizados'){
+      // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
+      // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
+      if(__gatewaySenha){ clientes = await clientesGet(); }
     }
   });
 }
@@ -1036,19 +1040,40 @@ function renderNovaVenda(main){
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
 
+  // Guarda o registro completo do cliente escolhido, pra o ✎ conseguir abrir o
+  // cadastro dele já preenchido (os campos da tela só guardam nome e telefone).
+  let clienteSelecionadoVenda = null;
   function atualizarResumoClienteVenda(){
     const nome = document.getElementById('v_cliente').value;
     const tel = document.getElementById('v_telefone').value;
     const resumo = document.getElementById('v_clienteResumo');
     resumo.innerHTML = nome
-      ? `<b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}`
+      ? `<div style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
+           <div><b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}</div>
+           ${clienteSelecionadoVenda && clienteSelecionadoVenda.id ? `<button type="button" class="btn btn-ghost btn-sm" id="btnEditarClienteVenda" title="Editar cadastro deste cliente">✎ Editar cadastro</button>` : ''}
+         </div>`
       : `<span class="muted">Nenhum cliente selecionado.</span>`;
+    const btnEd = document.getElementById('btnEditarClienteVenda');
+    if(btnEd) btnEd.addEventListener('click', abrirEdicaoClienteVenda);
+  }
+  function aplicarClienteVenda(clienteFinal){
+    clienteSelecionadoVenda = clienteFinal;
+    document.getElementById('v_cliente').value = clienteFinal.nome || '';
+    document.getElementById('v_telefone').value = clienteFinal.telefone || '';
+    atualizarResumoClienteVenda();
+  }
+  /** Abre o cadastro do cliente selecionado. O que for alterado aqui vale pro
+   *  cadastro central (clientes_cadastro), ou seja, pra todos os módulos. */
+  function abrirEdicaoClienteVenda(){
+    if(!clienteSelecionadoVenda) return;
+    abrirSeletorCliente((clienteFinal)=>{
+      aplicarClienteVenda(clienteFinal);
+      showToast('Cadastro do cliente atualizado.');
+    }, clienteSelecionadoVenda);
   }
   document.getElementById('btnSelecionarClienteVenda').addEventListener('click', ()=>{
     abrirSeletorCliente((clienteFinal)=>{
-      document.getElementById('v_cliente').value = clienteFinal.nome || '';
-      document.getElementById('v_telefone').value = clienteFinal.telefone || '';
-      atualizarResumoClienteVenda();
+      aplicarClienteVenda(clienteFinal);
       mostrarOrcamentosAbertosModal(clienteFinal);
     });
   });
