@@ -625,13 +625,26 @@
     { id:'aprovado', nome:'Aprovado', inicial:false, encerra:true },
     { id:'recusado', nome:'Recusado', inicial:false, encerra:true },
   ];
+  /**
+   * Nome de exibição da vendedora nos relatórios. Lançamento antigo foi salvo com o
+   * nome completo e o novo com o apelido — sem normalizar, a mesma pessoa apareceria
+   * em duas linhas. Aqui os dois viram o apelido atual do cadastro.
+   */
+  function nomeVendedoraNormalizado(nomeGravado){
+    const alvo = String(nomeGravado||'').trim().toLowerCase();
+    if(!alvo) return nomeGravado;
+    const lista = (configCompleto && configCompleto.funcionarios) || [];
+    const f = lista.find(x=> String(x.nome||'').trim().toLowerCase()===alvo || String(x.apelido||'').trim().toLowerCase()===alvo);
+    if(!f) return nomeGravado;
+    return (f.apelido||'').trim() || f.nome;
+  }
   function statusListDash(){ return (configCompleto && configCompleto.statusOrcamento && configCompleto.statusOrcamento.length>0) ? configCompleto.statusOrcamento : STATUS_ORCAMENTO_PADRAO_DASH; }
   function statusInfoDeDash(id){ return statusListDash().find(s=>s.id===id) || statusListDash()[0]; }
   /** Métricas de orçamentos por vendedora: total, valor, contagem por status, e taxa de conversão (aprovado/total). */
   function metricasOrcamentosPorVendedora(){
     const map = {};
     orcamentos.forEach(o=>{
-      const v = o.vendedora || "Sem vendedora";
+      const v = nomeVendedoraNormalizado(o.vendedora) || "Sem vendedora";
       if(!map[v]) map[v] = { total:0, valorTotal:0, porStatus:{}, aprovados:0, recusados:0 };
       map[v].total++;
       map[v].valorTotal += Number(o.valorTotal)||0;
@@ -667,11 +680,13 @@
     const totais = {};
     vendas.forEach(v=>{
       if(!v.vendedora) return;
-      totais[v.vendedora] = (totais[v.vendedora]||0) + (Number(v.valorTotal)||0);
+      const nv = nomeVendedoraNormalizado(v.vendedora);
+      totais[nv] = (totais[nv]||0) + (Number(v.valorTotal)||0);
     });
     orders.forEach(o=>{
       if(!o.vendedora) return;
-      totais[o.vendedora] = (totais[o.vendedora]||0) + (Number(o.valorTotal)||0);
+      const no = nomeVendedoraNormalizado(o.vendedora);
+      totais[no] = (totais[no]||0) + (Number(o.valorTotal)||0);
     });
     const lista = Object.entries(totais).map(([vendedora,total])=>({vendedora,total})).sort((a,b)=>b.total-a.total);
     const somaGeral = lista.reduce((acc,x)=>acc+x.total,0);
@@ -1218,7 +1233,7 @@
       const lista = ordensComFator();
       const porVendedora = new Map();
       lista.forEach(o=>{
-        const nome = o.vendedora || "—";
+        const nome = nomeVendedoraNormalizado(o.vendedora) || "—";
         const fatorValor = (Number(o.valorTotal)||0) * (Number(o.fatorPercentual)||0) / 100;
         if(!porVendedora.has(nome)) porVendedora.set(nome, { vendas:0, totalVendido:0, totalFator:0 });
         const e = porVendedora.get(nome);
@@ -1260,7 +1275,7 @@
       const lista = ordensComFator();
       const porVendedora = new Map();
       lista.forEach(o=>{
-        const nome = o.vendedora || "—";
+        const nome = nomeVendedoraNormalizado(o.vendedora) || "—";
         const fatorValor = (Number(o.valorTotal)||0) * (Number(o.fatorPercentual)||0) / 100;
         porVendedora.set(nome, (porVendedora.get(nome)||0) + fatorValor);
       });
@@ -1531,7 +1546,7 @@
       const porLoja = {}, porVendedora = {};
       vendas.forEach(v=>{
         const l=v.loja||"—"; porLoja[l]=(porLoja[l]||0)+(Number(v.valorTotal)||0);
-        const vd=v.vendedora||"—"; porVendedora[vd]=(porVendedora[vd]||0)+(Number(v.valorTotal)||0);
+        const vd=nomeVendedoraNormalizado(v.vendedora)||"—"; porVendedora[vd]=(porVendedora[vd]||0)+(Number(v.valorTotal)||0);
       });
       const itensLoja = Object.entries(porLoja).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
       const itensVend = Object.entries(porVendedora).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);

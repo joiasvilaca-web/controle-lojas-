@@ -303,6 +303,17 @@ async function registroExcluir(id){
   }catch(e){ console.error('erro ao excluir registro', e); return false; }
 }
 
+/** Nome que aparece nas listas: apelido do cadastro, ou nome completo se não tiver. */
+function nomeExibicaoFuncionario(f){
+  const ap = (f && f.apelido || '').trim();
+  return ap || (f && f.nome) || '';
+}
+/** Venda antiga foi salva com o nome completo, venda nova com o apelido: bate com os dois. */
+function funcionarioBateComNome(f, nomeGravado){
+  const alvo = String(nomeGravado||'').trim().toLowerCase();
+  if(!alvo) return false;
+  return String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo;
+}
 /** Rótulo de cargo a partir dos cargos marcados em Cadastro → Funcionários. */
 function cargoLabelDosCargos(cargos){
   const c = cargos || [];
@@ -331,6 +342,7 @@ function mesclarFuncionariosDoCadastro(fichas, cfg){
       id: 'dpf_' + f.id,          // id estável: ao salvar o ✎ vira uma ficha de verdade, sem duplicar
       funcionarioId: f.id,
       nome: f.nome,
+      apelido: f.apelido||'',
       cargo: cargoLabelDosCargos(f.cargos),
       status: 'ativo',
       semFicha: true,             // só pra mostrar o aviso na lista
@@ -443,9 +455,9 @@ function renderView(){
   else if(currentTab==='atestados') renderRegistros(main, 'atestado');
 }
 
-function nomeFuncionario(id){ const f = funcionarios.find(x=>x.funcionarioId===id || x.id===id); return f ? f.nome : '—'; }
+function nomeFuncionario(id){ const f = funcionarios.find(x=>x.funcionarioId===id || x.id===id); return f ? nomeExibicaoFuncionario(f) : '—'; }
 function funcionarioOptionsHtml(selected){
-  return `<option value="">Selecione</option>` + funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.funcionarioId||f.id}" ${selected===(f.funcionarioId||f.id)?'selected':''}>${escapeHtml(f.nome)}</option>`).join('');
+  return `<option value="">Selecione</option>` + funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.funcionarioId||f.id}" ${selected===(f.funcionarioId||f.id)?'selected':''}>${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('');
 }
 
 /* ============================================================
@@ -464,16 +476,14 @@ async function renderVendasDP(main){
     let listaFuncionarios = funcionarios.filter(f=>f.status!=='desligado');
     // vendedora/oficina só podem ver a própria linha aqui — não o comparativo de todo mundo
     if(!podeVerTodos){
-      const meuNome = (currentUser && currentUser.nome || '').trim().toLowerCase();
-      listaFuncionarios = listaFuncionarios.filter(f=> (f.nome||'').trim().toLowerCase()===meuNome);
+      listaFuncionarios = listaFuncionarios.filter(f=> funcionarioBateComNome(f, currentUser && currentUser.nome));
     }
     const linhas = listaFuncionarios.map(f=>{
-      const nomeLower = (f.nome||'').trim().toLowerCase();
-      const minhasVendas = vendasDoMes.filter(v=> (v.vendedora||'').trim().toLowerCase()===nomeLower);
-      const minhasOrdens = ordensDoMes.filter(o=> (o.vendedora||'').trim().toLowerCase()===nomeLower);
+      const minhasVendas = vendasDoMes.filter(v=> funcionarioBateComNome(f, v.vendedora));
+      const minhasOrdens = ordensDoMes.filter(o=> funcionarioBateComNome(f, o.vendedora));
       const totalPdv = minhasVendas.reduce((acc,v)=> acc + (Number(v.valorTotal)||0), 0);
       const totalOs = minhasOrdens.reduce((acc,o)=> acc + (Number(o.valorTotal)||0), 0);
-      return { nome:f.nome, qtdPdv:minhasVendas.length, totalPdv, qtdOs:minhasOrdens.length, totalOs, total:totalPdv+totalOs };
+      return { nome:nomeExibicaoFuncionario(f), qtdPdv:minhasVendas.length, totalPdv, qtdOs:minhasOrdens.length, totalOs, total:totalPdv+totalOs };
     }).sort((a,b)=>b.total-a.total);
 
     const historicoConferencias = podeVerTodos
@@ -544,7 +554,7 @@ function renderFuncionarios(main){
     if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">${podeEditar?'Nenhum funcionário cadastrado ainda. Cadastre em Cadastro → Funcionários.':'Nenhuma informação encontrada.'}</td></tr>`; return; }
     tbody.innerHTML = funcionarios.slice().reverse().map(f=>`
       <tr>
-        <td><b>${escapeHtml(f.nome)}</b>${f.semFicha?` <span class="badge" style="margin-left:6px; font-size:11px;">ficha em branco</span>`:''}</td>
+        <td><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''}${f.semFicha?` <span class="badge" style="margin-left:6px; font-size:11px;">ficha em branco</span>`:''}</td>
         <td>${escapeHtml(f.cargo||'—')}</td>
         <td>${escapeHtml(f.loja||'—')}</td>
         <td>${fmtDate(f.dataAdmissao)}</td>
@@ -784,7 +794,7 @@ function renderRegistros(main, tipo){
       ${podeEditar ? `<button class="btn btn-accent" id="btnNovoRegistro">+ Novo</button>` : ''}
     </div>
     <div class="filters">
-      <select id="fFunc"><option value="">Todos os funcionários</option>${funcionarios.map(f=>`<option value="${f.funcionarioId||f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select>
+      <select id="fFunc"><option value="">Todos os funcionários</option>${funcionarios.map(f=>`<option value="${f.funcionarioId||f.id}">${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select>
     </div>
     <div class="card" style="padding:14px 18px;">
       <table>

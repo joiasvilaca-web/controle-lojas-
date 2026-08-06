@@ -1675,6 +1675,7 @@ function renderFuncionariosTab(main){
       <div id="funcRows"></div>
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
         <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
+        <div class="field" style="flex:0 1 150px; min-width:120px; margin-bottom:0;"><input id="func_apelido" placeholder="Apelido (opcional)"></div>
         <div class="cargo-checks">
           <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
           <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
@@ -1691,7 +1692,7 @@ function renderFuncionariosTab(main){
     if(config.funcionarios.length===0){ wrap.innerHTML = `<div class="empty">Nenhum funcionário cadastrado.</div>`; return; }
     wrap.innerHTML = config.funcionarios.map((f,i)=>`
       <div class="code-list-item">
-        <div><b>${escapeHtml(f.nome)}</b> ${(f.cargos||[]).map(c=>`<span class="chip" style="margin-left:6px;">${cargoLabel(c)}</span>`).join('')}</div>
+        <div><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''} ${(f.cargos||[]).map(c=>`<span class="chip" style="margin-left:6px;">${cargoLabel(c)}</span>`).join('')}</div>
         <div style="display:flex; gap:4px;">
           <button class="icon-btn" data-editfunc="${i}" title="Cadastro completo (RH)">✎</button>
           <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
@@ -1713,12 +1714,14 @@ function renderFuncionariosTab(main){
   renderRows();
   document.getElementById('btnAddFunc').addEventListener('click', async ()=>{
     const nome = document.getElementById('func_nome').value.trim();
+    const apelido = document.getElementById('func_apelido').value.trim();
     const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
     if(!nome){ showToast('Informe o nome do funcionário.'); return; }
     if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-    config.funcionarios.push({ id: uid('func'), nome, cargos });
+    config.funcionarios.push({ id: uid('func'), nome, apelido, cargos });
     await configSave();
     document.getElementById('func_nome').value = '';
+    document.getElementById('func_apelido').value = '';
     document.querySelectorAll('.func_cargo_new').forEach(c=>c.checked=false);
     renderRows();
     showToast('Funcionário cadastrado.');
@@ -1737,7 +1740,7 @@ async function abrirFuncionarioCompletoModal(funcionario){
   const todosPerfis = await dpFuncionariosGetTodos();
   let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
   const d = {
-    nome: funcionario.nome, cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
+    nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
     cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
     telefoneFixo: perfil?perfil.telefoneFixo:'', celularParticular: perfil?perfil.celularParticular:'', celularLoja: perfil?perfil.celularLoja:'',
     temFilhos: perfil?(perfil.temFilhos||'nao'):'nao', filhos: perfil&&Array.isArray(perfil.filhos)?perfil.filhos.map(f=>({...f})):[],
@@ -1775,6 +1778,9 @@ async function abrirFuncionarioCompletoModal(funcionario){
     if(abaAtiva==='Básico'){
       body.innerHTML = `
         <div class="field"><label>Nome completo</label><input id="fc_nome" value="${escapeHtml(d.nome)}"></div>
+        <div class="field"><label>Apelido</label><input id="fc_apelido" value="${escapeHtml(d.apelido||'')}" placeholder="Como aparece nas listas dos módulos">
+          <p class="muted" style="margin:4px 0 0; font-size:12px;">É este nome que aparece nas listas de seleção dos outros módulos (venda, O.S., orçamento, transferências, Venda PG). Se ficar em branco, usa o nome completo.</p>
+        </div>
         <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função (usada nos módulos de venda, O.S., Venda PG...)</div>
         <div class="cargo-checks">
           <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''}> Vendedora</label>
@@ -2017,13 +2023,14 @@ async function abrirFuncionarioCompletoModal(funcionario){
     if(d.cargos.length===0){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Selecione ao menos uma função.'); return; }
     // 1) Atualiza o básico (config.funcionarios) — usado em todo o app
     funcionario.nome = d.nome.trim();
+    funcionario.apelido = (d.apelido||'').trim();
     funcionario.cargos = d.cargos;
     const okConfig = await configSave();
     // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId
     const perfilFinal = {
       id: perfil ? perfil.id : uid('func'),
       funcionarioId: funcionario.id,
-      nome: d.nome.trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
+      nome: d.nome.trim(), apelido: (d.apelido||'').trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
       telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
       temFilhos:d.temFilhos, filhos: d.temFilhos==='sim' ? d.filhos : [],
       email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
