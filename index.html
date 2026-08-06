@@ -1179,11 +1179,46 @@ function openImportarClientesCadastro(){
   });
   document.getElementById('cfgImportConfirm').addEventListener('click', async ()=>{
     if(!parsedRows){ showToast('Escolha um arquivo primeiro.'); return; }
+    if(!Array.isArray(clientesCacheIdx)){ showToast('A lista de clientes ainda está carregando. Aguarde uns segundos e tente de novo.'); return; }
     const mapeamento = parsedHeaders.map((h,i)=>{ const sel=document.querySelector(`[data-cfgmapidx="${i}"]`); return sel?sel.value:''; });
     if(!mapeamento.includes('nome')){ showToast('Marque ao menos uma coluna como "Nome".'); return; }
+
+    // ---- Tela de progresso: sem isso, importações grandes parecem travadas ----
+    const btnConfirm = document.getElementById('cfgImportConfirm');
+    const btnCancel  = document.getElementById('cfgImportCancel');
+    const areaMap    = document.getElementById('cfgImportMapping');
+    btnConfirm.disabled = true; btnCancel.disabled = true;
+    areaMap.innerHTML = `
+      <div style="margin-top:16px;">
+        <div id="impStatus" style="font-size:13px;font-weight:700;margin-bottom:8px;">Preparando...</div>
+        <div style="height:8px;background:var(--line);border-radius:99px;overflow:hidden;">
+          <div id="impBarra" style="height:100%;width:0%;background:var(--accent,#7a1f3d);transition:width .15s;"></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px;">Não feche esta janela.</div>
+      </div>`;
+    const elStatus = document.getElementById('impStatus');
+    const elBarra  = document.getElementById('impBarra');
+    const respirar = ()=> new Promise(r=>setTimeout(r,0)); // devolve o controle pra tela redesenhar
+    function progresso(texto, pct){
+      elStatus.textContent = texto;
+      elBarra.style.width = Math.max(0,Math.min(100,pct)) + '%';
+    }
+
+    // ---- Índice de telefone/CPF: evita varrer a lista inteira a cada linha ----
+    // Sem isso, 3.000 linhas contra 5.000 clientes viram 15 milhões de comparações.
+    const idxPorTel = new Map(), idxPorCpf = new Map();
+    (clientesCacheIdx||[]).forEach((c,i)=>{
+      const t = onlyDigitsCli(c.telefone); if(t && !idxPorTel.has(t)) idxPorTel.set(t,i);
+      const p = onlyDigitsCli(c.cpf);      if(p && !idxPorCpf.has(p)) idxPorCpf.set(p,i);
+    });
+
     let novos=0, atualizados=0, ignorados=0;
     const afetados=[];
-    for(const row of parsedRows){
+    progresso('Lendo as linhas da planilha...', 2);
+    await respirar();
+
+    for(let n=0; n<parsedRows.length; n++){
+      const row = parsedRows[n];
       const obj={};
       parsedHeaders.forEach((h,i)=>{
         const campo=mapeamento[i]; if(!campo) return;
@@ -1193,20 +1228,46 @@ function openImportarClientesCadastro(){
         if(val) obj[campo]=val;
       });
       if(!obj.nome){ ignorados++; continue; }
-      const idx=findClienteIndexCadastro(obj.telefone, obj.cpf);
+      const tel = onlyDigitsCli(obj.telefone||'');
+      const cpf = onlyDigitsCli(obj.cpf||'');
+      let idx = -1;
+      if(tel && idxPorTel.has(tel)) idx = idxPorTel.get(tel);
+      else if(cpf && idxPorCpf.has(cpf)) idx = idxPorCpf.get(cpf);
       if(idx===-1){
         const novo={ id:'cli_'+Math.random().toString(36).slice(2)+Date.now().toString(36), nome:'', telefone:'', email:'', cpf:'', dataNascimento:'', cep:'', endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'', ...obj, criadoEm:Date.now() };
-        clientesCacheIdx.unshift(novo); afetados.push(novo); novos++;
+        const posicao = clientesCacheIdx.push(novo) - 1;
+        // já indexa o recém-criado, pra planilha com a mesma pessoa repetida não duplicar
+        if(tel && !idxPorTel.has(tel)) idxPorTel.set(tel, posicao);
+        if(cpf && !idxPorCpf.has(cpf)) idxPorCpf.set(cpf, posicao);
+        afetados.push(novo); novos++;
       }else{
         const ex=clientesCacheIdx[idx];
         Object.keys(obj).forEach(k=>{ ex[k]=obj[k]; });
-        afetados.push(ex); atualizados++;
+        if(!afetados.includes(ex)) afetados.push(ex);
+        atualizados++;
       }
+      if(n % 500 === 0){ progresso(`Lendo linha ${n+1} de ${parsedRows.length}...`, 2 + (n/parsedRows.length)*13); await respirar(); }
     }
-    for(const c of afetados){ await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:c.id, payload:c } } }); }
+
+    // ---- Gravação em lotes: antes era 1 requisição por cliente, uma de cada vez ----
+    const TAMANHO_LOTE = 200;
+    let gravados = 0, falhas = 0;
+    for(let i=0; i<afetados.length; i+=TAMANHO_LOTE){
+      const lote = afetados.slice(i, i+TAMANHO_LOTE).map(c=>({ id:c.id, payload:c }));
+      const r = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row: lote } });
+      if(r && r.error){ falhas += lote.length; console.error('lote com erro na importação:', r.error); }
+      else gravados += lote.length;
+      progresso(`Salvando ${Math.min(i+TAMANHO_LOTE, afetados.length)} de ${afetados.length} cliente(s)...`, 15 + ((i+TAMANHO_LOTE)/Math.max(1,afetados.length))*85);
+      await respirar();
+    }
+
     closeModal();
     renderClientesTable(null);
-    showToast(`Importação concluída: ${novos} novo(s), ${atualizados} atualizado(s), ${ignorados} ignorado(s).`);
+    if(falhas>0){
+      showToast(`Importação parcial: ${gravados} salvo(s), ${falhas} com erro. Veja o console e tente de novo.`);
+    }else{
+      showToast(`Importação concluída: ${novos} novo(s), ${atualizados} atualizado(s), ${ignorados} ignorado(s).`);
+    }
   });
 }
 
