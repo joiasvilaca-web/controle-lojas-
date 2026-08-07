@@ -434,6 +434,56 @@
     }
   }
 
+  /**
+   * Aviso de "Contas a pagar" fixo na primeira linha do Dashboard — mesma informação do
+   * popup que já aparece ao logar (verificarAlertaGastos, se existir no shell), só que
+   * sempre visível aqui em cima, sem precisar fechar um popup. Usa os mesmos dados
+   * (gastosDash) e o mesmo critério de "pago" (statusGastoPago) já usados no card de
+   * Gastos mais abaixo no Dashboard.
+   */
+  function renderContasHoje(){
+    const el = document.getElementById("secContasHoje");
+    if(!el) return;
+    const hj = new Date().toISOString().slice(0,10);
+    const gcStatus = (configCompleto && configCompleto.gastosConfig && configCompleto.gastosConfig.status) || [];
+    function pago(g){
+      const st = gcStatus.find(s=>s.id===g.status);
+      return st ? !!st.tipoPago : !!g.pago;
+    }
+    function cancelado(g){
+      const st = gcStatus.find(s=>s.id===g.status);
+      return st ? st.id==="cancelado" : g.status==="cancelado";
+    }
+    const vencidos = gastosDash.filter(g=>!pago(g) && !cancelado(g) && g.vencimento && g.vencimento < hj);
+    const hoje = gastosDash.filter(g=>!pago(g) && !cancelado(g) && g.vencimento === hj);
+    if(vencidos.length===0 && hoje.length===0){ el.innerHTML = ""; return; }
+    const totalVenc = vencidos.reduce((a,g)=>a+Number(g.valor||0),0);
+    const totalHoje = hoje.reduce((a,g)=>a+Number(g.valor||0),0);
+    const fmtData = d=>{ if(!d) return "—"; const [y,m,di]=d.split("-"); return `${di}/${m}/${y}`; };
+    el.innerHTML = `
+      <div class="card" style="padding:16px; margin-bottom:18px; border-left:5px solid var(--danger);">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+          <div style="font-weight:800; font-size:14px; color:var(--accent-ink);">🔔 Contas a pagar</div>
+          <button class="btn-grafico" id="btnIrGastosDash">Ver em Gastos →</button>
+        </div>
+        ${vencidos.length>0?`
+          <div style="background:var(--danger-soft); border-radius:8px; padding:10px 12px; margin-bottom:${hoje.length>0?'8px':'0'};">
+            <div style="font-weight:700; font-size:12.5px; color:var(--danger); margin-bottom:6px;">⚠️ ${vencidos.length} conta(s) VENCIDA(S) — ${fmtMoeda(totalVenc)}</div>
+            ${vencidos.slice(0,5).map(g=>`<div style="display:flex; justify-content:space-between; font-size:12px; padding:3px 0;"><span>${escapeHtml(g.nome||g.descricao||"—")}</span><span style="font-weight:700;">${fmtData(g.vencimento)} · ${fmtMoeda(g.valor)}</span></div>`).join("")}
+            ${vencidos.length>5?`<div style="font-size:11px; color:var(--danger);">… e mais ${vencidos.length-5}.</div>`:""}
+          </div>`:""}
+        ${hoje.length>0?`
+          <div style="background:var(--wait-soft); border-radius:8px; padding:10px 12px;">
+            <div style="font-weight:700; font-size:12.5px; color:var(--wait); margin-bottom:6px;">📅 ${hoje.length} conta(s) vencem HOJE — ${fmtMoeda(totalHoje)}</div>
+            ${hoje.map(g=>`<div style="display:flex; justify-content:space-between; font-size:12px; padding:3px 0;"><span>${escapeHtml(g.nome||g.descricao||"—")}</span><span style="font-weight:700;">${fmtMoeda(g.valor)}</span></div>`).join("")}
+          </div>`:""}
+      </div>
+    `;
+    document.getElementById("btnIrGastosDash").addEventListener("click", ()=>{
+      if(EMBEDDED) parent.postMessage({ type:"irParaModulo", modulo:"dashboard", alvo:"gastos" }, "*");
+    });
+  }
+
   function enterDashboard(){
     document.getElementById("view-login").style.display = "none";
     document.getElementById("view-dashboard").style.display = "block";
@@ -597,6 +647,7 @@
     const mostraTransf = currentUser.nivel !== "oficina";
 
     main.innerHTML = `
+      ${mostraFinanceiro ? `<div id="secContasHoje"></div>` : ""}
       ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições/Vendas.</div>` : ""}
       ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento) nem o Fator (F).</div>` : ""}
 
@@ -609,6 +660,7 @@
       ${mostraFinanceiro ? `<div class="section" id="secFator"></div>` : ""}
     `;
 
+    if(mostraFinanceiro) renderContasHoje();
     if(mostraFinanceiro) renderAlertasRH();
     if(mostraFinanceiro) renderSecaoInteligencia();
     if(mostraFinanceiro) renderSecaoPagamentos();

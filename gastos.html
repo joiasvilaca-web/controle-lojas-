@@ -83,6 +83,7 @@ tr:hover td{background:var(--surface-2);}
 .rec-menu button:hover{background:var(--surface-2);}
 .rec-menu button.sel{background:var(--accent-soft);color:var(--gold-ink);font-weight:700;}
 .legenda-status{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}
+#tabsBar{display:none;}
 </style>
 </head>
 <body>
@@ -105,7 +106,11 @@ tr:hover td{background:var(--surface-2);}
     <select id="gastoFiltroStatus"><option value="">Todos os status</option></select>
     <select id="gastoFiltroCategoria"><option value="">Todas as categorias</option></select>
     <select id="gastoFiltroLoja"><option value="">Todas as lojas</option></select>
-    <input type="month" id="gastoFiltroMes" title="Filtrar por mês">
+    <span style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);">
+      <input type="date" id="gastoFiltroDe" title="Data inicial">
+      até
+      <input type="date" id="gastoFiltroAte" title="Data final">
+    </span>
     <button class="btn btn-ghost btn-sm" id="btnLimparFiltroGasto">Limpar</button>
   </div>
   <div class="card" style="padding:0;overflow-x:auto;"><div id="gastosTabela"></div></div>
@@ -318,24 +323,27 @@ function renderAlertasVencimento(){
       </div></div>`;
   }
   el.innerHTML=html;
-  el.querySelectorAll('[data-marcar-pago]').forEach(b=>b.addEventListener('click',async()=>{await marcarStatus(b.dataset.marcarPago,'pago');renderLancamentos();}));
+  el.querySelectorAll('[data-marcar-pago]').forEach(b=>b.addEventListener('click',async()=>{await marcarStatus(b.dataset.marcarPago,'pago');}));
 }
 
 /* ===== KPIs ===== */
 function renderKpis(lista){
+  // "lista" já vem filtrada pelo período selecionado (padrão: mês vigente) — Total pago,
+  // A pagar e Maior categoria respeitam esse período. Total vencido é sempre global
+  // (independe do período escolhido), porque é um alerta que deve continuar visível.
   const pagos=lista.filter(g=>ehPago(g));
   const aPagar=lista.filter(g=>!ehPago(g)&&statusDe(g.status).id!=='cancelado');
-  const vencidos=lista.filter(g=>estaVencido(g));
   const totalPago=pagos.reduce((a,g)=>a+Number(g.valor||0),0);
   const totalAPagar=aPagar.reduce((a,g)=>a+Number(g.valor||0),0);
+  const vencidosGlobal=gastos.filter(g=>estaVencido(g));
+  const totalVencido=vencidosGlobal.reduce((a,g)=>a+Number(g.valor||0),0);
   const porCat={};
   pagos.forEach(g=>{const c=g.categoria||'Outros';porCat[c]=(porCat[c]||0)+Number(g.valor||0);});
   const topCat=Object.entries(porCat).sort((a,b)=>b[1]-a[1]).slice(0,1);
   document.getElementById('kpisGastos').innerHTML=`
-    <div class="kpi-card"><div class="kpi-val" style="color:var(--ok);">${fmtMoeda(totalPago)}</div><div class="kpi-label">Total pago</div></div>
-    <div class="kpi-card"><div class="kpi-val" style="color:var(--wait);">${fmtMoeda(totalAPagar)}</div><div class="kpi-label">A pagar</div></div>
-    <div class="kpi-card"><div class="kpi-val" style="color:var(--danger);">${vencidos.length}</div><div class="kpi-label">Vencidos</div></div>
-    <div class="kpi-card"><div class="kpi-val">${lista.length}</div><div class="kpi-label">Lançamentos</div></div>
+    <div class="kpi-card"><div class="kpi-val" style="color:var(--ok);">${fmtMoeda(totalPago)}</div><div class="kpi-label">Total pago (período)</div></div>
+    <div class="kpi-card"><div class="kpi-val" style="color:var(--wait);">${fmtMoeda(totalAPagar)}</div><div class="kpi-label">A pagar (período)</div></div>
+    <div class="kpi-card"><div class="kpi-val" style="color:var(--danger);">${fmtMoeda(totalVencido)}</div><div class="kpi-label">Total vencido</div></div>
     ${topCat.length?`<div class="kpi-card"><div class="kpi-val" style="font-size:13px;">${esc(topCat[0][0])}</div><div class="kpi-label">Maior categoria</div></div>`:''}
   `;
 }
@@ -347,17 +355,31 @@ function renderLancamentos(){
     const st=document.getElementById('gastoFiltroStatus').value;
     const cat=document.getElementById('gastoFiltroCategoria').value;
     const loja=document.getElementById('gastoFiltroLoja').value;
-    const mes=document.getElementById('gastoFiltroMes').value;
+    const de=document.getElementById('gastoFiltroDe').value;
+    const ate=document.getElementById('gastoFiltroAte').value;
     let l=[...gastos];
     if(q) l=l.filter(g=>(g.nome||'').toLowerCase().includes(q)||(g.categoria||'').toLowerCase().includes(q));
     if(st==='__vencido') l=l.filter(g=>estaVencido(g));
     else if(st) l=l.filter(g=>g.status===st);
     if(cat) l=l.filter(g=>g.categoria===cat);
     if(loja) l=l.filter(g=>g.loja===loja);
-    if(mes) l=l.filter(g=>(g.vencimento||g.criadoEm||'').startsWith(mes));
+    if(de) l=l.filter(g=>(g.vencimento||g.criadoEm||'') >= de);
+    if(ate) l=l.filter(g=>(g.vencimento||g.criadoEm||'') <= ate);
     l.sort((a,b)=>(b.vencimento||b.criadoEm||'').localeCompare(a.vencimento||a.criadoEm||''));
     return l;
   }
+  // Padrão: período = mês vigente (o resumo/KPIs deve refletir o mês atual por padrão)
+  (function definirPeriodoPadrao(){
+    const deEl=document.getElementById('gastoFiltroDe'), ateEl=document.getElementById('gastoFiltroAte');
+    if(!deEl.value && !ateEl.value){
+      const hj=new Date();
+      const ano=hj.getFullYear(), mesN=hj.getMonth();
+      const primeiro=`${ano}-${String(mesN+1).padStart(2,'0')}-01`;
+      const ultimoDia=new Date(ano,mesN+1,0).getDate();
+      const ultimo=`${ano}-${String(mesN+1).padStart(2,'0')}-${String(ultimoDia).padStart(2,'0')}`;
+      deEl.value=primeiro; ateEl.value=ultimo;
+    }
+  })();
   function render(){
     const l=filtrar();
     renderKpis(l);
@@ -379,7 +401,7 @@ function renderLancamentos(){
           <td><span class="badge" style="background:${esc(s.cor)}22;color:${esc(s.cor)};border:1px solid ${esc(s.cor)}55;">${esc(s.nome)}</span></td>
           <td style="font-size:12px;">${esc(g.responsavel||'—')}</td>
           <td style="white-space:nowrap;">
-            <button class="icon-btn" data-status="${esc(g.id)}" title="Mudar status">🔄</button>
+            <button class="icon-btn" data-status="${esc(g.id)}" title="Mudar status">🏷️</button>
             <button class="icon-btn" data-edit="${esc(g.id)}" title="Editar">✎</button>
             <button class="icon-btn" data-del="${esc(g.id)}" title="Excluir">🗑</button>
           </td>
@@ -391,13 +413,15 @@ function renderLancamentos(){
     el.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>excluirGasto(b.dataset.del,render)));
   }
   ['gastoBusca'].forEach(id=>document.getElementById(id).oninput=render);
-  ['gastoFiltroStatus','gastoFiltroCategoria','gastoFiltroLoja','gastoFiltroMes'].forEach(id=>document.getElementById(id).onchange=render);
+  ['gastoFiltroStatus','gastoFiltroCategoria','gastoFiltroLoja','gastoFiltroDe','gastoFiltroAte'].forEach(id=>document.getElementById(id).onchange=render);
   document.getElementById('btnLimparFiltroGasto').onclick=()=>{
-    document.getElementById('gastoBusca').value='';document.getElementById('gastoFiltroMes').value='';
+    document.getElementById('gastoBusca').value='';
+    document.getElementById('gastoFiltroDe').value='';document.getElementById('gastoFiltroAte').value='';
     ['gastoFiltroStatus','gastoFiltroCategoria','gastoFiltroLoja'].forEach(id=>document.getElementById(id).value='');
     render();
   };
   document.getElementById('btnNovoGasto').onclick=()=>abrirModalGasto(null,render);
+  window.__renderListaGastosAtual = render; // permite que marcarStatus() force um refresh desta lista, mesmo chamado de fora (notificação/agenda)
   render();
 }
 
@@ -405,10 +429,14 @@ async function marcarStatus(id,statusId){
   const g=gastos.find(x=>x.id===id);if(!g)return;
   g.status=statusId;
   g.pago=ehPago(g);
-  if(g.pago) g.dataPagamento=hoje();
+  if(g.pago) g.dataPagamento=hoje(); else g.dataPagamento=null;
   await gw({op:'upsert',table:'gastos',params:{row:{id:g.id,payload:g}}});
   showToast('Status atualizado!');
+  // Sincroniza TUDO que depende do status deste gasto — notificação, lista de
+  // Lançamentos e Agenda — não importa qual tela iniciou a troca.
   renderAlertasVencimento();
+  if(typeof window.__renderListaGastosAtual==='function') window.__renderListaGastosAtual();
+  renderAgenda();
   parent.postMessage({type:'gastoAtualizado'},'*');
 }
 function abrirTrocaStatus(id,onDone){
@@ -676,7 +704,7 @@ function renderAgenda(){
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
-        <button class="btn btn-accent" id="btnAgStatus">🔄 Mudar status</button>
+        <button class="btn btn-accent" id="btnAgStatus">🏷️ Mudar status</button>
       </div>
     `);
     document.getElementById('btnAgStatus').addEventListener('click',()=>{closeModal();abrirTrocaStatus(g.id,()=>renderAgenda());});
