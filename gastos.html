@@ -365,7 +365,7 @@ function renderLancamentos(){
     if(loja) l=l.filter(g=>g.loja===loja);
     if(de) l=l.filter(g=>(g.vencimento||g.criadoEm||'') >= de);
     if(ate) l=l.filter(g=>(g.vencimento||g.criadoEm||'') <= ate);
-    l.sort((a,b)=>(b.vencimento||b.criadoEm||'').localeCompare(a.vencimento||a.criadoEm||''));
+    l.sort((a,b)=>(a.vencimento||a.criadoEm||'').localeCompare(b.vencimento||b.criadoEm||''));
     return l;
   }
   // Padrão: período = mês vigente (o resumo/KPIs deve refletir o mês atual por padrão)
@@ -598,57 +598,69 @@ function abrirModalGasto(g,onSave){
   });
 
   document.getElementById('btnSalvarGasto').addEventListener('click',async()=>{
+    const btnSalvar=document.getElementById('btnSalvarGasto');
+    if(btnSalvar.disabled) return; // proteção extra contra clique duplo
     const nome=document.getElementById('gNome').value.trim();
     const valor=parseFloat(document.getElementById('gValor').value);
     const venc=document.getElementById('gVenc').value;
     if(!nome||isNaN(valor)||valor<0||!venc){showToast('Preencha nome, valor e vencimento.');return;}
-    const base={
-      loja:document.getElementById('gLoja').value,
-      nome, categoria:document.getElementById('gCat').value,
-      valor, vencimento:venc,
-      formaPagamento:document.getElementById('gFormaPg').value,
-      obs:document.getElementById('gObs').value.trim(),
-      responsavel:respNome,
-      status:document.getElementById('gStatus').value,
-    };
-    base.pago = !!(gastosCfg().status.find(s=>s.id===base.status)||{}).tipoPago;
-    if(base.pago) base.dataPagamento=hoje();
+    const textoOriginalBtn=btnSalvar.textContent;
+    btnSalvar.disabled=true;
+    btnSalvar.textContent='Salvando...';
+    try{
+      const base={
+        loja:document.getElementById('gLoja').value,
+        nome, categoria:document.getElementById('gCat').value,
+        valor, vencimento:venc,
+        formaPagamento:document.getElementById('gFormaPg').value,
+        obs:document.getElementById('gObs').value.trim(),
+        responsavel:respNome,
+        status:document.getElementById('gStatus').value,
+      };
+      base.pago = !!(gastosCfg().status.find(s=>s.id===base.status)||{}).tipoPago;
+      if(base.pago) base.dataPagamento=hoje();
 
-    if(isEdit){
-      const atualizado={...g,...base};
-      await gw({op:'upsert',table:'gastos',params:{row:{id:atualizado.id,payload:atualizado}}});
-      const idx=gastos.findIndex(x=>x.id===atualizado.id);
-      if(idx>=0)gastos[idx]=atualizado;
-      showToast('Lançamento atualizado!');
-    } else if(recorrenciaSel==='mensal'||recorrenciaSel==='anual'){
-      const fixo={ id:uid('f'), ...base, recorrencia:recorrenciaSel, dataInicio:venc, ativo:true, criadoEm:hoje() };
-      await gw({op:'upsert',table:'gastos_fixos',params:{row:{id:fixo.id,payload:fixo}}});
-      fixos.push(fixo);
-      await gerarInstanciasFixos();
-      showToast('Despesa recorrente criada!');
-    } else if(recorrenciaSel==='parcelas'){
-      const total=parseInt(document.getElementById('gParcelas').value)||2;
-      const grupoId=uid('pg');
-      for(let i=1;i<=total;i++){
-        const p={ id:uid('g'), ...base, nome:base.nome, vencimento:addMeses(venc,i-1),
-          parcelaInfo:{numero:i,total,grupoId}, criadoEm:hoje(),
-          status: i===1 ? base.status : 'apagar', pago: i===1 ? base.pago : false };
-        if(!p.pago) delete p.dataPagamento;
-        await gw({op:'upsert',table:'gastos',params:{row:{id:p.id,payload:p}}});
-        gastos.push(p);
+      if(isEdit){
+        const atualizado={...g,...base};
+        await gw({op:'upsert',table:'gastos',params:{row:{id:atualizado.id,payload:atualizado}}});
+        const idx=gastos.findIndex(x=>x.id===atualizado.id);
+        if(idx>=0)gastos[idx]=atualizado;
+        showToast('Lançamento atualizado!');
+      } else if(recorrenciaSel==='mensal'||recorrenciaSel==='anual'){
+        const fixo={ id:uid('f'), ...base, recorrencia:recorrenciaSel, dataInicio:venc, ativo:true, criadoEm:hoje() };
+        await gw({op:'upsert',table:'gastos_fixos',params:{row:{id:fixo.id,payload:fixo}}});
+        fixos.push(fixo);
+        await gerarInstanciasFixos();
+        showToast('Despesa recorrente criada!');
+      } else if(recorrenciaSel==='parcelas'){
+        const total=parseInt(document.getElementById('gParcelas').value)||2;
+        const grupoId=uid('pg');
+        for(let i=1;i<=total;i++){
+          const p={ id:uid('g'), ...base, nome:base.nome, vencimento:addMeses(venc,i-1),
+            parcelaInfo:{numero:i,total,grupoId}, criadoEm:hoje(),
+            status: i===1 ? base.status : 'apagar', pago: i===1 ? base.pago : false };
+          if(!p.pago) delete p.dataPagamento;
+          await gw({op:'upsert',table:'gastos',params:{row:{id:p.id,payload:p}}});
+          gastos.push(p);
+        }
+        showToast(`${total} parcelas criadas!`);
+      } else {
+        const novo={ id:uid('g'), ...base, criadoEm:hoje() };
+        await gw({op:'upsert',table:'gastos',params:{row:{id:novo.id,payload:novo}}});
+        gastos.push(novo);
+        showToast('Gasto adicionado!');
       }
-      showToast(`${total} parcelas criadas!`);
-    } else {
-      const novo={ id:uid('g'), ...base, criadoEm:hoje() };
-      await gw({op:'upsert',table:'gastos',params:{row:{id:novo.id,payload:novo}}});
-      gastos.push(novo);
-      showToast('Gasto adicionado!');
+      closeModal();
+      preencherFiltros();
+      if(onSave)onSave();
+      renderAlertasVencimento();
+      parent.postMessage({type:'gastoAtualizado'},'*');
+    }catch(e){
+      showToast('⚠️ Erro ao salvar. Tente novamente.');
+    }finally{
+      btnSalvar.disabled=false;
+      btnSalvar.textContent=textoOriginalBtn;
     }
-    closeModal();
-    preencherFiltros();
-    if(onSave)onSave();
-    renderAlertasVencimento();
-    parent.postMessage({type:'gastoAtualizado'},'*');
   });
 }
 
