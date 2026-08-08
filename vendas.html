@@ -692,7 +692,6 @@ function mountPagamentos(container, holder){
           </div>
         </div>
         <div id="pagNotaCamposWrap" style="display:none;">
-          <div class="field"><label>Número da nota</label><input id="pagNumeroNota" placeholder="Ex: 12345" value="${escapeHtml(holder.numeroNota||'')}"></div>
           <div class="grid-3">
             <div class="field"><label>Empresa joia</label><select id="pagLojaSaida">${lojaAbrevOptionsHtml(holder.lojaSaidaId||'')}</select></div>
             <div class="field"><label>Empresa do pagamento</label><select id="pagLojaPagamento">${lojaAbrevOptionsHtml(holder.lojaPagamentoId||'')}</select></div>
@@ -723,8 +722,6 @@ function mountPagamentos(container, holder){
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
       r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; atualizarVisibilidadeNota(); });
     });
-    const numNotaEl = container.querySelector('#pagNumeroNota');
-    if(numNotaEl) numNotaEl.addEventListener('input', ()=>{ holder.numeroNota = numNotaEl.value.trim(); });
     const lojaSaidaEl = container.querySelector('#pagLojaSaida');
     if(lojaSaidaEl) lojaSaidaEl.addEventListener('change', ()=>{ holder.lojaSaidaId = lojaSaidaEl.value; atualizarErroEmpresas(); });
     const lojaPagamentoEl = container.querySelector('#pagLojaPagamento');
@@ -1676,8 +1673,7 @@ function abrirNotaVenda(v){
     <h3>Nota fiscal</h3>
     <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
     <table>
-      <tr><td class="muted" style="width:150px;">Número da nota</td><td>${escapeHtml(v.numeroNota||'—')}</td></tr>
-      <tr><td class="muted">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
+      <tr><td class="muted" style="width:150px;">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
       <tr><td class="muted">Empresa do pagamento</td><td>${escapeHtml(nomeLoja(v.lojaPagamentoId))}</td></tr>
       <tr><td class="muted">Empresa nota</td><td>${escapeHtml(nomeLoja(v.lojaNotaId))}</td></tr>
       ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
@@ -1728,9 +1724,16 @@ function abrirEditarVenda(v){
   document.getElementById('ev_nao').addEventListener('click', ()=> abrirFormularioEdicaoVenda(v));
 }
 function abrirFormularioEdicaoVenda(v){
+  const podeEditarTudo = v.data === hoje() && (!v.trocas || v.trocas.length===0);
+  if(podeEditarTudo) abrirFormularioEdicaoCompleta(v);
+  else abrirFormularioEdicaoRestrita(v, v.data!==hoje() ? null : 'Esta venda já teve troca registrada, então itens e pagamento não dá pra editar aqui — só os dados abaixo.');
+}
+/** Edição restrita: só dados administrativos (loja, vendedora, data, cliente, telefone).
+ * Usada quando a venda não é de hoje, ou já teve troca registrada. */
+function abrirFormularioEdicaoRestrita(v, avisoExtra){
   openModal(`
     <h3>Editar venda</h3>
-    <p class="muted">Itens e formas de pagamento não são editáveis aqui — pra isso, use Troca ou Cancelamento.</p>
+    <p class="muted">${avisoExtra ? escapeHtml(avisoExtra) : 'Essa venda não é de hoje — pra manter o caixa e o estoque batendo, itens e pagamento só dá pra editar no mesmo dia da venda. Use Troca ou Cancelamento pra esses casos.'}</p>
     <div class="grid-2">
       <div class="field"><label>Loja</label><select id="ed_loja">${lojaOptionsHtml(v.lojaId||'')}</select></div>
       <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml(v.vendedora||'')}</select></div>
@@ -1760,6 +1763,169 @@ function abrirFormularioEdicaoVenda(v){
     v.data = data;
     v.telefone = telefone;
     v.cliente = cliente;
+    const ok = await vendaSalvar(v);
+    if(ok){
+      showToast('Venda atualizada.');
+      closeModal();
+      renderTabs(); renderView();
+    }
+  });
+}
+/** Edição completa: só liberada quando a venda é de HOJE e não teve troca — nesse caso
+ * dá pra mexer em tudo (itens, estoque, pagamento, crédito/fiado, nota fiscal), porque
+ * ainda não entrou em nenhum fechamento/relatório de dia anterior. O salvamento desfaz
+ * o que a venda original tinha lançado (estoque + crédito/fiado do cliente antigo) e
+ * relança do zero com os dados novos — igual criar uma venda, só que por cima da mesma. */
+function abrirFormularioEdicaoCompleta(v){
+  openModal(`
+    <h3>Editar venda</h3>
+    <p class="muted" style="color:var(--ok);">Venda de hoje — pode editar tudo, inclusive itens e pagamento.</p>
+    <div class="grid-2">
+      <div class="field"><label>Loja</label><select id="ed_loja">${lojaOptionsHtml(v.lojaId||'')}</select></div>
+      <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml(v.vendedora||'')}</select></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Data</label><input type="date" id="ed_data" value="${v.data||''}"></div>
+      <div class="field"><label>Telefone</label><input id="ed_telefone" value="${escapeHtml(v.telefone||'')}"></div>
+    </div>
+    <div class="field"><label>Cliente</label><input id="ed_cliente" value="${escapeHtml(v.cliente||'')}"></div>
+    <div id="ed_itensContainer"></div>
+    <div id="ed_pagamentoContainer"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="ed_fechar">Cancelar</button>
+      <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
+    </div>
+  `);
+  const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'' })) };
+  mountItens(document.getElementById('ed_itensContainer'), itensHolder);
+  const pagHolder = {
+    valorTotal: v.valorTotal, pagamentos: (v.pagamentos||[]).map(p=>({...p})),
+    momentoPagamento: v.momentoPagamento, emissaoNota: v.emissaoNota, numeroNota: v.numeroNota,
+    lojaSaidaId: v.lojaSaidaId||'', lojaPagamentoId: v.lojaPagamentoId||'', lojaNotaId: v.lojaNotaId||'', lojaBaixaEstoqueId: v.lojaBaixaEstoqueId||'',
+  };
+  mountPagamentos(document.getElementById('ed_pagamentoContainer'), pagHolder);
+
+  document.getElementById('ed_fechar').addEventListener('click', closeModal);
+  document.getElementById('ed_salvar').addEventListener('click', async ()=>{
+    const lojaId = document.getElementById('ed_loja').value;
+    const vendedora = document.getElementById('ed_vendedora').value.trim();
+    const data = document.getElementById('ed_data').value;
+    const telefone = document.getElementById('ed_telefone').value.trim();
+    const cliente = document.getElementById('ed_cliente').value.trim();
+    const itensValidos = itensHolder.itens.filter(it=>it.produto);
+    if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
+    if(itensValidos.length===0){ showToast('Adicione ao menos um item vendido.'); return; }
+    const erroNota = notaEmpresasErro(pagHolder);
+    if(erroNota){ showToast(erroNota); return; }
+
+    // ===== 1) Desfaz o que a venda original lançou (estoque + crédito/fiado do cliente antigo) =====
+    if(v.estoqueConsumido){
+      for(const [produtoId, qtd] of Object.entries(v.estoqueConsumido)){
+        if(!qtd) continue;
+        const p = produtosEstoque.find(x=>x.id===produtoId);
+        if(!p) continue;
+        p.estoque = (Number(p.estoque)||0) + qtd;
+        await produtoEstoqueAtualizar(p);
+      }
+    }
+    const clienteAntigo = encontrarClienteDaVenda(v);
+    if(clienteAntigo){
+      let mudou = false;
+      if(v.creditoUsado > 0){
+        clienteAntigo.credito = (Number(clienteAntigo.credito)||0) + v.creditoUsado;
+        if(!clienteAntigo.creditoMovimentos) clienteAntigo.creditoMovimentos = [];
+        clienteAntigo.creditoMovimentos.push({ data: hoje(), valor: v.creditoUsado, tipo:'estorno', obs:`Edição da venda ${String(v.id).slice(-8)}` });
+        mudou = true;
+      }
+      if(v.fiadoDebitoId && Array.isArray(clienteAntigo.fiadoDebitos)){
+        const idx = clienteAntigo.fiadoDebitos.findIndex(d=>d.id===v.fiadoDebitoId);
+        if(idx > -1){
+          const jaPago = Number(clienteAntigo.fiadoDebitos[idx].valorPago)||0;
+          if(jaPago > 0){
+            clienteAntigo.credito = (Number(clienteAntigo.credito)||0) + jaPago;
+            if(!clienteAntigo.creditoMovimentos) clienteAntigo.creditoMovimentos = [];
+            clienteAntigo.creditoMovimentos.push({ data: hoje(), valor: jaPago, tipo:'estorno', obs:`Edição da venda ${String(v.id).slice(-8)} (parcela de fiado já paga)` });
+          }
+          clienteAntigo.fiadoDebitos.splice(idx,1);
+          mudou = true;
+        }
+      }
+      if(mudou) await salvarUmCliente(clienteAntigo);
+    }
+
+    // ===== 2) Planeja o novo consumo de estoque (igual a uma venda nova) =====
+    const reservas = {};
+    let faltandoGeral = [];
+    itensValidos.forEach(it=>{
+      if(!it.produtoEstoqueId){ it.estoqueConsumidoItem = {}; return; }
+      const antes = {...reservas};
+      const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas);
+      if(!resultado.ok) faltandoGeral.push(...resultado.faltando);
+      const delta = {};
+      Object.keys(reservas).forEach(pid=>{ const d=(reservas[pid]||0)-(antes[pid]||0); if(d>0) delta[pid]=d; });
+      it.estoqueConsumidoItem = delta;
+    });
+    if(faltandoGeral.length > 0){
+      const lista = faltandoGeral.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
+      const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nSalvar mesmo assim? O estoque desses itens vai ficar negativo.`);
+      if(!prosseguir) return;
+    }
+
+    // ===== 3) Novo crédito/fiado (igual a uma venda nova), pro cliente (novo) da edição =====
+    const pagsCredito = (pagHolder.pagamentos||[]).filter(p=>p.formaId==='__credito');
+    const pagsFiado = (pagHolder.pagamentos||[]).filter(p=>p.formaId==='__fiado');
+    const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const totalFiado = pagsFiado.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    let clienteNovo = null;
+    if(pagsCredito.length>0 || pagsFiado.length>0){
+      const telD = (telefone||'').replace(/\D/g,'');
+      const nomeL = (cliente||'').trim().toLowerCase();
+      clienteNovo = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+      if(!clienteNovo){ showToast('Pra usar Crédito ou Fiado, selecione um cliente já cadastrado.'); return; }
+      if(totalCredito>0 && (Number(clienteNovo.credito)||0) < totalCredito - 0.001){
+        showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(clienteNovo.credito)||0).toFixed(2)}.`);
+        return;
+      }
+    }
+
+    const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+    const novoFiadoDebitoId = totalFiado>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
+
+    // ===== 4) Aplica tudo e regrava a venda =====
+    await aplicarConsumosEstoque(reservas);
+    if(clienteNovo){
+      if(totalCredito>0){
+        clienteNovo.credito = (Number(clienteNovo.credito)||0) - totalCredito;
+        if(!clienteNovo.creditoMovimentos) clienteNovo.creditoMovimentos = [];
+        clienteNovo.creditoMovimentos.push({ data: hoje(), valor: -totalCredito, tipo:'uso', obs:`Venda ${String(v.id).slice(-8)} (editada)` });
+      }
+      if(totalFiado>0){
+        if(!clienteNovo.fiadoDebitos) clienteNovo.fiadoDebitos = [];
+        clienteNovo.fiadoDebitos.push({ id:novoFiadoDebitoId, origem:'Venda', numero:String(v.id).slice(-8), data, valor:totalFiado, valorPago:0, loja:loja?loja.nome:'' });
+      }
+      if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteNovo);
+    }
+
+    v.lojaId = lojaId;
+    v.loja = loja ? loja.nome : v.loja;
+    v.vendedora = vendedora;
+    v.data = data;
+    v.telefone = telefone;
+    v.cliente = cliente;
+    v.itens = itensValidos;
+    v.valorTotal = pagHolder.valorTotal;
+    v.pagamentos = pagHolder.pagamentos;
+    v.momentoPagamento = pagHolder.momentoPagamento;
+    v.emissaoNota = pagHolder.emissaoNota;
+    v.numeroNota = pagHolder.numeroNota || '';
+    v.lojaSaidaId = pagHolder.lojaSaidaId || '';
+    v.lojaPagamentoId = pagHolder.lojaPagamentoId || '';
+    v.lojaNotaId = pagHolder.lojaNotaId || '';
+    v.lojaBaixaEstoqueId = pagHolder.lojaBaixaEstoqueId || '';
+    v.estoqueConsumido = reservas;
+    v.creditoUsado = totalCredito;
+    v.fiadoDebitoId = novoFiadoDebitoId;
+
     const ok = await vendaSalvar(v);
     if(ok){
       showToast('Venda atualizada.');
@@ -1800,7 +1966,6 @@ function abrirDetalheVenda(v){
       <tr><td class="muted">Recebido</td><td>R$ ${valorRecebidoDe(v).toFixed(2)}</td></tr>
       <tr><td class="muted">A receber</td><td>R$ ${valorAReceberDe(v).toFixed(2)}</td></tr>
       ${v.emissaoNota==='sim' ? `
-        <tr><td class="muted">Nota</td><td>${escapeHtml(v.numeroNota||'—')}</td></tr>
         <tr><td class="muted">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
         <tr><td class="muted">Empresa do pagamento</td><td>${escapeHtml(nomeLoja(v.lojaPagamentoId))}</td></tr>
         <tr><td class="muted">Empresa nota</td><td>${escapeHtml(nomeLoja(v.lojaNotaId))}</td></tr>
