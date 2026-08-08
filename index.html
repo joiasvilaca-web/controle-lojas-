@@ -2332,7 +2332,7 @@ async function renderProdutoUnificadoTab(main){
             <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
               ${catNome(p.categoriaId||p.categoria)?`<span class="chip">${escapeHtml(catNome(p.categoriaId||p.categoria))}</span>`:''}
               ${subNome(p.subcategoriaId||p.subcategoria)?`<span class="chip">${escapeHtml(subNome(p.subcategoriaId||p.subcategoria))}</span>`:''}
-              <span class="chip">${Number(p.estoque||0)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
+              <span class="chip">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
               ${p.composicao&&p.composicao.length>0?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Composição: ${p.composicao.length}</span>`:'<span class="chip">Matéria-prima</span>'}
               ${p.vendavel===false?`<span class="chip">Só interno</span>`:`<span class="chip" style="background:var(--ok-soft);color:var(--ok);">Vendável</span>`}
               ${p.precoVenda!=null?`<span class="chip" style="background:var(--accent);color:#fff;">R$ ${Number(p.precoVenda).toFixed(2)}</span>`:''}
@@ -2673,6 +2673,21 @@ async function produtoEstoqueExcluir(id){
 }
 
 function unidadeLabel(u){ return u==='g' ? 'gramas' : u==='kg' ? 'kg' : 'unidade(s)'; }
+/** Compatibilidade: produto antigo (de antes do estoque virar por loja) só tinha um
+ * número só. Divide esse número igualmente entre as lojas cadastradas, só pra dar um
+ * ponto de partida — o valor certo por loja precisa ser ajustado manualmente depois. */
+function estoqueLegadoDivididoPorLoja(estoqueAntigo){
+  const lojas = config.lojas||[];
+  if(lojas.length===0) return {};
+  const porLoja = (Number(estoqueAntigo)||0) / lojas.length;
+  const out = {};
+  lojas.forEach(l=> out[l.id] = porLoja);
+  return out;
+}
+function estoqueTotalDe(produto){
+  if(produto && produto.estoquePorLoja) return Object.values(produto.estoquePorLoja).reduce((a,v)=>a+(Number(v)||0),0);
+  return Number(produto && produto.estoque || 0);
+}
 
 /**
  * Componente de fotos/vídeos do produto. `holder.fotos` acumula os itens já enviados
@@ -2786,7 +2801,7 @@ function abrirProdutoEstoqueModal(produto){
     cstCsosn: produto ? (produto.cstCsosn||'') : '',
     origemMercadoria: produto ? (produto.origemMercadoria||'') : '',
     gtin: produto ? (produto.gtin||'') : '',
-    estoque: produto && produto.estoque!==undefined ? produto.estoque : 0,
+    estoquePorLoja: produto && produto.estoquePorLoja ? {...produto.estoquePorLoja} : (produto && produto.estoque ? estoqueLegadoDivididoPorLoja(produto.estoque) : {}),
     custo: produto && produto.custo!==undefined ? produto.custo : null,
     precoVenda: produto && produto.precoVenda!==undefined ? produto.precoVenda : null,
     fatorPercentual: produto && produto.fatorPercentual!==undefined ? produto.fatorPercentual : null,
@@ -2890,17 +2905,37 @@ function abrirProdutoEstoqueModal(produto){
       });
     }
     else if(peTabAtiva==='valores'){
+      const lojas = config.lojas||[];
+      const totalEstoque = lojas.reduce((a,l)=>a+(Number(d.estoquePorLoja[l.id])||0),0);
       body.innerHTML = `
-        <div class="grid-2">
-          <div class="field"><label>Estoque atual</label><input type="number" step="0.001" id="pe_estoque" value="${d.estoque}"></div>
-          <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
+        <div class="field">
+          <label>Estoque por loja</label>
+          <div class="grid-2" id="pe_estoquePorLojaRows">
+            ${lojas.map(l=>`
+              <div class="field" style="margin-bottom:6px;">
+                <label class="muted" style="font-size:11px; text-transform:uppercase;">${escapeHtml(l.abreviacao)}</label>
+                <input type="number" step="0.001" data-estloja="${l.id}" value="${d.estoquePorLoja[l.id]!==undefined?d.estoquePorLoja[l.id]:0}">
+              </div>
+            `).join('')}
+          </div>
+          <div class="muted" id="pe_estoqueTotalHint" style="margin-top:2px;">Total: <b>${totalEstoque} ${unidadeLabel(d.unidade)}</b></div>
         </div>
         <div class="grid-2">
+          <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
           <div class="field"><label>Preço de venda (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
+        </div>
+        <div class="grid-2">
           <div class="field"><label>Fator/comissão (%) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_fatorPercentual" value="${d.fatorPercentual!==null?d.fatorPercentual:''}"></div>
         </div>
       `;
-      document.getElementById('pe_estoque').addEventListener('input', e=> d.estoque=e.target.value);
+      body.querySelectorAll('[data-estloja]').forEach(inp=>{
+        inp.addEventListener('input', e=>{
+          d.estoquePorLoja[inp.dataset.estloja] = e.target.value;
+          const total = lojas.reduce((a,l)=>a+(Number(d.estoquePorLoja[l.id])||0),0);
+          const hint = document.getElementById('pe_estoqueTotalHint');
+          if(hint) hint.innerHTML = `Total: <b>${total} ${unidadeLabel(d.unidade)}</b>`;
+        });
+      });
       document.getElementById('pe_custo').addEventListener('input', e=> d.custo=e.target.value);
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
       document.getElementById('pe_fatorPercentual').addEventListener('input', e=> d.fatorPercentual=e.target.value);
@@ -2984,7 +3019,7 @@ function abrirProdutoEstoqueModal(produto){
       cstCsosn: (d.cstCsosn||'').trim(),
       origemMercadoria: (d.origemMercadoria||'').trim(),
       gtin: (d.gtin||'').trim(),
-      estoque: parseFloat(d.estoque) || 0,
+      estoquePorLoja: Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0])),
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
       precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
       fatorPercentual: d.fatorPercentual===null || d.fatorPercentual==='' ? null : parseFloat(d.fatorPercentual),
@@ -3025,7 +3060,7 @@ async function renderEstoqueTab(main){
       <div class="code-list-item">
         <div>
           <b>${escapeHtml(p.nome)}</b>
-          <span class="chip" style="margin-left:8px;">${Number(p.estoque||0)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
+          <span class="chip" style="margin-left:8px;">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
           ${temComposicao ? `<span class="chip" style="margin-left:6px; background:var(--gold-soft); color:var(--gold-ink);">Receita: ${p.composicao.length} insumo(s)</span>` : `<span class="chip" style="margin-left:6px;">Matéria-prima</span>`}
           ${p.vendavel===false ? `<span class="chip" style="margin-left:6px;">Só interno</span>` : `<span class="chip" style="margin-left:6px; background:var(--ok-soft); color:var(--ok);">Vendável</span>`}
           ${p.fotos && p.fotos.length>0 ? `<span class="chip" style="margin-left:6px;">📷 ${p.fotos.length}</span>` : ''}
@@ -3066,7 +3101,7 @@ function imprimirEtiquetaProduto(produto){
   if(campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
   if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
   if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
-  if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${produto.estoque} ${unidadeLabel(produto.unidade)}</div>`);
+  if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${estoqueTotalDe(produto)} ${unidadeLabel(produto.unidade)}</div>`);
   if(campos.gtin && produto.gtin) linhas.push(`<div>${escapeHtml(produto.gtin)}</div>`);
   if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
   if(campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){

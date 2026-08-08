@@ -317,12 +317,23 @@ function unidadeEstoqueLabel(u){ return u==='g' ? 'g' : u==='kg' ? 'kg' : 'un'; 
  * venda (pra não contar duas vezes o mesmo estoque entre itens diferentes).
  * Retorna { ok, faltando:[{produtoId, nome, quantidade}] }.
  */
-function planejarConsumoEstoque(produtoId, quantidadeNecessaria, reservas){
+/**
+ * Planeja o consumo de `quantidadeNecessaria` unidades do produto `produtoId`, NA
+ * LOJA `lojaId` (estoque agora é por loja, não mais um número global), explodindo
+ * pela composição (receita) em cascata quando falta estoque em qualquer nível —
+ * ex: falta o produto pronto -> usa o insumo secundário -> se também faltar, usa
+ * os insumos primários que compõem o secundário (sempre dentro da mesma loja).
+ * `reservas` acumula quanto de cada produto já foi planejado consumir nesta
+ * venda (pra não contar duas vezes o mesmo estoque entre itens diferentes).
+ * Retorna { ok, faltando:[{produtoId, nome, quantidade}] }.
+ */
+function planejarConsumoEstoque(produtoId, quantidadeNecessaria, reservas, lojaId){
   const produto = produtosEstoque.find(p=>p.id===produtoId);
   if(!produto) return { ok:false, faltando:[{ produtoId, nome:'(produto não encontrado)', quantidade:quantidadeNecessaria }] };
 
+  const estoqueNaLoja = Number((produto.estoquePorLoja||{})[lojaId]) || 0;
   const jaReservado = reservas[produtoId] || 0;
-  const disponivel = Math.max(0, (Number(produto.estoque)||0) - jaReservado);
+  const disponivel = Math.max(0, estoqueNaLoja - jaReservado);
   const usarDoProprio = Math.min(disponivel, quantidadeNecessaria);
   if(usarDoProprio > 0) reservas[produtoId] = jaReservado + usarDoProprio;
 
@@ -337,19 +348,21 @@ function planejarConsumoEstoque(produtoId, quantidadeNecessaria, reservas){
   const faltandoTotal = [];
   produto.composicao.forEach(comp=>{
     const qtdComponente = (Number(comp.quantidade)||0) * faltaAinda;
-    const resultado = planejarConsumoEstoque(comp.insumoId, qtdComponente, reservas);
+    const resultado = planejarConsumoEstoque(comp.insumoId, qtdComponente, reservas, lojaId);
     if(!resultado.ok){ tudoOk = false; faltandoTotal.push(...resultado.faltando); }
   });
   return { ok: tudoOk, faltando: faltandoTotal };
 }
 
-/** Aplica os consumos planejados (debita do estoque, mesmo que fique negativo) e salva cada produto afetado. */
-async function aplicarConsumosEstoque(reservas){
+/** Aplica os consumos planejados NA LOJA `lojaId` (debita do estoque dessa loja
+ * especificamente, mesmo que fique negativo) e salva cada produto afetado. */
+async function aplicarConsumosEstoque(reservas, lojaId){
   const ids = Object.keys(reservas).filter(id=> reservas[id] > 0);
   for(const id of ids){
     const produto = produtosEstoque.find(p=>p.id===id);
     if(!produto) continue;
-    produto.estoque = (Number(produto.estoque)||0) - reservas[id];
+    if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
+    produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) - reservas[id];
     await produtoEstoqueAtualizar(produto);
   }
 }
@@ -620,10 +633,11 @@ function metalOptionsHtml(selected){
    emissão de nota condicional), aqui reaproveitado no PDV.
    ============================================================ */
 /**
- * Valida a exigência: quando emite nota, a empresa que RECEBEU o pagamento
- * precisa ser a mesma que EMITIU a nota (mesmo CNPJ pagando e faturando), e se a
- * empresa do pagamento for diferente da empresa de onde saiu a joia, a baixa de
- * estoque precisa ficar registrada na empresa que saiu a joia (não na do pagamento).
+ * A baixa de estoque acontece sempre na Empresa joia (de onde o produto saiu de
+ * verdade). Quando a nota é emitida pela MESMA empresa da joia, a própria nota já
+ * cobre essa baixa — não precisa de mais nada. Quando a nota é de uma empresa
+ * DIFERENTE da joia, a baixa não fica registrada em lugar nenhum automaticamente —
+ * por isso pedimos confirmação de que ela vai ser feita manualmente, na empresa certa.
  * Retorna null se estiver tudo certo, ou uma mensagem de erro pra mostrar.
  */
 function notaEmpresasErro(holder){
@@ -634,12 +648,12 @@ function notaEmpresasErro(holder){
   if(holder.lojaPagamentoId !== holder.lojaNotaId){
     return 'A empresa do pagamento precisa ser a mesma que emitiu a nota.';
   }
-  if(holder.lojaPagamentoId !== holder.lojaSaidaId){
+  if(holder.lojaNotaId !== holder.lojaSaidaId){
     if(!holder.lojaBaixaEstoqueId){
-      return 'Selecione a empresa da baixa de estoque.';
+      return 'A nota é de uma empresa diferente de onde saiu a joia — confirme em qual empresa a baixa de estoque vai ser feita manualmente.';
     }
     if(holder.lojaBaixaEstoqueId !== holder.lojaSaidaId){
-      return 'A empresa da baixa de estoque precisa ser a mesma empresa da joia.';
+      return 'A baixa de estoque precisa ser feita na mesma empresa de onde saiu a joia, não na empresa da nota.';
     }
   }
   return null;
@@ -697,9 +711,10 @@ function mountPagamentos(container, holder){
             <div class="field"><label>Empresa do pagamento</label><select id="pagLojaPagamento">${lojaAbrevOptionsHtml(holder.lojaPagamentoId||'')}</select></div>
             <div class="field"><label>Empresa nota</label><select id="pagLojaNota">${lojaAbrevOptionsHtml(holder.lojaNotaId||'')}</select></div>
           </div>
-          <div class="field" id="pagBaixaEstoqueWrap" style="display:none; max-width:220px;">
-            <label>Baixa estoque</label>
+          <div class="field" id="pagBaixaEstoqueWrap" style="display:none; max-width:280px;">
+            <label>Baixa estoque manual em</label>
             <select id="pagLojaBaixaEstoque">${lojaAbrevOptionsHtml(holder.lojaBaixaEstoqueId||'')}</select>
+            <div class="muted" style="font-size:11.5px; margin-top:4px;">A nota é de outra empresa — confirme em qual empresa você vai lançar a baixa manual (tem que ser a empresa joia).</div>
           </div>
           <div id="pagNotaErroHint" style="margin-top:6px;"></div>
         </div>
@@ -737,9 +752,9 @@ function mountPagamentos(container, holder){
     const hint = container.querySelector('#pagNotaErroHint');
     const baixaWrap = container.querySelector('#pagBaixaEstoqueWrap');
     if(!hint) return;
-    // O campo "Baixa estoque" só aparece quando a empresa do pagamento é diferente
-    // da empresa da joia — só nesse caso existe algo a decidir aqui.
-    const precisaBaixaEstoque = holder.emissaoNota==='sim' && holder.lojaSaidaId && holder.lojaPagamentoId && holder.lojaSaidaId !== holder.lojaPagamentoId;
+    // O campo "Baixa estoque" só aparece quando a nota é emitida por uma empresa
+    // diferente de onde saiu a joia — só nesse caso a baixa não é automática.
+    const precisaBaixaEstoque = holder.emissaoNota==='sim' && holder.lojaSaidaId && holder.lojaNotaId && holder.lojaSaidaId !== holder.lojaNotaId;
     if(baixaWrap) baixaWrap.style.display = precisaBaixaEstoque ? '' : 'none';
     if(!precisaBaixaEstoque) holder.lojaBaixaEstoqueId = '';
 
@@ -817,8 +832,9 @@ function semPagamentoLancado(v){ return !v.valorTotal && (!v.pagamentos || v.pag
 /* ============================================================
    ITENS DA VENDA
    ============================================================ */
-function mountItens(container, holder){
+function mountItens(container, holder, getLojaId){
   if(!holder.itens) holder.itens = [];
+  getLojaId = getLojaId || (()=>'');
 
   function totalItens(){ return holder.itens.reduce((acc,it)=> acc + (Number(it.quantidade)||0) * (Number(it.valorUnitario)||0), 0); }
 
@@ -841,6 +857,7 @@ function mountItens(container, holder){
   function drawRows(){
     const wrap = container.querySelector('#itensRows');
     const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
+    const lojaAtual = getLojaId();
     wrap.innerHTML = holder.itens.map((it,i)=>`
       <div class="item-row" data-idx="${i}">
         <div class="item-row-topo">
@@ -851,10 +868,10 @@ function mountItens(container, holder){
           <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
         </div>
         <div class="item-row-estoque">
-          <label class="muted" style="font-size:11.5px; text-transform:uppercase; font-weight:700;">Descontar do estoque</label>
-          <select data-itfield="produtoEstoqueId" style="max-width:260px;">
+          <label class="muted" style="font-size:11.5px; text-transform:uppercase; font-weight:700;">Descontar do estoque ${lojaAtual?'<span class="muted">(estoque da loja selecionada)</span>':''}</label>
+          <select data-itfield="produtoEstoqueId" style="max-width:280px;">
             <option value="">— Sem controle de estoque —</option>
-            ${vendaveis.map(p=>`<option value="${p.id}" ${it.produtoEstoqueId===p.id?'selected':''}>${escapeHtml(p.nome)} (${Number(p.estoque||0)} ${escapeHtml(unidadeEstoqueLabel(p.unidade))} em estoque)</option>`).join('')}
+            ${vendaveis.map(p=>`<option value="${p.id}" ${it.produtoEstoqueId===p.id?'selected':''}>${escapeHtml(p.nome)} (${Number((p.estoquePorLoja||{})[lojaAtual])||0} ${escapeHtml(unidadeEstoqueLabel(p.unidade))} nesta loja)</option>`).join('')}
           </select>
         </div>
       </div>
@@ -885,7 +902,7 @@ function mountItens(container, holder){
     hint.innerHTML = `Total dos itens: <b>R$ ${totalItens().toFixed(2)}</b> <span class="muted">(você pode ajustar o valor total do pagamento manualmente se houver desconto/acréscimo)</span>`;
   }
   draw();
-  return { totalItens };
+  return { totalItens, refreshEstoque: drawRows };
 }
 
 /* ============================================================
@@ -1108,7 +1125,8 @@ function renderNovaVenda(main){
     </div>
   `;
   const tempItensHolder = { itens:[ { id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'' } ] };
-  const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder);
+  const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder, ()=> document.getElementById('v_loja').value);
+  document.getElementById('v_loja').addEventListener('change', ()=> itensApi.refreshEstoque());
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
 
@@ -1170,12 +1188,15 @@ function renderNovaVenda(main){
     // vazio) não mexem em estoque nenhum, como sempre foi.
     // Também guarda o consumo POR ITEM (não só o total da venda), pra permitir
     // devolver ao estoque com precisão quando um item específico for trocado depois.
+    // Estoque é descontado da loja da venda, a não ser que a nota fiscal indique
+    // uma Empresa joia diferente — nesse caso, é de lá que o produto sai de verdade.
+    const lojaEstoque = lojaEstoqueDaVenda(lojaId, tempPagHolder);
     const reservas = {};
     let faltandoGeral = [];
     itensValidos.forEach(it=>{
       if(!it.produtoEstoqueId){ it.estoqueConsumidoItem = {}; return; }
       const antes = {...reservas};
-      const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas);
+      const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas, lojaEstoque);
       if(!resultado.ok) faltandoGeral.push(...resultado.faltando);
       const delta = {};
       Object.keys(reservas).forEach(pid=>{
@@ -1214,8 +1235,11 @@ function renderNovaVenda(main){
       lojaNotaId: tempPagHolder.lojaNotaId || '',
       lojaBaixaEstoqueId: tempPagHolder.lojaBaixaEstoqueId || '',
       status: 'ativa',
-      // Guardado pra permitir devolver ao estoque exatamente o que foi baixado nesta\n      // venda, mesmo que a composição do produto mude depois (cancelamento).
+      // Guardado pra permitir devolver ao estoque exatamente o que foi baixado nesta
+      // venda, mesmo que a composição do produto mude depois (cancelamento). E qual
+      // loja teve o estoque baixado, pra devolver/consumir sempre na loja certa.
       estoqueConsumido: reservas,
+      estoqueLojaId: lojaEstoque,
       creditoUsado: totalCredito,
       fiadoDebitoId: novoFiadoDebitoId,
       criadoPor: currentUser.nome,
@@ -1249,7 +1273,7 @@ function renderNovaVenda(main){
         }
         if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteCadastro);
       }
-      await aplicarConsumosEstoque(reservas);
+      await aplicarConsumosEstoque(reservas, lojaEstoque);
       vendas.unshift(venda);
       showToast('Venda lançada com sucesso.');
       currentTab = 'vendas';
@@ -1297,13 +1321,16 @@ function abrirCancelarVenda(venda){
 }
 async function executarCancelamentoVenda(venda, motivo){
   const recebido = valorRecebidoDe(venda);
-  // Devolve estoque
-  if(venda.estoqueConsumido){
+  // Devolve estoque — sempre na mesma loja de onde foi descontado (venda.estoqueLojaId).
+  // Vendas antigas (antes do estoque virar por loja) não têm esse campo; nesse caso não
+  // dá pra saber com certeza a loja certa, então pula a devolução automática.
+  if(venda.estoqueConsumido && venda.estoqueLojaId){
     for(const [produtoId, qtd] of Object.entries(venda.estoqueConsumido)){
       if(!qtd) continue;
       const produto = produtosEstoque.find(p=>p.id===produtoId);
       if(!produto) continue;
-      produto.estoque = (Number(produto.estoque)||0) + qtd;
+      if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
+      produto.estoquePorLoja[venda.estoqueLojaId] = (Number(produto.estoquePorLoja[venda.estoqueLojaId])||0) + qtd;
       await produtoEstoqueAtualizar(produto);
     }
   }
@@ -1345,6 +1372,13 @@ async function executarCancelamentoVenda(venda, motivo){
   renderTabs(); renderView();
 }
 function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/** De qual loja o estoque deve ser descontado/devolvido: por padrão, a própria
+ * loja da venda. Se a nota fiscal foi emitida e a Empresa joia é diferente da
+ * loja da venda, usa a Empresa joia — é de lá que o produto realmente saiu. */
+function lojaEstoqueDaVenda(lojaIdVenda, dadosNota){
+  if(dadosNota && dadosNota.emissaoNota==='sim' && dadosNota.lojaSaidaId) return dadosNota.lojaSaidaId;
+  return lojaIdVenda;
+}
 
 /* ============================================================
    TROCA DE ITEM
@@ -1458,10 +1492,12 @@ function abrirTrocaVenda(venda){
       if(!formaDiferenca){ showToast('Selecione a forma de pagamento/devolução da diferença.'); return; }
     }
 
-    // Baixa estoque do produto novo (mesma explosão em cascata da venda normal)
+    // Baixa estoque do produto novo (mesma explosão em cascata da venda normal),
+    // sempre na mesma loja de onde a venda já vinha descontando estoque.
+    const lojaEstoqueTroca = venda.estoqueLojaId || venda.lojaId;
     const reservasNovo = {};
     if(produtoEstoqueIdNovo){
-      const resultado = planejarConsumoEstoque(produtoEstoqueIdNovo, qtdNovo, reservasNovo);
+      const resultado = planejarConsumoEstoque(produtoEstoqueIdNovo, qtdNovo, reservasNovo, lojaEstoqueTroca);
       if(!resultado.ok){
         const lista = resultado.faltando.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
         const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nRegistrar a troca mesmo assim? O estoque vai ficar negativo.`);
@@ -1469,23 +1505,25 @@ function abrirTrocaVenda(venda){
       }
     }
 
-    // Devolve estoque do item antigo
+    // Devolve estoque do item antigo (mesma loja)
     if(antigo.estoqueConsumidoItem && Object.keys(antigo.estoqueConsumidoItem).length>0){
       for(const [pid, qtd] of Object.entries(antigo.estoqueConsumidoItem)){
         const p = produtosEstoque.find(x=>x.id===pid);
         if(!p) continue;
-        p.estoque = (Number(p.estoque)||0) + qtd;
+        if(!p.estoquePorLoja) p.estoquePorLoja = {};
+        p.estoquePorLoja[lojaEstoqueTroca] = (Number(p.estoquePorLoja[lojaEstoqueTroca])||0) + qtd;
         await produtoEstoqueAtualizar(p);
       }
     } else if(antigo.produtoEstoqueId){
       const p = produtosEstoque.find(x=>x.id===antigo.produtoEstoqueId);
       if(p){
-        p.estoque = (Number(p.estoque)||0) + Number(antigo.quantidade||0);
+        if(!p.estoquePorLoja) p.estoquePorLoja = {};
+        p.estoquePorLoja[lojaEstoqueTroca] = (Number(p.estoquePorLoja[lojaEstoqueTroca])||0) + Number(antigo.quantidade||0);
         await produtoEstoqueAtualizar(p);
         showToast('Item antigo devolvido ao estoque de forma simples (venda anterior a este controle) — confira manualmente se ele tem composição.');
       }
     }
-    await aplicarConsumosEstoque(reservasNovo);
+    await aplicarConsumosEstoque(reservasNovo, lojaEstoqueTroca);
 
     // Movimenta crédito/fiado do cliente se a diferença usar isso
     let clienteCadastro = null;
@@ -1797,7 +1835,8 @@ function abrirFormularioEdicaoCompleta(v){
     </div>
   `);
   const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'' })) };
-  mountItens(document.getElementById('ed_itensContainer'), itensHolder);
+  const itensApiEd = mountItens(document.getElementById('ed_itensContainer'), itensHolder, ()=> document.getElementById('ed_loja').value);
+  document.getElementById('ed_loja').addEventListener('change', ()=> itensApiEd.refreshEstoque());
   const pagHolder = {
     valorTotal: v.valorTotal, pagamentos: (v.pagamentos||[]).map(p=>({...p})),
     momentoPagamento: v.momentoPagamento, emissaoNota: v.emissaoNota, numeroNota: v.numeroNota,
@@ -1819,12 +1858,15 @@ function abrirFormularioEdicaoCompleta(v){
     if(erroNota){ showToast(erroNota); return; }
 
     // ===== 1) Desfaz o que a venda original lançou (estoque + crédito/fiado do cliente antigo) =====
-    if(v.estoqueConsumido){
+    // Devolve na mesma loja de onde saiu (vendas antigas sem esse registro não são revertidas
+    // automaticamente — o ajuste de estoque, se necessário, precisa ser manual).
+    if(v.estoqueConsumido && v.estoqueLojaId){
       for(const [produtoId, qtd] of Object.entries(v.estoqueConsumido)){
         if(!qtd) continue;
         const p = produtosEstoque.find(x=>x.id===produtoId);
         if(!p) continue;
-        p.estoque = (Number(p.estoque)||0) + qtd;
+        if(!p.estoquePorLoja) p.estoquePorLoja = {};
+        p.estoquePorLoja[v.estoqueLojaId] = (Number(p.estoquePorLoja[v.estoqueLojaId])||0) + qtd;
         await produtoEstoqueAtualizar(p);
       }
     }
@@ -1854,12 +1896,13 @@ function abrirFormularioEdicaoCompleta(v){
     }
 
     // ===== 2) Planeja o novo consumo de estoque (igual a uma venda nova) =====
+    const lojaEstoqueEdicao = lojaEstoqueDaVenda(lojaId, pagHolder);
     const reservas = {};
     let faltandoGeral = [];
     itensValidos.forEach(it=>{
       if(!it.produtoEstoqueId){ it.estoqueConsumidoItem = {}; return; }
       const antes = {...reservas};
-      const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas);
+      const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas, lojaEstoqueEdicao);
       if(!resultado.ok) faltandoGeral.push(...resultado.faltando);
       const delta = {};
       Object.keys(reservas).forEach(pid=>{ const d=(reservas[pid]||0)-(antes[pid]||0); if(d>0) delta[pid]=d; });
@@ -1892,7 +1935,7 @@ function abrirFormularioEdicaoCompleta(v){
     const novoFiadoDebitoId = totalFiado>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
 
     // ===== 4) Aplica tudo e regrava a venda =====
-    await aplicarConsumosEstoque(reservas);
+    await aplicarConsumosEstoque(reservas, lojaEstoqueEdicao);
     if(clienteNovo){
       if(totalCredito>0){
         clienteNovo.credito = (Number(clienteNovo.credito)||0) - totalCredito;
@@ -1923,6 +1966,7 @@ function abrirFormularioEdicaoCompleta(v){
     v.lojaNotaId = pagHolder.lojaNotaId || '';
     v.lojaBaixaEstoqueId = pagHolder.lojaBaixaEstoqueId || '';
     v.estoqueConsumido = reservas;
+    v.estoqueLojaId = lojaEstoqueEdicao;
     v.creditoUsado = totalCredito;
     v.fiadoDebitoId = novoFiadoDebitoId;
 

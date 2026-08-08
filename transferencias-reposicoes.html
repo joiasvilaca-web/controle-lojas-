@@ -299,6 +299,7 @@
         __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
         await loadConfig();
         await loadData();
+        await loadProdutosEstoque();
         render();
         const permitidas = tabsPermitidas();
         if(!permitidas.some(t=>t.id===state.tab)) setTab(permitidas[0] ? permitidas[0].id : "transferencias");
@@ -327,6 +328,7 @@
   const ITEM_FIELDS = {
     transferItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
+      {f:"produtoEstoqueId", type:"produtoEstoque", ph:"Vincular ao catálogo"},
       {f:"metal", type:"select", opts:METALS},
       {f:"quantidade", type:"number", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
@@ -356,7 +358,7 @@
     ],
   };
   const ITEM_FACTORIES = {
-    transferItens: ()=>({produto:"",metal:"",quantidade:"",fator:""}),
+    transferItens: ()=>({produto:"",produtoEstoqueId:"",metal:"",quantidade:"",fator:""}),
     pedidoItens: ()=>({produto:"",metal:"",quantidade:""}),
     vendaItens: ()=>({produto:"",metal:"",qtdLoja:"",qtdEcommerce:""}),
     disponibilizadoItens: ()=>({produto:"",metal:"",quantidade:"",fator:""}),
@@ -734,6 +736,61 @@
   function fieldOptionsHtml(list, current){
     return `<option value="">—</option>` + list.map(v=>`<option value="${escapeHtml(v)}" ${v===current?"selected":""}>${escapeHtml(v)}</option>`).join("");
   }
+  /** Catálogo de produtos (produtos_estoque) pra vincular um item de transferência a um
+   * produto real — só quando vinculado é que a transferência mexe no estoque de verdade. */
+  let produtosEstoqueCache = [];
+  async function loadProdutosEstoque(){
+    try{
+      const { data, error } = await supabaseClient.from("produtos_estoque").select("id,payload").order("created_at",{ascending:true});
+      if(error) throw error;
+      produtosEstoqueCache = (data||[]).map(r=>r.payload);
+    }catch(e){ console.error("Erro ao carregar produtos do catálogo:", e); produtosEstoqueCache = []; }
+  }
+  async function salvarProdutoEstoque(produto){
+    try{
+      const { error } = await supabaseClient.from("produtos_estoque").upsert({ id: produto.id, payload: produto });
+      if(error) throw error;
+      return true;
+    }catch(e){ console.error("Erro ao salvar estoque do produto:", e); return false; }
+  }
+  function produtoEstoqueOptionsHtml(selected){
+    const lista = produtosEstoqueCache || [];
+    const vazio = lista.length===0 ? `<option value="" disabled>Nenhum produto cadastrado em Cadastro → Produtos</option>` : "";
+    return `<option value="">— Não vincular ao catálogo —</option>${vazio}` + lista.map(p=>`<option value="${escapeHtml(p.id)}" ${p.id===selected?"selected":""}>${escapeHtml(p.nome)}</option>`).join("");
+  }
+  /** lojaOrigem/lojaDestino são guardados como ABREVIAÇÃO (ex: "MC"); o estoque por loja
+   * é indexado pelo ID da loja — resolve de um pro outro usando a config carregada. */
+  function lojaIdPorAbreviacao(abrev){
+    const lojas = (unificadoBruto && unificadoBruto.lojas) || [];
+    const l = lojas.find(x=>x.abreviacao===abrev);
+    return l ? l.id : null;
+  }
+  /** Move estoque de verdade quando uma transferência do tipo SAÍDA tem a baixa (na
+   * origem) ou a entrada (no destino) confirmada — TROCA nunca mexe em estoque, porque
+   * é um empréstimo temporário que volta pra origem, não uma saída definitiva. */
+  async function moverEstoqueTransferencia(r, tipoMovimento, sinal){
+    if(r.tipoTransf !== "SAÍDA") return;
+    const lojaAbrev = tipoMovimento==="baixa" ? r.lojaOrigem : r.lojaDestino;
+    const lojaId = lojaIdPorAbreviacao(lojaAbrev);
+    if(!lojaId){ showToast(`Não achei a loja "${lojaAbrev}" no cadastro — o estoque não foi ajustado automaticamente. Confira manualmente.`); return; }
+    for(const item of (r.transferItens||[])){
+      if(!item.produtoEstoqueId) continue;
+      const qtd = Number(item.quantidade)||0;
+      if(qtd<=0) continue;
+      const produto = produtosEstoqueCache.find(p=>p.id===item.produtoEstoqueId);
+      if(!produto) continue;
+      if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
+      produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) + sinal*qtd;
+      await salvarProdutoEstoque(produto);
+    }
+  }
+  function showToast(msg){
+    let el = document.getElementById("toastBoxTransf");
+    if(!el){ el = document.createElement("div"); el.id="toastBoxTransf"; el.style.cssText="position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#151C28; color:#fff; padding:11px 18px; border-radius:8px; font-size:13px; z-index:100; box-shadow:0 10px 30px -10px rgba(0,0,0,.4);"; document.body.appendChild(el); }
+    el.textContent = msg; el.style.display="block";
+    clearTimeout(window.__toastTimerTransf);
+    window.__toastTimerTransf = setTimeout(()=>{ el.style.display="none"; }, 3600);
+  }
 
   function renderSummary(){
     const records = getRecords();
@@ -784,7 +841,7 @@
   }
 
   function itemsTablePrintHtml(items, arrKey){
-    const fields = ITEM_FIELDS[arrKey];
+    const fields = ITEM_FIELDS[arrKey].filter(fc=>fc.f !== 'produtoEstoqueId');
     if(!items || items.length === 0) return '<div class="print-muted">Nenhum item lançado.</div>';
     const headerLabels = { produto:"Produto", metal:"Metal", quantidade:"Qtd", fator:"Fator", qtdLoja:"Qtd loja", qtdEcommerce:"Qtd e-commerce" };
     const headers = fields.map(fc => headerLabels[fc.f] || fc.f);
@@ -955,6 +1012,9 @@
       const cells = fields.map(fc=>{
         if(fc.type === "select"){
           return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}">${fieldOptionsHtml(fc.opts, it[fc.f])}</select>`;
+        }
+        if(fc.type === "produtoEstoque"){
+          return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" title="Vincular a um produto do catálogo movimenta o estoque de verdade quando a baixa/entrada for confirmada">${produtoEstoqueOptionsHtml(it[fc.f])}</select>`;
         }
         const inputType = fc.type === "number" ? "number" : "text";
         return `<input type="${inputType}" ${inputType==="number" ? 'min="0"' : ""} placeholder="${fc.ph||""}" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" value="${escapeHtml(it[fc.f])}">`;
@@ -1487,12 +1547,22 @@
 
     const editBtn = body.querySelector('[data-action="toggle-edit"]');
     if(editBtn){
-      editBtn.addEventListener("click", ()=>{
+      editBtn.addEventListener("click", async ()=>{
         const estavaEditando = state.editIds.has(r.id);
         if(estavaEditando){
+          const antes = state.editSnapshots.get(r.id);
           state.editIds.delete(r.id);
           state.editSnapshots.delete(r.id);
           state.unsavedNew.delete(r.id);
+          // Se "Baixa no estoque" ou "Entrada no estoque" mudou nesta edição (marcou ou
+          // desmarcou), movimenta o estoque de verdade — só transferência tipo SAÍDA mexe
+          // em estoque (TROCA é um empréstimo temporário, sempre volta pra origem).
+          if(state.tab === "transferencias" && antes && r.tipoTransf === "SAÍDA"){
+            if(!antes.vistoBaixaEstoque && r.vistoBaixaEstoque) await moverEstoqueTransferencia(r, "baixa", -1);
+            else if(antes.vistoBaixaEstoque && !r.vistoBaixaEstoque) await moverEstoqueTransferencia(r, "baixa", 1);
+            if(!antes.vistoEntradaEstoque && r.vistoEntradaEstoque) await moverEstoqueTransferencia(r, "entrada", 1);
+            else if(antes.vistoEntradaEstoque && !r.vistoEntradaEstoque) await moverEstoqueTransferencia(r, "entrada", -1);
+          }
           saveRecord(state.tab, r); // só salva ao clicar em "Concluir edição"
         }else{
           state.editSnapshots.set(r.id, JSON.parse(JSON.stringify(r)));
@@ -1631,7 +1701,7 @@
       parent.postMessage({ type:"ready", modulo:"transferencias" }, "*");
       return;
     }
-    await loadConfig(); await loadData(); render();
+    await loadConfig(); await loadData(); await loadProdutosEstoque(); render();
   }
   init();
 
