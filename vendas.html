@@ -640,20 +640,44 @@ function metalOptionsHtml(selected){
  * por isso pedimos confirmação de que ela vai ser feita manualmente, na empresa certa.
  * Retorna null se estiver tudo certo, ou uma mensagem de erro pra mostrar.
  */
-function notaEmpresasErro(holder){
-  if(holder.emissaoNota !== 'sim') return null;
-  if(!holder.lojaSaidaId || !holder.lojaPagamentoId || !holder.lojaNotaId){
-    return 'Selecione as 3 empresas (joia, pagamento e nota).';
+/**
+ * A baixa de estoque acontece sempre na Empresa joia (de onde o produto saiu de
+ * verdade) — isso vale COM ou SEM nota fiscal emitida. Quando tem nota e ela é da
+ * MESMA empresa da joia, a própria nota já cobre essa baixa — não precisa de mais
+ * nada. Em qualquer outro caso em que a Empresa joia seja diferente da loja da
+ * venda (com ou sem nota), a baixa não fica registrada em lugar nenhum
+ * automaticamente — por isso pedimos confirmação de que ela vai ser feita
+ * manualmente, na empresa certa.
+ * `lojaVendaId` é a loja escolhida lá em cima na tela (onde o cliente foi atendido).
+ * Retorna null se estiver tudo certo, ou uma mensagem de erro pra mostrar.
+ */
+function notaEmpresasErro(holder, lojaVendaId){
+  if(holder.emissaoNota === 'sim'){
+    if(!holder.lojaSaidaId || !holder.lojaPagamentoId || !holder.lojaNotaId){
+      return 'Selecione as 3 empresas (joia, pagamento e nota).';
+    }
+    if(holder.lojaPagamentoId !== holder.lojaNotaId){
+      return 'A empresa do pagamento precisa ser a mesma que emitiu a nota.';
+    }
+    if(holder.lojaNotaId !== holder.lojaSaidaId){
+      if(!holder.lojaBaixaEstoqueId){
+        return 'A nota é de uma empresa diferente de onde saiu a joia — confirme em qual empresa a baixa de estoque vai ser feita manualmente.';
+      }
+      if(holder.lojaBaixaEstoqueId !== holder.lojaSaidaId){
+        return 'A baixa de estoque precisa ser feita na mesma empresa de onde saiu a joia, não na empresa da nota.';
+      }
+    }
+    return null;
   }
-  if(holder.lojaPagamentoId !== holder.lojaNotaId){
-    return 'A empresa do pagamento precisa ser a mesma que emitiu a nota.';
-  }
-  if(holder.lojaNotaId !== holder.lojaSaidaId){
+  // Sem nota fiscal: só existe algo a confirmar se a Empresa joia foi preenchida
+  // E é diferente da loja da própria venda — aí sim o estoque não sai "sozinho"
+  // da loja certa, precisando de confirmação de baixa manual.
+  if(holder.lojaSaidaId && holder.lojaSaidaId !== lojaVendaId){
     if(!holder.lojaBaixaEstoqueId){
-      return 'A nota é de uma empresa diferente de onde saiu a joia — confirme em qual empresa a baixa de estoque vai ser feita manualmente.';
+      return 'A joia saiu de uma empresa diferente da loja da venda — confirme em qual empresa a baixa de estoque vai ser feita manualmente.';
     }
     if(holder.lojaBaixaEstoqueId !== holder.lojaSaidaId){
-      return 'A baixa de estoque precisa ser feita na mesma empresa de onde saiu a joia, não na empresa da nota.';
+      return 'A baixa de estoque precisa ser feita na mesma empresa de onde saiu a joia.';
     }
   }
   return null;
@@ -663,15 +687,17 @@ function todasEmpresasIguais(holder){
     holder.lojaSaidaId===holder.lojaPagamentoId && holder.lojaPagamentoId===holder.lojaNotaId;
 }
 /** Opções de loja pro seletor de "Nota fiscal": mostra a ABREVIAÇÃO (o que foi pedido),
- * com o nome completo só como dica ao passar o mouse. */
+ * com o nome completo só como dica ao passar o mouse. Sempre começa vazio — nunca
+ * pré-seleciona a primeira loja da lista sozinho. */
 function lojaAbrevOptionsHtml(selected){
-  return (config.lojas||[]).map(l=>`<option value="${l.id}" title="${escapeHtml(l.nome)}" ${selected===l.id?'selected':''}>${escapeHtml(l.abreviacao)}</option>`).join('');
+  return `<option value="">Selecione</option>` + (config.lojas||[]).map(l=>`<option value="${l.id}" title="${escapeHtml(l.nome)}" ${selected===l.id?'selected':''}>${escapeHtml(l.abreviacao)}</option>`).join('');
 }
 
-function mountPagamentos(container, holder){
+function mountPagamentos(container, holder, getLojaVendaId){
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = 'na_encomenda';
   if(!holder.emissaoNota) holder.emissaoNota = 'nao';
+  getLojaVendaId = getLojaVendaId || (()=>'');
 
   function draw(){
     container.innerHTML = `
@@ -695,6 +721,15 @@ function mountPagamentos(container, holder){
       <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
       <div id="pagNotaWrap" style="margin-top:14px; display:none;">
         <div class="field">
+          <label>Empresa joia <span class="muted">(de onde saiu o produto — deixe em branco se for a mesma loja da venda)</span></label>
+          <select id="pagLojaSaida" style="max-width:220px;">${lojaAbrevOptionsHtml(holder.lojaSaidaId||'')}</select>
+        </div>
+        <div class="field" id="pagBaixaEstoqueWrap" style="display:none; max-width:280px;">
+          <label>Baixa estoque manual em</label>
+          <select id="pagLojaBaixaEstoque">${lojaAbrevOptionsHtml(holder.lojaBaixaEstoqueId||'')}</select>
+          <div class="muted" style="font-size:11.5px; margin-top:4px;">A joia saiu de uma empresa diferente — confirme em qual empresa você vai lançar a baixa manual (tem que ser a empresa joia).</div>
+        </div>
+        <div class="field">
           <label>Nota fiscal</label>
           <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:2px;">
             <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:13.5px; text-transform:none; letter-spacing:0;">
@@ -706,18 +741,12 @@ function mountPagamentos(container, holder){
           </div>
         </div>
         <div id="pagNotaCamposWrap" style="display:none;">
-          <div class="grid-3">
-            <div class="field"><label>Empresa joia</label><select id="pagLojaSaida">${lojaAbrevOptionsHtml(holder.lojaSaidaId||'')}</select></div>
+          <div class="grid-2">
             <div class="field"><label>Empresa do pagamento</label><select id="pagLojaPagamento">${lojaAbrevOptionsHtml(holder.lojaPagamentoId||'')}</select></div>
             <div class="field"><label>Empresa nota</label><select id="pagLojaNota">${lojaAbrevOptionsHtml(holder.lojaNotaId||'')}</select></div>
           </div>
-          <div class="field" id="pagBaixaEstoqueWrap" style="display:none; max-width:280px;">
-            <label>Baixa estoque manual em</label>
-            <select id="pagLojaBaixaEstoque">${lojaAbrevOptionsHtml(holder.lojaBaixaEstoqueId||'')}</select>
-            <div class="muted" style="font-size:11.5px; margin-top:4px;">A nota é de outra empresa — confirme em qual empresa você vai lançar a baixa manual (tem que ser a empresa joia).</div>
-          </div>
-          <div id="pagNotaErroHint" style="margin-top:6px;"></div>
         </div>
+        <div id="pagNotaErroHint" style="margin-top:6px;"></div>
       </div>
     `;
     drawRows();
@@ -752,13 +781,16 @@ function mountPagamentos(container, holder){
     const hint = container.querySelector('#pagNotaErroHint');
     const baixaWrap = container.querySelector('#pagBaixaEstoqueWrap');
     if(!hint) return;
-    // O campo "Baixa estoque" só aparece quando a nota é emitida por uma empresa
-    // diferente de onde saiu a joia — só nesse caso a baixa não é automática.
-    const precisaBaixaEstoque = holder.emissaoNota==='sim' && holder.lojaSaidaId && holder.lojaNotaId && holder.lojaSaidaId !== holder.lojaNotaId;
+    const lojaVenda = getLojaVendaId();
+    // O campo "Baixa estoque" aparece sempre que a Empresa joia for diferente de
+    // quem deveria "cobrir" a baixa automaticamente: a empresa da nota (se tem
+    // nota) ou a própria loja da venda (se não tem nota).
+    const referenciaAutomatica = holder.emissaoNota==='sim' ? holder.lojaNotaId : lojaVenda;
+    const precisaBaixaEstoque = !!holder.lojaSaidaId && !!referenciaAutomatica && holder.lojaSaidaId !== referenciaAutomatica;
     if(baixaWrap) baixaWrap.style.display = precisaBaixaEstoque ? '' : 'none';
     if(!precisaBaixaEstoque) holder.lojaBaixaEstoqueId = '';
 
-    const msg = notaEmpresasErro(holder);
+    const msg = notaEmpresasErro(holder, lojaVenda);
     if(msg){
       hint.innerHTML = `<span style="color:var(--danger); font-weight:700;">⚠ ${escapeHtml(msg)}</span>`;
     } else if(todasEmpresasIguais(holder)){
@@ -775,6 +807,7 @@ function mountPagamentos(container, holder){
     if(holder.momentoPagamento === 'na_encomenda'){
       notaWrap.style.display = '';
       camposWrap.style.display = holder.emissaoNota === 'sim' ? '' : 'none';
+      if(holder.emissaoNota !== 'sim'){ holder.numeroNota = ''; holder.lojaPagamentoId = ''; holder.lojaNotaId = ''; }
     }else{
       notaWrap.style.display = 'none';
       holder.emissaoNota = 'nao'; holder.numeroNota = ''; holder.lojaSaidaId = ''; holder.lojaPagamentoId = ''; holder.lojaNotaId = ''; holder.lojaBaixaEstoqueId = '';
@@ -1128,7 +1161,7 @@ function renderNovaVenda(main){
   const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder, ()=> document.getElementById('v_loja').value);
   document.getElementById('v_loja').addEventListener('change', ()=> itensApi.refreshEstoque());
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
-  mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
+  mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder, ()=> document.getElementById('v_loja').value);
 
   // Guarda o registro completo do cliente escolhido, pra o ✎ conseguir abrir o
   // cadastro dele já preenchido (os campos da tela só guardam nome e telefone).
@@ -1180,7 +1213,7 @@ function renderNovaVenda(main){
 
     if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item vendido.'); return; }
-    const erroNota = notaEmpresasErro(tempPagHolder);
+    const erroNota = notaEmpresasErro(tempPagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
 
     // Planeja o desconto de estoque (com explosão em cascata pela composição) pra
@@ -1373,10 +1406,11 @@ async function executarCancelamentoVenda(venda, motivo){
 }
 function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** De qual loja o estoque deve ser descontado/devolvido: por padrão, a própria
- * loja da venda. Se a nota fiscal foi emitida e a Empresa joia é diferente da
- * loja da venda, usa a Empresa joia — é de lá que o produto realmente saiu. */
+ * loja da venda. Se a Empresa joia foi preenchida (com ou sem nota fiscal — a
+ * regra vale igual nos dois casos), usa a Empresa joia, que é de lá que o
+ * produto realmente saiu. */
 function lojaEstoqueDaVenda(lojaIdVenda, dadosNota){
-  if(dadosNota && dadosNota.emissaoNota==='sim' && dadosNota.lojaSaidaId) return dadosNota.lojaSaidaId;
+  if(dadosNota && dadosNota.lojaSaidaId) return dadosNota.lojaSaidaId;
   return lojaIdVenda;
 }
 
@@ -1702,6 +1736,10 @@ function abrirNotaVenda(v){
       <h3>Nota fiscal</h3>
       <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
       <p>Nota fiscal não emitida nesta venda.</p>
+      ${v.lojaSaidaId ? `<table>
+        <tr><td class="muted" style="width:150px;">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
+        ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
+      </table>` : ''}
       <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharNotaVenda">Fechar</button></div>
     `);
     document.getElementById('btnFecharNotaVenda').addEventListener('click', closeModal);
@@ -1773,8 +1811,8 @@ function abrirFormularioEdicaoRestrita(v, avisoExtra){
     <h3>Editar venda</h3>
     <p class="muted">${avisoExtra ? escapeHtml(avisoExtra) : 'Essa venda não é de hoje — pra manter o caixa e o estoque batendo, itens e pagamento só dá pra editar no mesmo dia da venda. Use Troca ou Cancelamento pra esses casos.'}</p>
     <div class="grid-2">
-      <div class="field"><label>Loja</label><select id="ed_loja">${lojaOptionsHtml(v.lojaId||'')}</select></div>
-      <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml(v.vendedora||'')}</select></div>
+      <div class="field"><label>Loja</label><select id="ed_loja"><option value="">Selecione</option>${lojaOptionsHtml('')}</select><div class="muted" style="font-size:11px; margin-top:3px;">Era: ${escapeHtml(v.loja||'—')}</div></div>
+      <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml('')}</select><div class="muted" style="font-size:11px; margin-top:3px;">Era: ${escapeHtml(v.vendedora||'—')}</div></div>
     </div>
     <div class="grid-2">
       <div class="field"><label>Data</label><input type="date" id="ed_data" value="${v.data||''}"></div>
@@ -1819,8 +1857,8 @@ function abrirFormularioEdicaoCompleta(v){
     <h3>Editar venda</h3>
     <p class="muted" style="color:var(--ok);">Venda de hoje — pode editar tudo, inclusive itens e pagamento.</p>
     <div class="grid-2">
-      <div class="field"><label>Loja</label><select id="ed_loja">${lojaOptionsHtml(v.lojaId||'')}</select></div>
-      <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml(v.vendedora||'')}</select></div>
+      <div class="field"><label>Loja</label><select id="ed_loja"><option value="">Selecione</option>${lojaOptionsHtml('')}</select><div class="muted" style="font-size:11px; margin-top:3px;">Era: ${escapeHtml(v.loja||'—')}</div></div>
+      <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml('')}</select><div class="muted" style="font-size:11px; margin-top:3px;">Era: ${escapeHtml(v.vendedora||'—')}</div></div>
     </div>
     <div class="grid-2">
       <div class="field"><label>Data</label><input type="date" id="ed_data" value="${v.data||''}"></div>
@@ -1840,9 +1878,13 @@ function abrirFormularioEdicaoCompleta(v){
   const pagHolder = {
     valorTotal: v.valorTotal, pagamentos: (v.pagamentos||[]).map(p=>({...p})),
     momentoPagamento: v.momentoPagamento, emissaoNota: v.emissaoNota, numeroNota: v.numeroNota,
-    lojaSaidaId: v.lojaSaidaId||'', lojaPagamentoId: v.lojaPagamentoId||'', lojaNotaId: v.lojaNotaId||'', lojaBaixaEstoqueId: v.lojaBaixaEstoqueId||'',
+    lojaSaidaId: '', lojaPagamentoId: '', lojaNotaId: '', lojaBaixaEstoqueId: '',
   };
-  mountPagamentos(document.getElementById('ed_pagamentoContainer'), pagHolder);
+  if(v.emissaoNota==='sim'){
+    const nomeLojaAnterior = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l ? l.abreviacao : '—'; };
+    document.getElementById('ed_pagamentoContainer').insertAdjacentHTML('beforebegin', `<div class="muted" style="font-size:11px; margin:-6px 0 6px;">Empresas da nota anteriores — joia: ${escapeHtml(nomeLojaAnterior(v.lojaSaidaId))} · pagamento: ${escapeHtml(nomeLojaAnterior(v.lojaPagamentoId))} · nota: ${escapeHtml(nomeLojaAnterior(v.lojaNotaId))}${v.lojaBaixaEstoqueId?' · baixa: '+escapeHtml(nomeLojaAnterior(v.lojaBaixaEstoqueId)):''} — escolha de novo abaixo.</div>`);
+  }
+  mountPagamentos(document.getElementById('ed_pagamentoContainer'), pagHolder, ()=> document.getElementById('ed_loja').value);
 
   document.getElementById('ed_fechar').addEventListener('click', closeModal);
   document.getElementById('ed_salvar').addEventListener('click', async ()=>{
@@ -1854,7 +1896,7 @@ function abrirFormularioEdicaoCompleta(v){
     const itensValidos = itensHolder.itens.filter(it=>it.produto);
     if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item vendido.'); return; }
-    const erroNota = notaEmpresasErro(pagHolder);
+    const erroNota = notaEmpresasErro(pagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
 
     // ===== 1) Desfaz o que a venda original lançou (estoque + crédito/fiado do cliente antigo) =====
@@ -2014,7 +2056,10 @@ function abrirDetalheVenda(v){
         <tr><td class="muted">Empresa do pagamento</td><td>${escapeHtml(nomeLoja(v.lojaPagamentoId))}</td></tr>
         <tr><td class="muted">Empresa nota</td><td>${escapeHtml(nomeLoja(v.lojaNotaId))}</td></tr>
         ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
-      ` : ''}
+      ` : (v.lojaSaidaId ? `
+        <tr><td class="muted">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
+        ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
+      ` : '')}
     </table>
     <div class="modal-actions">
       <button class="btn btn-accent" id="btnImprimirVenda">🖨️ Imprimir</button>
