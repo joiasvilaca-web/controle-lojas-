@@ -196,6 +196,15 @@ const fmtMoeda = v=>'R$ '+Number(v||0).toLocaleString('pt-BR',{minimumFractionDi
 const fmtDate = d=>{if(!d)return'—';const[y,m,di]=d.split('-');return`${di}/${m}/${y}`;};
 const hoje = ()=>new Date().toISOString().slice(0,10);
 const uid = p=>(p||'g')+Math.random().toString(36).slice(2,9)+Date.now().toString(36);
+// Ordena uma cópia da lista alfabeticamente (nunca muta a lista original — a ordem de
+// gravação/config continua intacta, só a exibição nos selects muda).
+function ordenarAlfa(lista, chave){
+  return [...lista].sort((a,b)=>{
+    const av=chave?String(a[chave]||''):String(a||'');
+    const bv=chave?String(b[chave]||''):String(b||'');
+    return av.localeCompare(bv,'pt-BR',{sensitivity:'base'});
+  });
+}
 function showToast(msg,dur=2800){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),dur);}
 function openModal(html){document.getElementById('modalBox').innerHTML=html;document.getElementById('modalOverlay').classList.add('show');}
 function closeModal(){document.getElementById('modalOverlay').classList.remove('show');}
@@ -263,10 +272,10 @@ async function loadAll(){
 function preencherFiltros(){
   const gc=gastosCfg();
   const selSt=document.getElementById('gastoFiltroStatus');
-  selSt.innerHTML='<option value="">Todos os status</option>'+gc.status.map(s=>`<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join('')+'<option value="__vencido">⚠️ Vencidos</option>';
-  const cats=[...new Set([...gc.categorias,...gastos.map(g=>g.categoria).filter(Boolean)])].sort();
+  selSt.innerHTML='<option value="">Todos os status</option>'+ordenarAlfa(gc.status,'nome').map(s=>`<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join('')+'<option value="__vencido">⚠️ Vencidos</option>';
+  const cats=[...new Set([...gc.categorias,...gastos.map(g=>g.categoria).filter(Boolean)])].sort((a,b)=>a.localeCompare(b,'pt-BR',{sensitivity:'base'}));
   document.getElementById('gastoFiltroCategoria').innerHTML='<option value="">Todas as categorias</option>'+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
-  const lojas=(config.lojas||[]);
+  const lojas=ordenarAlfa(config.lojas||[],'nome');
   document.getElementById('gastoFiltroLoja').innerHTML='<option value="">Todas as lojas</option>'+lojas.map(l=>`<option value="${esc(l.nome)}">${esc(l.nome)}</option>`).join('');
 }
 
@@ -445,7 +454,7 @@ function abrirTrocaStatus(id,onDone){
   openModal(`
     <h3 style="margin:0 0 14px;">Status — ${esc(g.nome)}</h3>
     <div style="display:flex;flex-direction:column;gap:6px;">
-      ${gc.status.map(s=>`<button class="btn btn-ghost" style="justify-content:flex-start;border-left:5px solid ${esc(s.cor)};" data-setst="${esc(s.id)}">${esc(s.nome)}${g.status===s.id?' ✓':''}</button>`).join('')}
+      ${ordenarAlfa(gc.status,'nome').map(s=>`<button class="btn btn-ghost" style="justify-content:flex-start;border-left:5px solid ${esc(s.cor)};" data-setst="${esc(s.id)}">${esc(s.nome)}${g.status===s.id?' ✓':''}</button>`).join('')}
     </div>
     <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>
   `);
@@ -486,10 +495,11 @@ async function excluirGasto(id,onDone){
 }
 
 /* ===== Combo com botão + (adicionar item novo à lista) ===== */
-function comboHtml(idSel, itens, valorAtual, idBtn){
+function comboHtml(idSel, itens, valorAtual, idBtn, idBtnEdit){
   return `<div class="combo">
     <select id="${idSel}">${itens.map(i=>`<option value="${esc(i)}"${i===valorAtual?' selected':''}>${esc(i)}</option>`).join('')}</select>
     <button type="button" class="btn-mini" id="${idBtn}" title="Adicionar novo">＋</button>
+    ${idBtnEdit?`<button type="button" class="btn-mini" id="${idBtnEdit}" title="Editar nome">✎</button>`:''}
   </div>`;
 }
 function ligarComboAdd(idSel, idBtn, lista, aoSalvar){
@@ -503,11 +513,35 @@ function ligarComboAdd(idSel, idBtn, lista, aoSalvar){
     if(aoSalvar) aoSalvar();
   });
 }
+// Renomeia, na lista de configuração real (por referência), o item atualmente
+// selecionado no combo — e persiste. Só se aplica a listas de strings simples
+// (categoria); status usa sua própria lógica porque é lista de objetos {id,nome}.
+function ligarComboEditar(idSel, idBtnEdit, lista, aoSalvar){
+  const btn=document.getElementById(idBtnEdit);
+  if(!btn) return;
+  btn.addEventListener('click',()=>{
+    const sel=document.getElementById(idSel);
+    const atual=sel.value;
+    if(!atual){ showToast('Selecione um item para editar.'); return; }
+    const novoNome=prompt('Novo nome para "'+atual+'":', atual);
+    if(!novoNome||!novoNome.trim()||novoNome.trim()===atual) return;
+    const v=novoNome.trim();
+    const idx=lista.indexOf(atual);
+    if(idx>=0) lista[idx]=v; else lista.push(v);
+    const opt=[...sel.options].find(o=>o.value===atual);
+    if(opt){ opt.value=v; opt.textContent=v; }
+    if(aoSalvar) aoSalvar();
+    showToast('Categoria atualizada! Vale para os próximos lançamentos.');
+  });
+}
 
 /* ===== Modal Adicionar/Editar ===== */
 function abrirModalGasto(g,onSave){
   const gc=gastosCfg();
-  const lojas=(config.lojas||[]);
+  const lojas=ordenarAlfa(config.lojas||[],'nome');
+  const categoriasOrdenadas=ordenarAlfa(gc.categorias);
+  const formasOrdenadas=ordenarAlfa(gc.formasPagamento);
+  const statusOrdenados=ordenarAlfa(gc.status,'nome');
   const isEdit=!!g;
   const respNome=(g&&g.responsavel)||((currentUser&&currentUser.nome)||'—');
   openModal(`
@@ -517,7 +551,7 @@ function abrirModalGasto(g,onSave){
         <select id="gLoja"><option value="">— Geral (todas) —</option>${lojas.map(l=>`<option value="${esc(l.nome)}"${g?.loja===l.nome?' selected':''}>${esc(l.nome)}</option>`).join('')}</select>
       </div>
       <div class="field"><label>Nome (identificação curta) *</label><input id="gNome" maxlength="60" value="${esc(g?.nome||'')}" placeholder="Ex: Aluguel MC"></div>
-      <div class="field"><label>Categoria *</label>${comboHtml('gCat', gc.categorias, g?.categoria||gc.categorias[0], 'gCatAdd')}</div>
+      <div class="field"><label>Categoria *</label>${comboHtml('gCat', categoriasOrdenadas, g?.categoria||categoriasOrdenadas[0], 'gCatAdd', 'gCatEdit')}</div>
       <div class="field"><label>Valor (R$) *</label><input type="number" id="gValor" step="0.01" min="0" value="${g?.valor||''}"></div>
       <div class="field"><label>Vencimento *</label>
         <div class="combo" style="position:relative;">
@@ -531,13 +565,14 @@ function abrirModalGasto(g,onSave){
           <input type="number" id="gParcelas" min="2" max="120" value="2" style="width:100px;">
         </div>
       </div>
-      <div class="field"><label>Forma de pagamento</label>${comboHtml('gFormaPg', gc.formasPagamento, g?.formaPagamento||gc.formasPagamento[0], 'gFormaPgAdd')}</div>
+      <div class="field"><label>Forma de pagamento</label>${comboHtml('gFormaPg', formasOrdenadas, g?.formaPagamento||formasOrdenadas[0], 'gFormaPgAdd')}</div>
       <div class="field" style="grid-column:1/-1;"><label>Observação</label><textarea id="gObs" style="min-height:56px;">${esc(g?.obs||'')}</textarea></div>
       <div class="field"><label>Responsável pelo lançamento</label><input id="gResp" readonly value="${esc(respNome)}"></div>
       <div class="field"><label>Status</label>
         <div class="combo">
-          <select id="gStatus">${gc.status.map(s=>`<option value="${esc(s.id)}"${(g?.status||'apagar')===s.id?' selected':''}>${esc(s.nome)}</option>`).join('')}</select>
+          <select id="gStatus">${statusOrdenados.map(s=>`<option value="${esc(s.id)}"${(g?.status||'apagar')===s.id?' selected':''}>${esc(s.nome)}</option>`).join('')}</select>
           <button type="button" class="btn-mini" id="gStatusAdd" title="Adicionar status">＋</button>
+          <button type="button" class="btn-mini" id="gStatusEdit" title="Editar nome do status">✎</button>
         </div>
       </div>
     </div>
@@ -580,7 +615,8 @@ function abrirModalGasto(g,onSave){
     document.getElementById('gRecInfo').textContent = g.parcelaInfo ? `Parcela ${g.parcelaInfo.numero}/${g.parcelaInfo.total}` : '🔁 Parte de uma recorrência (edite só este lançamento).';
   }
 
-  ligarComboAdd('gCat','gCatAdd',gastosCfg().categorias, salvarConfigGastos);
+  ligarComboAdd('gCat','gCatAdd',gastosCfg().categorias, ()=>{ salvarConfigGastos(); preencherFiltros(); });
+  ligarComboEditar('gCat','gCatEdit',gastosCfg().categorias, ()=>{ salvarConfigGastos(); preencherFiltros(); });
   ligarComboAdd('gFormaPg','gFormaPgAdd',gastosCfg().formasPagamento, salvarConfigGastos);
 
   document.getElementById('gStatusAdd').addEventListener('click',()=>{
@@ -595,6 +631,21 @@ function abrirModalGasto(g,onSave){
     const sel=document.getElementById('gStatus');
     const o=document.createElement('option');o.value=novo.id;o.textContent=novo.nome;o.selected=true;sel.appendChild(o);
     preencherFiltros();
+  });
+
+  document.getElementById('gStatusEdit').addEventListener('click',()=>{
+    const sel=document.getElementById('gStatus');
+    const idAtual=sel.value;
+    const st=gastosCfg().status.find(s=>s.id===idAtual);
+    if(!st){ showToast('Selecione um status para editar.'); return; }
+    const novoNome=prompt('Novo nome para "'+st.nome+'":', st.nome);
+    if(!novoNome||!novoNome.trim()||novoNome.trim()===st.nome) return;
+    st.nome=novoNome.trim();
+    salvarConfigGastos();
+    const opt=[...sel.options].find(o=>o.value===idAtual);
+    if(opt) opt.textContent=st.nome;
+    preencherFiltros();
+    showToast('Status atualizado! Vale para os próximos lançamentos (os antigos continuam vinculados pelo id, então nada muda neles).');
   });
 
   document.getElementById('btnSalvarGasto').addEventListener('click',async()=>{
@@ -695,7 +746,7 @@ function renderAgenda(){
     </div>`;
   }
   document.getElementById('agendaCalendario').innerHTML=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;">${html}</div>`;
-  document.getElementById('legendaStatus').innerHTML = gastosCfg().status.map(s=>
+  document.getElementById('legendaStatus').innerHTML = ordenarAlfa(gastosCfg().status,'nome').map(s=>
     `<span class="agenda-item" style="background:${esc(s.cor)};padding:4px 10px;border-radius:6px;">${esc(s.nome)}</span>`
   ).join('') + `<span class="agenda-item vencido-borda" style="background:var(--surface-2);color:var(--danger);padding:4px 10px;border-radius:6px;">borda = vencido</span>`;
   document.querySelectorAll('[data-agitem]').forEach(b=>b.addEventListener('click',()=>{
