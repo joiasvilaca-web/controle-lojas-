@@ -1133,12 +1133,21 @@ function renderNovaVenda(main){
     // Planeja o desconto de estoque (com explosão em cascata pela composição) pra
     // cada item vinculado a um produto do catálogo. Itens sem vínculo (produtoEstoqueId
     // vazio) não mexem em estoque nenhum, como sempre foi.
+    // Também guarda o consumo POR ITEM (não só o total da venda), pra permitir
+    // devolver ao estoque com precisão quando um item específico for trocado depois.
     const reservas = {};
     let faltandoGeral = [];
     itensValidos.forEach(it=>{
-      if(!it.produtoEstoqueId) return;
+      if(!it.produtoEstoqueId){ it.estoqueConsumidoItem = {}; return; }
+      const antes = {...reservas};
       const resultado = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, reservas);
       if(!resultado.ok) faltandoGeral.push(...resultado.faltando);
+      const delta = {};
+      Object.keys(reservas).forEach(pid=>{
+        const d = (reservas[pid]||0) - (antes[pid]||0);
+        if(d > 0) delta[pid] = d;
+      });
+      it.estoqueConsumidoItem = delta;
     });
     if(faltandoGeral.length > 0){
       const lista = faltandoGeral.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
@@ -1229,6 +1238,7 @@ function podeCancelarVenda(){
 function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
   if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem cancelar uma venda.'); return; }
+  if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
   const recebido = valorRecebidoDe(venda);
   openModal(`
     <h3>Cancelar venda</h3>
@@ -1299,6 +1309,198 @@ async function executarCancelamentoVenda(venda, motivo){
   renderTabs(); renderView();
 }
 function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
+/* ============================================================
+   TROCA DE ITEM
+   Troca sempre 1 item antigo -> 1 item novo, dentro de uma venda ativa.
+   - Devolve ao estoque o item antigo (com precisão se a venda já guarda
+     estoqueConsumidoItem; senão, devolve de forma simples só o próprio produto,
+     sem reconstituir a composição — venda anterior a esta atualização).
+   - Baixa do estoque o item novo, com a mesma explosão em cascata da venda normal.
+   - A diferença de valor (novo - antigo) movimenta o caixa: se positiva, é cobrada
+     do cliente; se negativa, é devolvida a ele. Ambas registradas em venda.trocas
+     pra aparecer depois na aba Caixa.
+   ============================================================ */
+function encontrarClienteDaVenda(venda){
+  const telD = (venda.telefone||'').replace(/\D/g,'');
+  const nomeL = (venda.cliente||'').trim().toLowerCase();
+  return clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL)) || null;
+}
+function abrirTrocaVenda(venda){
+  if(!venda || venda.status==='cancelada') return;
+  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem registrar uma troca.'); return; }
+  const itensDisponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado);
+  if(itensDisponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra troca (todos já foram trocados).'); return; }
+  const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
+  openModal(`
+    <h3>Registrar troca</h3>
+    <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)}</p>
+    <div class="field">
+      <label>Item que está sendo trocado (devolvido)</label>
+      <select id="tr_itemAntigo">
+        ${itensDisponiveis.map(x=>`<option value="${x.idx}">${x.it.quantidade}x ${escapeHtml(x.it.produto)}${x.it.metal?' ('+escapeHtml(x.it.metal)+')':''} — R$ ${(Number(x.it.quantidade)*Number(x.it.valorUnitario||0)).toFixed(2)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="section-label" style="margin-top:14px;">Novo produto (saída)</div>
+    <div class="grid-2">
+      <select id="tr_produto">${produtoJoiaOptionsHtml('')}</select>
+      <select id="tr_metal">${metalOptionsHtml('')}</select>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Qtd.</label><input type="number" min="1" step="1" id="tr_quantidade" value="1"></div>
+      <div class="field"><label>Valor unit. (R$)</label><input type="number" min="0" step="0.01" id="tr_valorUnitario" placeholder="0,00"></div>
+    </div>
+    <div class="field">
+      <label>Descontar do estoque</label>
+      <select id="tr_produtoEstoqueId">
+        <option value="">— Sem controle de estoque —</option>
+        ${vendaveis.map(p=>`<option value="${p.id}">${escapeHtml(p.nome)} (${Number(p.estoque||0)} ${escapeHtml(unidadeEstoqueLabel(p.unidade))} em estoque)</option>`).join('')}
+      </select>
+    </div>
+    <div id="tr_diferencaHint" class="muted" style="margin-top:10px; font-weight:700;"></div>
+    <div id="tr_pagDiferencaWrap" class="field" style="display:none; margin-top:6px;">
+      <label id="tr_pagDiferencaLabel">Forma de pagamento da diferença</label>
+      <select id="tr_formaPagDiferenca"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="tr_fechar">Voltar</button>
+      <button class="btn btn-accent" id="tr_confirmar">Confirmar troca</button>
+    </div>
+  `);
+  const elItemAntigo = document.getElementById('tr_itemAntigo');
+  const elQtd = document.getElementById('tr_quantidade');
+  const elValor = document.getElementById('tr_valorUnitario');
+  const elPagWrap = document.getElementById('tr_pagDiferencaWrap');
+  const elPagLabel = document.getElementById('tr_pagDiferencaLabel');
+  const elPagSelect = document.getElementById('tr_formaPagDiferenca');
+  const elHint = document.getElementById('tr_diferencaHint');
+
+  function itemAntigoSelecionado(){
+    const idx = Number(elItemAntigo.value);
+    return venda.itens[idx];
+  }
+  function atualizarDiferenca(){
+    const antigo = itemAntigoSelecionado();
+    const valorAntigo = Number(antigo.quantidade)*Number(antigo.valorUnitario||0);
+    const valorNovo = (Number(elQtd.value)||0)*(Number(elValor.value)||0);
+    const diferenca = valorNovo - valorAntigo;
+    if(Math.abs(diferenca) < 0.005){
+      elHint.innerHTML = `Troca sem diferença de valor (R$ ${valorNovo.toFixed(2)} = R$ ${valorAntigo.toFixed(2)}).`;
+      elPagWrap.style.display = 'none';
+    } else if(diferenca > 0){
+      elHint.innerHTML = `<span style="color:var(--danger);">Cliente paga a diferença: R$ ${diferenca.toFixed(2)}</span>`;
+      elPagLabel.textContent = 'Forma de pagamento da diferença (recebida)';
+      elPagSelect.innerHTML = (config.formasPagamento||[]).map(pt=>`<option value="${pt.id}">${escapeHtml(pt.nome)}</option>`).join('') + `<option value="__credito">💳 Crédito do cliente</option><option value="__fiado">📝 Fiado</option>`;
+      elPagWrap.style.display = '';
+    } else {
+      elHint.innerHTML = `<span style="color:var(--ok);">Devolver ao cliente: R$ ${Math.abs(diferenca).toFixed(2)}</span>`;
+      elPagLabel.textContent = 'Forma de devolução da diferença';
+      elPagSelect.innerHTML = (config.formasPagamento||[]).map(pt=>`<option value="${pt.id}">${escapeHtml(pt.nome)}</option>`).join('') + `<option value="__credito">💳 Crédito do cliente (fica pra próxima compra)</option>`;
+      elPagWrap.style.display = '';
+    }
+  }
+  [elItemAntigo,elQtd,elValor].forEach(el=> el.addEventListener('input', atualizarDiferenca));
+  atualizarDiferenca();
+
+  document.getElementById('tr_fechar').addEventListener('click', closeModal);
+  document.getElementById('tr_confirmar').addEventListener('click', async ()=>{
+    const idx = Number(elItemAntigo.value);
+    const antigo = venda.itens[idx];
+    const produtoNovo = document.getElementById('tr_produto').value.trim();
+    const metalNovo = document.getElementById('tr_metal').value;
+    const qtdNovo = Number(elQtd.value)||0;
+    const valorUnitNovo = Number(elValor.value)||0;
+    const produtoEstoqueIdNovo = document.getElementById('tr_produtoEstoqueId').value;
+    if(!produtoNovo || qtdNovo<=0){ showToast('Preencha o novo produto e a quantidade.'); return; }
+
+    const valorAntigo = Number(antigo.quantidade)*Number(antigo.valorUnitario||0);
+    const valorNovo = qtdNovo*valorUnitNovo;
+    const diferenca = valorNovo - valorAntigo;
+    let formaDiferenca = null;
+    if(Math.abs(diferenca) >= 0.005){
+      formaDiferenca = elPagSelect.value;
+      if(!formaDiferenca){ showToast('Selecione a forma de pagamento/devolução da diferença.'); return; }
+    }
+
+    // Baixa estoque do produto novo (mesma explosão em cascata da venda normal)
+    const reservasNovo = {};
+    if(produtoEstoqueIdNovo){
+      const resultado = planejarConsumoEstoque(produtoEstoqueIdNovo, qtdNovo, reservasNovo);
+      if(!resultado.ok){
+        const lista = resultado.faltando.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
+        const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nRegistrar a troca mesmo assim? O estoque vai ficar negativo.`);
+        if(!prosseguir) return;
+      }
+    }
+
+    // Devolve estoque do item antigo
+    if(antigo.estoqueConsumidoItem && Object.keys(antigo.estoqueConsumidoItem).length>0){
+      for(const [pid, qtd] of Object.entries(antigo.estoqueConsumidoItem)){
+        const p = produtosEstoque.find(x=>x.id===pid);
+        if(!p) continue;
+        p.estoque = (Number(p.estoque)||0) + qtd;
+        await produtoEstoqueAtualizar(p);
+      }
+    } else if(antigo.produtoEstoqueId){
+      const p = produtosEstoque.find(x=>x.id===antigo.produtoEstoqueId);
+      if(p){
+        p.estoque = (Number(p.estoque)||0) + Number(antigo.quantidade||0);
+        await produtoEstoqueAtualizar(p);
+        showToast('Item antigo devolvido ao estoque de forma simples (venda anterior a este controle) — confira manualmente se ele tem composição.');
+      }
+    }
+    await aplicarConsumosEstoque(reservasNovo);
+
+    // Movimenta crédito/fiado do cliente se a diferença usar isso
+    let clienteCadastro = null;
+    if(formaDiferenca==='__credito' || formaDiferenca==='__fiado'){
+      clienteCadastro = encontrarClienteDaVenda(venda);
+      if(!clienteCadastro){ showToast('Pra usar Crédito ou Fiado na diferença, o cliente precisa estar no cadastro.'); return; }
+    }
+    let fiadoDebitoIdTroca = null;
+    if(diferenca > 0){
+      if(formaDiferenca==='__credito'){
+        if((Number(clienteCadastro.credito)||0) < diferenca - 0.001){ showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(clienteCadastro.credito)||0).toFixed(2)}.`); return; }
+        clienteCadastro.credito = (Number(clienteCadastro.credito)||0) - diferenca;
+        if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
+        clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: -diferenca, tipo:'uso', obs:`Troca — venda ${String(venda.id).slice(-8)}` });
+      } else if(formaDiferenca==='__fiado'){
+        fiadoDebitoIdTroca = 'fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36);
+        if(!clienteCadastro.fiadoDebitos) clienteCadastro.fiadoDebitos = [];
+        clienteCadastro.fiadoDebitos.push({ id:fiadoDebitoIdTroca, origem:'Troca', numero:String(venda.id).slice(-8), data:hoje(), valor:diferenca, valorPago:0, loja:venda.loja||'' });
+      }
+    } else if(diferenca < 0 && formaDiferenca==='__credito'){
+      clienteCadastro = clienteCadastro || encontrarClienteDaVenda(venda);
+      if(!clienteCadastro){ showToast('Pra devolver como crédito, o cliente precisa estar no cadastro.'); return; }
+      clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + Math.abs(diferenca);
+      if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
+      clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: Math.abs(diferenca), tipo:'estorno', obs:`Troca — venda ${String(venda.id).slice(-8)}` });
+    }
+    if(clienteCadastro) await salvarUmCliente(clienteCadastro);
+
+    const troca = {
+      id: uid('troca'),
+      itemAntigoDescricao: `${antigo.quantidade}x ${antigo.produto}${antigo.metal?' ('+antigo.metal+')':''}`,
+      itemAntigoValor: valorAntigo,
+      itemNovo: { produto:produtoNovo, metal:metalNovo, quantidade:qtdNovo, valorUnitario:valorUnitNovo, produtoEstoqueId:produtoEstoqueIdNovo, estoqueConsumidoItem:reservasNovo },
+      itemNovoValor: valorNovo,
+      diferenca,
+      formaDiferenca,
+      fiadoDebitoId: fiadoDebitoIdTroca,
+      data: hoje(),
+      feitoPor: currentUser.nome,
+      criadoEm: Date.now(),
+    };
+    antigo.trocado = true;
+    antigo.trocaId = troca.id;
+    if(!venda.trocas) venda.trocas = [];
+    venda.trocas.push(troca);
+    await vendaSalvar(venda);
+    showToast('Troca registrada.');
+    closeModal();
+    renderTabs(); renderView();
+  });
+}
 
 /* ============================================================
    LISTA DE VENDAS
@@ -1374,6 +1576,7 @@ function renderVendas(main){
               <td style="${aReceber>0 && !cancelada?'color:var(--danger); font-weight:700;':''} white-space:nowrap;">R$ ${aReceber.toFixed(2)}</td>
               <td style="white-space:nowrap;">
                 <button class="icon-btn" data-view="${v.id}" title="Ver detalhes">👁</button>
+                ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-trocar="${v.id}" title="Registrar troca">🔁</button>` : ''}
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-cancelar="${v.id}" title="Cancelar venda">🚫</button>` : ''}
                 ${currentUser.nivel==='diretoria' ? `<button class="icon-btn" data-del="${v.id}" title="Excluir">🗑️</button>` : ''}
               </td>
@@ -1383,6 +1586,7 @@ function renderVendas(main){
       </table>
     `;
     wrap.querySelectorAll('[data-view]').forEach(b=> b.addEventListener('click', ()=> abrirDetalheVenda(vendas.find(x=>x.id===b.dataset.view)) ));
+    wrap.querySelectorAll('[data-trocar]').forEach(b=> b.addEventListener('click', ()=> abrirTrocaVenda(vendas.find(x=>x.id===b.dataset.trocar)) ));
     wrap.querySelectorAll('[data-cancelar]').forEach(b=> b.addEventListener('click', ()=> abrirCancelarVenda(vendas.find(x=>x.id===b.dataset.cancelar)) ));
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
@@ -1411,9 +1615,18 @@ function abrirDetalheVenda(v){
     <table>
       <thead><tr><th>Produto</th><th>Metal</th><th>Qtd.</th><th>Valor unit.</th></tr></thead>
       <tbody>
-        ${(v.itens||[]).map(it=>`<tr><td>${escapeHtml(it.produto)}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td></tr>`).join('')}
+        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.55;"':''}><td>${escapeHtml(it.produto)}${it.trocado?' <span class="muted">(trocado)</span>':''}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td></tr>`).join('')}
       </tbody>
     </table>
+    ${(v.trocas&&v.trocas.length>0) ? `
+    <div class="section-label" style="margin-top:14px;">Trocas</div>
+    <table>
+      <thead><tr><th>Data</th><th>Novo produto</th><th>Diferença</th><th>Feito por</th></tr></thead>
+      <tbody>
+        ${v.trocas.map(t=>`<tr><td>${fmtDate(t.data)}</td><td>${escapeHtml(t.itemNovo.quantidade)}x ${escapeHtml(t.itemNovo.produto)}</td><td style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">R$ ${t.diferenca.toFixed(2)}</td><td>${escapeHtml(t.feitoPor||'—')}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    ` : ''}
     <div class="section-label" style="margin-top:14px;">Pagamento</div>
     <table>
       <tr><td class="muted" style="width:150px;">Momento</td><td>${v.momentoPagamento==='na_volta' ? 'Pagar na volta' : 'Pago no ato da venda'}</td></tr>
