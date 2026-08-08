@@ -621,18 +621,37 @@ function metalOptionsHtml(selected){
    ============================================================ */
 /**
  * Valida a exigência: quando emite nota, a empresa que RECEBEU o pagamento
- * precisa ser a mesma que EMITIU a nota (mesmo CNPJ pagando e faturando).
+ * precisa ser a mesma que EMITIU a nota (mesmo CNPJ pagando e faturando), e se a
+ * empresa do pagamento for diferente da empresa de onde saiu a joia, a baixa de
+ * estoque precisa ficar registrada na empresa que saiu a joia (não na do pagamento).
  * Retorna null se estiver tudo certo, ou uma mensagem de erro pra mostrar.
  */
 function notaEmpresasErro(holder){
   if(holder.emissaoNota !== 'sim') return null;
   if(!holder.lojaSaidaId || !holder.lojaPagamentoId || !holder.lojaNotaId){
-    return 'Selecione as 3 empresas (saída da joia, pagamento e nota).';
+    return 'Selecione as 3 empresas (joia, pagamento e nota).';
   }
   if(holder.lojaPagamentoId !== holder.lojaNotaId){
-    return 'A empresa que recebeu o pagamento precisa ser a mesma que emitiu a nota.';
+    return 'A empresa do pagamento precisa ser a mesma que emitiu a nota.';
+  }
+  if(holder.lojaPagamentoId !== holder.lojaSaidaId){
+    if(!holder.lojaBaixaEstoqueId){
+      return 'Selecione a empresa da baixa de estoque.';
+    }
+    if(holder.lojaBaixaEstoqueId !== holder.lojaSaidaId){
+      return 'A empresa da baixa de estoque precisa ser a mesma empresa da joia.';
+    }
   }
   return null;
+}
+function todasEmpresasIguais(holder){
+  return holder.emissaoNota==='sim' && holder.lojaSaidaId && holder.lojaPagamentoId && holder.lojaNotaId &&
+    holder.lojaSaidaId===holder.lojaPagamentoId && holder.lojaPagamentoId===holder.lojaNotaId;
+}
+/** Opções de loja pro seletor de "Nota fiscal": mostra a ABREVIAÇÃO (o que foi pedido),
+ * com o nome completo só como dica ao passar o mouse. */
+function lojaAbrevOptionsHtml(selected){
+  return (config.lojas||[]).map(l=>`<option value="${l.id}" title="${escapeHtml(l.nome)}" ${selected===l.id?'selected':''}>${escapeHtml(l.abreviacao)}</option>`).join('');
 }
 
 function mountPagamentos(container, holder){
@@ -662,7 +681,7 @@ function mountPagamentos(container, holder){
       <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
       <div id="pagNotaWrap" style="margin-top:14px; display:none;">
         <div class="field">
-          <label>Emitiu nota fiscal?</label>
+          <label>Nota fiscal</label>
           <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:2px;">
             <label style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:13.5px; text-transform:none; letter-spacing:0;">
               <input type="radio" name="pagEmiteNota" value="sim" ${holder.emissaoNota==='sim'?'checked':''}> Sim
@@ -675,11 +694,15 @@ function mountPagamentos(container, holder){
         <div id="pagNotaCamposWrap" style="display:none;">
           <div class="field"><label>Número da nota</label><input id="pagNumeroNota" placeholder="Ex: 12345" value="${escapeHtml(holder.numeroNota||'')}"></div>
           <div class="grid-3">
-            <div class="field"><label>Empresa de onde sai a joia</label><select id="pagLojaSaida">${lojaOptionsHtml(holder.lojaSaidaId||'')}</select></div>
-            <div class="field"><label>Empresa que recebeu o pagamento</label><select id="pagLojaPagamento">${lojaOptionsHtml(holder.lojaPagamentoId||'')}</select></div>
-            <div class="field"><label>Empresa que emitiu a nota</label><select id="pagLojaNota">${lojaOptionsHtml(holder.lojaNotaId||'')}</select></div>
+            <div class="field"><label>Empresa joia</label><select id="pagLojaSaida">${lojaAbrevOptionsHtml(holder.lojaSaidaId||'')}</select></div>
+            <div class="field"><label>Empresa do pagamento</label><select id="pagLojaPagamento">${lojaAbrevOptionsHtml(holder.lojaPagamentoId||'')}</select></div>
+            <div class="field"><label>Empresa nota</label><select id="pagLojaNota">${lojaAbrevOptionsHtml(holder.lojaNotaId||'')}</select></div>
           </div>
-          <div class="muted" id="pagNotaErroHint" style="margin-top:2px;"></div>
+          <div class="field" id="pagBaixaEstoqueWrap" style="display:none; max-width:220px;">
+            <label>Baixa estoque</label>
+            <select id="pagLojaBaixaEstoque">${lojaAbrevOptionsHtml(holder.lojaBaixaEstoqueId||'')}</select>
+          </div>
+          <div id="pagNotaErroHint" style="margin-top:6px;"></div>
         </div>
       </div>
     `;
@@ -708,14 +731,29 @@ function mountPagamentos(container, holder){
     if(lojaPagamentoEl) lojaPagamentoEl.addEventListener('change', ()=>{ holder.lojaPagamentoId = lojaPagamentoEl.value; atualizarErroEmpresas(); });
     const lojaNotaEl = container.querySelector('#pagLojaNota');
     if(lojaNotaEl) lojaNotaEl.addEventListener('change', ()=>{ holder.lojaNotaId = lojaNotaEl.value; atualizarErroEmpresas(); });
+    const lojaBaixaEstoqueEl = container.querySelector('#pagLojaBaixaEstoque');
+    if(lojaBaixaEstoqueEl) lojaBaixaEstoqueEl.addEventListener('change', ()=>{ holder.lojaBaixaEstoqueId = lojaBaixaEstoqueEl.value; atualizarErroEmpresas(); });
     atualizarErroEmpresas();
   }
 
   function atualizarErroEmpresas(){
     const hint = container.querySelector('#pagNotaErroHint');
+    const baixaWrap = container.querySelector('#pagBaixaEstoqueWrap');
     if(!hint) return;
+    // O campo "Baixa estoque" só aparece quando a empresa do pagamento é diferente
+    // da empresa da joia — só nesse caso existe algo a decidir aqui.
+    const precisaBaixaEstoque = holder.emissaoNota==='sim' && holder.lojaSaidaId && holder.lojaPagamentoId && holder.lojaSaidaId !== holder.lojaPagamentoId;
+    if(baixaWrap) baixaWrap.style.display = precisaBaixaEstoque ? '' : 'none';
+    if(!precisaBaixaEstoque) holder.lojaBaixaEstoqueId = '';
+
     const msg = notaEmpresasErro(holder);
-    hint.innerHTML = msg ? `<span style="color:var(--danger); font-weight:700;">⚠ ${escapeHtml(msg)}</span>` : '';
+    if(msg){
+      hint.innerHTML = `<span style="color:var(--danger); font-weight:700;">⚠ ${escapeHtml(msg)}</span>`;
+    } else if(todasEmpresasIguais(holder)){
+      hint.innerHTML = `<span style="color:var(--ok); font-weight:700;">✔ Tudo certo — mesma empresa na joia, no pagamento e na nota.</span>`;
+    } else {
+      hint.innerHTML = '';
+    }
   }
 
   function atualizarVisibilidadeNota(){
@@ -727,7 +765,7 @@ function mountPagamentos(container, holder){
       camposWrap.style.display = holder.emissaoNota === 'sim' ? '' : 'none';
     }else{
       notaWrap.style.display = 'none';
-      holder.emissaoNota = 'nao'; holder.numeroNota = ''; holder.lojaSaidaId = ''; holder.lojaPagamentoId = ''; holder.lojaNotaId = '';
+      holder.emissaoNota = 'nao'; holder.numeroNota = ''; holder.lojaSaidaId = ''; holder.lojaPagamentoId = ''; holder.lojaNotaId = ''; holder.lojaBaixaEstoqueId = '';
     }
     atualizarErroEmpresas();
   }
@@ -1177,6 +1215,7 @@ function renderNovaVenda(main){
       lojaSaidaId: tempPagHolder.lojaSaidaId || '',
       lojaPagamentoId: tempPagHolder.lojaPagamentoId || '',
       lojaNotaId: tempPagHolder.lojaNotaId || '',
+      lojaBaixaEstoqueId: tempPagHolder.lojaBaixaEstoqueId || '',
       status: 'ativa',
       // Guardado pra permitir devolver ao estoque exatamente o que foi baixado nesta\n      // venda, mesmo que a composição do produto mude depois (cancelamento).
       estoqueConsumido: reservas,
@@ -1636,9 +1675,10 @@ function abrirDetalheVenda(v){
       <tr><td class="muted">A receber</td><td>R$ ${valorAReceberDe(v).toFixed(2)}</td></tr>
       ${v.emissaoNota==='sim' ? `
         <tr><td class="muted">Nota</td><td>${escapeHtml(v.numeroNota||'—')}</td></tr>
-        <tr><td class="muted">Saída da joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
-        <tr><td class="muted">Recebeu pagamento</td><td>${escapeHtml(nomeLoja(v.lojaPagamentoId))}</td></tr>
-        <tr><td class="muted">Emitiu a nota</td><td>${escapeHtml(nomeLoja(v.lojaNotaId))}</td></tr>
+        <tr><td class="muted">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
+        <tr><td class="muted">Empresa do pagamento</td><td>${escapeHtml(nomeLoja(v.lojaPagamentoId))}</td></tr>
+        <tr><td class="muted">Empresa nota</td><td>${escapeHtml(nomeLoja(v.lojaNotaId))}</td></tr>
+        ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
       ` : ''}
     </table>
     <div class="modal-actions">
