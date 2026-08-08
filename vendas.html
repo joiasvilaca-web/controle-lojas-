@@ -1571,8 +1571,9 @@ function renderVendas(main){
   const fBusca = document.getElementById('filtroBusca');
   const fSemPagamento = document.getElementById('filtroSemPagamento');
 
-  function itensResumo(v){
-    return (v.itens||[]).map(it=>`${it.quantidade}x ${escapeHtml(it.produto)}${it.metal?' ('+escapeHtml(it.metal)+')':''}`).join(', ');
+  function abrevLojaDe(v){
+    const l = (config.lojas||[]).find(x=>x.id===v.lojaId);
+    return l ? l.abreviacao : v.loja;
   }
 
   function renderTable(){
@@ -1597,27 +1598,30 @@ function renderVendas(main){
     if(list.length===0){ wrap.innerHTML = `<div class="empty">Nenhuma venda encontrada com esses filtros.</div>`; return; }
     wrap.innerHTML = `
       <table>
-        <thead><tr><th>Data</th><th>Loja</th><th>Vendedora</th><th>Cliente</th><th>Itens</th><th>Recebido</th><th>A receber</th><th>Ações</th></tr></thead>
+        <thead><tr><th>Data</th><th>Loja</th><th>Vendedora</th><th>Cliente</th><th>Itens</th><th>Nota</th><th>Recebido</th><th>A receber</th><th>Ações</th></tr></thead>
         <tbody>
           ${list.map(v=>{
             const semPag = semPagamentoLancado(v);
             const recebido = valorRecebidoDe(v);
             const aReceber = valorAReceberDe(v);
             const cancelada = v.status==='cancelada';
+            const qtdItens = (v.itens||[]).length;
+            const temNota = v.emissaoNota==='sim';
             return `
             <tr${cancelada ? ' style="opacity:.6;"' : ''}>
               <td>${fmtDate(v.data)}</td>
-              <td><span class="badge badge-loja">${escapeHtml(v.loja)}</span></td>
+              <td><span class="badge badge-loja">${escapeHtml(abrevLojaDe(v))}</span></td>
               <td>${escapeHtml(v.vendedora)}</td>
               <td>${escapeHtml(v.cliente||'—')}${semPag && !cancelada ? `<div style="margin-top:4px; color:var(--danger); font-weight:700; font-size:11.5px;">⚠ Sem pagamento lançado</div>` : ''}${cancelada ? `<div style="margin-top:4px; color:var(--danger); font-weight:700; font-size:11.5px;" title="${escapeHtml(v.motivoCancelamento||'')}">🚫 Cancelada por ${escapeHtml(v.canceladoPor||'—')}</div>` : ''}</td>
-              <td>${itensResumo(v)}</td>
+              <td><button type="button" class="btn-link-itens" data-itens="${v.id}" style="background:none; border:none; padding:0; color:var(--accent-ink,#4A1830); font-weight:700; text-decoration:underline; cursor:pointer; font-size:inherit;">${qtdItens} ${qtdItens===1?'item':'itens'}</button></td>
+              <td><button type="button" class="btn-link-nota" data-nota="${v.id}" style="background:none; border:none; padding:0; cursor:pointer; font-size:inherit;"><span class="badge" style="${temNota?'background:var(--ok-soft,#D7F3E3); color:var(--ok);':'background:var(--surface-2,#F5F7F9); color:var(--ink-faint,#8B93A1);'}">${temNota?'Sim':'Não'}</span></button></td>
               <td style="color:var(--ok); white-space:nowrap;">R$ ${recebido.toFixed(2)}</td>
               <td style="${aReceber>0 && !cancelada?'color:var(--danger); font-weight:700;':''} white-space:nowrap;">R$ ${aReceber.toFixed(2)}</td>
               <td style="white-space:nowrap;">
                 <button class="icon-btn" data-view="${v.id}" title="Ver detalhes">👁</button>
+                ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-editar="${v.id}" title="Editar venda">✎</button>` : ''}
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-trocar="${v.id}" title="Registrar troca">🔁</button>` : ''}
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-cancelar="${v.id}" title="Cancelar venda">🚫</button>` : ''}
-                ${currentUser.nivel==='diretoria' ? `<button class="icon-btn" data-del="${v.id}" title="Excluir">🗑️</button>` : ''}
               </td>
             </tr>`;
           }).join('')}
@@ -1625,22 +1629,144 @@ function renderVendas(main){
       </table>
     `;
     wrap.querySelectorAll('[data-view]').forEach(b=> b.addEventListener('click', ()=> abrirDetalheVenda(vendas.find(x=>x.id===b.dataset.view)) ));
+    wrap.querySelectorAll('[data-itens]').forEach(b=> b.addEventListener('click', ()=> abrirItensVenda(vendas.find(x=>x.id===b.dataset.itens)) ));
+    wrap.querySelectorAll('[data-nota]').forEach(b=> b.addEventListener('click', ()=> abrirNotaVenda(vendas.find(x=>x.id===b.dataset.nota)) ));
+    wrap.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditarVenda(vendas.find(x=>x.id===b.dataset.editar)) ));
     wrap.querySelectorAll('[data-trocar]').forEach(b=> b.addEventListener('click', ()=> abrirTrocaVenda(vendas.find(x=>x.id===b.dataset.trocar)) ));
     wrap.querySelectorAll('[data-cancelar]').forEach(b=> b.addEventListener('click', ()=> abrirCancelarVenda(vendas.find(x=>x.id===b.dataset.cancelar)) ));
-    wrap.querySelectorAll('[data-del]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        if(!confirm('Excluir esta venda? Essa ação não pode ser desfeita.')) return;
-        const id = b.dataset.del;
-        const ok = await vendaExcluir(id);
-        if(ok){ vendas = vendas.filter(x=>x.id!==id); showToast('Venda excluída.'); renderTable(); }
-      });
-    });
   }
   [fLoja,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
   document.getElementById('btnLimparFiltroVendas').addEventListener('click', ()=>{
     fLoja.value=''; fData.value=''; fBusca.value=''; fSemPagamento.checked=false; renderTable();
   });
   renderTable();
+}
+
+function abrirItensVenda(v){
+  if(!v) return;
+  openModal(`
+    <h3>Itens da venda</h3>
+    <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
+    <table>
+      <thead><tr><th>Produto</th><th>Metal</th><th>Qtd.</th><th>Valor unit.</th><th>Subtotal</th></tr></thead>
+      <tbody>
+        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.55;"':''}><td>${escapeHtml(it.produto)}${it.trocado?' <span class="muted">(trocado)</span>':''}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td><td>R$ ${(Number(it.quantidade)*Number(it.valorUnitario||0)).toFixed(2)}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btnFecharItensVenda">Fechar</button>
+    </div>
+  `);
+  document.getElementById('btnFecharItensVenda').addEventListener('click', closeModal);
+}
+function abrirNotaVenda(v){
+  if(!v) return;
+  const nomeLoja = (id)=> { const l = (config.lojas||[]).find(x=>x.id===id); return l ? `${l.nome} (${l.abreviacao})` : '—'; };
+  if(v.emissaoNota !== 'sim'){
+    openModal(`
+      <h3>Nota fiscal</h3>
+      <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
+      <p>Nota fiscal não emitida nesta venda.</p>
+      <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharNotaVenda">Fechar</button></div>
+    `);
+    document.getElementById('btnFecharNotaVenda').addEventListener('click', closeModal);
+    return;
+  }
+  openModal(`
+    <h3>Nota fiscal</h3>
+    <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
+    <table>
+      <tr><td class="muted" style="width:150px;">Número da nota</td><td>${escapeHtml(v.numeroNota||'—')}</td></tr>
+      <tr><td class="muted">Empresa joia</td><td>${escapeHtml(nomeLoja(v.lojaSaidaId))}</td></tr>
+      <tr><td class="muted">Empresa do pagamento</td><td>${escapeHtml(nomeLoja(v.lojaPagamentoId))}</td></tr>
+      <tr><td class="muted">Empresa nota</td><td>${escapeHtml(nomeLoja(v.lojaNotaId))}</td></tr>
+      ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
+    </table>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btnFecharNotaVenda">Fechar</button>
+    </div>
+  `);
+  document.getElementById('btnFecharNotaVenda').addEventListener('click', closeModal);
+}
+
+/* ============================================================
+   EDITAR VENDA
+   Antes de editar, pergunta se a nota já foi tirada (impressa/emitida de fato).
+   Se sim, edição direta é bloqueada — o caminho correto é Cancelar ou Trocar (que já
+   fazem a reversão de estoque/caixa/crédito direito), e a pessoa precisa lembrar de
+   refletir isso no sistema de nota fiscal também (fora deste app).
+   Se não, abre um formulário com os campos administrativos (não mexe em itens nem
+   em formas de pagamento — isso é o que Troca e Cancelamento já cobrem).
+   ============================================================ */
+function abrirEditarVenda(v){
+  if(!v || v.status==='cancelada') return;
+  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem editar uma venda.'); return; }
+  openModal(`
+    <h3>Editar venda</h3>
+    <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
+    <p>Você já tirou a nota fiscal desta venda?</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="ev_nao">Não</button>
+      <button class="btn btn-accent" id="ev_sim" style="background:var(--danger); border-color:var(--danger);">Sim</button>
+    </div>
+  `);
+  document.getElementById('ev_sim').addEventListener('click', ()=>{
+    openModal(`
+      <h3>Não é possível editar</h3>
+      <p>Como a nota fiscal já foi tirada, essa venda não pode ser editada diretamente — isso deixaria a nota emitida com dados diferentes do sistema.</p>
+      <p>Em vez disso, faça um <b>cancelamento</b> ou uma <b>troca</b>. E não esqueça de refletir essa mudança no sistema de nota fiscal também (fora deste app).</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="ev_fechar">Fechar</button>
+        <button class="btn btn-ghost" id="ev_irTrocar">🔁 Registrar troca</button>
+        <button class="btn btn-accent" id="ev_irCancelar" style="background:var(--danger); border-color:var(--danger);">🚫 Cancelar venda</button>
+      </div>
+    `);
+    document.getElementById('ev_fechar').addEventListener('click', closeModal);
+    document.getElementById('ev_irTrocar').addEventListener('click', ()=>{ closeModal(); abrirTrocaVenda(v); });
+    document.getElementById('ev_irCancelar').addEventListener('click', ()=>{ closeModal(); abrirCancelarVenda(v); });
+  });
+  document.getElementById('ev_nao').addEventListener('click', ()=> abrirFormularioEdicaoVenda(v));
+}
+function abrirFormularioEdicaoVenda(v){
+  openModal(`
+    <h3>Editar venda</h3>
+    <p class="muted">Itens e formas de pagamento não são editáveis aqui — pra isso, use Troca ou Cancelamento.</p>
+    <div class="grid-2">
+      <div class="field"><label>Loja</label><select id="ed_loja">${lojaOptionsHtml(v.lojaId||'')}</select></div>
+      <div class="field"><label>Vendedora</label><select id="ed_vendedora">${vendedoraOptionsHtml(v.vendedora||'')}</select></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label>Data</label><input type="date" id="ed_data" value="${v.data||''}"></div>
+      <div class="field"><label>Telefone</label><input id="ed_telefone" value="${escapeHtml(v.telefone||'')}"></div>
+    </div>
+    <div class="field"><label>Cliente</label><input id="ed_cliente" value="${escapeHtml(v.cliente||'')}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="ed_fechar">Cancelar</button>
+      <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
+    </div>
+  `);
+  document.getElementById('ed_fechar').addEventListener('click', closeModal);
+  document.getElementById('ed_salvar').addEventListener('click', async ()=>{
+    const lojaId = document.getElementById('ed_loja').value;
+    const vendedora = document.getElementById('ed_vendedora').value.trim();
+    const data = document.getElementById('ed_data').value;
+    const telefone = document.getElementById('ed_telefone').value.trim();
+    const cliente = document.getElementById('ed_cliente').value.trim();
+    if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
+    const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+    v.lojaId = lojaId;
+    v.loja = loja ? loja.nome : v.loja;
+    v.vendedora = vendedora;
+    v.data = data;
+    v.telefone = telefone;
+    v.cliente = cliente;
+    const ok = await vendaSalvar(v);
+    if(ok){
+      showToast('Venda atualizada.');
+      closeModal();
+      renderTabs(); renderView();
+    }
+  });
 }
 
 function abrirDetalheVenda(v){
