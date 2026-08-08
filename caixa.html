@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Caixa — Gestão e Controle</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#EEF1F4; --surface:#FFFFFF; --surface-2:#F5F7F9;
+    --ink:#151C28; --ink-soft:#4B5563; --ink-faint:#8B93A1;
+    --line:#D7DCE2; --accent:#662344; --accent-ink:#4A1830; --accent-soft:#FDD49E;
+    --ok:#188A54; --ok-soft:#D7F3E3;
+    --danger:#C4272B; --danger-soft:#FADADA;
+    --wait:#B8650A; --wait-soft:#FBE6C7;
+    --just:#6425C9; --just-soft:#E9DBFA;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); min-height:100vh; -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer;}
+  input,select{font-family:inherit;}
+
+  /* login */
+  #view-login{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card{ width:100%; max-width:380px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:32px 28px; box-shadow:0 12px 32px -18px rgba(20,30,45,0.25); }
+  .login-tag{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:8px; }
+  .login-title{ font-size:20px; font-weight:750; margin:0 0 4px; }
+  .login-sub{ color:var(--ink-soft); font-size:13px; margin:0 0 22px; line-height:1.5; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px; }
+  .field input, .field select{ width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:14px; background:var(--surface-2); color:var(--ink); }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--accent); background:#fff; }
+  .btn{ border:none; border-radius:8px; padding:10px 16px; font-size:13.5px; font-weight:700; }
+  .btn-primary{ background:var(--ink); color:#fff; width:100%; }
+  .btn-ghost{ background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line); }
+  .btn-sm{ padding:7px 12px; font-size:12.5px; }
+  .login-error{ background:var(--danger-soft); color:var(--danger); font-size:12.5px; padding:9px 11px; border-radius:7px; margin-bottom:12px; display:none; }
+  .login-error.show{ display:block; }
+  .back-link{ display:inline-block; font-size:12px; font-weight:700; color:var(--ink-soft); text-decoration:none; margin-bottom:16px; }
+
+  /* shell */
+  #view-caixa{ display:none; }
+  header.topbar{
+    background:var(--ink); color:#fff; padding:0 20px; height:56px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px; position:sticky; top:0; z-index:20;
+  }
+  header.topbar a{ color:rgba(255,255,255,.7); text-decoration:none; font-size:13px; font-weight:700; }
+  .who{ font-size:12.5px; color:rgba(255,255,255,.75); display:flex; align-items:center; gap:10px; }
+  .level-pill{ font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; background:rgba(255,255,255,.14); padding:3px 9px; border-radius:20px; }
+  main{ max-width:1120px; margin:0 auto; padding:24px 18px 60px; }
+
+  .page-head{ margin-bottom:16px; }
+  .page-title{ font-size:24px; font-weight:800; margin:0 0 4px; }
+  .page-sub{ color:var(--ink-soft); font-size:13.5px; margin:0; }
+  .section-label{ font-size:11.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid var(--line); }
+  .muted{ color:var(--ink-soft); font-size:13px; }
+  .empty{ text-align:center; padding:36px 20px; color:var(--ink-faint); font-size:13px; }
+
+  .filters{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:flex-end; }
+  .filters select, .filters input{ padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px; background:var(--surface); color:var(--ink); }
+
+  .card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:14px; box-shadow:0 2px 10px -4px rgba(43,15,31,0.07); }
+  .grid-2{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  thead th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:750; padding:10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody td{ padding:9px 10px; border-bottom:1px solid var(--line); }
+  tbody tr:last-child td{ border-bottom:none; }
+
+  .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
+  .modal-overlay.show{display:flex;}
+  .modal{background:var(--surface); color:var(--ink); border-radius:16px; max-width:640px; width:100%; max-height:88vh; overflow:auto; padding:26px;}
+  .modal-actions{display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;}
+
+  html.embedded #view-login{ display:none !important; }
+  html.embedded header.topbar{ display:none !important; }
+</style>
+</head>
+<body>
+
+<div id="view-login">
+  <div class="login-card">
+    <a href="index.html" class="back-link">← Gestão e Controle</a>
+    <div class="login-tag">Caixa</div>
+    <div class="login-title">Acessar o Caixa</div>
+    <p class="login-sub">Use a mesma senha do resto do sistema.</p>
+    <div class="login-error" id="loginError">Senha não encontrada.</div>
+    <div class="field"><label>Senha</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="off"></div>
+    <button class="btn btn-primary" id="btnLogin">Entrar</button>
+  </div>
+</div>
+
+<div id="view-caixa">
+  <header class="topbar">
+    <a href="index.html">← Gestão e Controle</a>
+    <div class="who">
+      <span id="whoName"></span>
+      <span class="level-pill" id="whoLevel"></span>
+      <button class="btn btn-ghost" id="btnLogout" style="padding:5px 10px; background:rgba(179,38,30,0.18); color:#ffb3ac;">🚪 Sair</button>
+    </div>
+  </header>
+  <main id="mainContent"></main>
+</div>
+<div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBox"></div></div>
+
+<script>
+(function(){
+  "use strict";
+
+  const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+  const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+
+  let __gatewaySenha = null;
+  async function gatewayCall(body){
+    try{
+      const res = await fetch(GATEWAY_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha: __gatewaySenha, ...body }),
+      });
+      return await res.json();
+    }catch(e){
+      console.error("erro ao falar com o servidor", e);
+      return { error: "Não foi possível conectar. Verifique sua internet." };
+    }
+  }
+  async function gatewayLogin(senhaTentativa){
+    return gatewayCall({ op:"login", senha: senhaTentativa });
+  }
+  const supabaseClient = {
+    from(table){
+      return {
+        select(){
+          return {
+            eq(column, value){
+              return {
+                maybeSingle: async ()=>{
+                  if(table === "gestao_config" && column === "id" && value === "config"){
+                    const r = await gatewayCall({ op:"getConfig" });
+                    if(r.error) return { data:null, error:r.error };
+                    return { data: { payload: r.data }, error: null };
+                  }
+                  return gatewayCall({ op:"selectOne", table, params:{ column, value } });
+                }
+              };
+            },
+            order(){ return gatewayCall({ op:"selectAll", table }); }
+          };
+        },
+      };
+    }
+  };
+
+  let currentUser = null; // { nome, nivel }
+  let config = null;
+  let vendas = [];
+  let caixaGastos = [];
+  let caixaOrdens = [];
+
+  function escapeHtml(s){ return (s==null?"":String(s)).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function fmtDate(s){ if(!s) return "—"; const p=(s||"").split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
+  function fmtMoeda(v){ return "R$ " + (Number(v)||0).toFixed(2).replace(".", ","); }
+  function hoje(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  /* Fiado e crédito não entram como "recebido": fiado só entra quando as parcelas são
+     recebidas; crédito entrou no caixa na recarga (não de novo no uso). */
+  function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
+  function valorAReceberDe(v){ return Math.max(0, (Number(v.valorTotal)||0) - valorRecebidoDe(v)); }
+  function lojaOptionsHtml(selected){
+    return (config.lojas||[]).map(l=>`<option value="${l.id}" ${selected===l.id?'selected':''}>${escapeHtml(l.nome)} (${escapeHtml(l.abreviacao)})</option>`).join('');
+  }
+  function nomeLojaCaixa(valor){
+    if(!valor) return '';
+    const porId = (config.lojas||[]).find(l=>l.id===valor);
+    return porId ? porId.nome : valor;
+  }
+  function dataDeTimestamp(ts){
+    if(!ts) return '';
+    const d = new Date(ts);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  function showToast(msg){
+    let el = document.getElementById('toastBox');
+    if(!el){ el = document.createElement('div'); el.id='toastBox'; el.style.cssText='position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; padding:11px 18px; border-radius:8px; font-size:13px; z-index:100; box-shadow:0 10px 30px -10px rgba(0,0,0,.4);'; document.body.appendChild(el); }
+    el.textContent = msg; el.style.display='block';
+    clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(()=>{ el.style.display='none'; }, 3200);
+  }
+  function closeModal(){
+    document.getElementById('modalOverlay').classList.remove('show');
+    document.getElementById('modalBox').innerHTML='';
+  }
+  function openModal(html){
+    document.getElementById('modalBox').innerHTML = html;
+    document.getElementById('modalOverlay').classList.add('show');
+  }
+
+  /* ================= CARREGAMENTO ================= */
+  async function carregarConfig(){
+    const { data } = await supabaseClient.from("gestao_config").select("payload").eq("id","config").maybeSingle();
+    config = data ? data.payload : { lojas:[] };
+  }
+  async function carregarTudo(forcar){
+    await carregarConfig();
+    try{
+      const { data, error } = await supabaseClient.from('vendas_pdv').select('id,payload').order('created_at',{ascending:true});
+      if(error) throw error;
+      vendas = (data||[]).map(r=>r.payload);
+    }catch(e){ console.error('erro ao carregar vendas p/ caixa', e); vendas = []; }
+    try{
+      const { data, error } = await supabaseClient.from('gastos').select('id,payload').order('created_at',{ascending:true});
+      if(error) throw error;
+      caixaGastos = (data||[]).map(r=>r.payload);
+    }catch(e){ console.error('erro ao carregar gastos p/ caixa', e); caixaGastos = []; }
+    try{
+      const { data, error } = await supabaseClient.from('painel_ordens_kv').select('value').eq('key','orders').maybeSingle();
+      if(error) throw error;
+      caixaOrdens = (data && data.value) || [];
+    }catch(e){ console.error('erro ao carregar O.S. p/ caixa', e); caixaOrdens = []; }
+  }
+
+  /* ================= TELA PRINCIPAL ================= */
+  function enterCaixa(){
+    document.getElementById('view-login').style.display = 'none';
+    document.getElementById('view-caixa').style.display = 'block';
+    document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
+    document.getElementById('whoLevel').textContent = currentUser.nivel==='diretoria'?'Diretoria':currentUser.nivel==='gerente'?'Gerente':currentUser.nivel==='oficina'?'Oficina':'Vendedora';
+    montarCaixaConteudo(document.getElementById('mainContent'));
+  }
+  function montarCaixaConteudo(wrap){
+    const hj = hoje();
+    wrap.innerHTML = `
+      <div class="page-head">
+        <div class="page-title">💰 Caixa</div>
+        <p class="page-sub">Movimentação do dia: vendas e O.S. recebidas, contas pagas, a receber, canceladas e trocas.</p>
+      </div>
+      <div class="filters">
+        <div class="field" style="min-width:150px; margin:0;"><label class="muted" style="font-size:11px; text-transform:uppercase; font-weight:700;">De</label><input type="date" id="cx_de" value="${hj}"></div>
+        <div class="field" style="min-width:150px; margin:0;"><label class="muted" style="font-size:11px; text-transform:uppercase; font-weight:700;">Até</label><input type="date" id="cx_ate" value="${hj}"></div>
+        <select id="cx_loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
+        <button class="btn btn-ghost btn-sm" id="cx_hoje">Hoje</button>
+        <button class="btn btn-ghost btn-sm" id="cx_atualizar">🔄 Atualizar dados</button>
+      </div>
+      <div style="margin:2px 0 18px;">
+        <div class="muted" style="font-size:11px; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Mostrar</div>
+        <label style="display:flex; gap:16px; flex-wrap:wrap; font-size:13px; font-weight:600;">
+          <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="contasPagas" checked> Contas pagas</span>
+          <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="vendasRecebidas" checked> Vendas recebidas</span>
+          <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="osRecebidas" checked> O.S. recebidas</span>
+          <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="aReceber" checked> A receber em aberto</span>
+          <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="canceladas" checked> Canceladas</span>
+          <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="trocas" checked> Trocas</span>
+        </label>
+      </div>
+      <div id="caixaResumo"></div>
+      <div id="caixaDetalhes"></div>
+    `;
+    const elDe = wrap.querySelector('#cx_de');
+    const elAte = wrap.querySelector('#cx_ate');
+    const elLoja = wrap.querySelector('#cx_loja');
+    const tipos = ()=> [...wrap.querySelectorAll('.cx_tipo')].filter(c=>c.checked).map(c=>c.value);
+
+    function render(){ renderRelatorioCaixa(elDe.value, elAte.value, elLoja.value, tipos()); }
+    [elDe, elAte, elLoja].forEach(el=> el.addEventListener('input', render));
+    wrap.querySelectorAll('.cx_tipo').forEach(c=> c.addEventListener('change', render));
+    wrap.querySelector('#cx_hoje').addEventListener('click', ()=>{ elDe.value = hoje(); elAte.value = hoje(); render(); });
+    wrap.querySelector('#cx_atualizar').addEventListener('click', async ()=>{
+      await carregarTudo(true);
+      showToast('Dados do Caixa atualizados.');
+      render();
+    });
+    render();
+  }
+  function renderRelatorioCaixa(de, ate, lojaId, tipos){
+    const dentroPeriodo = (s)=> !!s && s>=de && s<=ate;
+    const lojaNomeFiltro = lojaId ? nomeLojaCaixa(lojaId) : '';
+
+    let contasPagasBase = caixaGastos.filter(g=> g.pago && dentroPeriodo(g.dataPagamento));
+    let vendasRecBase = vendas.filter(v=> dentroPeriodo(v.data) && valorRecebidoDe(v) > 0);
+    let osRecBase = caixaOrdens.filter(o=> dentroPeriodo(o.data) && valorRecebidoDe(o) > 0);
+    let aReceberVendasBase = vendas.filter(v=> v.status==='ativa' && dentroPeriodo(v.data) && valorAReceberDe(v) > 0);
+    let aReceberOSBase = caixaOrdens.filter(o=> o.status!=='cancelado' && o.status!=='entregue' && o.status!=='rascunho' && dentroPeriodo(o.data) && valorAReceberDe(o) > 0);
+    let canceladasVendasBase = vendas.filter(v=> v.status==='cancelada' && dentroPeriodo(dataDeTimestamp(v.canceladoEm)));
+    let canceladasOSBase = caixaOrdens.filter(o=> o.status==='cancelado' && dentroPeriodo(dataDeTimestamp(o.canceladoEm)));
+    let trocasBase = [];
+    vendas.forEach(v=> (v.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:v}); }));
+
+    if(lojaId){
+      contasPagasBase = contasPagasBase.filter(g=> g.loja === lojaNomeFiltro);
+      vendasRecBase = vendasRecBase.filter(v=> v.lojaId === lojaId);
+      osRecBase = osRecBase.filter(o=> o.loja === lojaId);
+      aReceberVendasBase = aReceberVendasBase.filter(v=> v.lojaId === lojaId);
+      aReceberOSBase = aReceberOSBase.filter(o=> o.loja === lojaId);
+      canceladasVendasBase = canceladasVendasBase.filter(v=> v.lojaId === lojaId);
+      canceladasOSBase = canceladasOSBase.filter(o=> o.loja === lojaId);
+      trocasBase = trocasBase.filter(t=> t.venda.lojaId === lojaId);
+    }
+
+    const grupos = {};
+    function grupo(nome){ if(!grupos[nome]) grupos[nome] = { nome, vendasRec:[], osRec:[], gastos:[], canceladasV:[], canceladasO:[], trocas:[] }; return grupos[nome]; }
+    vendasRecBase.forEach(v=> grupo(v.loja||'—').vendasRec.push(v));
+    osRecBase.forEach(o=> grupo(nomeLojaCaixa(o.loja)||'—').osRec.push(o));
+    contasPagasBase.forEach(g=> grupo(g.loja || '__geral__').gastos.push(g));
+    canceladasVendasBase.forEach(v=> grupo(v.loja||'—').canceladasV.push(v));
+    canceladasOSBase.forEach(o=> grupo(nomeLojaCaixa(o.loja)||'—').canceladasO.push(o));
+    trocasBase.forEach(t=> grupo(t.venda.loja||'—').trocas.push(t));
+
+    function metricasGrupo(g){
+      const contasPagas = g.gastos.reduce((a,x)=>a+(Number(x.valor)||0),0);
+      const recVendas = g.vendasRec.reduce((a,x)=>a+valorRecebidoDe(x),0);
+      const recOS = g.osRec.reduce((a,x)=>a+valorRecebidoDe(x),0);
+      const saidaCanceladas = g.canceladasV.reduce((a,x)=>a+(Number(x.caixaSaidaCancelamento)||0),0) + g.canceladasO.reduce((a,x)=>a+(Number(x.caixaSaidaCancelamento)||0),0);
+      const trocasDif = g.trocas.reduce((a,t)=>a+(Number(t.diferenca)||0),0);
+      const saldo = recVendas + recOS + trocasDif - contasPagas - saidaCanceladas;
+      return { contasPagas, recVendas, recOS, saidaCanceladas, trocasDif, saldo };
+    }
+
+    const nomesLoja = Object.keys(grupos).filter(n=>n!=='__geral__').sort((a,b)=>a.localeCompare(b,'pt-BR'));
+    const temGeral = !!grupos['__geral__'];
+
+    function cardHtml(titulo, g, destaque){
+      const m = metricasGrupo(g);
+      return `
+        <div class="card" style="padding:16px 18px; margin-bottom:12px; ${destaque?'border:2px solid var(--ink); background:var(--surface);':''}">
+          <div style="font-weight:800; font-size:15px; margin-bottom:10px;">${escapeHtml(titulo)}</div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; font-size:13.5px;">
+            <div><div class="muted">Vendas recebidas</div><div style="color:var(--ok); font-weight:700;">${fmtMoeda(m.recVendas)}</div></div>
+            <div><div class="muted">O.S. recebidas</div><div style="color:var(--ok); font-weight:700;">${fmtMoeda(m.recOS)}</div></div>
+            <div><div class="muted">Contas pagas</div><div style="color:var(--danger); font-weight:700;">- ${fmtMoeda(m.contasPagas)}</div></div>
+            <div><div class="muted">Saída (cancelamentos)</div><div style="color:var(--danger); font-weight:700;">- ${fmtMoeda(m.saidaCanceladas)}</div></div>
+            <div><div class="muted">Trocas (diferença líquida)</div><div style="color:${m.trocasDif>=0?'var(--ok)':'var(--danger)'}; font-weight:700;">${m.trocasDif>=0?'':'- '}${fmtMoeda(Math.abs(m.trocasDif))}</div></div>
+            <div><div class="muted">Saldo do período</div><div style="font-weight:800; font-size:15.5px;">${fmtMoeda(m.saldo)}</div></div>
+          </div>
+        </div>
+      `;
+    }
+
+    const resumoEl = document.getElementById('caixaResumo');
+    if(resumoEl){
+      let html = '';
+      if(nomesLoja.length===0 && !temGeral){
+        html = `<div class="empty">Nenhuma movimentação encontrada nesse período/filtro.</div>`;
+      } else {
+        nomesLoja.forEach(nome=>{ html += cardHtml(nome, grupos[nome]); });
+        if(temGeral) html += cardHtml('Despesas gerais (sem loja específica)', grupos['__geral__']);
+        const consolidado = { vendasRec:[], osRec:[], gastos:[], canceladasV:[], canceladasO:[], trocas:[] };
+        Object.values(grupos).forEach(g=>{
+          ['vendasRec','osRec','gastos','canceladasV','canceladasO','trocas'].forEach(k=> consolidado[k].push(...g[k]));
+        });
+        html += cardHtml(nomesLoja.length>1 || (nomesLoja.length===1 && temGeral) ? 'Consolidado — todas as lojas' : 'Consolidado', consolidado, true);
+      }
+      resumoEl.innerHTML = html;
+    }
+
+    const det = document.getElementById('caixaDetalhes');
+    if(!det) return;
+    let html = '';
+    if(tipos.includes('contasPagas')){
+      html += detalheSecao('💸 Contas pagas', contasPagasBase, g=>`
+        <tr><td>${fmtDate(g.dataPagamento)}</td><td>${escapeHtml(g.loja||'Geral')}</td><td>${escapeHtml(g.nome)} <span class="muted">(${escapeHtml(g.categoria||'—')})</span></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(g.valor)}</td></tr>
+      `, ['Data','Loja','Descrição','Valor']);
+    }
+    if(tipos.includes('vendasRecebidas')){
+      html += detalheSecao('🛒 Vendas recebidas', vendasRecBase, v=>`
+        <tr${v.status==='cancelada'?' style="opacity:.6;"':''}><td>${fmtDate(v.data)}</td><td>${escapeHtml(v.loja)}</td><td>${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' <span class="muted">(venda cancelada depois)</span>':''}</td><td style="color:var(--ok); font-weight:700;">${fmtMoeda(valorRecebidoDe(v))}</td></tr>
+      `, ['Data','Loja','Cliente','Recebido']);
+    }
+    if(tipos.includes('osRecebidas')){
+      html += detalheSecao('🧾 O.S. recebidas', osRecBase, o=>`
+        <tr${o.status==='cancelado'?' style="opacity:.6;"':''}><td>${fmtDate(o.data)}</td><td>${escapeHtml(nomeLojaCaixa(o.loja))}</td><td>${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' <span class="muted">(O.S. cancelada depois)</span>':''}</td><td style="color:var(--ok); font-weight:700;">${fmtMoeda(valorRecebidoDe(o))}</td></tr>
+      `, ['Data','Loja','Cliente','Recebido']);
+    }
+    if(tipos.includes('aReceber')){
+      const aReceberTodos = [
+        ...aReceberVendasBase.map(v=>({origem:'Venda', data:v.data, loja:v.loja, cliente:v.cliente, valor:valorAReceberDe(v)})),
+        ...aReceberOSBase.map(o=>({origem:'O.S.', data:o.data, loja:nomeLojaCaixa(o.loja), cliente:o.cliente, valor:valorAReceberDe(o)})),
+      ];
+      html += detalheSecao('⏳ A receber em aberto (venda fechada / O.S. aberta)', aReceberTodos, x=>`
+        <tr><td>${escapeHtml(x.origem)}</td><td>${fmtDate(x.data)}</td><td>${escapeHtml(x.loja)}</td><td>${escapeHtml(x.cliente||'—')}</td><td style="color:var(--danger); font-weight:700;">${fmtMoeda(x.valor)}</td></tr>
+      `, ['Origem','Data','Loja','Cliente','A receber']);
+    }
+    if(tipos.includes('canceladas')){
+      const canceladasTodas = [
+        ...canceladasVendasBase.map(v=>({origem:'Venda', data:dataDeTimestamp(v.canceladoEm), loja:v.loja, cliente:v.cliente, motivo:v.motivoCancelamento, por:v.canceladoPor, valor:v.caixaSaidaCancelamento})),
+        ...canceladasOSBase.map(o=>({origem:'O.S.', data:dataDeTimestamp(o.canceladoEm), loja:nomeLojaCaixa(o.loja), cliente:o.cliente, motivo:o.motivoCancelamento, por:o.canceladoPor, valor:o.caixaSaidaCancelamento})),
+      ];
+      html += detalheSecao('🚫 Canceladas', canceladasTodas, x=>`
+        <tr><td>${escapeHtml(x.origem)}</td><td>${fmtDate(x.data)}</td><td>${escapeHtml(x.loja)}</td><td>${escapeHtml(x.cliente||'—')}<div class="muted" style="font-size:11.5px;">${escapeHtml(x.motivo||'')} — por ${escapeHtml(x.por||'—')}</div></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(x.valor)}</td></tr>
+      `, ['Origem','Data','Loja','Cliente / motivo','Saiu do caixa']);
+    }
+    if(tipos.includes('trocas')){
+      html += detalheSecao('🔁 Trocas', trocasBase, t=>`
+        <tr><td>${fmtDate(t.data)}</td><td>${escapeHtml(t.venda.loja)}</td><td>${escapeHtml(t.venda.cliente||'—')}</td><td>${escapeHtml(t.itemAntigoDescricao)} → ${escapeHtml(t.itemNovo.quantidade)}x ${escapeHtml(t.itemNovo.produto)}</td><td style="color:${t.diferenca>=0?'var(--ok)':'var(--danger)'}; font-weight:700;">${t.diferenca>=0?'':'- '}${fmtMoeda(Math.abs(t.diferenca))}</td></tr>
+      `, ['Data','Loja','Cliente','Item antigo → novo','Diferença']);
+    }
+    det.innerHTML = html || `<div class="empty">Nada pra mostrar com os filtros marcados.</div>`;
+  }
+  function detalheSecao(titulo, lista, linhaHtml, colunas){
+    return `
+      <details class="card" style="padding:14px 18px; margin-bottom:12px;" ${lista.length>0 && lista.length<=15 ? 'open' : ''}>
+        <summary style="cursor:pointer; font-weight:800; font-size:14.5px;">${escapeHtml(titulo)} <span class="muted" style="font-weight:600;">(${lista.length})</span></summary>
+        ${lista.length===0 ? `<div class="empty" style="margin-top:10px;">Nenhum lançamento.</div>` : `
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table>
+            <thead><tr>${colunas.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+            <tbody>${lista.map(linhaHtml).join('')}</tbody>
+          </table>
+        </div>`}
+      </details>
+    `;
+  }
+
+  /* ================= LOGIN / MODO EMBUTIDO ================= */
+  const EMBEDDED = window.self !== window.top;
+  if(EMBEDDED){
+    document.documentElement.classList.add('embedded');
+    window.addEventListener('message', async (ev)=>{
+      if(!ev.data || !ev.data.type) return;
+      if(ev.data.type === 'auth'){
+        currentUser = ev.data.user;
+        __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
+        await carregarTudo();
+        enterCaixa();
+        parent.postMessage({ type:'tabs', modulo:'caixa', tabs: [], active: null }, '*');
+      }
+    });
+    parent.postMessage({ type:'ready', modulo:'caixa' }, '*');
+  }
+
+  document.getElementById('btnLogin').addEventListener('click', doLogin);
+  document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+
+  async function doLogin(){
+    const pass = document.getElementById('loginPass').value.trim();
+    const err = document.getElementById('loginError');
+    const btn = document.getElementById('btnLogin');
+    if(!pass) return;
+    err.classList.remove('show');
+    btn.disabled = true;
+    try{
+      const r = await gatewayLogin(pass);
+      if(!r || !r.ok){ err.classList.add('show'); return; }
+      __gatewaySenha = pass;
+      currentUser = { nome: r.user.nome, nivel: r.user.nivel };
+      await carregarTudo();
+      enterCaixa();
+    }catch(e){
+      console.error('erro no login do caixa', e);
+      err.textContent = 'Não foi possível verificar a senha agora. Tente novamente.';
+      err.classList.add('show');
+    }finally{
+      btn.disabled = false;
+    }
+  }
+  document.getElementById('btnLogout').addEventListener('click', ()=>{
+    currentUser = null;
+    __gatewaySenha = null;
+    document.getElementById('loginPass').value = '';
+    document.getElementById('view-caixa').style.display = 'none';
+    document.getElementById('view-login').style.display = 'flex';
+  });
+})();
+</script>
+</body>
+</html>
