@@ -931,6 +931,7 @@ function tabsForLevel(){
   const t = [
     { id:'nova', label:'Nova venda', icon:'🧾' },
     { id:'vendas', label:'Vendas', icon:'📋' },
+    { id:'caixa', label:'Caixa', icon:'💰' },
   ];
   if(window.__permissoesAbasOverride){
     return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
@@ -968,6 +969,7 @@ function renderView(){
   main.innerHTML = '';
   if(currentTab==='nova') renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
+  else if(currentTab==='caixa') renderCaixa(main);
 }
 
 /**
@@ -1602,6 +1604,247 @@ function renderVendas(main){
     fLoja.value=''; fData.value=''; fBusca.value=''; fSemPagamento.checked=false; renderTable();
   });
   renderTable();
+}
+
+/* ============================================================
+   ABA CAIXA
+   Lê, além de vendas_pdv (já carregado), duas fontes de outros módulos, só
+   leitura: `gastos` (Gastos → contas pagas) e `painel_ordens_kv` (O.S.).
+   Carregamento é sob demanda (só quando a aba é aberta pela 1ª vez) pra não
+   pesar o carregamento inicial do app.
+   ============================================================ */
+let caixaGastos = null;
+let caixaOrdens = null;
+async function carregarDadosCaixa(forcar){
+  if(caixaGastos===null || forcar){
+    try{
+      const { data, error } = await supabaseClient.from('gastos').select('id,payload').order('created_at',{ascending:true});
+      if(error) throw error;
+      caixaGastos = (data||[]).map(r=>r.payload);
+    }catch(e){ console.error('erro ao carregar gastos p/ caixa', e); caixaGastos = []; }
+  }
+  if(caixaOrdens===null || forcar){
+    try{
+      const { data, error } = await supabaseClient.from('painel_ordens_kv').select('value').eq('key','orders').maybeSingle();
+      if(error) throw error;
+      caixaOrdens = (data && data.value) || [];
+    }catch(e){ console.error('erro ao carregar O.S. p/ caixa', e); caixaOrdens = []; }
+  }
+}
+/** O.S. guarda a LOJA (id); Venda e Gasto guardam o NOME. Resolve sempre pro nome, pra
+ * poder agrupar os três juntos. */
+function nomeLojaCaixa(valor){
+  if(!valor) return '';
+  const porId = (config.lojas||[]).find(l=>l.id===valor);
+  return porId ? porId.nome : valor;
+}
+function dataDeTimestamp(ts){
+  if(!ts) return '';
+  const d = new Date(ts);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function renderCaixa(main){
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">Caixa</h1>
+        <p class="page-sub">Movimentação do dia: vendas e O.S. recebidas, contas pagas, a receber, canceladas e trocas.</p>
+      </div>
+    </div>
+    <div id="caixaLoading" class="muted">Carregando dados do caixa...</div>
+    <div id="caixaConteudo" style="display:none;"></div>
+  `;
+  carregarDadosCaixa().then(()=>{
+    const loading = document.getElementById('caixaLoading');
+    const conteudo = document.getElementById('caixaConteudo');
+    if(!loading || !conteudo) return; // usuário já trocou de aba antes de terminar de carregar
+    loading.style.display = 'none';
+    conteudo.style.display = '';
+    montarCaixaConteudo(conteudo);
+  });
+}
+function montarCaixaConteudo(wrap){
+  const hj = hoje();
+  wrap.innerHTML = `
+    <div class="filters">
+      <div class="field" style="min-width:150px; margin:0;"><label class="muted" style="font-size:11px; text-transform:uppercase; font-weight:700;">De</label><input type="date" id="cx_de" value="${hj}"></div>
+      <div class="field" style="min-width:150px; margin:0;"><label class="muted" style="font-size:11px; text-transform:uppercase; font-weight:700;">Até</label><input type="date" id="cx_ate" value="${hj}"></div>
+      <select id="cx_loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
+      <button class="btn btn-ghost btn-sm" id="cx_hoje">Hoje</button>
+      <button class="btn btn-ghost btn-sm" id="cx_atualizar">🔄 Atualizar dados</button>
+    </div>
+    <div style="margin:2px 0 18px;">
+      <div class="muted" style="font-size:11px; text-transform:uppercase; font-weight:700; margin-bottom:4px;">Mostrar</div>
+      <label style="display:flex; gap:16px; flex-wrap:wrap; font-size:13px; font-weight:600;">
+        <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="contasPagas" checked> Contas pagas</span>
+        <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="vendasRecebidas" checked> Vendas recebidas</span>
+        <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="osRecebidas" checked> O.S. recebidas</span>
+        <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="aReceber" checked> A receber em aberto</span>
+        <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="canceladas" checked> Canceladas</span>
+        <span style="display:flex; align-items:center; gap:5px;"><input type="checkbox" class="cx_tipo" value="trocas" checked> Trocas</span>
+      </label>
+    </div>
+    <div id="caixaResumo"></div>
+    <div id="caixaDetalhes"></div>
+  `;
+  const elDe = wrap.querySelector('#cx_de');
+  const elAte = wrap.querySelector('#cx_ate');
+  const elLoja = wrap.querySelector('#cx_loja');
+  const tipos = ()=> [...wrap.querySelectorAll('.cx_tipo')].filter(c=>c.checked).map(c=>c.value);
+
+  function render(){ renderRelatorioCaixa(elDe.value, elAte.value, elLoja.value, tipos()); }
+  [elDe, elAte, elLoja].forEach(el=> el.addEventListener('input', render));
+  wrap.querySelectorAll('.cx_tipo').forEach(c=> c.addEventListener('change', render));
+  wrap.querySelector('#cx_hoje').addEventListener('click', ()=>{ elDe.value = hoje(); elAte.value = hoje(); render(); });
+  wrap.querySelector('#cx_atualizar').addEventListener('click', async ()=>{
+    await carregarDadosCaixa(true);
+    showToast('Dados do Caixa atualizados.');
+    render();
+  });
+  render();
+}
+function renderRelatorioCaixa(de, ate, lojaId, tipos){
+  const dentroPeriodo = (s)=> !!s && s>=de && s<=ate;
+  const lojaNomeFiltro = lojaId ? nomeLojaCaixa(lojaId) : '';
+
+  // ===== Listas-base (período aplicado; loja ainda não) =====
+  let contasPagasBase = caixaGastos.filter(g=> g.pago && dentroPeriodo(g.dataPagamento));
+  let vendasRecBase = vendas.filter(v=> dentroPeriodo(v.data) && valorRecebidoDe(v) > 0);
+  let osRecBase = caixaOrdens.filter(o=> dentroPeriodo(o.data) && valorRecebidoDe(o) > 0);
+  let aReceberVendasBase = vendas.filter(v=> v.status==='ativa' && dentroPeriodo(v.data) && valorAReceberDe(v) > 0);
+  let aReceberOSBase = caixaOrdens.filter(o=> o.status!=='cancelado' && o.status!=='entregue' && o.status!=='rascunho' && dentroPeriodo(o.data) && valorAReceberDe(o) > 0);
+  let canceladasVendasBase = vendas.filter(v=> v.status==='cancelada' && dentroPeriodo(dataDeTimestamp(v.canceladoEm)));
+  let canceladasOSBase = caixaOrdens.filter(o=> o.status==='cancelado' && dentroPeriodo(dataDeTimestamp(o.canceladoEm)));
+  let trocasBase = [];
+  vendas.forEach(v=> (v.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:v}); }));
+
+  // ===== Filtro de loja =====
+  if(lojaId){
+    contasPagasBase = contasPagasBase.filter(g=> g.loja === lojaNomeFiltro);
+    vendasRecBase = vendasRecBase.filter(v=> v.lojaId === lojaId);
+    osRecBase = osRecBase.filter(o=> o.loja === lojaId);
+    aReceberVendasBase = aReceberVendasBase.filter(v=> v.lojaId === lojaId);
+    aReceberOSBase = aReceberOSBase.filter(o=> o.loja === lojaId);
+    canceladasVendasBase = canceladasVendasBase.filter(v=> v.lojaId === lojaId);
+    canceladasOSBase = canceladasOSBase.filter(o=> o.loja === lojaId);
+    trocasBase = trocasBase.filter(t=> t.venda.lojaId === lojaId);
+  }
+
+  // ===== Agrupamento por loja =====
+  const grupos = {};
+  function grupo(nome){ if(!grupos[nome]) grupos[nome] = { nome, vendasRec:[], osRec:[], gastos:[], canceladasV:[], canceladasO:[], trocas:[] }; return grupos[nome]; }
+  vendasRecBase.forEach(v=> grupo(v.loja||'—').vendasRec.push(v));
+  osRecBase.forEach(o=> grupo(nomeLojaCaixa(o.loja)||'—').osRec.push(o));
+  contasPagasBase.forEach(g=> grupo(g.loja || '__geral__').gastos.push(g));
+  canceladasVendasBase.forEach(v=> grupo(v.loja||'—').canceladasV.push(v));
+  canceladasOSBase.forEach(o=> grupo(nomeLojaCaixa(o.loja)||'—').canceladasO.push(o));
+  trocasBase.forEach(t=> grupo(t.venda.loja||'—').trocas.push(t));
+
+  function metricasGrupo(g){
+    const contasPagas = g.gastos.reduce((a,x)=>a+(Number(x.valor)||0),0);
+    const recVendas = g.vendasRec.reduce((a,x)=>a+valorRecebidoDe(x),0);
+    const recOS = g.osRec.reduce((a,x)=>a+valorRecebidoDe(x),0);
+    const saidaCanceladas = g.canceladasV.reduce((a,x)=>a+(Number(x.caixaSaidaCancelamento)||0),0) + g.canceladasO.reduce((a,x)=>a+(Number(x.caixaSaidaCancelamento)||0),0);
+    const trocasDif = g.trocas.reduce((a,t)=>a+(Number(t.diferenca)||0),0);
+    const saldo = recVendas + recOS + trocasDif - contasPagas - saidaCanceladas;
+    return { contasPagas, recVendas, recOS, saidaCanceladas, trocasDif, saldo };
+  }
+
+  const nomesLoja = Object.keys(grupos).filter(n=>n!=='__geral__').sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  const temGeral = !!grupos['__geral__'];
+
+  function cardHtml(titulo, g, destaque){
+    const m = metricasGrupo(g);
+    return `
+      <div class="card" style="padding:16px 18px; margin-bottom:12px; ${destaque?'border:2px solid var(--ink); background:var(--surface);':''}">
+        <div style="font-weight:800; font-size:15px; margin-bottom:10px;">${escapeHtml(titulo)}</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; font-size:13.5px;">
+          <div><div class="muted">Vendas recebidas</div><div style="color:var(--ok); font-weight:700;">${fmtMoeda(m.recVendas)}</div></div>
+          <div><div class="muted">O.S. recebidas</div><div style="color:var(--ok); font-weight:700;">${fmtMoeda(m.recOS)}</div></div>
+          <div><div class="muted">Contas pagas</div><div style="color:var(--danger); font-weight:700;">- ${fmtMoeda(m.contasPagas)}</div></div>
+          <div><div class="muted">Saída (cancelamentos)</div><div style="color:var(--danger); font-weight:700;">- ${fmtMoeda(m.saidaCanceladas)}</div></div>
+          <div><div class="muted">Trocas (diferença líquida)</div><div style="color:${m.trocasDif>=0?'var(--ok)':'var(--danger)'}; font-weight:700;">${m.trocasDif>=0?'':'- '}${fmtMoeda(Math.abs(m.trocasDif))}</div></div>
+          <div><div class="muted">Saldo do período</div><div style="font-weight:800; font-size:15.5px;">${fmtMoeda(m.saldo)}</div></div>
+        </div>
+      </div>
+    `;
+  }
+
+  const resumoEl = document.getElementById('caixaResumo');
+  if(resumoEl){
+    let html = '';
+    if(nomesLoja.length===0 && !temGeral){
+      html = `<div class="empty">Nenhuma movimentação encontrada nesse período/filtro.</div>`;
+    } else {
+      nomesLoja.forEach(nome=>{ html += cardHtml(nome, grupos[nome]); });
+      if(temGeral) html += cardHtml('Despesas gerais (sem loja específica)', grupos['__geral__']);
+      // Consolidado = soma de todos os grupos mostrados
+      const consolidado = { vendasRec:[], osRec:[], gastos:[], canceladasV:[], canceladasO:[], trocas:[] };
+      Object.values(grupos).forEach(g=>{
+        ['vendasRec','osRec','gastos','canceladasV','canceladasO','trocas'].forEach(k=> consolidado[k].push(...g[k]));
+      });
+      html += cardHtml(nomesLoja.length>1 || (nomesLoja.length===1 && temGeral) ? 'Consolidado — todas as lojas' : 'Consolidado', consolidado, true);
+    }
+    resumoEl.innerHTML = html;
+  }
+
+  // ===== Detalhes (listas completas, respeitando os checkboxes "Mostrar") =====
+  const det = document.getElementById('caixaDetalhes');
+  if(!det) return;
+  let html = '';
+  if(tipos.includes('contasPagas')){
+    html += detalheSecao('💸 Contas pagas', contasPagasBase, g=>`
+      <tr><td>${fmtDate(g.dataPagamento)}</td><td>${escapeHtml(g.loja||'Geral')}</td><td>${escapeHtml(g.nome)} <span class="muted">(${escapeHtml(g.categoria||'—')})</span></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(g.valor)}</td></tr>
+    `, ['Data','Loja','Descrição','Valor']);
+  }
+  if(tipos.includes('vendasRecebidas')){
+    html += detalheSecao('🛒 Vendas recebidas', vendasRecBase, v=>`
+      <tr${v.status==='cancelada'?' style="opacity:.6;"':''}><td>${fmtDate(v.data)}</td><td>${escapeHtml(v.loja)}</td><td>${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' <span class="muted">(venda cancelada depois)</span>':''}</td><td style="color:var(--ok); font-weight:700;">${fmtMoeda(valorRecebidoDe(v))}</td></tr>
+    `, ['Data','Loja','Cliente','Recebido']);
+  }
+  if(tipos.includes('osRecebidas')){
+    html += detalheSecao('🧾 O.S. recebidas', osRecBase, o=>`
+      <tr${o.status==='cancelado'?' style="opacity:.6;"':''}><td>${fmtDate(o.data)}</td><td>${escapeHtml(nomeLojaCaixa(o.loja))}</td><td>${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' <span class="muted">(O.S. cancelada depois)</span>':''}</td><td style="color:var(--ok); font-weight:700;">${fmtMoeda(valorRecebidoDe(o))}</td></tr>
+    `, ['Data','Loja','Cliente','Recebido']);
+  }
+  if(tipos.includes('aReceber')){
+    const aReceberTodos = [
+      ...aReceberVendasBase.map(v=>({origem:'Venda', data:v.data, loja:v.loja, cliente:v.cliente, valor:valorAReceberDe(v)})),
+      ...aReceberOSBase.map(o=>({origem:'O.S.', data:o.data, loja:nomeLojaCaixa(o.loja), cliente:o.cliente, valor:valorAReceberDe(o)})),
+    ];
+    html += detalheSecao('⏳ A receber em aberto (venda fechada / O.S. aberta)', aReceberTodos, x=>`
+      <tr><td>${escapeHtml(x.origem)}</td><td>${fmtDate(x.data)}</td><td>${escapeHtml(x.loja)}</td><td>${escapeHtml(x.cliente||'—')}</td><td style="color:var(--danger); font-weight:700;">${fmtMoeda(x.valor)}</td></tr>
+    `, ['Origem','Data','Loja','Cliente','A receber']);
+  }
+  if(tipos.includes('canceladas')){
+    const canceladasTodas = [
+      ...canceladasVendasBase.map(v=>({origem:'Venda', data:dataDeTimestamp(v.canceladoEm), loja:v.loja, cliente:v.cliente, motivo:v.motivoCancelamento, por:v.canceladoPor, valor:v.caixaSaidaCancelamento})),
+      ...canceladasOSBase.map(o=>({origem:'O.S.', data:dataDeTimestamp(o.canceladoEm), loja:nomeLojaCaixa(o.loja), cliente:o.cliente, motivo:o.motivoCancelamento, por:o.canceladoPor, valor:o.caixaSaidaCancelamento})),
+    ];
+    html += detalheSecao('🚫 Canceladas', canceladasTodas, x=>`
+      <tr><td>${escapeHtml(x.origem)}</td><td>${fmtDate(x.data)}</td><td>${escapeHtml(x.loja)}</td><td>${escapeHtml(x.cliente||'—')}<div class="muted" style="font-size:11.5px;">${escapeHtml(x.motivo||'')} — por ${escapeHtml(x.por||'—')}</div></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(x.valor)}</td></tr>
+    `, ['Origem','Data','Loja','Cliente / motivo','Saiu do caixa']);
+  }
+  if(tipos.includes('trocas')){
+    html += detalheSecao('🔁 Trocas', trocasBase, t=>`
+      <tr><td>${fmtDate(t.data)}</td><td>${escapeHtml(t.venda.loja)}</td><td>${escapeHtml(t.venda.cliente||'—')}</td><td>${escapeHtml(t.itemAntigoDescricao)} → ${escapeHtml(t.itemNovo.quantidade)}x ${escapeHtml(t.itemNovo.produto)}</td><td style="color:${t.diferenca>=0?'var(--ok)':'var(--danger)'}; font-weight:700;">${t.diferenca>=0?'':'- '}${fmtMoeda(Math.abs(t.diferenca))}</td></tr>
+    `, ['Data','Loja','Cliente','Item antigo → novo','Diferença']);
+  }
+  det.innerHTML = html || `<div class="empty">Nada pra mostrar com os filtros marcados.</div>`;
+}
+function detalheSecao(titulo, lista, linhaHtml, colunas){
+  return `
+    <details class="card" style="padding:14px 18px; margin-bottom:12px;" ${lista.length>0 && lista.length<=15 ? 'open' : ''}>
+      <summary style="cursor:pointer; font-weight:800; font-size:14.5px;">${escapeHtml(titulo)} <span class="muted" style="font-weight:600;">(${lista.length})</span></summary>
+      ${lista.length===0 ? `<div class="empty" style="margin-top:10px;">Nenhum lançamento.</div>` : `
+      <div style="overflow-x:auto; margin-top:10px;">
+        <table>
+          <thead><tr>${colunas.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+          <tbody>${lista.map(linhaHtml).join('')}</tbody>
+        </table>
+      </div>`}
+    </details>
+  `;
 }
 
 function abrirDetalheVenda(v){
