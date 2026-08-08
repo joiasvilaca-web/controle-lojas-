@@ -1004,6 +1004,82 @@ async function saveConfig(){
   await configSetUnificada(unificado);
 }
 async function saveOrders(){ await storageSet('orders', orders, true); }
+
+/* ============================================================
+   CANCELAMENTO DE O.S.
+   - O.S. não consome produtos_estoque (é baseada em serviço), então cancelar
+     não mexe em estoque — só reverte crédito/fiado do cliente e registra o
+     valor que sai do caixa (se já tinha sido recebido).
+   ============================================================ */
+function podeCancelarOrdem(){
+  return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+}
+async function reverterFiadoECreditoOrdem(order){
+  const telD = onlyDigits(order.telefone||'');
+  const nomeL = (order.cliente||'').trim().toLowerCase();
+  const cliCad = clientes.find(c=> (telD && onlyDigits(c.telefone||'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+  if(!cliCad) return;
+  let mudou = false;
+  if(order.creditoUsado > 0){
+    cliCad.credito = (Number(cliCad.credito)||0) + order.creditoUsado;
+    if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
+    cliCad.creditoMovimentos.push({ data: hojeStr(), valor: order.creditoUsado, tipo:'estorno', obs:`Cancelamento O.S. ${order.via||''}` });
+    mudou = true;
+  }
+  if(order.fiadoDebitoId && Array.isArray(cliCad.fiadoDebitos)){
+    const idx = cliCad.fiadoDebitos.findIndex(d=>d.id===order.fiadoDebitoId);
+    if(idx > -1){
+      const debito = cliCad.fiadoDebitos[idx];
+      const jaPago = Number(debito.valorPago)||0;
+      if(jaPago > 0){
+        if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
+        cliCad.credito = (Number(cliCad.credito)||0) + jaPago;
+        cliCad.creditoMovimentos.push({ data: hojeStr(), valor: jaPago, tipo:'estorno', obs:`Cancelamento O.S. ${order.via||''} (parcela de fiado já paga)` });
+      }
+      cliCad.fiadoDebitos.splice(idx,1);
+      mudou = true;
+    }
+  }
+  if(mudou) await salvarUmCliente(cliCad);
+}
+function hojeStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/** Aplica o cancelamento em cima do objeto `order` em memória (não salva sozinho —
+ * quem chama decide quando persistir, pra poder combinar com outras alterações). */
+async function aplicarCancelamentoOrdem(order, motivo){
+  const recebido = valorRecebidoDe(order);
+  await reverterFiadoECreditoOrdem(order);
+  order.status = 'cancelado';
+  order.motivoCancelamento = motivo;
+  order.canceladoPor = currentUser.nome;
+  order.canceladoEm = Date.now();
+  order.caixaSaidaCancelamento = recebido;
+}
+/** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
+function abrirCancelarOrdem(order){
+  if(!order || order.status==='cancelado') return;
+  if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); return; }
+  const recebido = valorRecebidoDe(order);
+  openModal(`
+    <h3>Cancelar O.S.</h3>
+    <p class="muted">${escapeHtml(order.cliente||'cliente não identificado')} · Via ${escapeHtml(order.via||'—')} · <b>R$ ${(Number(order.valorTotal)||0).toFixed(2)}</b></p>
+    ${recebido>0 ? `<p style="color:var(--danger); font-weight:700;">Essa O.S. já recebeu R$ ${recebido.toFixed(2)} — esse valor vai sair do caixa como estorno.</p>` : ''}
+    <div class="field"><label>Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="co_motivo" style="min-height:70px;" placeholder="Ex: cliente desistiu, erro de lançamento..."></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="co_fechar">Voltar</button>
+      <button class="btn btn-accent" id="co_confirmar" style="background:var(--danger); border-color:var(--danger);">Confirmar cancelamento</button>
+    </div>
+  `);
+  document.getElementById('co_fechar').addEventListener('click', closeModal);
+  document.getElementById('co_confirmar').addEventListener('click', async ()=>{
+    const motivo = document.getElementById('co_motivo').value.trim();
+    if(!motivo){ showToast('Informe o motivo do cancelamento.'); return; }
+    await aplicarCancelamentoOrdem(order, motivo);
+    await saveOrders();
+    showToast('O.S. cancelada.');
+    closeModal();
+    renderView();
+  });
+}
 async function saveCodes(){ await storageSet('codes', codes, true); }
 /** Clientes agora vivem numa tabela compartilhada (clientes_cadastro) — usada também
  * por Vendas e Orçamentos, não só pelo O.S. Cada cliente é salvo/excluído individualmente
@@ -2747,6 +2823,13 @@ function renderNovaOrdem(main){
     }
 
     const st = config.serviceTypes.find(s=>s.id===sid);
+    // ===== Crédito do cliente / Fiado =====
+    // Calculados antes de montar a ordem pra já guardar dentro dela o id do débito de\n    // fiado (fiadoDebitoId) e o crédito usado (creditoUsado) — permite reverter com\n    // precisão em caso de cancelamento.
+    const pagsCreditoOS = (tempPagHolder.pagamentos||[]).filter(p=>p.formaId==='__credito');
+    const pagsFiadoOS = (tempPagHolder.pagamentos||[]).filter(p=>p.formaId==='__fiado');
+    const totalCredOS = pagsCreditoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const totalFiaOS = pagsFiadoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const novoFiadoDebitoIdOS = totalFiaOS>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
     const novaOrdem = {
       id: uid('ord'),
       ...cli,
@@ -2769,11 +2852,10 @@ function renderNovaOrdem(main){
       historicoLocal: [{ local:'loja', em: Date.now(), por: currentUser.nome }],
       observacoes: tempObsHolder.observacoes,
       fotos: tempFotoHolder.fotos,
+      creditoUsado: totalCredOS,
+      fiadoDebitoId: novoFiadoDebitoIdOS,
       criadoEm: Date.now()
     };
-    // ===== Crédito do cliente / Fiado =====
-    const pagsCreditoOS = (novaOrdem.pagamentos||[]).filter(p=>p.formaId==='__credito');
-    const pagsFiadoOS = (novaOrdem.pagamentos||[]).filter(p=>p.formaId==='__fiado');
     if(pagsCreditoOS.length>0 || pagsFiadoOS.length>0){
       const telD = onlyDigits(novaOrdem.telefone||'');
       const nomeL = (novaOrdem.cliente||'').trim().toLowerCase();
@@ -2782,20 +2864,18 @@ function renderNovaOrdem(main){
         showToast('Pra usar Crédito ou Fiado, o cliente precisa estar no cadastro (selecione pela busca).');
         return;
       }
-      const totalCred = pagsCreditoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
-      if(totalCred>0 && (Number(cliCad.credito)||0) < totalCred - 0.001){
+      if(totalCredOS>0 && (Number(cliCad.credito)||0) < totalCredOS - 0.001){
         showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(cliCad.credito)||0).toFixed(2)}.`);
         return;
       }
-      if(totalCred>0){
-        cliCad.credito = (Number(cliCad.credito)||0) - totalCred;
+      if(totalCredOS>0){
+        cliCad.credito = (Number(cliCad.credito)||0) - totalCredOS;
         if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-        cliCad.creditoMovimentos.push({ data: dt, valor: -totalCred, tipo:'uso', obs:`O.S. ${via}` });
+        cliCad.creditoMovimentos.push({ data: dt, valor: -totalCredOS, tipo:'uso', obs:`O.S. ${via}` });
       }
-      const totalFia = pagsFiadoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
-      if(totalFia>0){
+      if(totalFiaOS>0){
         if(!cliCad.fiadoDebitos) cliCad.fiadoDebitos = [];
-        cliCad.fiadoDebitos.push({ id:'fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36), origem:'O.S.', numero:via, data:dt, valor:totalFia, valorPago:0, loja:loja||'' });
+        cliCad.fiadoDebitos.push({ id:novoFiadoDebitoIdOS, origem:'O.S.', numero:via, data:dt, valor:totalFiaOS, valorPago:0, loja:loja||'' });
       }
       await salvarUmCliente(cliCad);
     }
@@ -3114,6 +3194,19 @@ function openEditModalCompleto(order, opts){
         return;
       }
     }
+    // Cancelamento pedido pelo dropdown de status desta tela (via alternativa ao
+    // botão "Cancelar O.S." da lista): exige motivo e reverte fiado/crédito igual.
+    if(status === 'cancelado' && order.status !== 'cancelado'){
+      if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); return; }
+      const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
+      if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); return; }
+      await aplicarCancelamentoOrdem(order, motivo);
+      await saveOrders();
+      closeModal();
+      showToast('O.S. cancelada.');
+      renderView();
+      return;
+    }
     let recebidoPor = order.recebidoPor || null;
     let recebidoEm = order.recebidoEm || null;
     if(status === 'entregue'){
@@ -3316,6 +3409,16 @@ function renderPainel(main){
             showToast('Ordem marcada como entregue para ' + nome + '.');
             renderTable();
           }, ()=>{ sel.value = previous; applyStatusClass(sel); });
+          return;
+        }
+        if(sel.value === 'cancelado' && previous !== 'cancelado'){
+          if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); sel.value = previous; applyStatusClass(sel); return; }
+          const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
+          if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); sel.value = previous; applyStatusClass(sel); return; }
+          await aplicarCancelamentoOrdem(ord, motivo);
+          await saveOrders();
+          showToast('O.S. cancelada.');
+          renderTable();
           return;
         }
         ord.status = sel.value;

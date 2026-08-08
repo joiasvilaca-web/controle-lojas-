@@ -1147,6 +1147,14 @@ function renderNovaVenda(main){
     }
 
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+    // ===== Crédito do cliente / Fiado =====
+    // Calculados antes de montar a venda pra já guardar dentro dela o id do débito de\n    // fiado gerado (fiadoDebitoId) e o valor de crédito usado (creditoUsado). Isso permite\n    // reverter com precisão no cancelamento, sem precisar "adivinhar" qual débito é qual.
+    const pagsCredito = (tempPagHolder.pagamentos||[]).filter(p=>p.formaId==='__credito');
+    const pagsFiado = (tempPagHolder.pagamentos||[]).filter(p=>p.formaId==='__fiado');
+    const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const totalFiado = pagsFiado.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const novoFiadoDebitoId = totalFiado>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
+
     const venda = {
       id: uid('venda'),
       loja: loja ? loja.nome : '',
@@ -1161,12 +1169,13 @@ function renderNovaVenda(main){
       lojaPagamentoId: tempPagHolder.lojaPagamentoId || '',
       lojaNotaId: tempPagHolder.lojaNotaId || '',
       status: 'ativa',
+      // Guardado pra permitir devolver ao estoque exatamente o que foi baixado nesta\n      // venda, mesmo que a composição do produto mude depois (cancelamento).
+      estoqueConsumido: reservas,
+      creditoUsado: totalCredito,
+      fiadoDebitoId: novoFiadoDebitoId,
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
     };
-    // ===== Crédito do cliente / Fiado =====
-    const pagsCredito = (venda.pagamentos||[]).filter(p=>p.formaId==='__credito');
-    const pagsFiado = (venda.pagamentos||[]).filter(p=>p.formaId==='__fiado');
     let clienteCadastro = null;
     if(pagsCredito.length>0 || pagsFiado.length>0){
       const telD = (venda.telefone||'').replace(/\D/g,'');
@@ -1176,7 +1185,6 @@ function renderNovaVenda(main){
         showToast('Pra usar Crédito ou Fiado, selecione um cliente já cadastrado (busque pela lupa).');
         return;
       }
-      const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
       if(totalCredito>0 && (Number(clienteCadastro.credito)||0) < totalCredito - 0.001){
         showToast(`Saldo de crédito insuficiente: cliente tem R$ ${(Number(clienteCadastro.credito)||0).toFixed(2)}.`);
         return;
@@ -1185,16 +1193,14 @@ function renderNovaVenda(main){
     const ok = await vendaSalvar(venda);
     if(ok){
       if(clienteCadastro){
-        const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
         if(totalCredito>0){
           clienteCadastro.credito = (Number(clienteCadastro.credito)||0) - totalCredito;
           if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
           clienteCadastro.creditoMovimentos.push({ data: venda.data, valor: -totalCredito, tipo:'uso', obs:`Venda ${String(venda.id).slice(-8)}` });
         }
-        const totalFiado = pagsFiado.reduce((a,p)=>a+(Number(p.valor)||0),0);
         if(totalFiado>0){
           if(!clienteCadastro.fiadoDebitos) clienteCadastro.fiadoDebitos = [];
-          clienteCadastro.fiadoDebitos.push({ id:'fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36), origem:'Venda', numero:String(venda.id).slice(-8), data:venda.data, valor:totalFiado, valorPago:0, loja:venda.loja||'' });
+          clienteCadastro.fiadoDebitos.push({ id:novoFiadoDebitoId, origem:'Venda', numero:String(venda.id).slice(-8), data:venda.data, valor:totalFiado, valorPago:0, loja:venda.loja||'' });
         }
         if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteCadastro);
       }
@@ -1206,6 +1212,93 @@ function renderNovaVenda(main){
     }
   });
 }
+
+/* ============================================================
+   CANCELAMENTO DE VENDA
+   - Devolve ao estoque exatamente o que foi consumido na venda (se soubermos, ou
+     seja, vendas lançadas a partir desta atualização; vendas antigas não têm esse
+     registro e o estoque precisa ser ajustado manualmente).
+   - Reverte crédito do cliente usado como pagamento e cancela débito de fiado
+     pendente (se já havia parcela paga do fiado, essa parcela volta como crédito).
+   - Não mexe no valor de itens/soma: só marca a venda como cancelada e registra
+     quanto dinheiro efetivamente recebido "sai do caixa" (usado depois na aba Caixa).
+   ============================================================ */
+function podeCancelarVenda(){
+  return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+}
+function abrirCancelarVenda(venda){
+  if(!venda || venda.status==='cancelada') return;
+  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem cancelar uma venda.'); return; }
+  const recebido = valorRecebidoDe(venda);
+  openModal(`
+    <h3>Cancelar venda</h3>
+    <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)} · <b>R$ ${(Number(venda.valorTotal)||0).toFixed(2)}</b></p>
+    ${recebido>0 ? `<p style="color:var(--danger); font-weight:700;">Essa venda já recebeu R$ ${recebido.toFixed(2)} — esse valor vai sair do caixa como estorno.</p>` : ''}
+    ${venda.estoqueConsumido && Object.keys(venda.estoqueConsumido).length>0 ? `<p class="muted">Os itens desta venda voltarão ao estoque automaticamente.</p>` : `<p style="color:var(--danger);">Esta venda não tem registro de consumo de estoque (venda antiga) — se ela baixou estoque, o ajuste precisa ser feito manualmente em Cadastro → Produtos.</p>`}
+    <div class="field"><label>Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="cv_motivo" style="min-height:70px;" placeholder="Ex: cliente desistiu, erro de lançamento..."></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cv_fechar">Voltar</button>
+      <button class="btn btn-accent" id="cv_confirmar" style="background:var(--danger); border-color:var(--danger);">Confirmar cancelamento</button>
+    </div>
+  `);
+  document.getElementById('cv_fechar').addEventListener('click', closeModal);
+  document.getElementById('cv_confirmar').addEventListener('click', async ()=>{
+    const motivo = document.getElementById('cv_motivo').value.trim();
+    if(!motivo){ showToast('Informe o motivo do cancelamento.'); return; }
+    await executarCancelamentoVenda(venda, motivo);
+    closeModal();
+  });
+}
+async function executarCancelamentoVenda(venda, motivo){
+  const recebido = valorRecebidoDe(venda);
+  // Devolve estoque
+  if(venda.estoqueConsumido){
+    for(const [produtoId, qtd] of Object.entries(venda.estoqueConsumido)){
+      if(!qtd) continue;
+      const produto = produtosEstoque.find(p=>p.id===produtoId);
+      if(!produto) continue;
+      produto.estoque = (Number(produto.estoque)||0) + qtd;
+      await produtoEstoqueAtualizar(produto);
+    }
+  }
+  // Reverte crédito/fiado do cliente
+  const telD = (venda.telefone||'').replace(/\D/g,'');
+  const nomeL = (venda.cliente||'').trim().toLowerCase();
+  const clienteCadastro = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+  if(clienteCadastro){
+    let mudou = false;
+    if(venda.creditoUsado > 0){
+      clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + venda.creditoUsado;
+      if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
+      clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: venda.creditoUsado, tipo:'estorno', obs:`Cancelamento venda ${String(venda.id).slice(-8)}` });
+      mudou = true;
+    }
+    if(venda.fiadoDebitoId && Array.isArray(clienteCadastro.fiadoDebitos)){
+      const idx = clienteCadastro.fiadoDebitos.findIndex(d=>d.id===venda.fiadoDebitoId);
+      if(idx > -1){
+        const debito = clienteCadastro.fiadoDebitos[idx];
+        const jaPago = Number(debito.valorPago)||0;
+        if(jaPago > 0){
+          if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
+          clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + jaPago;
+          clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: jaPago, tipo:'estorno', obs:`Cancelamento venda ${String(venda.id).slice(-8)} (parcela de fiado já paga)` });
+        }
+        clienteCadastro.fiadoDebitos.splice(idx,1);
+        mudou = true;
+      }
+    }
+    if(mudou) await salvarUmCliente(clienteCadastro);
+  }
+  venda.status = 'cancelada';
+  venda.motivoCancelamento = motivo;
+  venda.canceladoPor = currentUser.nome;
+  venda.canceladoEm = Date.now();
+  venda.caixaSaidaCancelamento = recebido;
+  await vendaSalvar(venda);
+  showToast('Venda cancelada.');
+  renderTabs(); renderView();
+}
+function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 
 /* ============================================================
    LISTA DE VENDAS
@@ -1252,9 +1345,9 @@ function renderVendas(main){
     if(fSemPagamento.checked) list = list.filter(v=>semPagamentoLancado(v));
     list.sort((a,b)=> b.criadoEm - a.criadoEm);
 
-    const totalRecebido = list.reduce((acc,v)=> acc + valorRecebidoDe(v), 0);
-    const totalAReceber = list.reduce((acc,v)=> acc + valorAReceberDe(v), 0);
-    const semPagCount = list.filter(v=>semPagamentoLancado(v)).length;
+    const totalRecebido = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorRecebidoDe(v), 0);
+    const totalAReceber = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorAReceberDe(v), 0);
+    const semPagCount = list.filter(v=>v.status!=='cancelada' && semPagamentoLancado(v)).length;
     document.getElementById('resumoValoresVendas').innerHTML =
       `Nesta lista: <b style="color:var(--ok);">Recebido R$ ${totalRecebido.toFixed(2)}</b> · <b style="color:var(--danger);">A receber R$ ${totalAReceber.toFixed(2)}</b>` +
       (semPagCount>0 ? ` · <b style="color:var(--danger);">${semPagCount} sem pagamento lançado</b>` : '');
@@ -1269,17 +1362,19 @@ function renderVendas(main){
             const semPag = semPagamentoLancado(v);
             const recebido = valorRecebidoDe(v);
             const aReceber = valorAReceberDe(v);
+            const cancelada = v.status==='cancelada';
             return `
-            <tr>
+            <tr${cancelada ? ' style="opacity:.6;"' : ''}>
               <td>${fmtDate(v.data)}</td>
               <td><span class="badge badge-loja">${escapeHtml(v.loja)}</span></td>
               <td>${escapeHtml(v.vendedora)}</td>
-              <td>${escapeHtml(v.cliente||'—')}${semPag ? `<div style="margin-top:4px; color:var(--danger); font-weight:700; font-size:11.5px;">⚠ Sem pagamento lançado</div>` : ''}</td>
+              <td>${escapeHtml(v.cliente||'—')}${semPag && !cancelada ? `<div style="margin-top:4px; color:var(--danger); font-weight:700; font-size:11.5px;">⚠ Sem pagamento lançado</div>` : ''}${cancelada ? `<div style="margin-top:4px; color:var(--danger); font-weight:700; font-size:11.5px;" title="${escapeHtml(v.motivoCancelamento||'')}">🚫 Cancelada por ${escapeHtml(v.canceladoPor||'—')}</div>` : ''}</td>
               <td>${itensResumo(v)}</td>
               <td style="color:var(--ok); white-space:nowrap;">R$ ${recebido.toFixed(2)}</td>
-              <td style="${aReceber>0?'color:var(--danger); font-weight:700;':''} white-space:nowrap;">R$ ${aReceber.toFixed(2)}</td>
+              <td style="${aReceber>0 && !cancelada?'color:var(--danger); font-weight:700;':''} white-space:nowrap;">R$ ${aReceber.toFixed(2)}</td>
               <td style="white-space:nowrap;">
                 <button class="icon-btn" data-view="${v.id}" title="Ver detalhes">👁</button>
+                ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-cancelar="${v.id}" title="Cancelar venda">🚫</button>` : ''}
                 ${currentUser.nivel==='diretoria' ? `<button class="icon-btn" data-del="${v.id}" title="Excluir">🗑️</button>` : ''}
               </td>
             </tr>`;
@@ -1288,6 +1383,7 @@ function renderVendas(main){
       </table>
     `;
     wrap.querySelectorAll('[data-view]').forEach(b=> b.addEventListener('click', ()=> abrirDetalheVenda(vendas.find(x=>x.id===b.dataset.view)) ));
+    wrap.querySelectorAll('[data-cancelar]').forEach(b=> b.addEventListener('click', ()=> abrirCancelarVenda(vendas.find(x=>x.id===b.dataset.cancelar)) ));
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         if(!confirm('Excluir esta venda? Essa ação não pode ser desfeita.')) return;
