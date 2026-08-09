@@ -872,6 +872,23 @@ function mountItens(container, holder, getLojaId){
 
   function totalItens(){ return holder.itens.reduce((acc,it)=> acc + (Number(it.quantidade)||0) * (Number(it.valorUnitario)||0), 0); }
 
+  /** Recalcula valorUnitario a partir do preço original + desconto/acréscimo (se algum
+   * ajuste estiver configurado). Se não houver ajuste, não mexe no que já está lá — a
+   * pessoa ainda pode digitar o valor unitário na mão, direto. */
+  function recalcularValorAjustado(it){
+    if(it.ajusteTipo==='desconto' || it.ajusteTipo==='acrescimo'){
+      const base = Number(it.precoOriginal)||0;
+      const qtdAjuste = Number(it.ajusteQtd)||0;
+      const delta = it.ajusteModo==='percentual' ? base*qtdAjuste/100 : qtdAjuste;
+      it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
+    }
+  }
+  function outrasLojasComEstoque(produto, lojaAtualId){
+    const porLoja = (produto && produto.estoquePorLoja) || {};
+    return (config.lojas||[]).filter(l=> l.id!==lojaAtualId && (Number(porLoja[l.id])||0) > 0)
+      .map(l=> `${l.abreviacao} (${Number(porLoja[l.id])||0})`);
+  }
+
   function draw(){
     container.innerHTML = `
       <div class="section-label">Itens vendidos</div>
@@ -884,7 +901,7 @@ function mountItens(container, holder, getLojaId){
     `;
     drawRows();
     container.querySelector('#btnAddItem').addEventListener('click', ()=>{
-      holder.itens.push({ id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'' });
+      holder.itens.push({ id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'' });
       drawRows();
     });
   }
@@ -892,36 +909,81 @@ function mountItens(container, holder, getLojaId){
     const wrap = container.querySelector('#itensRows');
     const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
     const lojaAtual = getLojaId();
-    wrap.innerHTML = holder.itens.map((it,i)=>`
+    if(vendaveis.length===0){
+      wrap.innerHTML = `<div class="empty" style="padding:16px;">Nenhum produto cadastrado ainda — cadastre em <b>Cadastro → Produtos</b> antes de lançar uma venda.</div>`;
+      return;
+    }
+    wrap.innerHTML = holder.itens.map((it,i)=>{
+      const produtoAtual = it.produtoEstoqueId ? vendaveis.find(p=>p.id===it.produtoEstoqueId) : null;
+      const estoqueAqui = produtoAtual ? (Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0) : null;
+      const outras = produtoAtual ? outrasLojasComEstoque(produtoAtual, lojaAtual) : [];
+      return `
       <div class="item-row" data-idx="${i}">
         <div class="item-row-topo">
-          <select data-itfield="produto">${produtoJoiaOptionsHtml(it.produto)}</select>
+          <select data-itfield="produtoEstoqueId">
+            <option value="">Selecione um produto</option>
+            ${vendaveis.map(p=>`<option value="${p.id}" ${it.produtoEstoqueId===p.id?'selected':''}>${escapeHtml(p.nome)}</option>`).join('')}
+          </select>
           <select data-itfield="metal">${metalOptionsHtml(it.metal)}</select>
           <input type="number" min="1" step="1" data-itfield="quantidade" value="${it.quantidade!==undefined?it.quantidade:1}">
           <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00" value="${it.valorUnitario!==undefined && it.valorUnitario!=='' ? it.valorUnitario : ''}">
           <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
         </div>
+        ${produtoAtual ? `
         <div class="item-row-estoque">
-          <label class="muted" style="font-size:11.5px; text-transform:uppercase; font-weight:700;">Descontar do estoque ${lojaAtual?'<span class="muted">(estoque da loja selecionada)</span>':''}</label>
-          <select data-itfield="produtoEstoqueId" style="max-width:280px;">
-            <option value="">— Sem controle de estoque —</option>
-            ${vendaveis.map(p=>`<option value="${p.id}" ${it.produtoEstoqueId===p.id?'selected':''}>${escapeHtml(p.nome)} (${Number((p.estoquePorLoja||{})[lojaAtual])||0} ${escapeHtml(unidadeEstoqueLabel(p.unidade))} nesta loja)</option>`).join('')}
-          </select>
+          <span class="muted" style="font-size:12px;">📦 <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} nesta loja</span>
+          ${outras.length>0 ? `<span class="muted" style="font-size:12px;">· também tem em: ${outras.join(', ')}</span>` : `<span class="muted" style="font-size:12px;">· sem estoque em outras lojas</span>`}
         </div>
+        <div class="item-row-ajuste" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <select data-itfield="ajusteTipo" style="max-width:130px;">
+            <option value="nenhum" ${it.ajusteTipo==='nenhum'?'selected':''}>Sem ajuste</option>
+            <option value="desconto" ${it.ajusteTipo==='desconto'?'selected':''}>Desconto</option>
+            <option value="acrescimo" ${it.ajusteTipo==='acrescimo'?'selected':''}>Acréscimo</option>
+          </select>
+          ${it.ajusteTipo!=='nenhum' ? `
+            <select data-itfield="ajusteModo" style="max-width:80px;">
+              <option value="percentual" ${it.ajusteModo==='percentual'?'selected':''}>%</option>
+              <option value="valor" ${it.ajusteModo==='valor'?'selected':''}>R$</option>
+            </select>
+            <input type="number" min="0" step="0.01" data-itfield="ajusteQtd" placeholder="0" style="max-width:100px;" value="${it.ajusteQtd!==undefined && it.ajusteQtd!=='' ? it.ajusteQtd : ''}">
+            <span class="muted" style="font-size:11.5px;">preço de tabela: R$ ${Number(it.precoOriginal||0).toFixed(2)}</span>
+          ` : ''}
+        </div>
+        ` : ''}
       </div>
-    `).join('');
+    `;
+    }).join('');
     wrap.querySelectorAll('[data-itfield]').forEach(el=>{
       el.addEventListener('input', ()=>{
         const row = el.closest('[data-idx]');
         const idx = Number(row.dataset.idx);
         const field = el.dataset.itfield;
-        holder.itens[idx][field] = (field==='quantidade'||field==='valorUnitario') ? (el.value===''?'':parseFloat(el.value)) : el.value;
+        const it = holder.itens[idx];
+        if(field==='produtoEstoqueId'){
+          const produto = vendaveis.find(p=>p.id===el.value);
+          it.produtoEstoqueId = el.value;
+          it.produto = produto ? produto.nome : '';
+          it.precoOriginal = produto && produto.precoVenda!=null ? produto.precoVenda : '';
+          if(it.valorUnitario==='' || it.valorUnitario==null) it.valorUnitario = it.precoOriginal || '';
+          drawRows();
+          return;
+        }
+        if(field==='ajusteTipo'){
+          it.ajusteTipo = el.value;
+          if(el.value==='nenhum'){ it.ajusteQtd = ''; } else { recalcularValorAjustado(it); }
+          drawRows();
+          return;
+        }
+        if(field==='ajusteModo'){ it.ajusteModo = el.value; recalcularValorAjustado(it); drawRows(); return; }
+        if(field==='ajusteQtd'){ it.ajusteQtd = el.value===''?'':parseFloat(el.value); recalcularValorAjustado(it); const inp=row.querySelector('[data-itfield="valorUnitario"]'); if(inp) inp.value=it.valorUnitario; updateTotalHint(); return; }
+        it[field] = (field==='quantidade'||field==='valorUnitario') ? (el.value===''?'':parseFloat(el.value)) : el.value;
         updateTotalHint();
       });
       el.addEventListener('change', ()=>{
         const row = el.closest('[data-idx]');
         const idx = Number(row.dataset.idx);
         const field = el.dataset.itfield;
+        if(field==='produtoEstoqueId' || field==='ajusteTipo' || field==='ajusteModo' || field==='ajusteQtd') return; // já tratado no 'input' acima
         holder.itens[idx][field] = (field==='quantidade'||field==='valorUnitario') ? (el.value===''?'':parseFloat(el.value)) : el.value;
       });
     });
@@ -1161,7 +1223,7 @@ function renderNovaVenda(main){
   `;
   const linkVoltarV = document.getElementById('linkVoltarVendas');
   if(linkVoltarV) linkVoltarV.addEventListener('click', (e)=>{ e.preventDefault(); modoNovaVenda = false; currentTab = 'vendas'; renderTabs(); renderView(); });
-  const tempItensHolder = { itens:[ { id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'' } ] };
+  const tempItensHolder = { itens:[ { id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'' } ] };
   const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder, ()=> document.getElementById('v_loja').value);
   document.getElementById('v_loja').addEventListener('change', ()=> itensApi.refreshEstoque());
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
@@ -1441,6 +1503,13 @@ function abrirTrocaVenda(venda){
   const itensDisponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado);
   if(itensDisponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra troca (todos já foram trocados).'); return; }
   const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
+  if(vendaveis.length===0){ showToast('Nenhum produto cadastrado ainda — cadastre em Cadastro → Produtos antes de registrar uma troca.'); return; }
+  const lojaEstoqueTroca = venda.estoqueLojaId || venda.lojaId;
+  function outrasLojasComEstoqueTroca(produto){
+    const porLoja = (produto && produto.estoquePorLoja) || {};
+    return (config.lojas||[]).filter(l=> l.id!==lojaEstoqueTroca && (Number(porLoja[l.id])||0) > 0)
+      .map(l=> `${l.abreviacao} (${Number(porLoja[l.id])||0})`);
+  }
   openModal(`
     <h3>Registrar troca</h3>
     <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)}</p>
@@ -1451,21 +1520,20 @@ function abrirTrocaVenda(venda){
       </select>
     </div>
     <div class="section-label" style="margin-top:14px;">Novo produto (saída)</div>
+    ${vendaveis.length===0 ? `<div class="empty">Nenhum produto cadastrado ainda — cadastre em Cadastro → Produtos primeiro.</div>` : `
     <div class="grid-2">
-      <select id="tr_produto">${produtoJoiaOptionsHtml('')}</select>
+      <select id="tr_produto">
+        <option value="">Selecione um produto</option>
+        ${vendaveis.map(p=>`<option value="${p.id}">${escapeHtml(p.nome)}</option>`).join('')}
+      </select>
       <select id="tr_metal">${metalOptionsHtml('')}</select>
     </div>
     <div class="grid-2">
       <div class="field"><label>Qtd.</label><input type="number" min="1" step="1" id="tr_quantidade" value="1"></div>
       <div class="field"><label>Valor unit. (R$)</label><input type="number" min="0" step="0.01" id="tr_valorUnitario" placeholder="0,00"></div>
     </div>
-    <div class="field">
-      <label>Descontar do estoque</label>
-      <select id="tr_produtoEstoqueId">
-        <option value="">— Sem controle de estoque —</option>
-        ${vendaveis.map(p=>`<option value="${p.id}">${escapeHtml(p.nome)} (${Number(p.estoque||0)} ${escapeHtml(unidadeEstoqueLabel(p.unidade))} em estoque)</option>`).join('')}
-      </select>
-    </div>
+    <div id="tr_estoqueHint" class="muted" style="margin:2px 0 10px; font-size:12px;"></div>
+    `}
     <div id="tr_diferencaHint" class="muted" style="margin-top:10px; font-weight:700;"></div>
     <div id="tr_pagDiferencaWrap" class="field" style="display:none; margin-top:6px;">
       <label id="tr_pagDiferencaLabel">Forma de pagamento da diferença</label>
@@ -1477,12 +1545,33 @@ function abrirTrocaVenda(venda){
     </div>
   `);
   const elItemAntigo = document.getElementById('tr_itemAntigo');
+  const elProduto = document.getElementById('tr_produto');
   const elQtd = document.getElementById('tr_quantidade');
   const elValor = document.getElementById('tr_valorUnitario');
+  const elEstoqueHint = document.getElementById('tr_estoqueHint');
   const elPagWrap = document.getElementById('tr_pagDiferencaWrap');
   const elPagLabel = document.getElementById('tr_pagDiferencaLabel');
   const elPagSelect = document.getElementById('tr_formaPagDiferenca');
   const elHint = document.getElementById('tr_diferencaHint');
+
+  function produtoNovoSelecionado(){
+    return elProduto ? vendaveis.find(p=>p.id===elProduto.value) : null;
+  }
+  function atualizarEstoqueHint(){
+    if(!elEstoqueHint) return;
+    const produto = produtoNovoSelecionado();
+    if(!produto){ elEstoqueHint.innerHTML = ''; return; }
+    const aqui = Number((produto.estoquePorLoja||{})[lojaEstoqueTroca])||0;
+    const outras = outrasLojasComEstoqueTroca(produto);
+    elEstoqueHint.innerHTML = `📦 <b>${aqui}</b> ${escapeHtml(unidadeEstoqueLabel(produto.unidade))} nesta loja` + (outras.length>0 ? ` · também tem em: ${outras.join(', ')}` : ' · sem estoque em outras lojas');
+  }
+  if(elProduto) elProduto.addEventListener('input', ()=>{
+    const produto = produtoNovoSelecionado();
+    if(produto && (elValor.value==='' || elValor.value==null) && produto.precoVenda!=null) elValor.value = produto.precoVenda;
+    atualizarEstoqueHint();
+    atualizarDiferenca();
+  });
+  atualizarEstoqueHint();
 
   function itemAntigoSelecionado(){
     const idx = Number(elItemAntigo.value);
@@ -1515,12 +1604,13 @@ function abrirTrocaVenda(venda){
   document.getElementById('tr_confirmar').addEventListener('click', async ()=>{
     const idx = Number(elItemAntigo.value);
     const antigo = venda.itens[idx];
-    const produtoNovo = document.getElementById('tr_produto').value.trim();
+    const produtoEstoqueIdNovo = elProduto ? elProduto.value : '';
+    const produtoNovoObj = produtoNovoSelecionado();
+    const produtoNovo = produtoNovoObj ? produtoNovoObj.nome : '';
     const metalNovo = document.getElementById('tr_metal').value;
     const qtdNovo = Number(elQtd.value)||0;
     const valorUnitNovo = Number(elValor.value)||0;
-    const produtoEstoqueIdNovo = document.getElementById('tr_produtoEstoqueId').value;
-    if(!produtoNovo || qtdNovo<=0){ showToast('Preencha o novo produto e a quantidade.'); return; }
+    if(!produtoEstoqueIdNovo || !produtoNovo || qtdNovo<=0){ showToast('Selecione o novo produto (precisa estar cadastrado) e a quantidade.'); return; }
 
     const valorAntigo = Number(antigo.quantidade)*Number(antigo.valorUnitario||0);
     const valorNovo = qtdNovo*valorUnitNovo;
@@ -1533,7 +1623,6 @@ function abrirTrocaVenda(venda){
 
     // Baixa estoque do produto novo (mesma explosão em cascata da venda normal),
     // sempre na mesma loja de onde a venda já vinha descontando estoque.
-    const lojaEstoqueTroca = venda.estoqueLojaId || venda.lojaId;
     const reservasNovo = {};
     if(produtoEstoqueIdNovo){
       const resultado = planejarConsumoEstoque(produtoEstoqueIdNovo, qtdNovo, reservasNovo, lojaEstoqueTroca);
@@ -1879,7 +1968,7 @@ function abrirFormularioEdicaoCompleta(v){
       <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
     </div>
   `);
-  const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'' })) };
+  const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'' })) };
   const itensApiEd = mountItens(document.getElementById('ed_itensContainer'), itensHolder, ()=> document.getElementById('ed_loja').value);
   document.getElementById('ed_loja').addEventListener('change', ()=> itensApiEd.refreshEstoque());
   const pagHolder = {
