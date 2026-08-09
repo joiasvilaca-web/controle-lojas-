@@ -663,7 +663,7 @@ async function doLogin(){
   btn.disabled = false; btn.textContent = 'Entrar';
   if(!r || !r.ok){ err.classList.add('show'); return; }
   __gatewaySenha = pass;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[] };
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
   salvarSessao();
@@ -678,7 +678,7 @@ async function tentarRestaurarSessao(){
   const r = await gatewayLogin(s.senha);
   if(!r || !r.ok){ limparSessao(); return false; }
   __gatewaySenha = s.senha;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha };
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[] };
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
   salvarSessao(); // renova a validade
@@ -1876,6 +1876,9 @@ function renderFuncionariosTab(main){
           <label><input type="checkbox" value="gerente" class="func_cargo_new"> Gerente</label>
           <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
         </div>
+        <div class="field" style="flex:0 1 200px; min-width:170px; margin-bottom:0;">
+          <select id="func_lojaNova"><option value="">Loja de acesso...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
+        </div>
         <button class="btn btn-accent btn-sm" id="btnAddFunc">+ Adicionar</button>
       </div>
     </div>
@@ -1910,12 +1913,19 @@ function renderFuncionariosTab(main){
     const nome = document.getElementById('func_nome').value.trim();
     const apelido = document.getElementById('func_apelido').value.trim();
     const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
+    const lojaEscolhida = document.getElementById('func_lojaNova').value;
     if(!nome){ showToast('Informe o nome do funcionário.'); return; }
     if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-    config.funcionarios.push({ id: uid('func'), nome, apelido, cargos });
+    if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
+    const novoId = uid('func');
+    config.funcionarios.push({ id: novoId, nome, apelido, cargos });
     await configSave();
+    // Já deixa o acesso inicializado (nível Vendedora + a loja escolhida aqui).
+    // A diretoria pode ajustar depois pela aba Acesso do cadastro completo.
+    await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
     document.getElementById('func_nome').value = '';
     document.getElementById('func_apelido').value = '';
+    document.getElementById('func_lojaNova').value = '';
     document.querySelectorAll('.func_cargo_new').forEach(c=>c.checked=false);
     renderRows();
     showToast('Funcionário cadastrado.');
@@ -1933,6 +1943,8 @@ const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','A
 async function abrirFuncionarioCompletoModal(funcionario){
   const todosPerfis = await dpFuncionariosGetTodos();
   let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
+  const abasVisiveis = currentUser.nivel==='diretoria' ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
+  const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
   const d = {
     nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
     cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
@@ -1948,11 +1960,13 @@ async function abrirFuncionarioCompletoModal(funcionario){
     status: perfil?(perfil.status||'ativo'):'ativo', dataDesligamento: perfil?perfil.dataDesligamento:'',
     banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
     tipoPix: perfil?(perfil.tipoPix||''):'', chavePix: perfil?perfil.chavePix:'',
+    nivelAcesso: usuarioAcesso?usuarioAcesso.nivel:'vendedora',
+    lojasAcesso: usuarioAcesso&&Array.isArray(usuarioAcesso.lojas)?[...usuarioAcesso.lojas]:[],
   };
   let abaAtiva = 'Básico';
   openModal(`
     <div class="section-label">Cadastro completo — ${escapeHtml(funcionario.nome)}</div>
-    <div class="mini-tabs" id="fcAbas" style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${ABAS_FUNC_COMPLETO.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fctab="${a}">${a}</button>`).join('')}</div>
+    <div class="mini-tabs" id="fcAbas" style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${abasVisiveis.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fctab="${a}">${a}</button>`).join('')}</div>
     <div id="fcAbaBody"></div>
     <div class="modal-actions">
       <button class="btn btn-accent" id="btnSalvarFuncCompleto">Salvar</button>
@@ -2167,20 +2181,46 @@ async function abrirFuncionarioCompletoModal(funcionario){
         </div>
       `;
       ligarCampos(body);
-    } else if(abaAtiva==='Acesso'){
+    } else if(abaAtiva==='Acesso' && currentUser.nivel==='diretoria'){
       const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
-      const nivelAtual = cargoLabelPrincipal(d.cargos) || 'Nenhuma função selecionada';
       const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
       const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
       const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
       body.innerHTML = `
-        <div class="field"><label>Nível de acesso <span class="muted">(definido pela função, o funcionário só visualiza — não pode mudar)</span></label><input value="${nivelAtual}" disabled></div>
+        <div class="field"><label>Nível de acesso</label>
+          <select id="fc_nivelAcesso">${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Lojas liberadas</label>
+          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
+        </div>
+        <button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>
+        <hr style="margin:16px 0; border-color:var(--surface-2);">
         <div class="field"><label>E-mail (recebe o link pra definir a senha)</label><input type="email" id="fc_emailAcesso" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
         <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
         ${status==='ativo' ? `<p class="muted">Senha atual (visível só pra diretoria): <b style="color:var(--ink); letter-spacing:1px;">${escapeHtml(usuarioLigado.senha||'')}</b></p>` : ''}
         <button type="button" class="btn btn-accent btn-sm" id="btnEnviarConvite">${status==='sem_acesso' ? '📧 Enviar convite de acesso' : '📧 Reenviar convite (gera nova senha)'}</button>
-        <p class="muted" style="margin-top:10px;">O funcionário recebe um e-mail com um link pra escolher a própria senha. O nível de acesso é sempre o mesmo da função cadastrada na aba Básico.</p>
+        <p class="muted" style="margin-top:10px;">Salve o nível e as lojas antes de enviar o convite. O funcionário recebe um e-mail com um link pra escolher a própria senha — o nível e as lojas não mudam com o convite.</p>
       `;
+      document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
+      document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
+        chk.addEventListener('change', ()=>{
+          d.lojasAcesso = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
+        });
+      });
+      document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
+        const btn = document.getElementById('btnSalvarAcesso');
+        btn.disabled = true; btn.textContent = 'Salvando...';
+        const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: d.nivelAcesso, lojas: d.lojasAcesso });
+        btn.disabled = false; btn.textContent = '💾 Salvar nível e lojas';
+        if(r && r.ok){
+          showToast('Acesso atualizado.');
+          const configAtualizada = await configGet();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+        } else {
+          showToast((r && r.error) || 'Não foi possível salvar o acesso.');
+        }
+      });
       document.getElementById('fc_emailAcesso').addEventListener('input', e=>{ d.emailAcesso = e.target.value; });
       document.getElementById('btnEnviarConvite').addEventListener('click', async ()=>{
         const email = document.getElementById('fc_emailAcesso').value.trim();
