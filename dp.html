@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Departamento Pessoal · Vilaça Joias</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -141,8 +142,11 @@ html.embedded .mobile-tabbar{display:none !important;}
 const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
 const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+const FUNCIONARIO_ACESSO_URL = SUPABASE_URL + "/functions/v1/funcionario-acesso";
+const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let config = null;
+let __configCarregadaOk = false; // só permite salvar depois de carregar a config de verdade — evita sobrescrever com vazio
 let funcionarios = [];
 let registros = [];
 let currentUser = null;
@@ -161,6 +165,320 @@ async function gatewayCall(body){
     console.error('erro ao falar com o servidor', e);
     return { error: 'Não foi possível conectar. Verifique sua internet.' };
   }
+}
+async function chamarFuncionarioAcesso(body){
+  try{
+    const res = await fetch(FUNCIONARIO_ACESSO_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  }catch(e){
+    console.error('erro ao falar com o servidor (acesso)', e);
+    return { error: 'Não foi possível conectar. Verifique sua internet.' };
+  }
+}
+function readFileAsDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function uploadFotoParaDrive(dataUrl, filename, pasta, tratar){
+  const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
+    body: { dataUrl, filename, pasta, tratar }
+  });
+  if(error) throw error;
+  if(!data || !data.url) throw new Error('Resposta inválida do upload para o Drive');
+  return data;
+}
+async function configSave(){
+  if(!__configCarregadaOk){ showToast('Configuração não carregada — recarregue a página antes de salvar.'); return false; }
+  try{
+    const { error } = await supabaseClient.from('gestao_config').upsert({ id:'config', payload: config });
+    if(error) throw error;
+    return true;
+  }catch(e){ console.error('erro ao salvar config', e); showToast('Erro ao salvar. Tente novamente.'); return false; }
+}
+function cargoLabelPrincipal(cargos){
+  const c = cargos||[];
+  if(c.includes('diretor')) return 'Diretor(a)';
+  if(c.includes('gerente')) return 'Gerente';
+  if(c.includes('vendedora')) return 'Vendedora';
+  if(c.includes('oficina')) return 'Oficina';
+  return '';
+}
+
+/* ============================================================
+   PERFIS DE ACESSO — migrado do módulo Cadastro a pedido do Felipe.
+   MODULOS_APP/permissoesPadrao/permissoesDoUsuario são cópias das mesmas funções
+   do index.html (cada módulo do app mantém sua própria cópia dessas definições,
+   seguindo o padrão já usado no resto do projeto).
+   ============================================================ */
+const MODULOS_APP = {
+  transferencias: { nome:'Transferências e Reposições', abas:[
+    { id:'transferencias', label:'Transferências' },
+    { id:'reposicao', label:'Reposição' },
+  ]},
+  os: { nome:'Painel de O.S.', abas:[
+    { id:'painel', label:'Painel' },
+    { id:'agenda', label:'Agenda' },
+    { id:'clientes', label:'Clientes' },
+    { id:'codigo', label:'Código' },
+  ]},
+  vendas: { nome:'Vendas (PDV)', abas:[
+    { id:'vendas', label:'Vendas' },
+  ]},
+  caixa: { nome:'Caixa', abas:[] },
+  orcamentos: { nome:'Orçamentos', abas:[
+    { id:'novo', label:'Novo orçamento' },
+    { id:'lista', label:'Orçamentos' },
+  ]},
+  vendapg: { nome:'Venda PG', abas:[] },
+  conciliacao: { nome:'Conciliação de Cartão', abas:[
+    { id:'conciliar', label:'Conciliar' },
+    { id:'taxas', label:'Taxas e Prazos' },
+  ]},
+  dp: { nome:'Departamento Pessoal', abas:[] },
+  ia: { nome:'Inteligência Artificial', abas:[] },
+  gastos: { nome:'Gastos', abas:[
+    { id:'lancamentos', label:'Lançamentos' },
+    { id:'agenda', label:'Agenda' },
+  ]},
+  marketing: { nome:'Marketing', abas:[
+    { id:'aniversario', label:'Aniversário' },
+    { id:'orcamentos', label:'Orçamentos' },
+    { id:'maladire', label:'Mala Direta' },
+  ]},
+  dashboard: { nome:'Dashboard', abas:[] },
+  config: { nome:'Cadastro', abas:[
+    { id:'clientes', label:'Clientes' },
+    { id:'produto', label:'Produto' },
+    { id:'lojas', label:'Lojas' },
+    { id:'pagamento', label:'Formas de Pagamento' },
+    { id:'impressao', label:'Impressão & Etiquetas' },
+    { id:'statusOrcamento', label:'Status de Orçamento' },
+    { id:'mensagens', label:'Mensagens' },
+  ]},
+};
+function permissoesPadrao(nivel){
+  const todasAbas = (moduloId)=>{ const o={}; MODULOS_APP[moduloId].abas.forEach(a=>o[a.id]=true); return o; };
+  if(nivel==='diretoria' || nivel==='gerente'){
+    return {
+      transferencias:{ ativo:true, abas:todasAbas('transferencias') },
+      os:{ ativo:true, abas:todasAbas('os') },
+      vendas:{ ativo:true, abas:todasAbas('vendas') },
+      caixa:{ ativo:true },
+      orcamentos:{ ativo:true, abas:todasAbas('orcamentos') },
+      vendapg:{ ativo:true },
+      conciliacao:{ ativo:true, abas:todasAbas('conciliacao') },
+      dp:{ ativo:true },
+      ia:{ ativo:true },
+      gastos:{ ativo:true, abas:todasAbas('gastos') },
+      marketing:{ ativo:true, abas:todasAbas('marketing') },
+      dashboard:{ ativo:true }, config:{ ativo:true, abas:todasAbas('config') },
+    };
+  }
+  if(nivel==='oficina'){
+    return {
+      transferencias:{ ativo:false, abas:{} },
+      os:{ ativo:true, abas:{ painel:true, agenda:true, clientes:false, codigo:true } },
+      vendas:{ ativo:false, abas:{} },
+      caixa:{ ativo:false },
+      orcamentos:{ ativo:false, abas:{} },
+      vendapg:{ ativo:false },
+      conciliacao:{ ativo:false, abas:{} },
+      dp:{ ativo:true },
+      ia:{ ativo:true },
+      gastos:{ ativo:false, abas:{} },
+      marketing:{ ativo:false, abas:{} },
+      dashboard:{ ativo:true }, config:{ ativo:false, abas:{} },
+    };
+  }
+  return {
+    transferencias:{ ativo:true, abas:todasAbas('transferencias') },
+    os:{ ativo:true, abas:{ painel:true, agenda:true, clientes:true, codigo:false } },
+    vendas:{ ativo:true, abas:todasAbas('vendas') },
+    caixa:{ ativo:true },
+    orcamentos:{ ativo:true, abas:todasAbas('orcamentos') },
+    vendapg:{ ativo:true },
+    conciliacao:{ ativo:false, abas:{} },
+    dp:{ ativo:true },
+    ia:{ ativo:true },
+    gastos:{ ativo:true, abas:{ lancamentos:true, agenda:true } },
+    marketing:{ ativo:true, abas:todasAbas('marketing') },
+    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, lojas:false, pagamento:false, impressao:false, statusOrcamento:false, mensagens:false } },
+  };
+}
+function permissoesDoUsuario(u){
+  const padrao = permissoesPadrao(u.nivel);
+  if(!u.permissoes) return padrao;
+  const mesclado = {};
+  Object.keys(padrao).forEach(moduloId=>{
+    const salvo = u.permissoes[moduloId];
+    if(!salvo){ mesclado[moduloId] = padrao[moduloId]; return; }
+    const abasPadrao = padrao[moduloId].abas || {};
+    const abasSalvas = salvo.abas || {};
+    mesclado[moduloId] = { ativo: salvo.ativo, abas: { ...abasPadrao, ...abasSalvas } };
+  });
+  return mesclado;
+}
+function resumoPermissoesHtml(u){
+  const p = permissoesDoUsuario(u);
+  const chips = Object.keys(MODULOS_APP).filter(m=> p[m] && p[m].ativo).map(m=>MODULOS_APP[m].nome);
+  return chips.length ? chips.map(c=>`<span class="chip">${escapeHtml(c)}</span>`).join(' ') : `<span class="chip" style="background:var(--danger-soft); color:var(--danger);">Nenhum acesso</span>`;
+}
+function abasChecklistHtml(moduloId, permissoesModulo){
+  const mod = MODULOS_APP[moduloId];
+  if(!mod.abas.length) return '';
+  const abasAtuais = (permissoesModulo && permissoesModulo.abas) || {};
+  return `
+    <div class="cargo-checks" style="margin:6px 0 2px 22px; flex-direction:column; align-items:flex-start; gap:6px;" data-abaswrap="${moduloId}">
+      ${mod.abas.map(a=>`
+        <label><input type="checkbox" class="chk-aba" data-modulo="${moduloId}" data-aba="${a.id}" ${abasAtuais[a.id]?'checked':''}> ${escapeHtml(a.label)}</label>
+      `).join('')}
+    </div>
+  `;
+}
+function modulosChecklistHtml(permissoes){
+  return Object.keys(MODULOS_APP).map(moduloId=>{
+    const mod = MODULOS_APP[moduloId];
+    const ativo = permissoes[moduloId] && permissoes[moduloId].ativo;
+    return `
+      <div style="margin-bottom:10px;">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:13px; text-transform:none; letter-spacing:0;">
+          <input type="checkbox" class="chk-modulo" data-modulo="${moduloId}" ${ativo?'checked':''}> ${escapeHtml(mod.nome)}
+        </label>
+        <div data-abasslot="${moduloId}" style="display:${ativo?'':'none'};">${abasChecklistHtml(moduloId, permissoes[moduloId])}</div>
+      </div>
+    `;
+  }).join('');
+}
+function wirePermissoesChecklist(container){
+  container.querySelectorAll('.chk-modulo').forEach(chk=>{
+    chk.addEventListener('change', ()=>{
+      const slot = container.querySelector(`[data-abasslot="${chk.dataset.modulo}"]`);
+      if(slot) slot.style.display = chk.checked ? '' : 'none';
+    });
+  });
+}
+function lerPermissoesDoFormulario(container){
+  const permissoes = {};
+  Object.keys(MODULOS_APP).forEach(moduloId=>{
+    const chkModulo = container.querySelector(`.chk-modulo[data-modulo="${moduloId}"]`);
+    const ativo = !!(chkModulo && chkModulo.checked);
+    const abas = {};
+    container.querySelectorAll(`.chk-aba[data-modulo="${moduloId}"]`).forEach(chkAba=>{
+      abas[chkAba.dataset.aba] = chkAba.checked;
+    });
+    permissoes[moduloId] = MODULOS_APP[moduloId].abas.length ? { ativo, abas } : { ativo };
+  });
+  return permissoes;
+}
+function openAcessoModal(usuario){
+  const permissoesIniciais = usuario ? permissoesDoUsuario(usuario) : permissoesPadrao('vendedora');
+  openModal(`
+    <div class="section-label">${usuario ? 'Editar acesso' : 'Novo acesso'}</div>
+    <div class="grid-3">
+      <div class="field"><label>Nome</label><input id="ac_nome" value="${escapeHtml(usuario?usuario.nome:'')}" placeholder="Nome"></div>
+      <div class="field"><label>Senha</label><input id="ac_senha" value="${escapeHtml(usuario?usuario.senha:'')}" placeholder="Senha"></div>
+      <div class="field"><label>Nível (referência)</label>
+        <select id="ac_nivel">
+          <option value="vendedora" ${(!usuario||usuario.nivel==='vendedora')?'selected':''}>Vendedora</option>
+          <option value="oficina" ${usuario&&usuario.nivel==='oficina'?'selected':''}>Oficina</option>
+          <option value="diretoria" ${usuario&&usuario.nivel==='diretoria'?'selected':''}>Diretoria</option>
+          <option value="custom" ${usuario&&usuario.nivel==='custom'?'selected':''}>Personalizado</option>
+        </select>
+      </div>
+    </div>
+    <p class="muted" style="margin:2px 0 12px;">O nível só define o rótulo mostrado; o que realmente controla o acesso são os módulos e abas marcados abaixo.</p>
+    <div class="section-label" style="margin-top:10px;">Módulos e abas liberados</div>
+    <div id="acPermissoesWrap">${modulosChecklistHtml(permissoesIniciais)}</div>
+    <div style="display:flex; gap:10px; margin-top:16px;">
+      <button class="btn btn-accent" id="btnSalvarAcesso2">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarAcesso2">Cancelar</button>
+    </div>
+  `);
+  const permWrap = document.getElementById('acPermissoesWrap');
+  wirePermissoesChecklist(permWrap);
+  if(!usuario){
+    document.getElementById('ac_nivel').addEventListener('change', (e)=>{
+      const novoPadrao = permissoesPadrao(e.target.value);
+      document.getElementById('acPermissoesWrap').innerHTML = modulosChecklistHtml(novoPadrao);
+      wirePermissoesChecklist(document.getElementById('acPermissoesWrap'));
+      showToast('Marcações de módulos atualizadas pro padrão desse nível — revise antes de salvar.');
+    });
+  }
+  document.getElementById('btnCancelarAcesso2').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarAcesso2').addEventListener('click', async ()=>{
+    const nome = document.getElementById('ac_nome').value.trim();
+    const senha = document.getElementById('ac_senha').value.trim();
+    const nivel = document.getElementById('ac_nivel').value;
+    if(!nome || !senha){ showToast('Preencha nome e senha.'); return; }
+    const outroComMesmaSenha = (config.users||[]).some(u=> u.senha===senha && (!usuario || u.id!==usuario.id));
+    if(outroComMesmaSenha){ showToast('Essa senha já está em uso.'); return; }
+    const permissoes = lerPermissoesDoFormulario(permWrap);
+    config.users = Array.isArray(config.users) ? config.users : [];
+    if(usuario){
+      Object.assign(usuario, { nome, senha, nivel, permissoes });
+    }else{
+      config.users.push({ id: uid('u'), nome, senha, nivel, permissoes });
+    }
+    const ok = await configSave();
+    if(!ok) return;
+    closeModal();
+    if(window.__redrawAcessos) window.__redrawAcessos();
+    showToast('Acesso salvo.');
+  });
+}
+function renderAcessosDP(main){
+  if(!podeEditarDP()){
+    main.innerHTML = `<div class="card"><p class="muted">Só diretoria e gerência podem ver os perfis de acesso.</p></div>`;
+    return;
+  }
+  main.innerHTML = `
+    <div class="page-head">
+      <h1 class="page-title">Perfis de Acesso</h1>
+      <p class="page-sub">Cada senha define quais módulos a pessoa vê e, dentro de cada módulo, quais abas ela pode usar. Válido para o Painel de O.S., Transferências, Vendas e Dashboard.</p>
+    </div>
+    <div class="card">
+      <div id="userRows"></div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-accent btn-sm" id="btnNovoAcesso">+ Novo acesso</button>
+      </div>
+    </div>
+  `;
+  function renderRows(){
+    const wrap = document.getElementById('userRows');
+    const users = config.users||[];
+    if(users.length===0){ wrap.innerHTML = `<div class="empty">Nenhum acesso cadastrado.</div>`; return; }
+    wrap.innerHTML = users.map((u,i)=>`
+      <div class="code-list-item" style="align-items:flex-start;">
+        <div style="flex:1;">
+          <div><b>${escapeHtml(u.nome)}</b> <span class="muted" style="margin-left:8px;">senha: ${escapeHtml(u.senha)}</span> <span class="level-pill" style="background:var(--surface-2); color:var(--ink-soft); margin-left:6px;">${levelLabel(u.nivel)}</span></div>
+          <div style="margin-top:6px; display:flex; gap:5px; flex-wrap:wrap;">${resumoPermissoesHtml(u)}</div>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
+          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openAcessoModal(config.users[Number(b.dataset.edit)]) ));
+    wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
+      if(config.users.length<=1){ showToast('É necessário manter ao menos um acesso.'); return; }
+      config.users.splice(Number(b.dataset.del),1);
+      const ok = await configSave();
+      if(!ok) return;
+      renderRows(); showToast('Acesso removido.');
+    }));
+  }
+  renderRows();
+  window.__redrawAcessos = renderRows;
+  document.getElementById('btnNovoAcesso').addEventListener('click', ()=> openAcessoModal(null) );
 }
 async function gatewayLogin(senhaTentativa){ return gatewayCall({ op:'login', senha: senhaTentativa }); }
 const supabaseClient = {
@@ -201,7 +519,7 @@ function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOStri
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='gerente' ? 'Gerente' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
+function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='gerente'?'Gerente':n==='oficina'?'Oficina':n==='vendedora'?'Vendedora':'Personalizado'; }
 /** Só diretoria/gerente podem criar, editar ou excluir no DP — vendedora/oficina só visualizam a própria ficha. */
 function podeEditarDP(){ return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente'); }
 function showToast(msg){
@@ -353,7 +671,8 @@ function mesclarFuncionariosDoCadastro(fichas, cfg){
 
 async function loadAll(){
   config = await configGetUnificada();
-  if(!config){ config = { lojas:[] }; }
+  if(config){ __configCarregadaOk = true; }
+  else { config = { lojas:[] }; showToast('⚠️ Não foi possível carregar as configurações — algumas ações ficam bloqueadas. Recarregue a página.', 6000); }
   funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
   registros = await registrosGet();
 }
@@ -418,11 +737,13 @@ const TABS = [
   { id:'ferias', label:'Férias', icon:'🌴' },
   { id:'avisos', label:'Advertência', icon:'⚠️' },
   { id:'atestados', label:'Atestados', icon:'🩺' },
+  { id:'acessos', label:'Perfis de Acesso', icon:'🔑', restrito:true },
 ];
 function buildTabs(){
+  const abasVisiveis = TABS.filter(t=> !t.restrito || podeEditarDP());
   const nav = document.getElementById('tabs');
   nav.innerHTML = '';
-  TABS.forEach(t=>{
+  abasVisiveis.forEach(t=>{
     const b = document.createElement('button');
     b.textContent = t.label; b.dataset.tab = t.id;
     b.addEventListener('click', ()=>{ currentTab = t.id; renderTabs(); renderView(); });
@@ -430,7 +751,7 @@ function buildTabs(){
   });
   const mobileNav = document.getElementById('mobileTabbar');
   mobileNav.innerHTML = '';
-  TABS.forEach(t=>{
+  abasVisiveis.forEach(t=>{
     const b = document.createElement('button');
     b.dataset.tab = t.id;
     b.innerHTML = `<span class="mt-icon">${t.icon}</span><span>${t.label}</span>`;
@@ -453,6 +774,7 @@ function renderView(){
   else if(currentTab==='ferias') renderRegistros(main, 'ferias');
   else if(currentTab==='avisos') renderRegistros(main, 'aviso');
   else if(currentTab==='atestados') renderRegistros(main, 'atestado');
+  else if(currentTab==='acessos') renderAcessosDP(main);
 }
 
 function nomeFuncionario(id){ const f = funcionarios.find(x=>x.funcionarioId===id || x.id===id); return f ? nomeExibicaoFuncionario(f) : '—'; }
@@ -540,7 +862,7 @@ function renderFuncionarios(main){
   main.innerHTML = `
     <div class="page-head">
       <h1 class="page-title">Funcionários</h1>
-      <p class="page-sub">${podeEditar ? 'Lista de todos os funcionários cadastrados. Pra adicionar um novo, use o módulo Cadastro → Funcionários — aqui só dá pra ver/editar o perfil de RH de quem já existe.' : 'Suas informações cadastradas.'}</p>
+      <p class="page-sub">${podeEditar ? 'Cadastro único por funcionário: função (usada nos módulos), dados pessoais, profissionais, bancários e acesso — tudo numa aba só.' : 'Suas informações cadastradas.'}</p>
     </div>
     <div class="card" style="padding:14px 18px;">
       <table>
@@ -548,10 +870,30 @@ function renderFuncionarios(main){
         <tbody id="tbodyFunc"></tbody>
       </table>
     </div>
+    ${podeEditar ? `
+    <div class="card" style="padding:14px 18px;">
+      <div class="section-label" style="margin-top:0;">Novo funcionário</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
+        <div class="field" style="flex:0 1 150px; min-width:120px; margin-bottom:0;"><input id="func_apelido" placeholder="Apelido (opcional)"></div>
+        <div class="cargo-checks">
+          <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
+          <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
+          <label><input type="checkbox" value="gerente" class="func_cargo_new"> Gerente</label>
+          <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
+        </div>
+        <div class="field" style="flex:0 1 200px; min-width:170px; margin-bottom:0;">
+          <select id="func_lojaNova"><option value="">Loja de acesso...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
+        </div>
+        <div class="field" style="flex:0 1 220px; min-width:180px; margin-bottom:0;"><input type="email" id="func_emailNovo" placeholder="E-mail (opcional — envia link de cadastro)"></div>
+        <button class="btn btn-accent btn-sm" id="btnAddFunc">+ Adicionar</button>
+      </div>
+    </div>
+    ` : ''}
   `;
   function draw(){
     const tbody = document.getElementById('tbodyFunc');
-    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">${podeEditar?'Nenhum funcionário cadastrado ainda. Cadastre em Cadastro → Funcionários.':'Nenhuma informação encontrada.'}</td></tr>`; return; }
+    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">${podeEditar?'Nenhum funcionário cadastrado ainda.':'Nenhuma informação encontrada.'}</td></tr>`; return; }
     tbody.innerHTML = funcionarios.slice().reverse().map(f=>`
       <tr>
         <td><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''}${f.semFicha?` <span class="badge" style="margin-left:6px; font-size:11px;">ficha em branco</span>`:''}</td>
@@ -566,169 +908,438 @@ function renderFuncionarios(main){
     `).join('');
     tbody.querySelectorAll('[data-verfunc]').forEach(b=> b.addEventListener('click', async ()=>{
       // Busca fresca antes de abrir: evita mostrar uma ficha desatualizada (ex: o
-      // funcionário acabou de preencher o link de autocadastro dele) e mantém DP e
-      // Cadastro sempre olhando pro mesmo cadastro, sem duplicar.
+      // funcionário acabou de preencher o link de autocadastro dele) e nunca duplica.
       const idClicado = b.dataset.verfunc;
       const alvoAntigo = funcionarios.find(f=>f.id===idClicado);
       const funcionarioIdAlvo = alvoAntigo ? alvoAntigo.funcionarioId : null;
       funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
       if(window.__redrawFuncionarios) window.__redrawFuncionarios();
       const atualizado = funcionarios.find(f=> (funcionarioIdAlvo && f.funcionarioId===funcionarioIdAlvo) || f.id===idClicado);
-      abrirFuncionarioModal(atualizado || alvoAntigo);
+      const funcionarioCadastro = (config.funcionarios||[]).find(fc=> fc.id === (funcionarioIdAlvo || (atualizado&&atualizado.funcionarioId)) );
+      abrirFuncionarioCompletoModal(funcionarioCadastro || { id: funcionarioIdAlvo, nome: (atualizado||alvoAntigo).nome, apelido: (atualizado||alvoAntigo).apelido||'', cargos: [] });
     }));
   }
   draw();
   window.__redrawFuncionarios = draw;
+
+  if(podeEditar){
+    document.getElementById('btnAddFunc').addEventListener('click', async ()=>{
+      const nome = document.getElementById('func_nome').value.trim();
+      const apelido = document.getElementById('func_apelido').value.trim();
+      const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
+      const lojaEscolhida = document.getElementById('func_lojaNova').value;
+      const email = document.getElementById('func_emailNovo').value.trim();
+      if(!nome){ showToast('Informe o nome do funcionário.'); return; }
+      if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
+      if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
+      const novoId = uid('func');
+      config.funcionarios = Array.isArray(config.funcionarios) ? config.funcionarios : [];
+      config.funcionarios.push({ id: novoId, nome, apelido, cargos });
+      const ok = await configSave();
+      if(!ok) return;
+      // Já deixa o acesso inicializado (nível Vendedora + a loja escolhida aqui).
+      // A diretoria pode ajustar depois pela aba Acesso do cadastro completo.
+      await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
+      let mensagem = 'Funcionário cadastrado.';
+      if(email){
+        const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
+        mensagem = (rConvite && rConvite.ok)
+          ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).'
+          : 'Funcionário cadastrado, mas não foi possível enviar o link por e-mail: ' + ((rConvite && rConvite.error) || 'erro desconhecido');
+      }
+      funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+      renderFuncionarios(main);
+      showToast(mensagem);
+    });
+  }
 }
 
-const ABAS_FUNC = ['Pessoais','Profissionais','Bancários','Acesso'];
-function abrirFuncionarioModal(f, onSalvarExtra){
-  const editando = !!f;
+const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','Acesso'];
+/**
+ * Cadastro completo e unificado de um funcionário: a função/cargo (usada em todo o
+ * app pros módulos de venda/O.S./Venda PG) fica na mesma tela que os dados de RH
+ * (pessoais/profissionais/bancários). Migrado do módulo Cadastro pro Departamento
+ * Pessoal a pedido do Felipe — o cadastro é um só, compartilhado entre os dois.
+ */
+async function abrirFuncionarioCompletoModal(funcionario){
   const podeEditar = podeEditarDP();
+  const todosPerfis = await funcionariosGet(); // sempre busca fresco (funcionariosGet não usa cache)
+  let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
+  const abasVisiveis = currentUser.nivel==='diretoria' ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
+  const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
   const d = {
-    nome: f?f.nome:'', cpf: f?f.cpf:'', rg: f?f.rg:'', dataNascimento: f?f.dataNascimento:'', estadoCivil: f?f.estadoCivil:'',
-    telefone: f?f.telefone:'', email: f?f.email:'', endereco: f?f.endereco:'', numero: f?f.numero:'', complemento: f?f.complemento:'',
-    bairro: f?f.bairro:'', cidade: f?f.cidade:'', estado: f?f.estado:'', cep: f?f.cep:'',
-    contatoEmergenciaNome: f?f.contatoEmergenciaNome:'', contatoEmergenciaTelefone: f?f.contatoEmergenciaTelefone:'',
-    cargo: f?f.cargo:'', loja: f?f.loja:'', dataAdmissao: f?f.dataAdmissao:'', tipoContrato: f?(f.tipoContrato||'CLT'):'CLT',
-    salario: f&&f.salario!==undefined?f.salario:null, ctpsNumero: f?f.ctpsNumero:'', ctpsSerie: f?f.ctpsSerie:'', pis: f?f.pis:'',
-    status: f?(f.status||'ativo'):'ativo', dataDesligamento: f?f.dataDesligamento:'',
-    banco: f?f.banco:'', agencia: f?f.agencia:'', conta: f?f.conta:'', tipoConta: f?(f.tipoConta||'corrente'):'corrente',
+    nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
+    cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
+    telefoneFixo: perfil?perfil.telefoneFixo:'', celularParticular: perfil?perfil.celularParticular:'', celularLoja: perfil?perfil.celularLoja:'',
+    temFilhos: perfil?(perfil.temFilhos||'nao'):'nao', filhos: perfil&&Array.isArray(perfil.filhos)?perfil.filhos.map(f=>({...f})):[],
+    email: perfil?perfil.email:'', endereco: perfil?perfil.endereco:'', numero: perfil?perfil.numero:'',
+    complemento: perfil?perfil.complemento:'', bairro: perfil?perfil.bairro:'', cidade: perfil?perfil.cidade:'', estado: perfil?perfil.estado:'', cep: perfil?perfil.cep:'',
+    contatoEmergenciaNome: perfil?perfil.contatoEmergenciaNome:'', contatoEmergenciaTelefone: perfil?perfil.contatoEmergenciaTelefone:'',
+    loja: perfil?perfil.loja:'', dataAdmissao: perfil?perfil.dataAdmissao:'', tipoContrato: perfil?(perfil.tipoContrato||'CLT'):'CLT',
+    experiencia1Data: perfil?perfil.experiencia1Data:'', experiencia1Dias: perfil?perfil.experiencia1Dias:'',
+    experiencia2Data: perfil?perfil.experiencia2Data:'', experiencia2Dias: perfil?perfil.experiencia2Dias:'',
+    salario: perfil&&perfil.salario!==undefined?perfil.salario:null, ctpsNumero: perfil?perfil.ctpsNumero:'', ctpsSerie: perfil?perfil.ctpsSerie:'', pis: perfil?perfil.pis:'',
+    status: perfil?(perfil.status||'ativo'):'ativo', dataDesligamento: perfil?perfil.dataDesligamento:'',
+    banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
+    tipoPix: perfil?(perfil.tipoPix||''):'', chavePix: perfil?perfil.chavePix:'',
+    nivelAcesso: usuarioAcesso?usuarioAcesso.nivel:'vendedora',
+    lojasAcesso: usuarioAcesso&&Array.isArray(usuarioAcesso.lojas)?[...usuarioAcesso.lojas]:[],
   };
-  let abaAtiva = 'Pessoais';
+  let abaAtiva = 'Básico';
   openModal(`
-    <div class="section-label">${podeEditar ? (editando?'Editar funcionário':'Novo funcionário') : 'Meus dados'}</div>
-    <div class="mini-tabs" id="funcAbas">${ABAS_FUNC.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fatab="${a}">${a}</button>`).join('')}</div>
-    <div id="funcAbaBody"></div>
+    <div class="section-label">${podeEditar?'Cadastro completo':'Meus dados'} — ${escapeHtml(funcionario.nome)}</div>
+    <div class="mini-tabs" id="fcAbas" style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${abasVisiveis.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fctab="${a}">${a}</button>`).join('')}</div>
+    <div id="fcAbaBody"></div>
     <div class="modal-actions">
-      ${podeEditar ? `<button class="btn btn-accent" id="btnSalvarFunc">Salvar</button>` : ''}
-      <button class="btn btn-ghost" id="btnCancelarFunc">${podeEditar?'Cancelar':'Fechar'}</button>
+      ${podeEditar ? `<button class="btn btn-accent" id="btnSalvarFuncCompleto">Salvar</button>` : ''}
+      <button class="btn btn-ghost" id="btnCancelarFuncCompleto">${podeEditar?'Cancelar':'Fechar'}</button>
     </div>
   `);
   function renderAbas(){
-    document.querySelectorAll('#funcAbas [data-fatab]').forEach(b=>{
-      b.classList.toggle('btn-accent', b.dataset.fatab===abaAtiva);
-      b.classList.toggle('btn-ghost', b.dataset.fatab!==abaAtiva);
+    document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=>{
+      b.classList.toggle('btn-accent', b.dataset.fctab===abaAtiva);
+      b.classList.toggle('btn-ghost', b.dataset.fctab!==abaAtiva);
     });
   }
-  document.querySelectorAll('#funcAbas [data-fatab]').forEach(b=> b.addEventListener('click', ()=>{ abaAtiva=b.dataset.fatab; renderCorpo(); renderAbas(); }));
+  document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=> b.addEventListener('click', ()=>{ abaAtiva=b.dataset.fctab; renderCorpo(); renderAbas(); }));
+
+  function desabilitarSeSomenteLeitura(body){
+    if(podeEditar) return;
+    body.querySelectorAll('input, select, button:not(#btnCancelarFuncCompleto)').forEach(el=>{ el.disabled = true; });
+  }
 
   function renderCorpo(){
-    const body = document.getElementById('funcAbaBody');
-    if(abaAtiva==='Pessoais'){
+    const body = document.getElementById('fcAbaBody');
+    if(!body) return; // modal já foi fechado (ex: usuário saiu enquanto uma ação assíncrona ainda rodava)
+    if(abaAtiva==='Básico'){
+      body.innerHTML = `
+        <div class="field"><label>Nome completo</label><input id="fc_nome" value="${escapeHtml(d.nome)}"></div>
+        <div class="field"><label>Apelido</label><input id="fc_apelido" value="${escapeHtml(d.apelido||'')}" placeholder="Como aparece nas listas dos módulos">
+          <p class="muted" style="margin:4px 0 0; font-size:12px;">É este nome que aparece nas listas de seleção dos outros módulos (venda, O.S., orçamento, transferências, Venda PG). Se ficar em branco, usa o nome completo.</p>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função (usada nos módulos de venda, O.S., Venda PG...)</div>
+        <div class="cargo-checks">
+          <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''}> Vendedora</label>
+          <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''}> Oficina</label>
+          <label><input type="checkbox" value="gerente" class="fc_cargo" ${d.cargos.includes('gerente')?'checked':''}> Gerente</label>
+          <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''}> Diretor(a)</label>
+        </div>
+        <div id="fc_fotoArea"></div>
+      `;
+      montarFotoFuncionario();
+      document.getElementById('fc_nome').addEventListener('input', e=> d.nome = e.target.value);
+      document.querySelectorAll('.fc_cargo').forEach(el=>{
+        el.addEventListener('change', ()=>{
+          d.cargos = Array.from(document.querySelectorAll('.fc_cargo:checked')).map(c=>c.value);
+        });
+      });
+      function montarFotoFuncionario(){
+        const area = document.getElementById('fc_fotoArea');
+        area.innerHTML = `
+          <div class="section-label" style="margin-top:14px;">Foto do funcionário</div>
+          <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+            ${d.foto ? `<img src="${escapeHtml(d.foto)}" style="width:84px; height:84px; border-radius:50%; object-fit:cover; border:1px solid var(--line);">` : `<div style="width:84px; height:84px; border-radius:50%; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--ink-faint); font-size:11px; text-align:center;">Sem foto</div>`}
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <input type="file" accept="image/*" id="fc_inputAnexarFoto" style="display:none;">
+              <input type="file" accept="image/*" capture="user" id="fc_inputTirarFoto" style="display:none;">
+              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnAnexarFoto">📎 Anexar foto</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnTirarFoto">📷 Tirar foto</button>
+              ${d.foto ? `<button type="button" class="btn btn-ghost btn-sm" id="fc_btnRemoverFoto" style="color:var(--danger);">Remover</button>` : ''}
+            </div>
+          </div>
+          <div class="muted" id="fc_fotoStatus" style="margin-top:6px;"></div>
+        `;
+        document.getElementById('fc_btnAnexarFoto').addEventListener('click', ()=> document.getElementById('fc_inputAnexarFoto').click());
+        document.getElementById('fc_btnTirarFoto').addEventListener('click', ()=> document.getElementById('fc_inputTirarFoto').click());
+        document.getElementById('fc_inputAnexarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
+        document.getElementById('fc_inputTirarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
+        const btnRemover = document.getElementById('fc_btnRemoverFoto');
+        if(btnRemover) btnRemover.addEventListener('click', ()=>{ d.foto = ''; montarFotoFuncionario(); });
+        desabilitarSeSomenteLeitura(area);
+      }
+      async function processarFotoFuncionario(file){
+        if(!file) return;
+        const status = document.getElementById('fc_fotoStatus');
+        status.textContent = 'Enviando foto...';
+        try{
+          const dataUrl = await readFileAsDataUrl(file);
+          const nomeArquivo = 'funcionario_' + (funcionario.id||'novo') + '_' + Date.now() + '.jpg';
+          const resultado = await uploadFotoParaDrive(dataUrl, nomeArquivo, 'funcionarios', false);
+          d.foto = resultado.url;
+          status.textContent = '';
+          montarFotoFuncionario();
+        }catch(e){
+          console.error('erro ao enviar foto do funcionário', e);
+          status.textContent = 'Não foi possível enviar a foto. Tente novamente.';
+        }
+      }
+    } else if(abaAtiva==='Pessoais'){
       body.innerHTML = `
         <div class="grid-2">
-          <div class="field"><label>Nome completo</label><input id="fu_nome" value="${escapeHtml(d.nome)}"></div>
-          <div class="field"><label>CPF</label><input id="fu_cpf" value="${escapeHtml(d.cpf)}"></div>
-          <div class="field"><label>RG</label><input id="fu_rg" value="${escapeHtml(d.rg)}"></div>
-          <div class="field"><label>Data de nascimento</label><input type="date" id="fu_dataNascimento" value="${d.dataNascimento||''}"></div>
-          <div class="field"><label>Estado civil</label><input id="fu_estadoCivil" value="${escapeHtml(d.estadoCivil)}"></div>
-          <div class="field"><label>Telefone</label><input id="fu_telefone" value="${escapeHtml(d.telefone)}"></div>
-          <div class="field"><label>E-mail</label><input type="email" id="fu_email" value="${escapeHtml(d.email)}"></div>
-          <div class="field"><label>CEP</label><input id="fu_cep" value="${escapeHtml(d.cep)}"></div>
+          <div class="field"><label>CPF</label><input id="fc_cpf" value="${escapeHtml(d.cpf)}"></div>
+          <div class="field"><label>RG</label><input id="fc_rg" value="${escapeHtml(d.rg)}"></div>
+          <div class="field"><label>Data de nascimento</label><input type="date" id="fc_dataNascimento" value="${d.dataNascimento||''}"></div>
+          <div class="field"><label>Estado civil</label><select id="fc_estadoCivil">
+            <option value="">—</option>
+            ${['Solteiro(a)','Casado(a)','União estável','Divorciado(a)','Viúvo(a)'].map(o=>`<option value="${o}" ${d.estadoCivil===o?'selected':''}>${o}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>E-mail</label><input type="email" id="fc_email" value="${escapeHtml(d.email)}"></div>
+          <div class="field"><label>CEP</label><input id="fc_cep" value="${escapeHtml(d.cep)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Telefones</div>
+        <div class="grid-3">
+          <div class="field"><label>Fixo</label><input id="fc_telefoneFixo" value="${escapeHtml(d.telefoneFixo)}"></div>
+          <div class="field"><label>Celular particular</label><input id="fc_celularParticular" value="${escapeHtml(d.celularParticular)}"></div>
+          <div class="field"><label>Celular da loja</label><input id="fc_celularLoja" value="${escapeHtml(d.celularLoja)}"></div>
         </div>
         <div class="grid-3">
-          <div class="field"><label>Endereço</label><input id="fu_endereco" value="${escapeHtml(d.endereco)}"></div>
-          <div class="field"><label>Número</label><input id="fu_numero" value="${escapeHtml(d.numero)}"></div>
-          <div class="field"><label>Complemento</label><input id="fu_complemento" value="${escapeHtml(d.complemento)}"></div>
+          <div class="field"><label>Endereço</label><input id="fc_endereco" value="${escapeHtml(d.endereco)}"></div>
+          <div class="field"><label>Número</label><input id="fc_numero" value="${escapeHtml(d.numero)}"></div>
+          <div class="field"><label>Complemento</label><input id="fc_complemento" value="${escapeHtml(d.complemento)}"></div>
         </div>
         <div class="grid-3">
-          <div class="field"><label>Bairro</label><input id="fu_bairro" value="${escapeHtml(d.bairro)}"></div>
-          <div class="field"><label>Cidade</label><input id="fu_cidade" value="${escapeHtml(d.cidade)}"></div>
-          <div class="field"><label>Estado</label><input id="fu_estado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml(d.estado)}"></div>
+          <div class="field"><label>Bairro</label><input id="fc_bairro" value="${escapeHtml(d.bairro)}"></div>
+          <div class="field"><label>Cidade</label><input id="fc_cidade" value="${escapeHtml(d.cidade)}"></div>
+          <div class="field"><label>Estado</label><input id="fc_estado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml(d.estado)}"></div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Contato de emergência</label><input id="fu_contatoEmergenciaNome" value="${escapeHtml(d.contatoEmergenciaNome)}"></div>
-          <div class="field"><label>Telefone do contato</label><input id="fu_contatoEmergenciaTelefone" value="${escapeHtml(d.contatoEmergenciaTelefone)}"></div>
+          <div class="field"><label>Contato de emergência</label><input id="fc_contatoEmergenciaNome" value="${escapeHtml(d.contatoEmergenciaNome)}"></div>
+          <div class="field"><label>Telefone do contato</label><input id="fc_contatoEmergenciaTelefone" value="${escapeHtml(d.contatoEmergenciaTelefone)}"></div>
         </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Filhos</div>
+        <div class="field"><label>Tem filhos?</label>
+          <select id="fc_temFilhos">
+            <option value="nao" ${d.temFilhos==='nao'?'selected':''}>Não</option>
+            <option value="sim" ${d.temFilhos==='sim'?'selected':''}>Sim</option>
+          </select>
+        </div>
+        <div id="fc_filhosArea"></div>
       `;
+      ligarCampos(body);
+      montarSecaoFilhos();
+      document.getElementById('fc_temFilhos').addEventListener('change', e=>{
+        d.temFilhos = e.target.value;
+        if(d.temFilhos==='sim' && d.filhos.length===0) d.filhos = [{ dataNascimento:'' }];
+        if(d.temFilhos==='nao') d.filhos = [];
+        montarSecaoFilhos();
+      });
+      function montarSecaoFilhos(){
+        const area = document.getElementById('fc_filhosArea');
+        if(d.temFilhos!=='sim'){ area.innerHTML=''; return; }
+        area.innerHTML = `
+          <div class="field" style="max-width:160px;"><label>Quantos filhos?</label><input type="number" min="1" id="fc_qtdFilhos" value="${d.filhos.length||1}"></div>
+          <div id="fc_filhosLista"></div>
+        `;
+        desenharListaFilhos();
+        document.getElementById('fc_qtdFilhos').addEventListener('input', e=>{
+          const qtd = Math.max(1, parseInt(e.target.value)||1);
+          const atual = d.filhos.length;
+          if(qtd > atual){ for(let i=atual;i<qtd;i++) d.filhos.push({ dataNascimento:'' }); }
+          else if(qtd < atual){ d.filhos = d.filhos.slice(0, qtd); }
+          desenharListaFilhos();
+        });
+        desabilitarSeSomenteLeitura(area);
+      }
+      function calcularIdade(dataNasc){
+        if(!dataNasc) return null;
+        const hoje = new Date(); const nasc = new Date(dataNasc+'T00:00:00');
+        let idade = hoje.getFullYear() - nasc.getFullYear();
+        const m = hoje.getMonth() - nasc.getMonth();
+        if(m<0 || (m===0 && hoje.getDate()<nasc.getDate())) idade--;
+        return idade>=0 ? idade : null;
+      }
+      function desenharListaFilhos(){
+        const lista = document.getElementById('fc_filhosLista');
+        lista.innerHTML = d.filhos.map((f,i)=>{
+          const idade = calcularIdade(f.dataNascimento);
+          return `
+          <div class="grid-2" style="align-items:end;">
+            <div class="field"><label>Data de nascimento — filho(a) ${i+1}</label><input type="date" data-filhodata="${i}" value="${f.dataNascimento||''}"></div>
+            <div class="field"><label>Idade atual</label><input value="${idade!==null?idade+' anos':'—'}" disabled></div>
+          </div>
+        `;
+        }).join('');
+        lista.querySelectorAll('[data-filhodata]').forEach(el=>{
+          el.addEventListener('input', ()=>{
+            d.filhos[Number(el.dataset.filhodata)].dataNascimento = el.value;
+            desenharListaFilhos();
+          });
+        });
+        desabilitarSeSomenteLeitura(lista);
+      }
     } else if(abaAtiva==='Profissionais'){
       body.innerHTML = `
         <div class="grid-2">
-          <div class="field"><label>Cargo</label><input id="fu_cargo" value="${escapeHtml(d.cargo)}"></div>
-          <div class="field"><label>Loja</label>
-            <select id="fu_loja"><option value="">—</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.nome)}" ${d.loja===l.nome?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select>
-          </div>
-          <div class="field"><label>Data de admissão</label><input type="date" id="fu_dataAdmissao" value="${d.dataAdmissao||''}"></div>
-          <div class="field"><label>Tipo de contrato</label>
-            <select id="fu_tipoContrato">${['CLT','Estágio','PJ','Autônomo'].map(t=>`<option value="${t}" ${d.tipoContrato===t?'selected':''}>${t}</option>`).join('')}</select>
-          </div>
-          <div class="field"><label>Salário (R$)</label><input type="number" step="0.01" id="fu_salario" value="${d.salario!==null?d.salario:''}"></div>
-          <div class="field"><label>PIS/PASEP</label><input id="fu_pis" value="${escapeHtml(d.pis)}"></div>
-          <div class="field"><label>CTPS — número</label><input id="fu_ctpsNumero" value="${escapeHtml(d.ctpsNumero)}"></div>
-          <div class="field"><label>CTPS — série</label><input id="fu_ctpsSerie" value="${escapeHtml(d.ctpsSerie)}"></div>
+          <div class="field"><label>Loja</label><select id="fc_loja"><option value="">—</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.nome)}" ${d.loja===l.nome?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+          <div class="field"><label>Data de admissão</label><input type="date" id="fc_dataAdmissao" value="${d.dataAdmissao||''}"></div>
+          <div class="field"><label>Tipo de contrato</label><select id="fc_tipoContrato">${['CLT','Estágio','PJ','Autônomo'].map(t=>`<option value="${t}" ${d.tipoContrato===t?'selected':''}>${t}</option>`).join('')}</select></div>
+          ${currentUser.nivel==='diretoria' ? `<div class="field"><label>Salário (R$)</label><input type="number" step="0.01" id="fc_salario" value="${d.salario!==null?d.salario:''}"></div>` : ''}
+          <div class="field"><label>PIS/PASEP</label><input id="fc_pis" value="${escapeHtml(d.pis)}"></div>
+          <div class="field"><label>CTPS — número</label><input id="fc_ctpsNumero" value="${escapeHtml(d.ctpsNumero)}"></div>
+          <div class="field"><label>CTPS — série</label><input id="fc_ctpsSerie" value="${escapeHtml(d.ctpsSerie)}"></div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Status</label>
-            <select id="fu_status"><option value="ativo" ${d.status==='ativo'?'selected':''}>Ativo</option><option value="desligado" ${d.status==='desligado'?'selected':''}>Desligado</option></select>
-          </div>
-          <div class="field"><label>Data de desligamento <span class="muted">(se houver)</span></label><input type="date" id="fu_dataDesligamento" value="${d.dataDesligamento||''}"></div>
+          <div class="field"><label>Status</label><select id="fc_status"><option value="ativo" ${d.status==='ativo'?'selected':''}>Ativo</option><option value="desligado" ${d.status==='desligado'?'selected':''}>Desligado</option></select></div>
+          <div class="field"><label>Data de desligamento <span class="muted">(se houver)</span></label><input type="date" id="fc_dataDesligamento" value="${d.dataDesligamento||''}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Período de experiência <span class="muted" style="text-transform:none; font-weight:400;">(a CLT permite até 2 períodos)</span></div>
+        <div class="grid-2">
+          <div class="field"><label>Experiência 1 — início</label><input type="date" id="fc_experiencia1Data" value="${d.experiencia1Data||''}"></div>
+          <div class="field"><label>Experiência 1 — duração (dias)</label><input type="number" min="1" id="fc_experiencia1Dias" value="${d.experiencia1Dias||''}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Experiência 2 — início <span class="muted">(se houver prorrogação)</span></label><input type="date" id="fc_experiencia2Data" value="${d.experiencia2Data||''}"></div>
+          <div class="field"><label>Experiência 2 — duração (dias)</label><input type="number" min="1" id="fc_experiencia2Dias" value="${d.experiencia2Dias||''}"></div>
         </div>
       `;
+      ligarCampos(body);
     } else if(abaAtiva==='Bancários'){
       body.innerHTML = `
         <div class="grid-2">
-          <div class="field"><label>Banco</label><input id="fu_banco" value="${escapeHtml(d.banco)}"></div>
-          <div class="field"><label>Tipo de conta</label>
-            <select id="fu_tipoConta"><option value="corrente" ${d.tipoConta==='corrente'?'selected':''}>Corrente</option><option value="poupanca" ${d.tipoConta==='poupanca'?'selected':''}>Poupança</option></select>
-          </div>
-          <div class="field"><label>Agência</label><input id="fu_agencia" value="${escapeHtml(d.agencia)}"></div>
-          <div class="field"><label>Conta</label><input id="fu_conta" value="${escapeHtml(d.conta)}"></div>
+          <div class="field"><label>Banco</label><input id="fc_banco" value="${escapeHtml(d.banco)}"></div>
+          <div class="field"><label>Tipo de conta</label><select id="fc_tipoConta"><option value="corrente" ${d.tipoConta==='corrente'?'selected':''}>Corrente</option><option value="poupanca" ${d.tipoConta==='poupanca'?'selected':''}>Poupança</option></select></div>
+          <div class="field"><label>Agência</label><input id="fc_agencia" value="${escapeHtml(d.agencia)}"></div>
+          <div class="field"><label>Conta</label><input id="fc_conta" value="${escapeHtml(d.conta)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">PIX</div>
+        <div class="grid-2">
+          <div class="field"><label>Tipo de PIX</label><select id="fc_tipoPix">
+            <option value="">—</option>
+            ${['CPF','CNPJ','E-mail','Telefone','Chave aleatória'].map(o=>`<option value="${o}" ${d.tipoPix===o?'selected':''}>${o}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>Número do PIX</label><input id="fc_chavePix" value="${escapeHtml(d.chavePix)}"></div>
         </div>
       `;
-    } else if(abaAtiva==='Acesso'){
-      const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===(f&&f.funcionarioId));
+      ligarCampos(body);
+    } else if(abaAtiva==='Acesso' && currentUser.nivel==='diretoria'){
+      const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
       const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
       const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
       const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
       body.innerHTML = `
-        <p class="muted" style="margin-top:0;">Só visualização aqui — pra editar o acesso (enviar convite, ver a senha), use o módulo Cadastro → Funcionários.</p>
-        <div class="field"><label>Nível de acesso</label><input value="${escapeHtml(usuarioLigado?levelLabel(usuarioLigado.nivel):(f&&f.cargo)||'—')}" disabled></div>
-        <div class="field"><label>E-mail cadastrado</label><input value="${escapeHtml(usuarioLigado?usuarioLigado.email||'—':'—')}" disabled></div>
+        <div class="field"><label>Nível de acesso</label>
+          <select id="fc_nivelAcesso">${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Lojas liberadas</label>
+          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
+        </div>
+        <button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>
+        <hr style="margin:16px 0; border-color:var(--surface-2);">
+        <div class="field"><label>E-mail (recebe o link pra definir a senha)</label><input type="email" id="fc_emailAcesso" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
         <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
+        ${status==='ativo' ? `<p class="muted">Senha atual (visível só pra diretoria): <b style="color:var(--ink); letter-spacing:1px;">${escapeHtml(usuarioLigado.senha||'')}</b></p>` : ''}
+        <button type="button" class="btn btn-accent btn-sm" id="btnEnviarConvite">${status==='sem_acesso' ? '📧 Enviar convite de acesso' : '📧 Reenviar convite (gera nova senha)'}</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnEnviarConviteCadastro" style="margin-left:6px;">📋 Enviar link de cadastro completo (1 dia)</button>
+        <p class="muted" style="margin-top:10px;">Salve o nível e as lojas antes de enviar o convite. O funcionário recebe um e-mail com um link pra escolher a própria senha — o nível e as lojas não mudam com o convite. O link de "cadastro completo" deixa o próprio funcionário preencher os dados pessoais/profissionais/bancários dele e já escolher a senha, tudo numa página só, válida por 24h.</p>
       `;
+      document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
+      document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
+        chk.addEventListener('change', ()=>{
+          d.lojasAcesso = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
+        });
+      });
+      document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
+        const btn = document.getElementById('btnSalvarAcesso');
+        btn.disabled = true; btn.textContent = 'Salvando...';
+        const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: d.nivelAcesso, lojas: d.lojasAcesso });
+        btn.disabled = false; btn.textContent = '💾 Salvar nível e lojas';
+        if(r && r.ok){
+          showToast('Acesso atualizado.');
+          const configAtualizada = await configGetUnificada();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+        } else {
+          showToast((r && r.error) || 'Não foi possível salvar o acesso.');
+        }
+      });
+      document.getElementById('fc_emailAcesso').addEventListener('input', e=>{ d.emailAcesso = e.target.value; });
+      document.getElementById('btnEnviarConvite').addEventListener('click', async ()=>{
+        const email = document.getElementById('fc_emailAcesso').value.trim();
+        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
+        const btn = document.getElementById('btnEnviarConvite');
+        btn.disabled = true; btn.textContent = 'Enviando...';
+        const r = await chamarFuncionarioAcesso({ op:'enviarConvite', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
+        btn.disabled = false;
+        if(r && r.ok){
+          showToast('Convite enviado! O funcionário vai receber um e-mail pra definir a senha.');
+          const configAtualizada = await configGetUnificada();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível enviar o convite.');
+          renderCorpo();
+        }
+      });
+      document.getElementById('btnEnviarConviteCadastro').addEventListener('click', async ()=>{
+        const email = document.getElementById('fc_emailAcesso').value.trim();
+        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
+        const btn = document.getElementById('btnEnviarConviteCadastro');
+        btn.disabled = true; btn.textContent = 'Enviando...';
+        const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
+        btn.disabled = false; btn.textContent = '📋 Enviar link de cadastro completo (1 dia)';
+        if(r && r.ok){
+          showToast('Link de cadastro completo enviado! Válido por 24 horas.');
+          const configAtualizada = await configGetUnificada();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível enviar o link de cadastro.');
+        }
+      });
     }
-    // religa os campos já preenchidos com o holder `d`, pra não perder ao trocar de aba
+    desabilitarSeSomenteLeitura(body);
+  }
+  function ligarCampos(body){
     body.querySelectorAll('input, select').forEach(el=>{
-      const campo = el.id.replace('fu_','');
-      el.addEventListener('input', ()=>{ d[campo] = el.value; });
-      el.addEventListener('change', ()=>{ d[campo] = el.value; });
-      if(!podeEditar) el.disabled = true;
+      const campo = el.id.replace('fc_','');
+      const handler = ()=>{ d[campo] = el.value; };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
     });
   }
   renderCorpo(); renderAbas();
 
-  document.getElementById('btnCancelarFunc').addEventListener('click', closeModal);
-  if(document.getElementById('btnSalvarFunc'))
-  document.getElementById('btnSalvarFunc').addEventListener('click', async ()=>{
-    if(!d.nome || !d.nome.trim()){ abaAtiva='Pessoais'; renderCorpo(); renderAbas(); showToast('Informe o nome do funcionário.'); return; }
-    // Confere de novo, fresco, se já não existe uma ficha real pra esse funcionário (ex:
-    // ele preencheu o link de autocadastro dele enquanto esta tela estava aberta) —
-    // assim nunca cria uma ficha duplicada.
-    let idFinal = f ? f.id : uid('func');
-    if(f && f.funcionarioId){
-      const frescos = await funcionariosGet();
-      const existente = frescos.find(p=>p.funcionarioId===f.funcionarioId);
-      if(existente) idFinal = existente.id;
+  document.getElementById('btnCancelarFuncCompleto').addEventListener('click', closeModal);
+  if(podeEditar)
+  document.getElementById('btnSalvarFuncCompleto').addEventListener('click', async ()=>{
+    if(!d.nome || !d.nome.trim()){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Informe o nome.'); return; }
+    if(d.cargos.length===0){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Selecione ao menos uma função.'); return; }
+    // 1) Atualiza o básico (config.funcionarios) — usado em todo o app
+    const funcCadastro = (config.funcionarios||[]).find(f=>f.id===funcionario.id);
+    if(funcCadastro){
+      funcCadastro.nome = d.nome.trim();
+      funcCadastro.apelido = (d.apelido||'').trim();
+      funcCadastro.cargos = d.cargos;
     }
-    // Espalha o registro original ANTES do formulário: assim o funcionarioId (elo com o
-    // cadastro central) e os campos que só existem no módulo Cadastro (foto, celulares,
-    // filhos, experiências, PIX...) não somem ao salvar por aqui.
-    const dados = {
-      ...(f||{}),
-      id: idFinal,
-      ...d,
-      salario: d.salario===''||d.salario===null?null:parseFloat(d.salario),
-      criadoEm: f?f.criadoEm:Date.now(),
+    const okConfig = await configSave();
+    // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId — confere de
+    // novo, fresco, se já não existe uma ficha (ex: o funcionário preencheu o link de
+    // autocadastro dele enquanto esta tela estava aberta), pra nunca duplicar o cadastro.
+    const perfisFrescos = await funcionariosGet();
+    const perfilAtual = perfisFrescos.find(p=>p.funcionarioId===funcionario.id) || perfil;
+    const perfilFinal = {
+      id: perfilAtual ? perfilAtual.id : uid('func'),
+      funcionarioId: funcionario.id,
+      nome: d.nome.trim(), apelido: (d.apelido||'').trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
+      telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
+      temFilhos:d.temFilhos, filhos: d.temFilhos==='sim' ? d.filhos : [],
+      email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
+      bairro:d.bairro, cidade:d.cidade, estado:d.estado, cep:d.cep,
+      contatoEmergenciaNome:d.contatoEmergenciaNome, contatoEmergenciaTelefone:d.contatoEmergenciaTelefone,
+      cargo: cargoLabelPrincipal(d.cargos), loja:d.loja, dataAdmissao:d.dataAdmissao, tipoContrato:d.tipoContrato,
+      experiencia1Data:d.experiencia1Data, experiencia1Dias: d.experiencia1Dias===''?null:parseInt(d.experiencia1Dias),
+      experiencia2Data:d.experiencia2Data, experiencia2Dias: d.experiencia2Dias===''?null:parseInt(d.experiencia2Dias),
+      salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), ctpsNumero:d.ctpsNumero, ctpsSerie:d.ctpsSerie, pis:d.pis,
+      status:d.status, dataDesligamento:d.dataDesligamento,
+      banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta, tipoPix:d.tipoPix, chavePix:d.chavePix,
+      criadoEm: perfilAtual ? perfilAtual.criadoEm : Date.now(),
     };
-    delete dados.semFicha; // marcação de tela; a partir daqui a ficha existe de verdade
-    const ok = await funcionarioSalvar(dados);
-    if(ok){
-      const idx = funcionarios.findIndex(x=>x.id===dados.id);
-      if(idx>=0) funcionarios[idx] = dados; else funcionarios.push(dados);
+    const okPerfil = await funcionarioSalvar(perfilFinal);
+    if(okConfig && okPerfil){
       closeModal();
-      if(onSalvarExtra) onSalvarExtra(); else if(window.__redrawFuncionarios) window.__redrawFuncionarios();
-      showToast(editando ? 'Funcionário atualizado.' : 'Funcionário cadastrado.');
+      funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+      if(window.__redrawFuncionarios) window.__redrawFuncionarios();
+      showToast('Cadastro do funcionário atualizado.');
     }
   });
 }

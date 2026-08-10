@@ -435,20 +435,6 @@ async function gatewayCall(body){
 async function gatewayLogin(senhaTentativa){
   return gatewayCall({ op:'login', senha: senhaTentativa });
 }
-const FUNCIONARIO_ACESSO_URL = SUPABASE_URL + "/functions/v1/funcionario-acesso";
-async function chamarFuncionarioAcesso(body){
-  try{
-    const res = await fetch(FUNCIONARIO_ACESSO_URL, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
-      body: JSON.stringify(body),
-    });
-    return await res.json();
-  }catch(e){
-    console.error('erro ao falar com o servidor (acesso)', e);
-    return { error: 'Não foi possível conectar. Verifique sua internet.' };
-  }
-}
 /** Shim com a mesma "forma" do cliente Supabase antigo, pra não precisar reescrever
  * cada chamada existente — só troca o que acontece por baixo dos panos. */
 const supabaseClient = {
@@ -1101,11 +1087,9 @@ const CFG_TABS = [
   { id:'clientes', label:'Clientes' },
   { id:'produto', label:'Produto' },
   { id:'lojas', label:'Lojas' },
-  { id:'funcionarios', label:'Funcionários' },
   { id:'pagamento', label:'Formas de Pagamento' },
   { id:'impressao', label:'Impressão & Etiquetas' },
   { id:'statusOrcamento', label:'Status de Orçamento' },
-  { id:'acessos', label:'Perfis de Acesso' },
   { id:'mensagens', label:'Mensagens' },
 ];
 let currentCfgTab = 'clientes';
@@ -1130,14 +1114,12 @@ function renderCfgTab(tab){
   if(tab==='clientes') return renderClientesTab(body);
   if(tab==='produto') return renderProdutoUnificadoTab(body);
   if(tab==='lojas') return renderLojasTab(body);
-  if(tab==='funcionarios') return renderFuncionariosTab(body);
   if(tab==='produtos') return renderProdutosTab(body);
   if(tab==='joias') return renderJoiasTab(body);
   if(tab==='estoque') return renderEstoqueTab(body);
   if(tab==='pagamento') return renderPagamentoTab(body);
   if(tab==='impressao') return renderImpressaoTab(body);
   if(tab==='statusOrcamento') return renderStatusOrcamentoTab(body);
-  if(tab==='acessos') return renderAcessosTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
 }
 
@@ -1983,471 +1965,6 @@ function renderLojasTab(main){
 }
 
 /* ---------- FUNCIONÁRIOS ---------- */
-function renderFuncionariosTab(main){
-  main.innerHTML = `
-    <div class="card">
-      <div class="section-label">Funcionários</div>
-      <p class="muted" style="margin:-4px 0 14px;">Cadastro único por funcionário: função (usada nos módulos), dados pessoais, profissionais e bancários — tudo numa aba só. Clique em ✎ pra abrir o cadastro completo.</p>
-      <div id="funcRows"></div>
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
-        <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
-        <div class="field" style="flex:0 1 150px; min-width:120px; margin-bottom:0;"><input id="func_apelido" placeholder="Apelido (opcional)"></div>
-        <div class="cargo-checks">
-          <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
-          <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
-          <label><input type="checkbox" value="gerente" class="func_cargo_new"> Gerente</label>
-          <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
-        </div>
-        <div class="field" style="flex:0 1 200px; min-width:170px; margin-bottom:0;">
-          <select id="func_lojaNova"><option value="">Loja de acesso...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
-        </div>
-        <div class="field" style="flex:0 1 220px; min-width:180px; margin-bottom:0;"><input type="email" id="func_emailNovo" placeholder="E-mail (opcional — envia link de cadastro)"></div>
-        <button class="btn btn-accent btn-sm" id="btnAddFunc">+ Adicionar</button>
-      </div>
-    </div>
-  `;
-  function cargoLabel(c){ return c==='vendedora'?'Vendedora':c==='oficina'?'Oficina':'Diretor(a)'; }
-  function renderRows(){
-    const wrap = document.getElementById('funcRows');
-    if(config.funcionarios.length===0){ wrap.innerHTML = `<div class="empty">Nenhum funcionário cadastrado.</div>`; return; }
-    wrap.innerHTML = config.funcionarios.map((f,i)=>`
-      <div class="code-list-item">
-        <div><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''} ${(f.cargos||[]).map(c=>`<span class="chip" style="margin-left:6px;">${cargoLabel(c)}</span>`).join('')}</div>
-        <div style="display:flex; gap:4px;">
-          <button class="icon-btn" data-editfunc="${i}" title="Cadastro completo (RH)">✎</button>
-          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
-        </div>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-editfunc]').forEach(b=>{
-      b.addEventListener('click', ()=> abrirFuncionarioCompletoModal(config.funcionarios[Number(b.dataset.editfunc)]) );
-    });
-    wrap.querySelectorAll('[data-del]').forEach(b=>{
-      b.addEventListener('click', async ()=>{
-        config.funcionarios.splice(Number(b.dataset.del),1);
-        await configSave();
-        renderRows();
-        showToast('Funcionário removido.');
-      });
-    });
-  }
-  renderRows();
-  document.getElementById('btnAddFunc').addEventListener('click', async ()=>{
-    const nome = document.getElementById('func_nome').value.trim();
-    const apelido = document.getElementById('func_apelido').value.trim();
-    const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
-    const lojaEscolhida = document.getElementById('func_lojaNova').value;
-    const email = document.getElementById('func_emailNovo').value.trim();
-    if(!nome){ showToast('Informe o nome do funcionário.'); return; }
-    if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-    if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
-    const novoId = uid('func');
-    config.funcionarios.push({ id: novoId, nome, apelido, cargos });
-    await configSave();
-    // Já deixa o acesso inicializado (nível Vendedora + a loja escolhida aqui).
-    // A diretoria pode ajustar depois pela aba Acesso do cadastro completo.
-    await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
-    let mensagem = 'Funcionário cadastrado.';
-    if(email){
-      const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
-      mensagem = (rConvite && rConvite.ok)
-        ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).'
-        : 'Funcionário cadastrado, mas não foi possível enviar o link por e-mail: ' + ((rConvite && rConvite.error) || 'erro desconhecido');
-    }
-    document.getElementById('func_nome').value = '';
-    document.getElementById('func_apelido').value = '';
-    document.getElementById('func_lojaNova').value = '';
-    document.getElementById('func_emailNovo').value = '';
-    document.querySelectorAll('.func_cargo_new').forEach(c=>c.checked=false);
-    renderRows();
-    showToast(mensagem);
-  });
-}
-
-const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','Acesso'];
-/**
- * Cadastro completo e unificado de um funcionário: a função/cargo (usada em todo o
- * app pros módulos de venda/O.S./Venda PG) fica na mesma tela que os dados de RH
- * (pessoais/profissionais/bancários, que também aparecem no Departamento Pessoal).
- * Ligação entre as duas tabelas é por "funcionarioId" — criada automaticamente na
- * primeira vez que alguém salva dados de RH pra esse funcionário.
- */
-async function abrirFuncionarioCompletoModal(funcionario){
-  const todosPerfis = await dpFuncionariosGetTodos(true); // busca fresca: garante ver o que o funcionário já preencheu pelo link
-  let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
-  const abasVisiveis = currentUser.nivel==='diretoria' ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
-  const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
-  const d = {
-    nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
-    cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
-    telefoneFixo: perfil?perfil.telefoneFixo:'', celularParticular: perfil?perfil.celularParticular:'', celularLoja: perfil?perfil.celularLoja:'',
-    temFilhos: perfil?(perfil.temFilhos||'nao'):'nao', filhos: perfil&&Array.isArray(perfil.filhos)?perfil.filhos.map(f=>({...f})):[],
-    email: perfil?perfil.email:'', endereco: perfil?perfil.endereco:'', numero: perfil?perfil.numero:'',
-    complemento: perfil?perfil.complemento:'', bairro: perfil?perfil.bairro:'', cidade: perfil?perfil.cidade:'', estado: perfil?perfil.estado:'', cep: perfil?perfil.cep:'',
-    contatoEmergenciaNome: perfil?perfil.contatoEmergenciaNome:'', contatoEmergenciaTelefone: perfil?perfil.contatoEmergenciaTelefone:'',
-    loja: perfil?perfil.loja:'', dataAdmissao: perfil?perfil.dataAdmissao:'', tipoContrato: perfil?(perfil.tipoContrato||'CLT'):'CLT',
-    experiencia1Data: perfil?perfil.experiencia1Data:'', experiencia1Dias: perfil?perfil.experiencia1Dias:'',
-    experiencia2Data: perfil?perfil.experiencia2Data:'', experiencia2Dias: perfil?perfil.experiencia2Dias:'',
-    salario: perfil&&perfil.salario!==undefined?perfil.salario:null, ctpsNumero: perfil?perfil.ctpsNumero:'', ctpsSerie: perfil?perfil.ctpsSerie:'', pis: perfil?perfil.pis:'',
-    status: perfil?(perfil.status||'ativo'):'ativo', dataDesligamento: perfil?perfil.dataDesligamento:'',
-    banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
-    tipoPix: perfil?(perfil.tipoPix||''):'', chavePix: perfil?perfil.chavePix:'',
-    nivelAcesso: usuarioAcesso?usuarioAcesso.nivel:'vendedora',
-    lojasAcesso: usuarioAcesso&&Array.isArray(usuarioAcesso.lojas)?[...usuarioAcesso.lojas]:[],
-  };
-  let abaAtiva = 'Básico';
-  openModal(`
-    <div class="section-label">Cadastro completo — ${escapeHtml(funcionario.nome)}</div>
-    <div class="mini-tabs" id="fcAbas" style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${abasVisiveis.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fctab="${a}">${a}</button>`).join('')}</div>
-    <div id="fcAbaBody"></div>
-    <div class="modal-actions">
-      <button class="btn btn-accent" id="btnSalvarFuncCompleto">Salvar</button>
-      <button class="btn btn-ghost" id="btnCancelarFuncCompleto">Cancelar</button>
-    </div>
-  `);
-  function renderAbas(){
-    document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=>{
-      b.classList.toggle('btn-accent', b.dataset.fctab===abaAtiva);
-      b.classList.toggle('btn-ghost', b.dataset.fctab!==abaAtiva);
-    });
-  }
-  document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=> b.addEventListener('click', ()=>{ abaAtiva=b.dataset.fctab; renderCorpo(); renderAbas(); }));
-
-  function renderCorpo(){
-    const body = document.getElementById('fcAbaBody');
-    if(!body) return; // modal já foi fechado (ex: usuário saiu enquanto uma ação assíncrona ainda rodava)
-    if(abaAtiva==='Básico'){
-      body.innerHTML = `
-        <div class="field"><label>Nome completo</label><input id="fc_nome" value="${escapeHtml(d.nome)}"></div>
-        <div class="field"><label>Apelido</label><input id="fc_apelido" value="${escapeHtml(d.apelido||'')}" placeholder="Como aparece nas listas dos módulos">
-          <p class="muted" style="margin:4px 0 0; font-size:12px;">É este nome que aparece nas listas de seleção dos outros módulos (venda, O.S., orçamento, transferências, Venda PG). Se ficar em branco, usa o nome completo.</p>
-        </div>
-        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função (usada nos módulos de venda, O.S., Venda PG...)</div>
-        <div class="cargo-checks">
-          <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''}> Vendedora</label>
-          <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''}> Oficina</label>
-          <label><input type="checkbox" value="gerente" class="fc_cargo" ${d.cargos.includes('gerente')?'checked':''}> Gerente</label>
-          <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''}> Diretor(a)</label>
-        </div>
-        <p class="muted" style="margin-top:10px;">O que você preencher nas abas Pessoais/Profissionais/Bancários também fica disponível no módulo Departamento Pessoal.</p>
-        <div id="fc_fotoArea"></div>
-      `;
-      montarFotoFuncionario();
-      document.getElementById('fc_nome').addEventListener('input', e=> d.nome = e.target.value);
-      document.querySelectorAll('.fc_cargo').forEach(el=>{
-        el.addEventListener('change', ()=>{
-          d.cargos = Array.from(document.querySelectorAll('.fc_cargo:checked')).map(c=>c.value);
-        });
-      });
-      function montarFotoFuncionario(){
-        const area = document.getElementById('fc_fotoArea');
-        area.innerHTML = `
-          <div class="section-label" style="margin-top:14px;">Foto do funcionário</div>
-          <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
-            ${d.foto ? `<img src="${escapeHtml(d.foto)}" style="width:84px; height:84px; border-radius:50%; object-fit:cover; border:1px solid var(--line);">` : `<div style="width:84px; height:84px; border-radius:50%; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--ink-faint); font-size:11px; text-align:center;">Sem foto</div>`}
-            <div style="display:flex; gap:8px; flex-wrap:wrap;">
-              <input type="file" accept="image/*" id="fc_inputAnexarFoto" style="display:none;">
-              <input type="file" accept="image/*" capture="user" id="fc_inputTirarFoto" style="display:none;">
-              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnAnexarFoto">📎 Anexar foto</button>
-              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnTirarFoto">📷 Tirar foto</button>
-              ${d.foto ? `<button type="button" class="btn btn-ghost btn-sm" id="fc_btnRemoverFoto" style="color:var(--danger);">Remover</button>` : ''}
-            </div>
-          </div>
-          <div class="muted" id="fc_fotoStatus" style="margin-top:6px;"></div>
-        `;
-        document.getElementById('fc_btnAnexarFoto').addEventListener('click', ()=> document.getElementById('fc_inputAnexarFoto').click());
-        document.getElementById('fc_btnTirarFoto').addEventListener('click', ()=> document.getElementById('fc_inputTirarFoto').click());
-        document.getElementById('fc_inputAnexarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
-        document.getElementById('fc_inputTirarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
-        const btnRemover = document.getElementById('fc_btnRemoverFoto');
-        if(btnRemover) btnRemover.addEventListener('click', ()=>{ d.foto = ''; montarFotoFuncionario(); });
-      }
-      async function processarFotoFuncionario(file){
-        if(!file) return;
-        const status = document.getElementById('fc_fotoStatus');
-        status.textContent = 'Enviando foto...';
-        try{
-          const dataUrl = await readFileAsDataUrl(file);
-          const nomeArquivo = 'funcionario_' + (funcionario.id||'novo') + '_' + Date.now() + '.jpg';
-          const resultado = await uploadFotoParaDrive(dataUrl, nomeArquivo, 'funcionarios', false);
-          d.foto = resultado.url;
-          status.textContent = '';
-          montarFotoFuncionario();
-        }catch(e){
-          console.error('erro ao enviar foto do funcionário', e);
-          status.textContent = 'Não foi possível enviar a foto. Tente novamente.';
-        }
-      }
-    } else if(abaAtiva==='Pessoais'){
-      body.innerHTML = `
-        <div class="grid-2">
-          <div class="field"><label>CPF</label><input id="fc_cpf" value="${escapeHtml(d.cpf)}"></div>
-          <div class="field"><label>RG</label><input id="fc_rg" value="${escapeHtml(d.rg)}"></div>
-          <div class="field"><label>Data de nascimento</label><input type="date" id="fc_dataNascimento" value="${d.dataNascimento||''}"></div>
-          <div class="field"><label>Estado civil</label><select id="fc_estadoCivil">
-            <option value="">—</option>
-            ${['Solteiro(a)','Casado(a)','União estável','Divorciado(a)','Viúvo(a)'].map(o=>`<option value="${o}" ${d.estadoCivil===o?'selected':''}>${o}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>E-mail</label><input type="email" id="fc_email" value="${escapeHtml(d.email)}"></div>
-          <div class="field"><label>CEP</label><input id="fc_cep" value="${escapeHtml(d.cep)}"></div>
-        </div>
-        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Telefones</div>
-        <div class="grid-3">
-          <div class="field"><label>Fixo</label><input id="fc_telefoneFixo" value="${escapeHtml(d.telefoneFixo)}"></div>
-          <div class="field"><label>Celular particular</label><input id="fc_celularParticular" value="${escapeHtml(d.celularParticular)}"></div>
-          <div class="field"><label>Celular da loja</label><input id="fc_celularLoja" value="${escapeHtml(d.celularLoja)}"></div>
-        </div>
-        <div class="grid-3">
-          <div class="field"><label>Endereço</label><input id="fc_endereco" value="${escapeHtml(d.endereco)}"></div>
-          <div class="field"><label>Número</label><input id="fc_numero" value="${escapeHtml(d.numero)}"></div>
-          <div class="field"><label>Complemento</label><input id="fc_complemento" value="${escapeHtml(d.complemento)}"></div>
-        </div>
-        <div class="grid-3">
-          <div class="field"><label>Bairro</label><input id="fc_bairro" value="${escapeHtml(d.bairro)}"></div>
-          <div class="field"><label>Cidade</label><input id="fc_cidade" value="${escapeHtml(d.cidade)}"></div>
-          <div class="field"><label>Estado</label><input id="fc_estado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml(d.estado)}"></div>
-        </div>
-        <div class="grid-2">
-          <div class="field"><label>Contato de emergência</label><input id="fc_contatoEmergenciaNome" value="${escapeHtml(d.contatoEmergenciaNome)}"></div>
-          <div class="field"><label>Telefone do contato</label><input id="fc_contatoEmergenciaTelefone" value="${escapeHtml(d.contatoEmergenciaTelefone)}"></div>
-        </div>
-        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Filhos</div>
-        <div class="field"><label>Tem filhos?</label>
-          <select id="fc_temFilhos">
-            <option value="nao" ${d.temFilhos==='nao'?'selected':''}>Não</option>
-            <option value="sim" ${d.temFilhos==='sim'?'selected':''}>Sim</option>
-          </select>
-        </div>
-        <div id="fc_filhosArea"></div>
-      `;
-      ligarCampos(body);
-      montarSecaoFilhos();
-      document.getElementById('fc_temFilhos').addEventListener('change', e=>{
-        d.temFilhos = e.target.value;
-        if(d.temFilhos==='sim' && d.filhos.length===0) d.filhos = [{ dataNascimento:'' }];
-        if(d.temFilhos==='nao') d.filhos = [];
-        montarSecaoFilhos();
-      });
-      function montarSecaoFilhos(){
-        const area = document.getElementById('fc_filhosArea');
-        if(d.temFilhos!=='sim'){ area.innerHTML=''; return; }
-        area.innerHTML = `
-          <div class="field" style="max-width:160px;"><label>Quantos filhos?</label><input type="number" min="1" id="fc_qtdFilhos" value="${d.filhos.length||1}"></div>
-          <div id="fc_filhosLista"></div>
-        `;
-        desenharListaFilhos();
-        document.getElementById('fc_qtdFilhos').addEventListener('input', e=>{
-          const qtd = Math.max(1, parseInt(e.target.value)||1);
-          const atual = d.filhos.length;
-          if(qtd > atual){ for(let i=atual;i<qtd;i++) d.filhos.push({ dataNascimento:'' }); }
-          else if(qtd < atual){ d.filhos = d.filhos.slice(0, qtd); }
-          desenharListaFilhos();
-        });
-      }
-      function calcularIdade(dataNasc){
-        if(!dataNasc) return null;
-        const hoje = new Date(); const nasc = new Date(dataNasc+'T00:00:00');
-        let idade = hoje.getFullYear() - nasc.getFullYear();
-        const m = hoje.getMonth() - nasc.getMonth();
-        if(m<0 || (m===0 && hoje.getDate()<nasc.getDate())) idade--;
-        return idade>=0 ? idade : null;
-      }
-      function desenharListaFilhos(){
-        const lista = document.getElementById('fc_filhosLista');
-        lista.innerHTML = d.filhos.map((f,i)=>{
-          const idade = calcularIdade(f.dataNascimento);
-          return `
-          <div class="grid-2" style="align-items:end;">
-            <div class="field"><label>Data de nascimento — filho(a) ${i+1}</label><input type="date" data-filhodata="${i}" value="${f.dataNascimento||''}"></div>
-            <div class="field"><label>Idade atual</label><input value="${idade!==null?idade+' anos':'—'}" disabled></div>
-          </div>
-        `;
-        }).join('');
-        lista.querySelectorAll('[data-filhodata]').forEach(el=>{
-          el.addEventListener('input', ()=>{
-            d.filhos[Number(el.dataset.filhodata)].dataNascimento = el.value;
-            desenharListaFilhos();
-          });
-        });
-      }
-    } else if(abaAtiva==='Profissionais'){
-      body.innerHTML = `
-        <div class="grid-2">
-          <div class="field"><label>Loja</label><select id="fc_loja"><option value="">—</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.nome)}" ${d.loja===l.nome?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
-          <div class="field"><label>Data de admissão</label><input type="date" id="fc_dataAdmissao" value="${d.dataAdmissao||''}"></div>
-          <div class="field"><label>Tipo de contrato</label><select id="fc_tipoContrato">${['CLT','Estágio','PJ','Autônomo'].map(t=>`<option value="${t}" ${d.tipoContrato===t?'selected':''}>${t}</option>`).join('')}</select></div>
-          ${currentUser.nivel==='diretoria' ? `<div class="field"><label>Salário (R$)</label><input type="number" step="0.01" id="fc_salario" value="${d.salario!==null?d.salario:''}"></div>` : ''}
-          <div class="field"><label>PIS/PASEP</label><input id="fc_pis" value="${escapeHtml(d.pis)}"></div>
-          <div class="field"><label>CTPS — número</label><input id="fc_ctpsNumero" value="${escapeHtml(d.ctpsNumero)}"></div>
-          <div class="field"><label>CTPS — série</label><input id="fc_ctpsSerie" value="${escapeHtml(d.ctpsSerie)}"></div>
-        </div>
-        <div class="grid-2">
-          <div class="field"><label>Status</label><select id="fc_status"><option value="ativo" ${d.status==='ativo'?'selected':''}>Ativo</option><option value="desligado" ${d.status==='desligado'?'selected':''}>Desligado</option></select></div>
-          <div class="field"><label>Data de desligamento <span class="muted">(se houver)</span></label><input type="date" id="fc_dataDesligamento" value="${d.dataDesligamento||''}"></div>
-        </div>
-        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Período de experiência <span class="muted" style="text-transform:none; font-weight:400;">(a CLT permite até 2 períodos)</span></div>
-        <div class="grid-2">
-          <div class="field"><label>Experiência 1 — início</label><input type="date" id="fc_experiencia1Data" value="${d.experiencia1Data||''}"></div>
-          <div class="field"><label>Experiência 1 — duração (dias)</label><input type="number" min="1" id="fc_experiencia1Dias" value="${d.experiencia1Dias||''}"></div>
-        </div>
-        <div class="grid-2">
-          <div class="field"><label>Experiência 2 — início <span class="muted">(se houver prorrogação)</span></label><input type="date" id="fc_experiencia2Data" value="${d.experiencia2Data||''}"></div>
-          <div class="field"><label>Experiência 2 — duração (dias)</label><input type="number" min="1" id="fc_experiencia2Dias" value="${d.experiencia2Dias||''}"></div>
-        </div>
-      `;
-      ligarCampos(body);
-    } else if(abaAtiva==='Bancários'){
-      body.innerHTML = `
-        <div class="grid-2">
-          <div class="field"><label>Banco</label><input id="fc_banco" value="${escapeHtml(d.banco)}"></div>
-          <div class="field"><label>Tipo de conta</label><select id="fc_tipoConta"><option value="corrente" ${d.tipoConta==='corrente'?'selected':''}>Corrente</option><option value="poupanca" ${d.tipoConta==='poupanca'?'selected':''}>Poupança</option></select></div>
-          <div class="field"><label>Agência</label><input id="fc_agencia" value="${escapeHtml(d.agencia)}"></div>
-          <div class="field"><label>Conta</label><input id="fc_conta" value="${escapeHtml(d.conta)}"></div>
-        </div>
-        <div class="section-label" style="margin-top:6px; border:none; padding:0;">PIX</div>
-        <div class="grid-2">
-          <div class="field"><label>Tipo de PIX</label><select id="fc_tipoPix">
-            <option value="">—</option>
-            ${['CPF','CNPJ','E-mail','Telefone','Chave aleatória'].map(o=>`<option value="${o}" ${d.tipoPix===o?'selected':''}>${o}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>Número do PIX</label><input id="fc_chavePix" value="${escapeHtml(d.chavePix)}"></div>
-        </div>
-      `;
-      ligarCampos(body);
-    } else if(abaAtiva==='Acesso' && currentUser.nivel==='diretoria'){
-      const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
-      const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
-      const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
-      const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
-      const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
-      body.innerHTML = `
-        <div class="field"><label>Nível de acesso</label>
-          <select id="fc_nivelAcesso">${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
-        </div>
-        <div class="field"><label>Lojas liberadas</label>
-          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
-        </div>
-        <button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>
-        <hr style="margin:16px 0; border-color:var(--surface-2);">
-        <div class="field"><label>E-mail (recebe o link pra definir a senha)</label><input type="email" id="fc_emailAcesso" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
-        <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
-        ${status==='ativo' ? `<p class="muted">Senha atual (visível só pra diretoria): <b style="color:var(--ink); letter-spacing:1px;">${escapeHtml(usuarioLigado.senha||'')}</b></p>` : ''}
-        <button type="button" class="btn btn-accent btn-sm" id="btnEnviarConvite">${status==='sem_acesso' ? '📧 Enviar convite de acesso' : '📧 Reenviar convite (gera nova senha)'}</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnEnviarConviteCadastro" style="margin-left:6px;">📋 Enviar link de cadastro completo (1 dia)</button>
-        <p class="muted" style="margin-top:10px;">Salve o nível e as lojas antes de enviar o convite. O funcionário recebe um e-mail com um link pra escolher a própria senha — o nível e as lojas não mudam com o convite. O link de "cadastro completo" deixa o próprio funcionário preencher os dados pessoais/profissionais/bancários dele e já escolher a senha, tudo numa página só, válida por 24h.</p>
-      `;
-      document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
-      document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
-        chk.addEventListener('change', ()=>{
-          d.lojasAcesso = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
-        });
-      });
-      document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
-        const btn = document.getElementById('btnSalvarAcesso');
-        btn.disabled = true; btn.textContent = 'Salvando...';
-        const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: d.nivelAcesso, lojas: d.lojasAcesso });
-        btn.disabled = false; btn.textContent = '💾 Salvar nível e lojas';
-        if(r && r.ok){
-          showToast('Acesso atualizado.');
-          const configAtualizada = await configGet();
-          if(configAtualizada) config.users = configAtualizada.users || [];
-        } else {
-          showToast((r && r.error) || 'Não foi possível salvar o acesso.');
-        }
-      });
-      document.getElementById('fc_emailAcesso').addEventListener('input', e=>{ d.emailAcesso = e.target.value; });
-      document.getElementById('btnEnviarConvite').addEventListener('click', async ()=>{
-        const email = document.getElementById('fc_emailAcesso').value.trim();
-        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
-        const btn = document.getElementById('btnEnviarConvite');
-        btn.disabled = true; btn.textContent = 'Enviando...';
-        const r = await chamarFuncionarioAcesso({ op:'enviarConvite', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
-        btn.disabled = false;
-        if(r && r.ok){
-          showToast('Convite enviado! O funcionário vai receber um e-mail pra definir a senha.');
-          const configAtualizada = await configGet();
-          if(configAtualizada) config.users = configAtualizada.users || [];
-          renderCorpo();
-        } else {
-          showToast((r && r.error) || 'Não foi possível enviar o convite.');
-          renderCorpo();
-        }
-      });
-      document.getElementById('btnEnviarConviteCadastro').addEventListener('click', async ()=>{
-        const email = document.getElementById('fc_emailAcesso').value.trim();
-        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
-        const btn = document.getElementById('btnEnviarConviteCadastro');
-        btn.disabled = true; btn.textContent = 'Enviando...';
-        const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
-        btn.disabled = false; btn.textContent = '📋 Enviar link de cadastro completo (1 dia)';
-        if(r && r.ok){
-          showToast('Link de cadastro completo enviado! Válido por 24 horas.');
-          const configAtualizada = await configGet();
-          if(configAtualizada) config.users = configAtualizada.users || [];
-          renderCorpo();
-        } else {
-          showToast((r && r.error) || 'Não foi possível enviar o link de cadastro.');
-        }
-      });
-    }
-  }
-  function ligarCampos(body){
-    body.querySelectorAll('input, select').forEach(el=>{
-      const campo = el.id.replace('fc_','');
-      const handler = ()=>{ d[campo] = el.value; };
-      el.addEventListener('input', handler);
-      el.addEventListener('change', handler);
-    });
-  }
-  renderCorpo(); renderAbas();
-
-  document.getElementById('btnCancelarFuncCompleto').addEventListener('click', closeModal);
-  document.getElementById('btnSalvarFuncCompleto').addEventListener('click', async ()=>{
-    if(!d.nome || !d.nome.trim()){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Informe o nome.'); return; }
-    if(d.cargos.length===0){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Selecione ao menos uma função.'); return; }
-    // 1) Atualiza o básico (config.funcionarios) — usado em todo o app
-    funcionario.nome = d.nome.trim();
-    funcionario.apelido = (d.apelido||'').trim();
-    funcionario.cargos = d.cargos;
-    const okConfig = await configSave();
-    // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId — confere de
-    // novo, fresco, se já não existe uma ficha (ex: o funcionário preencheu o link de
-    // autocadastro dele enquanto esta tela estava aberta), pra nunca duplicar o cadastro.
-    const perfisFrescos = await dpFuncionariosGetTodos(true);
-    const perfilAtual = perfisFrescos.find(p=>p.funcionarioId===funcionario.id) || perfil;
-    const perfilFinal = {
-      id: perfilAtual ? perfilAtual.id : uid('func'),
-      funcionarioId: funcionario.id,
-      nome: d.nome.trim(), apelido: (d.apelido||'').trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
-      telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
-      temFilhos:d.temFilhos, filhos: d.temFilhos==='sim' ? d.filhos : [],
-      email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
-      bairro:d.bairro, cidade:d.cidade, estado:d.estado, cep:d.cep,
-      contatoEmergenciaNome:d.contatoEmergenciaNome, contatoEmergenciaTelefone:d.contatoEmergenciaTelefone,
-      cargo: cargoLabelPrincipal(d.cargos), loja:d.loja, dataAdmissao:d.dataAdmissao, tipoContrato:d.tipoContrato,
-      experiencia1Data:d.experiencia1Data, experiencia1Dias: d.experiencia1Dias===''?null:parseInt(d.experiencia1Dias),
-      experiencia2Data:d.experiencia2Data, experiencia2Dias: d.experiencia2Dias===''?null:parseInt(d.experiencia2Dias),
-      salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), ctpsNumero:d.ctpsNumero, ctpsSerie:d.ctpsSerie, pis:d.pis,
-      status:d.status, dataDesligamento:d.dataDesligamento,
-      banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta, tipoPix:d.tipoPix, chavePix:d.chavePix,
-      criadoEm: perfilAtual ? perfilAtual.criadoEm : Date.now(),
-    };
-    const okPerfil = await dpFuncionarioSalvar(perfilFinal);
-    if(okConfig && okPerfil){
-      closeModal();
-      renderFuncionariosTab(document.getElementById('cfgBody'));
-      showToast('Cadastro do funcionário atualizado.');
-    }
-  });
-}
-function cargoLabelPrincipal(cargos){
-  if(cargos.includes('diretor')) return 'Diretor(a)';
-  if(cargos.includes('gerente')) return 'Gerente';
-  if(cargos.includes('vendedora')) return 'Vendedora';
-  if(cargos.includes('oficina')) return 'Oficina';
-  return '';
-}
-
 /* ---------- PRODUTOS (ÓTICA: categorias/subcategorias/fator) ---------- */
 /* ============================================================
    PRODUTO UNIFICADO — Categorias + Subcategorias + Joias/Metais + Estoque/Composição
@@ -2828,34 +2345,6 @@ async function produtosEstoqueGet(){
   }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
 }
 let vendasParaHistoricoProduto = null; // carregado sob demanda, só quando alguém abre o histórico de um produto
-let dpFuncionariosCache = null; // carregado sob demanda, só quando alguém abre o cadastro completo de um funcionário
-/**
- * @param {boolean} forcar - se true, ignora o cache e busca direto no Supabase.
- * Usado sempre que se abre ou salva o cadastro completo de um funcionário, pra nunca
- * mostrar (ou salvar por cima de) uma ficha desatualizada — ex: o funcionário preencheu
- * o link de autocadastro dele depois que essa aba já tinha carregado a lista antiga.
- */
-async function dpFuncionariosGetTodos(forcar){
-  if(dpFuncionariosCache !== null && !forcar) return dpFuncionariosCache;
-  try{
-    const { data, error } = await supabaseClient.from('dp_funcionarios').select('id,payload').order('created_at', { ascending:true });
-    if(error) throw error;
-    dpFuncionariosCache = (data||[]).map(r=>r.payload);
-  }catch(e){
-    console.error('erro ao carregar perfis do Departamento Pessoal', e);
-    if(dpFuncionariosCache === null) dpFuncionariosCache = []; // mantém o cache antigo se a busca fresca falhar
-  }
-  return dpFuncionariosCache;
-}
-async function dpFuncionarioSalvar(perfil){
-  try{
-    const { error } = await supabaseClient.from('dp_funcionarios').upsert({ id: perfil.id, payload: perfil });
-    if(error) throw error;
-    const idx = dpFuncionariosCache ? dpFuncionariosCache.findIndex(p=>p.id===perfil.id) : -1;
-    if(idx>=0) dpFuncionariosCache[idx] = perfil; else if(dpFuncionariosCache) dpFuncionariosCache.push(perfil);
-    return true;
-  }catch(e){ console.error('erro ao salvar perfil do Departamento Pessoal', e); showToast('Não foi possível salvar os dados de RH.'); return false; }
-}
 async function vendasParaHistoricoProdutoGet(){
   if(vendasParaHistoricoProduto !== null) return vendasParaHistoricoProduto;
   try{
@@ -3338,6 +2827,9 @@ function imprimirEtiquetaProduto(produto){
     linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
   }
 
+  const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
+  const pesoTexto = cfg.negrito!==false ? 700 : 500;
+  const reforcoCss = cfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -3345,9 +2837,10 @@ function imprimirEtiquetaProduto(produto){
 <title>Etiqueta - ${escapeHtml(produto.nome)}</title>
 <style>
   @page{ size:${cfg.larguraMm}mm ${cfg.alturaMm}mm; margin:0; }
-  body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:2mm; box-sizing:border-box; color:#000; font-size:9px; line-height:1.3; display:flex; flex-direction:column; justify-content:center; }
-  .etq-nome{ font-weight:700; font-size:10px; }
-  .etq-preco{ font-weight:700; font-size:11px; margin-top:2px; }
+  *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:1.5mm; box-sizing:border-box; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; display:flex; flex-direction:column; justify-content:center; -webkit-font-smoothing:none; ${reforcoCss} }
+  .etq-nome{ font-weight:700; font-size:${px.nome}px; }
+  .etq-preco{ font-weight:700; font-size:${px.preco}px; margin-top:2px; }
 </style>
   <!-- PWA e ícones Vilaça Joias -->
   <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAErklEQVR4nM2XyW+VVRjGf+d84x17aSmUFlMsQ9EWJLEIaCBQNUAIGBOJRqMmLhwWuvEPcGPcuXAlGxIxJhKCEA1KQpQYEmhsSEuhBCxDB9qi7b29vdze4bvf5OJ2sBOt0Kae9fed5/c+z3nPIN5f+5LPEg65lOL/CwB1sSYWAoQQAPg++P7MSS8agF3wsG0XfB9VU9ANdUaIRQHwPJ/yVWEqq2NomqS/O0VvVxJNVxk1ZfEAhAB8WLEqQqw0QCCksfvABjraBzjz/bXxWB4bQAgxrZqxrKUquHa5H9fxKBQcrjb38fFne/i77wEXz90hGNbxvGIc/6kLhBBIWVQtWA6ZkQIjDywyaYtMuoCVt8cdMEyVUERnWVmQ+z0p+nuG2fhMBUIK/r0U5uXAmG1W3saxPYJhncrqGBVVEcpWhglHDSIlJrfaB2g6f3d8wY05YpgqhlmUKhYwQTAngJSCfM4GoGZjOZsaKqlaE8MMaDiORz5rU7AcgmGdVDI37d9c1qF6fRnLKyJcbe7DcTwMc6IjZgUQopjpSNpi/dMr2LZ7DVKV9NweorXpHkODWXKZAo7j0XiwltZL94gPjBCKGPij+fp+EWLX3nUULIe2P3pRNTl3BEIIPNfDcTz2v1bHsvIgTec76bqVwHU8NF1B0xUsy+HQW5vxXJ/4wAiRqInregAoiiQ1nOPlV56ivqGKk0db6O9JEQhq4wsQZliEQoA3OskbH27FdX2OH7lM9+0EgaBGOGpgmCqu47FqdQm1myq4+OsdTFPDdT2EAKkIUskczzfWsO9wHT9801r8JjBZfEYHfB8cx+OdT7bT3z3MLyfaiZUG8GGidaQgn3No2FlNZ0ecocEskagBgOt6ZFIWjYdq2bl3Hce+auJ6y32CIX3unVBKwUja4sDr9ZgBlbMnrxMrDUyjdl2PSMygZuNyTn3TimGoCCHIpC2CYZ03P9pKNGby9ecXGBrMEIroeO7MZ8F4BEJAoeBSURVl254nOXf6Bqo6fZuQUpDP2mx+bjWJgQx93SlUTZJO5al7tpL3Pn2BoXiWo19eIp3KFzedWcQnOSCEoGA5bNnxBMl4lq5bCQxTnVa97/tousLmrVX8/nMHVs6mpNRk/+E6SkoD/PRdG50dCcKjkUz9f1aAsZbZUL+Cro4EtuViTDnBhBTkMgXqG6rIZ23amnvZ0VjDlu2ruXa5n5Zv25CKIBIzHlr1jABFeyUd7QP03k2iqJP7FUCMOlW7aSVXm/t49e0tBMM6p49dIZnIEooY4DNv8SkO+OiGwm8/3kRRJEZgcvVSCgqWS2l5iOq1peiGwo0rf9FysQczoBGOGHPaPacDALqhAv6k6oUUuI6HY7s0HqzlQSrP2RPXSSayhKMGvu8/kviMAFN7VQiBXXDRDYV3P9hOKGpw5IsLKIp8aHs9MsBkcXBsl3DU4MVDtQRCOudO3cD3QTOUxxaHed4Hdu1bjxCCuzcH6fwzjhnUFkT84QACXNcnENKpqS0jGNZpvtCNVEaPyQUas0fgT9wFzhxvJxnPkh7Oz3q7XXiA0SFl0XpVnf1qvagAAIapUWzNhX9GzgtgMYTHxpK/DZcc4B+HNBVnYr9itQAAAABJRU5ErkJggg==">
@@ -3442,17 +2935,44 @@ const NOMES_MODULOS_IMPRESSAO = { os:'Ordens de Serviço', vendas:'Vendas (PDV)'
 
 function garantirConfigImpressao(){
   if(!config.impressao){
-    config.impressao = { larguraBobina: 80, os:{}, vendas:{}, orcamentos:{} };
+    config.impressao = { larguraBobina: 80, escalaTexto:'media', negrito:true, reforcoTraco:false, mensagemRodape:'', os:{}, vendas:{}, orcamentos:{} };
   }
+  if(!config.impressao.escalaTexto) config.impressao.escalaTexto = 'media';
+  if(config.impressao.negrito===undefined) config.impressao.negrito = true;
+  if(config.impressao.reforcoTraco===undefined) config.impressao.reforcoTraco = false;
+  if(config.impressao.mensagemRodape===undefined) config.impressao.mensagemRodape = '';
   Object.keys(CAMPOS_IMPRESSAO).forEach(mod=>{
     if(!config.impressao[mod]) config.impressao[mod] = {};
     CAMPOS_IMPRESSAO[mod].forEach(c=>{ if(config.impressao[mod][c.id]===undefined) config.impressao[mod][c.id] = true; });
   });
   if(!config.etiquetaJoia){
-    config.etiquetaJoia = { larguraMm:40, alturaMm:25, campos:{ nome:true, codigoInterno:true, precoVenda:true } };
+    config.etiquetaJoia = { larguraMm:50, alturaMm:30, escalaTexto:'media', negrito:true, reforcoTraco:false, campos:{ nome:true, codigoInterno:true, precoVenda:true } };
   }
   if(!config.etiquetaJoia.campos) config.etiquetaJoia.campos = {};
+  if(!config.etiquetaJoia.escalaTexto) config.etiquetaJoia.escalaTexto = 'media';
+  if(config.etiquetaJoia.negrito===undefined) config.etiquetaJoia.negrito = true;
+  if(config.etiquetaJoia.reforcoTraco===undefined) config.etiquetaJoia.reforcoTraco = false;
 }
+/** Tamanhos de fonte (em px, pra impressora térmica de bobina 58/80mm — bem maiores
+ * que o padrão de tela, senão sai ilegível) por escala escolhida. */
+const ESCALA_BOBINA_PX = {
+  pequena: { base:12, titulo:14, sub:11 },
+  media:   { base:14, titulo:17, sub:12.5 },
+  grande:  { base:16.5, titulo:20, sub:14.5 },
+};
+/** Tamanhos de fonte (em px, pensados pra impressora térmica — bem maiores que o
+ * padrão de tela) por escala escolhida, pra cada elemento da etiqueta. */
+const ESCALA_ETIQUETA_PX = {
+  pequena: { base:11, nome:13, preco:15 },
+  media:   { base:13, nome:16, preco:19 },
+  grande:  { base:16, nome:19, preco:23 },
+};
+const PRESETS_ETIQUETA = [
+  { id:'40x25', label:'40 × 25 mm (pequena)', larguraMm:40, alturaMm:25 },
+  { id:'50x30', label:'50 × 30 mm (padrão)', larguraMm:50, alturaMm:30 },
+  { id:'60x40', label:'60 × 40 mm (grande)', larguraMm:60, alturaMm:40 },
+  { id:'80x40', label:'80 × 40 mm (caixa/estojo)', larguraMm:80, alturaMm:40 },
+];
 
 function renderImpressaoTab(main){
   garantirConfigImpressao();
@@ -3460,22 +2980,68 @@ function renderImpressaoTab(main){
     <div class="card">
       <div class="section-label">Impressão (formato bobina)</div>
       <p class="muted" style="margin:-4px 0 14px;">Escolha o que aparece no recibo impresso de O.S., Vendas e Orçamentos. Sempre em formato de bobina (impressora térmica de recibo).</p>
-      <div class="field" style="max-width:220px;"><label>Largura da bobina</label>
-        <select id="impLargura">
-          <option value="58" ${config.impressao.larguraBobina===58?'selected':''}>58mm</option>
-          <option value="80" ${config.impressao.larguraBobina!==58?'selected':''}>80mm</option>
-        </select>
+      <div class="grid-3" style="max-width:560px;">
+        <div class="field"><label>Largura da bobina</label>
+          <select id="impLargura">
+            <option value="58" ${config.impressao.larguraBobina===58?'selected':''}>58mm</option>
+            <option value="80" ${config.impressao.larguraBobina!==58?'selected':''}>80mm</option>
+          </select>
+        </div>
+        <div class="field"><label>Tamanho do texto</label>
+          <select id="impEscala">
+            <option value="pequena" ${config.impressao.escalaTexto==='pequena'?'selected':''}>Pequeno</option>
+            <option value="media" ${config.impressao.escalaTexto==='media'?'selected':''}>Médio</option>
+            <option value="grande" ${config.impressao.escalaTexto==='grande'?'selected':''}>Grande</option>
+          </select>
+        </div>
+        <div class="field"><label>Traço</label>
+          <select id="impNegrito">
+            <option value="1" ${config.impressao.negrito!==false?'selected':''}>Negrito (mais forte)</option>
+            <option value="0" ${config.impressao.negrito===false?'selected':''}>Normal</option>
+          </select>
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:10px 0 0;">
+        <input type="checkbox" id="impReforco" ${config.impressao.reforcoTraco?'checked':''}> Reforço extra de traço (deixa o texto ainda mais escuro — use se a impressora estiver fraca mesmo com negrito)
+      </label>
+      <p class="muted" style="margin:6px 0 0; font-size:12px;">Texto mais grosso (negrito) sai bem mais forte e legível em impressora térmica do que traço fino — recomendado pra rolo de 8cm.</p>
+      <div class="field" style="margin-top:12px; max-width:520px;"><label>Mensagem de rodapé <span class="muted">opcional, aparece no fim de todo recibo</span></label>
+        <input id="impRodape" value="${escapeHtml(config.impressao.mensagemRodape||'')}" placeholder="Ex: Obrigado pela preferência! Volte sempre.">
       </div>
       <div id="impCamposWrap" style="margin-top:10px;"></div>
       <button class="btn btn-accent btn-sm" id="btnSalvarImpressao" style="margin-top:14px;">Salvar impressão</button>
     </div>
     <div class="card">
       <div class="section-label">Etiqueta de joia</div>
-      <p class="muted" style="margin:-4px 0 14px;">O que aparece na etiqueta de preço/identificação de cada peça, e o tamanho físico dela.</p>
+      <p class="muted" style="margin:-4px 0 14px;">O que aparece na etiqueta de preço/identificação de cada peça, o tamanho físico dela e a força do texto.</p>
+      <div class="field" style="max-width:320px;"><label>Tamanho pronto</label>
+        <select id="etqPreset">
+          <option value="">Personalizado (definir abaixo)</option>
+          ${PRESETS_ETIQUETA.map(p=>`<option value="${p.id}" ${config.etiquetaJoia.larguraMm===p.larguraMm&&config.etiquetaJoia.alturaMm===p.alturaMm?'selected':''}>${p.label}</option>`).join('')}
+        </select>
+      </div>
       <div class="grid-2" style="max-width:360px;">
         <div class="field"><label>Largura (mm)</label><input type="number" min="10" id="etqLargura" value="${config.etiquetaJoia.larguraMm}"></div>
         <div class="field"><label>Altura (mm)</label><input type="number" min="10" id="etqAltura" value="${config.etiquetaJoia.alturaMm}"></div>
       </div>
+      <div class="grid-2" style="max-width:360px;">
+        <div class="field"><label>Tamanho do texto</label>
+          <select id="etqEscala">
+            <option value="pequena" ${config.etiquetaJoia.escalaTexto==='pequena'?'selected':''}>Pequeno</option>
+            <option value="media" ${config.etiquetaJoia.escalaTexto==='media'?'selected':''}>Médio</option>
+            <option value="grande" ${config.etiquetaJoia.escalaTexto==='grande'?'selected':''}>Grande</option>
+          </select>
+        </div>
+        <div class="field"><label>Traço</label>
+          <select id="etqNegrito">
+            <option value="1" ${config.etiquetaJoia.negrito!==false?'selected':''}>Negrito (mais forte)</option>
+            <option value="0" ${config.etiquetaJoia.negrito===false?'selected':''}>Normal</option>
+          </select>
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:10px 0 0;">
+        <input type="checkbox" id="etqReforco" ${config.etiquetaJoia.reforcoTraco?'checked':''}> Reforço extra de traço (etiqueta saindo fraca mesmo com negrito)
+      </label>
       <div class="section-label" style="margin-top:10px;">Campos na etiqueta</div>
       <div id="etqCamposWrap"></div>
       <button class="btn btn-accent btn-sm" id="btnSalvarEtiqueta" style="margin-top:14px;">Salvar etiqueta</button>
@@ -3505,8 +3071,19 @@ function renderImpressaoTab(main){
     `).join('')}
   </div>`;
 
+  document.getElementById('etqPreset').addEventListener('change', e=>{
+    const preset = PRESETS_ETIQUETA.find(p=>p.id===e.target.value);
+    if(!preset) return;
+    document.getElementById('etqLargura').value = preset.larguraMm;
+    document.getElementById('etqAltura').value = preset.alturaMm;
+  });
+
   document.getElementById('btnSalvarImpressao').addEventListener('click', async ()=>{
     config.impressao.larguraBobina = Number(document.getElementById('impLargura').value);
+    config.impressao.escalaTexto = document.getElementById('impEscala').value;
+    config.impressao.negrito = document.getElementById('impNegrito').value === '1';
+    config.impressao.reforcoTraco = document.getElementById('impReforco').checked;
+    config.impressao.mensagemRodape = document.getElementById('impRodape').value;
     impWrap.querySelectorAll('[data-impmod]').forEach(chk=>{
       config.impressao[chk.dataset.impmod][chk.dataset.impcampo] = chk.checked;
     });
@@ -3516,6 +3093,9 @@ function renderImpressaoTab(main){
   document.getElementById('btnSalvarEtiqueta').addEventListener('click', async ()=>{
     config.etiquetaJoia.larguraMm = Number(document.getElementById('etqLargura').value) || 40;
     config.etiquetaJoia.alturaMm = Number(document.getElementById('etqAltura').value) || 25;
+    config.etiquetaJoia.escalaTexto = document.getElementById('etqEscala').value;
+    config.etiquetaJoia.negrito = document.getElementById('etqNegrito').value === '1';
+    config.etiquetaJoia.reforcoTraco = document.getElementById('etqReforco').checked;
     etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{
       config.etiquetaJoia.campos[chk.dataset.etqcampo] = chk.checked;
     });
@@ -3652,12 +3232,9 @@ const MODULOS_APP = {
     { id:'clientes', label:'Clientes' },
     { id:'produto', label:'Produto' },
     { id:'lojas', label:'Lojas' },
-    { id:'funcionarios', label:'Funcionários' },
-    { id:'servicos', label:'Tipos de Serviço' },
     { id:'pagamento', label:'Formas de Pagamento' },
     { id:'impressao', label:'Impressão & Etiquetas' },
     { id:'statusOrcamento', label:'Status de Orçamento' },
-    { id:'acessos', label:'Perfis de Acesso' },
     { id:'mensagens', label:'Mensagens' },
   ]},
 };
@@ -3710,7 +3287,7 @@ function permissoesPadrao(nivel){
     ia:{ ativo:true },
     gastos:{ ativo:true, abas:{ lancamentos:true, agenda:true } },
     marketing:{ ativo:true, abas:todasAbas('marketing') },
-    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, lojas:false, funcionarios:false, servicos:false, pagamento:false, impressao:false, statusOrcamento:false, acessos:false, mensagens:false } },
+    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, lojas:false, pagamento:false, impressao:false, statusOrcamento:false, mensagens:false } },
   };
 }
 function permissoesDoUsuario(u){
@@ -3729,154 +3306,6 @@ function permissoesDoUsuario(u){
     mesclado[moduloId] = { ativo: salvo.ativo, abas: { ...abasPadrao, ...abasSalvas } };
   });
   return mesclado;
-}
-function resumoPermissoesHtml(u){
-  const p = permissoesDoUsuario(u);
-  const chips = Object.keys(MODULOS_APP).filter(m=> p[m] && p[m].ativo).map(m=>MODULOS_APP[m].nome);
-  return chips.length ? chips.map(c=>`<span class="chip">${escapeHtml(c)}</span>`).join(' ') : `<span class="chip" style="background:var(--danger-soft); color:var(--danger);">Nenhum acesso</span>`;
-}
-
-function abasChecklistHtml(moduloId, permissoesModulo){
-  const mod = MODULOS_APP[moduloId];
-  if(!mod.abas.length) return '';
-  const abasAtuais = (permissoesModulo && permissoesModulo.abas) || {};
-  return `
-    <div class="cargo-checks" style="margin:6px 0 2px 22px; flex-direction:column; align-items:flex-start; gap:6px;" data-abaswrap="${moduloId}">
-      ${mod.abas.map(a=>`
-        <label><input type="checkbox" class="chk-aba" data-modulo="${moduloId}" data-aba="${a.id}" ${abasAtuais[a.id]?'checked':''}> ${escapeHtml(a.label)}</label>
-      `).join('')}
-    </div>
-  `;
-}
-function modulosChecklistHtml(permissoes){
-  return Object.keys(MODULOS_APP).map(moduloId=>{
-    const mod = MODULOS_APP[moduloId];
-    const ativo = permissoes[moduloId] && permissoes[moduloId].ativo;
-    return `
-      <div style="margin-bottom:10px;">
-        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:13px; text-transform:none; letter-spacing:0;">
-          <input type="checkbox" class="chk-modulo" data-modulo="${moduloId}" ${ativo?'checked':''}> ${escapeHtml(mod.nome)}
-        </label>
-        <div data-abasslot="${moduloId}" style="display:${ativo?'':'none'};">${abasChecklistHtml(moduloId, permissoes[moduloId])}</div>
-      </div>
-    `;
-  }).join('');
-}
-function wirePermissoesChecklist(container){
-  container.querySelectorAll('.chk-modulo').forEach(chk=>{
-    chk.addEventListener('change', ()=>{
-      const slot = container.querySelector(`[data-abasslot="${chk.dataset.modulo}"]`);
-      if(slot) slot.style.display = chk.checked ? '' : 'none';
-    });
-  });
-}
-function lerPermissoesDoFormulario(container){
-  const permissoes = {};
-  Object.keys(MODULOS_APP).forEach(moduloId=>{
-    const chkModulo = container.querySelector(`.chk-modulo[data-modulo="${moduloId}"]`);
-    const ativo = !!(chkModulo && chkModulo.checked);
-    const abas = {};
-    container.querySelectorAll(`.chk-aba[data-modulo="${moduloId}"]`).forEach(chkAba=>{
-      abas[chkAba.dataset.aba] = chkAba.checked;
-    });
-    permissoes[moduloId] = MODULOS_APP[moduloId].abas.length ? { ativo, abas } : { ativo };
-  });
-  return permissoes;
-}
-
-function openAcessoModal(usuario){
-  const permissoesIniciais = usuario ? permissoesDoUsuario(usuario) : permissoesPadrao('vendedora');
-  openModal(`
-    <div class="section-label">${usuario ? 'Editar acesso' : 'Novo acesso'}</div>
-    <div class="grid-3">
-      <div class="field"><label>Nome</label><input id="ac_nome" value="${escapeHtml(usuario?usuario.nome:'')}" placeholder="Nome"></div>
-      <div class="field"><label>Senha</label><input id="ac_senha" value="${escapeHtml(usuario?usuario.senha:'')}" placeholder="Senha"></div>
-      <div class="field"><label>Nível (referência)</label>
-        <select id="ac_nivel">
-          <option value="vendedora" ${(!usuario||usuario.nivel==='vendedora')?'selected':''}>Vendedora</option>
-          <option value="oficina" ${usuario&&usuario.nivel==='oficina'?'selected':''}>Oficina</option>
-          <option value="diretoria" ${usuario&&usuario.nivel==='diretoria'?'selected':''}>Diretoria</option>
-          <option value="custom" ${usuario&&usuario.nivel==='custom'?'selected':''}>Personalizado</option>
-        </select>
-      </div>
-    </div>
-    <p class="muted" style="margin:2px 0 12px;">O nível só define o rótulo mostrado; o que realmente controla o acesso são os módulos e abas marcados abaixo.</p>
-    <div class="section-label" style="margin-top:10px;">Módulos e abas liberados</div>
-    <div id="acPermissoesWrap">${modulosChecklistHtml(permissoesIniciais)}</div>
-    <div style="display:flex; gap:10px; margin-top:16px;">
-      <button class="btn btn-accent" id="btnSalvarAcesso">Salvar</button>
-      <button class="btn btn-ghost" id="btnCancelarAcesso">Cancelar</button>
-    </div>
-  `);
-  const permWrap = document.getElementById('acPermissoesWrap');
-  wirePermissoesChecklist(permWrap);
-  if(!usuario){
-    // Só em acesso NOVO: ao trocar o Nível, atualiza a lista pro padrão daquele nível
-    // (evita o problema de marcar "Diretoria" no rótulo mas salvar com permissões de vendedora,
-    // que ficaram do padrão inicial mostrado ao abrir o modal). Em edição de acesso já existente,
-    // o Nível continua sendo só um rótulo — não mexe nas permissões já customizadas da pessoa.
-    document.getElementById('ac_nivel').addEventListener('change', (e)=>{
-      const novoPadrao = permissoesPadrao(e.target.value);
-      document.getElementById('acPermissoesWrap').innerHTML = modulosChecklistHtml(novoPadrao);
-      wirePermissoesChecklist(document.getElementById('acPermissoesWrap'));
-      showToast('Marcações de módulos atualizadas pro padrão desse nível — revise antes de salvar.');
-    });
-  }
-  document.getElementById('btnCancelarAcesso').addEventListener('click', closeModal);
-  document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
-    const nome = document.getElementById('ac_nome').value.trim();
-    const senha = document.getElementById('ac_senha').value.trim();
-    const nivel = document.getElementById('ac_nivel').value;
-    if(!nome || !senha){ showToast('Preencha nome e senha.'); return; }
-    const outroComMesmaSenha = config.users.some(u=> u.senha===senha && (!usuario || u.id!==usuario.id));
-    if(outroComMesmaSenha){ showToast('Essa senha já está em uso.'); return; }
-    const permissoes = lerPermissoesDoFormulario(permWrap);
-    if(usuario){
-      Object.assign(usuario, { nome, senha, nivel, permissoes });
-    }else{
-      config.users.push({ id: uid('u'), nome, senha, nivel, permissoes });
-    }
-    await configSave();
-    closeModal();
-    renderAcessosTab(document.getElementById('cfgBody'));
-    showToast('Acesso salvo.');
-  });
-}
-
-function renderAcessosTab(main){
-  main.innerHTML = `
-    <div class="card">
-      <div class="section-label">Perfis de Acesso</div>
-      <p class="muted" style="margin:-4px 0 14px;">Cada senha define quais módulos a pessoa vê e, dentro de cada módulo, quais abas ela pode usar. Válido para o Painel de O.S., Transferências, Vendas e Dashboard.</p>
-      <div id="userRows"></div>
-      <div style="margin-top:14px;">
-        <button class="btn btn-accent btn-sm" id="btnNovoAcesso">+ Novo acesso</button>
-      </div>
-    </div>
-  `;
-  function renderRows(){
-    const wrap = document.getElementById('userRows');
-    if(config.users.length===0){ wrap.innerHTML = `<div class="empty">Nenhum acesso cadastrado.</div>`; return; }
-    wrap.innerHTML = config.users.map((u,i)=>`
-      <div class="code-list-item" style="align-items:flex-start;">
-        <div style="flex:1;">
-          <div><b>${escapeHtml(u.nome)}</b> <span class="muted" style="margin-left:8px;">senha: ${escapeHtml(u.senha)}</span> <span class="level-pill" style="background:var(--surface-2); color:var(--ink-soft); margin-left:6px;">${levelLabel(u.nivel)}</span></div>
-          <div style="margin-top:6px; display:flex; gap:5px; flex-wrap:wrap;">${resumoPermissoesHtml(u)}</div>
-        </div>
-        <div style="display:flex; gap:4px;">
-          <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
-          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
-        </div>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openAcessoModal(config.users[Number(b.dataset.edit)]) ));
-    wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
-      if(config.users.length<=1){ showToast('É necessário manter ao menos um acesso.'); return; }
-      config.users.splice(Number(b.dataset.del),1); await configSave(); renderRows(); showToast('Acesso removido.');
-    }));
-  }
-  renderRows();
-  document.getElementById('btnNovoAcesso').addEventListener('click', ()=> openAcessoModal(null) );
 }
 
 
