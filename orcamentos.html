@@ -560,6 +560,9 @@ if(EMBEDDED){
       // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
       // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
       if(__gatewaySenha){ clientes = await clientesGet(); }
+    } else if(ev.data.type === 'lojaAtual'){
+      window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
+      if(currentUser) renderView();
     }
   });
 }
@@ -660,7 +663,7 @@ function renderNovo(main){
     </div>
     <div class="card">
       <div class="grid-3">
-        <div class="field"><label>Loja</label><select id="o_loja"><option value="">Selecione</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+        <div class="field"><label>Loja</label><select id="o_loja"><option value="">Selecione</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${window.__lojaAtual&&window.__lojaAtual.id===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
         <div class="field"><label>Vendedora</label><select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>`<option value="${escapeHtml(nomeExibicaoFuncionario(f))}">${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select></div>
         <div class="field"><label>Validade</label><input type="date" id="o_validade" value="${validadePadrao.toISOString().slice(0,10)}"></div>
       </div>
@@ -795,6 +798,7 @@ function renderLista(main){
       </div>
     ` : ''}
     <div class="filters">
+      <select id="fLoja"><option value="">Todas as lojas</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
       <select id="fStatus">
         <option value="">Todos os status</option>
         ${statusList().map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
@@ -822,10 +826,12 @@ function renderLista(main){
     });
   });
   function draw(){
+    const lojaFiltro = document.getElementById('fLoja').value;
     const statusFiltro = document.getElementById('fStatus').value;
     const vendedoraFiltro = document.getElementById('fVendedora').value;
     const busca = document.getElementById('fBusca').value.trim().toLowerCase();
     const lista = orcamentos.filter(o=>{
+      if(lojaFiltro && o.lojaId!==lojaFiltro) return false;
       if(statusFiltro==='__vencido__' && !estaVencido(o)) return false;
       if(statusFiltro && statusFiltro!=='__vencido__' && o.status!==statusFiltro) return false;
       if(vendedoraFiltro && o.vendedora!==vendedoraFiltro) return false;
@@ -855,9 +861,17 @@ function renderLista(main){
     });
   }
   draw();
+  document.getElementById('fLoja').addEventListener('change', draw);
   document.getElementById('fStatus').addEventListener('change', draw);
   document.getElementById('fVendedora').addEventListener('change', draw);
   document.getElementById('fBusca').addEventListener('input', draw);
+  if(window.__lojaAtual && window.__lojaAtual.id){
+    const fLoja = document.getElementById('fLoja');
+    fLoja.value = window.__lojaAtual.id;
+    fLoja.disabled = true;
+    fLoja.title = 'Filtrando pela loja ativa — pra ver outra loja, troque em "Loja" no menu.';
+    draw();
+  }
 }
 
 function abrirDetalheOrcamento(o){
