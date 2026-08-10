@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <style>
   :root{
     --bg:#2B0F1F;
@@ -1978,6 +1979,7 @@ const TIPOS_PRODUTO = [
 function tipoProdutoLabel(id){ return (TIPOS_PRODUTO.find(t=>t.id===id)||{}).label || ''; }
 
 async function renderProdutoUnificadoTab(main){
+  garantirConfigProduto();
   // Carrega produtos do estoque se necessário
   if(!produtosEstoqueCarregado){
     produtosEstoque = await produtosEstoqueGet();
@@ -2201,6 +2203,102 @@ function abrirGerenciarTiposServicoModal(){
     renderRows();
   });
   document.getElementById('btnFecharGts').addEventListener('click', closeModal);
+}
+
+/* ---------- CADASTRO DE PRODUTO: garante as listas novas (medidas, pedras, fornecedores, sequencial) ---------- */
+function garantirConfigProduto(){
+  if(!Array.isArray(config.medidasAnel)) config.medidasAnel = [];
+  if(!Array.isArray(config.medidasComprimento)) config.medidasComprimento = [];
+  if(!Array.isArray(config.tiposPedra)) config.tiposPedra = [];
+  if(!Array.isArray(config.fornecedores)) config.fornecedores = [];
+  if(!config.produtosOtica) config.produtosOtica = { categorias:[], subcategorias:[] };
+  if(!config.produtosOtica.proximoCodigo) config.produtosOtica.proximoCodigo = 1;
+}
+/** A partir do texto do tipo de joia, decide qual variável de medida mostrar:
+ * "aro" pra anéis, "comprimento" pra cordão/pulseira, ou nada pros demais. */
+function categoriaMedidaDoTipoJoia(tipoJoia){
+  const t = (tipoJoia||'').toLowerCase();
+  if(t.includes('anel')) return 'aro';
+  if(t.includes('cord') || t.includes('pulseira')) return 'comprimento';
+  return null;
+}
+
+/* ---------- GERENCIAR LISTAS (editar, não só cadastrar) — usado pelos "✎" do cadastro de produto ---------- */
+/** Lista de objetos {id,nome,descricao} — categorias e subcategorias. */
+function abrirGerenciarListaObjetos(rotulo, lista, prefixoId, aoFechar){
+  openModal(`
+    <div class="section-label">Gerenciar ${rotulo.toLowerCase()}</div>
+    <div id="gloRows"></div>
+    <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; align-items:flex-end;">
+      <div class="field" style="flex:1; min-width:140px; margin-bottom:0;"><input id="glo_nome" placeholder="Nome novo"></div>
+      <div class="field" style="flex:2; min-width:160px; margin-bottom:0;"><input id="glo_desc" placeholder="Descrição (opcional)"></div>
+      <button class="btn btn-accent btn-sm" id="glo_add">+ Adicionar</button>
+    </div>
+    <div style="margin-top:16px;"><button class="btn btn-ghost" id="glo_fechar">Fechar</button></div>
+  `);
+  function renderRows(){
+    const wrap = document.getElementById('gloRows');
+    wrap.innerHTML = lista.length===0 ? `<div class="empty">Nenhum cadastrado ainda.</div>` : lista.map((item,i)=>`
+      <div class="code-list-item" style="gap:8px; flex-wrap:wrap;">
+        <input data-glonome="${i}" value="${escapeHtml(item.nome)}" style="flex:1; min-width:120px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+        <input data-glodesc="${i}" value="${escapeHtml(item.descricao||'')}" placeholder="Descrição" style="flex:1; min-width:120px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+        <button type="button" class="icon-btn" data-glodel="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-glonome]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glonome)].nome = inp.value.trim(); }));
+    wrap.querySelectorAll('[data-glodesc]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glodesc)].descricao = inp.value.trim(); }));
+    wrap.querySelectorAll('[data-glodel]').forEach(b=> b.addEventListener('click', ()=>{ lista.splice(Number(b.dataset.glodel),1); renderRows(); }));
+  }
+  renderRows();
+  document.getElementById('glo_add').addEventListener('click', ()=>{
+    const nome = document.getElementById('glo_nome').value.trim();
+    if(!nome){ showToast('Informe o nome.'); return; }
+    lista.push({ id: uid(prefixoId), nome, descricao: document.getElementById('glo_desc').value.trim() });
+    document.getElementById('glo_nome').value=''; document.getElementById('glo_desc').value='';
+    renderRows();
+  });
+  document.getElementById('glo_fechar').addEventListener('click', async ()=>{
+    const ok = await configSave();
+    closeModal();
+    if(ok && aoFechar) aoFechar();
+  });
+}
+/** Lista simples de strings — tipo de joia, tipo de metal, medidas, tipos de pedra, fornecedores. */
+function abrirGerenciarListaStrings(rotulo, lista, aoFechar){
+  openModal(`
+    <div class="section-label">Gerenciar ${rotulo.toLowerCase()}</div>
+    <div id="glsRows"></div>
+    <div style="display:flex; gap:10px; margin-top:14px;">
+      <div class="field" style="flex:1; margin-bottom:0;"><input id="gls_nome" placeholder="Novo item"></div>
+      <button class="btn btn-accent btn-sm" id="gls_add">+ Adicionar</button>
+    </div>
+    <div style="margin-top:16px;"><button class="btn btn-ghost" id="gls_fechar">Fechar</button></div>
+  `);
+  function renderRows(){
+    const wrap = document.getElementById('glsRows');
+    wrap.innerHTML = lista.length===0 ? `<div class="empty">Nenhum cadastrado ainda.</div>` : lista.map((v,i)=>`
+      <div class="code-list-item" style="gap:8px;">
+        <input data-glsval="${i}" value="${escapeHtml(v)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+        <button type="button" class="icon-btn" data-glsdel="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-glsval]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glsval)] = inp.value.trim(); }));
+    wrap.querySelectorAll('[data-glsdel]').forEach(b=> b.addEventListener('click', ()=>{ lista.splice(Number(b.dataset.glsdel),1); renderRows(); }));
+  }
+  renderRows();
+  document.getElementById('gls_add').addEventListener('click', ()=>{
+    const v = document.getElementById('gls_nome').value.trim();
+    if(!v){ showToast('Informe o nome.'); return; }
+    if(lista.includes(v)){ showToast('Já cadastrado.'); return; }
+    lista.push(v);
+    document.getElementById('gls_nome').value='';
+    renderRows();
+  });
+  document.getElementById('gls_fechar').addEventListener('click', async ()=>{
+    const ok = await configSave();
+    closeModal();
+    if(ok && aoFechar) aoFechar();
+  });
 }
 
 /* ---------- CATEGORIA / SUBCATEGORIA (abas legado — mantidas pra compatibilidade com código existente) ---------- */
@@ -2471,25 +2569,38 @@ function mountFotosProduto(container, holder, produtoId){
 }
 
 const PE_TABS = [
-  { id:'nomenclatura', label:'Nomenclatura' },
+  { id:'nomenclatura', label:'Nome' },
   { id:'fiscal', label:'Fiscal' },
   { id:'composicao', label:'Composição' },
   { id:'valores', label:'Valores' },
   { id:'historico', label:'Histórico' },
 ];
+/** Desenha um código de barras pequeno (CODE128) a partir do texto informado, usando
+ * JsBarcode. Usado tanto no cadastro de produto quanto, futuramente, em etiquetas. */
+function desenharBarcodeProduto(valor){
+  const holder = document.getElementById('pe_barcodeSvg');
+  if(!holder) return;
+  const v = (valor||'').trim();
+  if(!v){ holder.innerHTML = ''; return; }
+  holder.innerHTML = '<svg id="pe_barcodeSvgEl"></svg>';
+  try{
+    JsBarcode('#pe_barcodeSvgEl', v, { format:'CODE128', width:1.2, height:32, fontSize:11, margin:2, displayValue:true });
+  }catch(e){ console.error('erro ao gerar código de barras', e); holder.innerHTML = '<p class="muted" style="font-size:12px;">Não foi possível gerar o código de barras pra esse valor.</p>'; }
+}
 
 function abrirProdutoEstoqueModal(produto){
+  garantirConfigProduto();
   const editando = !!produto;
   const idAtual = produto ? produto.id : uid('prodest');
   const outrosDisponiveis = produtosEstoque.filter(p=> !produto || p.id !== produto.id);
   const fotosHolder = { fotos: (produto && produto.fotos) ? JSON.parse(JSON.stringify(produto.fotos)) : [] };
   const composicao = (produto && produto.composicao) ? JSON.parse(JSON.stringify(produto.composicao)) : [];
+  const medidas = (produto && Array.isArray(produto.medidas)) ? JSON.parse(JSON.stringify(produto.medidas)) : [];
+  const pedras = (produto && Array.isArray(produto.pedras)) ? JSON.parse(JSON.stringify(produto.pedras)) : [];
   const d = {
     nome: produto ? (produto.nome||'') : '',
     unidade: produto ? (produto.unidade||'un') : 'un',
     codigoInterno: produto ? (produto.codigoInterno||'') : '',
-    nomePopular: produto ? (produto.nomePopular||'') : '',
-    nomeTecnico: produto ? (produto.nomeTecnico||'') : '',
     categoriaId: produto ? (produto.categoriaId||'') : '',
     subcategoriaId: produto ? (produto.subcategoriaId||'') : '',
     tipo: produto ? (produto.tipo||'estoque') : 'estoque',
@@ -2499,12 +2610,11 @@ function abrirProdutoEstoqueModal(produto){
     ncm: produto ? (produto.ncm||'') : '',
     cfop: produto ? (produto.cfop||'') : '',
     cstCsosn: produto ? (produto.cstCsosn||'') : '',
-    origemMercadoria: produto ? (produto.origemMercadoria||'') : '',
+    fornecedor: produto ? (produto.fornecedor||'') : '',
     gtin: produto ? (produto.gtin||'') : '',
     estoquePorLoja: produto && produto.estoquePorLoja ? {...produto.estoquePorLoja} : (produto && produto.estoque ? estoqueLegadoDivididoPorLoja(produto.estoque) : {}),
     custo: produto && produto.custo!==undefined ? produto.custo : null,
     precoVenda: produto && produto.precoVenda!==undefined ? produto.precoVenda : null,
-    fatorPercentual: produto && produto.fatorPercentual!==undefined ? produto.fatorPercentual : null,
   };
   let peTabAtiva = 'nomenclatura';
 
@@ -2535,10 +2645,18 @@ function abrirProdutoEstoqueModal(produto){
   function renderPeTabBody(){
     const body = document.getElementById('peModalBody');
     if(peTabAtiva==='nomenclatura'){
+      const catMedida = categoriaMedidaDoTipoJoia(d.tipoJoia);
+      const listaMedidas = catMedida==='aro' ? config.medidasAnel : catMedida==='comprimento' ? config.medidasComprimento : [];
+      const rotuloMedida = catMedida==='aro' ? 'Medida (aro)' : 'Comprimento';
       body.innerHTML = `
         <div class="field"><label>Nome</label><input id="pe_nome" placeholder="Ex: Ouro 18k, Anel Solitário..." value="${escapeHtml(d.nome)}"></div>
         <div class="grid-2">
-          <div class="field"><label>Código interno / referência</label><input id="pe_codigoInterno" value="${escapeHtml(d.codigoInterno)}"></div>
+          <div class="field"><label>Código interno / referência</label>
+            <div style="display:flex; gap:6px;">
+              <input id="pe_codigoInterno" value="${escapeHtml(d.codigoInterno)}" style="flex:1;">
+              <button type="button" class="btn btn-ghost btn-sm" id="btnGerarCodigoInterno" title="Gerar código sequencial automático">Gerar</button>
+            </div>
+          </div>
           <div class="field"><label>Unidade</label>
             <select id="pe_unidade">
               <option value="un" ${d.unidade==='un'?'selected':''}>Unidade</option>
@@ -2548,45 +2666,132 @@ function abrirProdutoEstoqueModal(produto){
           </div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Nome popular <span class="muted">opcional</span></label><input id="pe_nomePopular" value="${escapeHtml(d.nomePopular)}"></div>
-          <div class="field"><label>Nome técnico <span class="muted">opcional</span></label><input id="pe_nomeTecnico" value="${escapeHtml(d.nomeTecnico)}"></div>
-        </div>
-        <div class="grid-2">
           <div class="field"><label>Tipo</label>
             <select id="pe_tipo">${TIPOS_PRODUTO.map(t=>`<option value="${t.id}" ${d.tipo===t.id?'selected':''}>${t.label}</option>`).join('')}</select>
           </div>
         </div>
         <div class="grid-2">
           <div class="field"><label>Categoria <span class="muted">opcional</span></label>
-            <select id="pe_categoriaId"><option value="">—</option>${(config.produtosOtica.categorias||[]).map(c=>`<option value="${c.id}" ${d.categoriaId===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}</select>
+            <div style="display:flex; gap:6px;">
+              <select id="pe_categoriaId" style="flex:1;"><option value="">—</option>${(config.produtosOtica.categorias||[]).map(c=>`<option value="${c.id}" ${d.categoriaId===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}</select>
+              <button type="button" class="icon-btn" id="btnEditarCategoria" title="Cadastrar/editar categorias">✎</button>
+            </div>
           </div>
           <div class="field"><label>Subcategoria <span class="muted">opcional</span></label>
-            <select id="pe_subcategoriaId"><option value="">—</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+            <div style="display:flex; gap:6px;">
+              <select id="pe_subcategoriaId" style="flex:1;"><option value="">—</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+              <button type="button" class="icon-btn" id="btnEditarSubcategoria" title="Cadastrar/editar subcategorias">✎</button>
+            </div>
           </div>
         </div>
         <div class="grid-2">
           <div class="field"><label>Tipo de joia <span class="muted">opcional</span></label>
-            <select id="pe_tipoJoia"><option value="">—</option>${(config.joiasProdutos||[]).map(v=>`<option value="${escapeHtml(v)}" ${d.tipoJoia===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
+            <div style="display:flex; gap:6px;">
+              <select id="pe_tipoJoia" style="flex:1;"><option value="">—</option>${(config.joiasProdutos||[]).map(v=>`<option value="${escapeHtml(v)}" ${d.tipoJoia===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
+              <button type="button" class="icon-btn" id="btnEditarTipoJoia" title="Cadastrar/editar tipos de joia">✎</button>
+            </div>
           </div>
           <div class="field"><label>Tipo de metal <span class="muted">opcional</span></label>
-            <select id="pe_tipoMetal"><option value="">—</option>${(config.metais||[]).map(v=>`<option value="${escapeHtml(v)}" ${d.tipoMetal===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
+            <div style="display:flex; gap:6px;">
+              <select id="pe_tipoMetal" style="flex:1;"><option value="">—</option>${(config.metais||[]).map(v=>`<option value="${escapeHtml(v)}" ${d.tipoMetal===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
+              <button type="button" class="icon-btn" id="btnEditarTipoMetal" title="Cadastrar/editar tipos de metal">✎</button>
+            </div>
           </div>
         </div>
-        <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:2px 0 0;">
+        ${catMedida ? `
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">${rotuloMedida}</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:140px; margin-bottom:0;">
+            <select id="pe_medidaSel">${listaMedidas.length===0?`<option value="">Nenhuma cadastrada</option>`:listaMedidas.map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
+          </div>
+          <div class="field" style="flex:0 1 100px; min-width:80px; margin-bottom:0;"><input type="number" min="1" id="pe_medidaQtd" placeholder="Qtd." value="1"></div>
+          <button type="button" class="icon-btn" id="btnEditarMedida" title="Cadastrar/editar ${rotuloMedida.toLowerCase()}">✎</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnAddMedida">+ Adicionar</button>
+        </div>
+        <div id="pe_medidasRows" style="margin-top:8px;"></div>
+        ` : ''}
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Tipo de pedra</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:120px; margin-bottom:0;">
+            <select id="pe_pedraSel">${config.tiposPedra.length===0?`<option value="">Nenhuma cadastrada</option>`:config.tiposPedra.map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
+          </div>
+          <div class="field" style="flex:0 1 90px; min-width:70px; margin-bottom:0;"><input type="number" min="1" id="pe_pedraQtd" placeholder="Qtd." value="1"></div>
+          <div class="field" style="flex:0 1 110px; min-width:90px; margin-bottom:0;"><input id="pe_pedraMedida" placeholder="Medida (ex: 5mm)"></div>
+          <button type="button" class="icon-btn" id="btnEditarPedra" title="Cadastrar/editar tipos de pedra">✎</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnAddPedra">+ Adicionar</button>
+        </div>
+        <div id="pe_pedrasRows" style="margin-top:8px;"></div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:14px 0 0;">
           <input type="checkbox" id="pe_vendavel" ${d.vendavel?'checked':''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
         </label>
       `;
       document.getElementById('pe_nome').addEventListener('input', e=> d.nome=e.target.value);
       document.getElementById('pe_codigoInterno').addEventListener('input', e=> d.codigoInterno=e.target.value);
+      document.getElementById('btnGerarCodigoInterno').addEventListener('click', async ()=>{
+        const seq = config.produtosOtica.proximoCodigo || 1;
+        const codigo = 'PRD' + String(seq).padStart(6,'0');
+        config.produtosOtica.proximoCodigo = seq + 1;
+        const ok = await configSave();
+        if(!ok) return;
+        d.codigoInterno = codigo;
+        document.getElementById('pe_codigoInterno').value = codigo;
+        showToast('Código gerado.');
+      });
       document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
-      document.getElementById('pe_nomePopular').addEventListener('input', e=> d.nomePopular=e.target.value);
-      document.getElementById('pe_nomeTecnico').addEventListener('input', e=> d.nomeTecnico=e.target.value);
       document.getElementById('pe_tipo').addEventListener('change', e=> d.tipo=e.target.value);
       document.getElementById('pe_categoriaId').addEventListener('change', e=> d.categoriaId=e.target.value);
       document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
-      document.getElementById('pe_tipoJoia').addEventListener('change', e=> d.tipoJoia=e.target.value);
+      document.getElementById('pe_tipoJoia').addEventListener('change', e=>{ d.tipoJoia=e.target.value; renderPeTabBody(); });
       document.getElementById('pe_tipoMetal').addEventListener('change', e=> d.tipoMetal=e.target.value);
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
+      document.getElementById('btnEditarCategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Categorias', config.produtosOtica.categorias, 'cat', ()=> renderPeTabBody()));
+      document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> renderPeTabBody()));
+      document.getElementById('btnEditarTipoJoia').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos de joia', config.joiasProdutos, ()=> renderPeTabBody()));
+      document.getElementById('btnEditarTipoMetal').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos de metal', config.metais, ()=> renderPeTabBody()));
+
+      function renderMedidasRows(){
+        const wrap = document.getElementById('pe_medidasRows');
+        if(!wrap) return;
+        wrap.innerHTML = medidas.length===0 ? `<div class="empty" style="padding:8px 0;">Nenhuma medida adicionada.</div>` : medidas.map((m,i)=>`
+          <div class="code-list-item"><div>${escapeHtml(m.medida)} — <b>${m.quantidade}</b> un.</div><button type="button" class="icon-btn" data-medidadel="${i}">✕</button></div>
+        `).join('');
+        wrap.querySelectorAll('[data-medidadel]').forEach(b=> b.addEventListener('click', ()=>{ medidas.splice(Number(b.dataset.medidadel),1); renderMedidasRows(); }));
+      }
+      if(catMedida){
+        renderMedidasRows();
+        document.getElementById('btnEditarMedida').addEventListener('click', ()=>{
+          const lista = catMedida==='aro' ? config.medidasAnel : config.medidasComprimento;
+          abrirGerenciarListaStrings(rotuloMedida, lista, ()=> renderPeTabBody());
+        });
+        document.getElementById('btnAddMedida').addEventListener('click', ()=>{
+          const sel = document.getElementById('pe_medidaSel').value;
+          const qtd = Math.max(1, parseInt(document.getElementById('pe_medidaQtd').value)||1);
+          if(!sel){ showToast('Cadastre ao menos uma medida primeiro (✎).'); return; }
+          const existente = medidas.find(m=>m.medida===sel);
+          if(existente) existente.quantidade += qtd; else medidas.push({ medida:sel, quantidade:qtd });
+          renderMedidasRows();
+        });
+      }
+
+      function renderPedrasRows(){
+        const wrap = document.getElementById('pe_pedrasRows');
+        if(!wrap) return;
+        wrap.innerHTML = pedras.length===0 ? `<div class="empty" style="padding:8px 0;">Nenhuma pedra adicionada.</div>` : pedras.map((p,i)=>`
+          <div class="code-list-item"><div>${escapeHtml(p.tipo)}${p.medida?' — '+escapeHtml(p.medida):''} — <b>${p.quantidade}</b> un.</div><button type="button" class="icon-btn" data-pedradel="${i}">✕</button></div>
+        `).join('');
+        wrap.querySelectorAll('[data-pedradel]').forEach(b=> b.addEventListener('click', ()=>{ pedras.splice(Number(b.dataset.pedradel),1); renderPedrasRows(); }));
+      }
+      renderPedrasRows();
+      document.getElementById('btnEditarPedra').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos de pedra', config.tiposPedra, ()=> renderPeTabBody()));
+      document.getElementById('btnAddPedra').addEventListener('click', ()=>{
+        const sel = document.getElementById('pe_pedraSel').value;
+        const qtd = Math.max(1, parseInt(document.getElementById('pe_pedraQtd').value)||1);
+        const medidaTxt = document.getElementById('pe_pedraMedida').value.trim();
+        if(!sel){ showToast('Cadastre ao menos um tipo de pedra primeiro (✎).'); return; }
+        pedras.push({ tipo:sel, quantidade:qtd, medida:medidaTxt });
+        document.getElementById('pe_pedraMedida').value = '';
+        renderPedrasRows();
+      });
     }
     else if(peTabAtiva==='fiscal'){
       body.innerHTML = `
@@ -2597,15 +2802,36 @@ function abrirProdutoEstoqueModal(produto){
         </div>
         <div class="grid-2">
           <div class="field"><label>CST/CSOSN</label><input id="pe_cstCsosn" value="${escapeHtml(d.cstCsosn)}"></div>
-          <div class="field"><label>Origem da mercadoria</label><input id="pe_origemMercadoria" value="${escapeHtml(d.origemMercadoria)}"></div>
+          <div class="field"><label>Fornecedor</label>
+            <div style="display:flex; gap:6px;">
+              <select id="pe_fornecedor" style="flex:1;"><option value="">—</option>${config.fornecedores.map(v=>`<option value="${escapeHtml(v)}" ${d.fornecedor===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
+              <button type="button" class="icon-btn" id="btnEditarFornecedor" title="Cadastrar/editar fornecedores">✎</button>
+            </div>
+          </div>
         </div>
-        <div class="field"><label>GTIN/EAN <span class="muted">opcional</span></label><input id="pe_gtin" value="${escapeHtml(d.gtin)}"></div>
+        <div class="field"><label>GTIN/EAN <span class="muted">opcional</span></label>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <input id="pe_gtin" value="${escapeHtml(d.gtin)}" style="flex:1; min-width:140px;">
+            <button type="button" class="btn btn-ghost btn-sm" id="btnGerarBarcode">Gerar código de barras</button>
+          </div>
+          <div id="pe_barcodeSvg" style="margin-top:8px;"></div>
+        </div>
       `;
       document.getElementById('pe_ncm').addEventListener('input', e=> d.ncm=e.target.value);
       document.getElementById('pe_cfop').addEventListener('input', e=> d.cfop=e.target.value);
       document.getElementById('pe_cstCsosn').addEventListener('input', e=> d.cstCsosn=e.target.value);
-      document.getElementById('pe_origemMercadoria').addEventListener('input', e=> d.origemMercadoria=e.target.value);
-      document.getElementById('pe_gtin').addEventListener('input', e=> d.gtin=e.target.value);
+      document.getElementById('pe_fornecedor').addEventListener('change', e=> d.fornecedor=e.target.value);
+      document.getElementById('btnEditarFornecedor').addEventListener('click', ()=> abrirGerenciarListaStrings('Fornecedores', config.fornecedores, ()=> renderPeTabBody()));
+      document.getElementById('pe_gtin').addEventListener('input', e=>{ d.gtin=e.target.value; desenharBarcodeProduto(d.gtin); });
+      document.getElementById('btnGerarBarcode').addEventListener('click', ()=>{
+        let base = (d.codigoInterno||'').replace(/\D/g,'');
+        if(!base) base = String(Date.now()).slice(-8);
+        base = base.padStart(8,'0').slice(-12);
+        d.gtin = base;
+        document.getElementById('pe_gtin').value = base;
+        desenharBarcodeProduto(base);
+      });
+      desenharBarcodeProduto(d.gtin);
     }
     else if(peTabAtiva==='composicao'){
       body.innerHTML = `
@@ -2640,9 +2866,6 @@ function abrirProdutoEstoqueModal(produto){
           <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
           <div class="field"><label>Preço de venda (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
         </div>
-        <div class="grid-2">
-          <div class="field"><label>Fator/comissão (%) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_fatorPercentual" value="${d.fatorPercentual!==null?d.fatorPercentual:''}"></div>
-        </div>
       `;
       body.querySelectorAll('[data-estloja]').forEach(inp=>{
         inp.addEventListener('input', e=>{
@@ -2654,7 +2877,6 @@ function abrirProdutoEstoqueModal(produto){
       });
       document.getElementById('pe_custo').addEventListener('input', e=> d.custo=e.target.value);
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
-      document.getElementById('pe_fatorPercentual').addEventListener('input', e=> d.fatorPercentual=e.target.value);
     }
     else if(peTabAtiva==='historico'){
       if(!editando){
@@ -2717,7 +2939,7 @@ function abrirProdutoEstoqueModal(produto){
   document.getElementById('btnCancelarProdutoEstoque').addEventListener('click', closeModal);
   document.getElementById('btnSalvarProdutoEstoque').addEventListener('click', async ()=>{
     const nome = (d.nome||'').trim();
-    if(!nome){ showToast('Informe o nome do produto (aba Nomenclatura).'); peTabAtiva='nomenclatura'; renderPeTabBody(); renderPeTabs(); return; }
+    if(!nome){ showToast('Informe o nome do produto (aba Nome).'); peTabAtiva='nomenclatura'; renderPeTabBody(); renderPeTabs(); return; }
     const composicaoValida = composicao.filter(c=> c.insumoId && c.quantidade && Number(c.quantidade) > 0)
       .map(c=> ({ insumoId: c.insumoId, quantidade: Number(c.quantidade) }));
     const dados = {
@@ -2725,23 +2947,22 @@ function abrirProdutoEstoqueModal(produto){
       nome,
       unidade: d.unidade,
       codigoInterno: (d.codigoInterno||'').trim(),
-      nomePopular: (d.nomePopular||'').trim(),
-      nomeTecnico: (d.nomeTecnico||'').trim(),
       categoriaId: d.categoriaId||'',
       subcategoriaId: d.subcategoriaId||'',
       tipo: d.tipo||'estoque',
       tipoJoia: d.tipoJoia||'',
       tipoMetal: d.tipoMetal||'',
+      medidas: medidas,
+      pedras: pedras,
       vendavel: d.vendavel,
       ncm: (d.ncm||'').trim(),
       cfop: (d.cfop||'').trim(),
       cstCsosn: (d.cstCsosn||'').trim(),
-      origemMercadoria: (d.origemMercadoria||'').trim(),
+      fornecedor: (d.fornecedor||'').trim(),
       gtin: (d.gtin||'').trim(),
       estoquePorLoja: Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0])),
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
       precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
-      fatorPercentual: d.fatorPercentual===null || d.fatorPercentual==='' ? null : parseFloat(d.fatorPercentual),
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
     };
@@ -2816,7 +3037,7 @@ function imprimirEtiquetaProduto(produto){
   const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
 
   const linhas = [];
-  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nomePopular || produto.nome)}</div>`);
+  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nome)}</div>`);
   if(campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
   if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
   if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);

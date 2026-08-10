@@ -649,7 +649,7 @@
     main.innerHTML = `
       ${mostraFinanceiro ? `<div id="secContasHoje"></div>` : ""}
       ${currentUser.nivel==="oficina" ? `<div class="locked-note">🔒 Seu acesso mostra somente as Ordens de Serviço, sem dados financeiros e sem Transferências/Reposições/Vendas.</div>` : ""}
-      ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento) nem o Fator (F).</div>` : ""}
+      ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento).</div>` : ""}
 
       ${mostraFinanceiro ? `<div id="secAlertasRH"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secInteligencia"></div>` : ""}
@@ -657,7 +657,6 @@
       <div class="section" id="secOrdens"></div>
       ${mostraTransf ? `<div class="section" id="secVendas"></div>` : ""}
       ${mostraTransf ? `<div class="section" id="secTransf"></div>` : ""}
-      ${mostraFinanceiro ? `<div class="section" id="secFator"></div>` : ""}
     `;
 
     if(mostraFinanceiro) renderContasHoje();
@@ -667,7 +666,6 @@
     renderSecaoOrdens(mostraFinanceiro);
     if(mostraTransf) renderSecaoVendas(mostraFinanceiro);
     if(mostraTransf) renderSecaoTransf();
-    if(mostraFinanceiro) renderSecaoFator();
   }
 
   /* ================= INTELIGÊNCIA (Curva ABC / avisos / metas / IA) ================= */
@@ -1251,91 +1249,6 @@
     `;
     document.body.appendChild(popup);
     document.getElementById("btnFecharAlertaMeta").addEventListener("click", ()=> popup.remove());
-  }
-
-  let filtrosFator = { loja:"", dataIni:"", dataFim:"" };
-
-  function renderSecaoFator(){
-    const el = document.getElementById("secFator");
-    const lojas = (ordersConfig && ordersConfig.lojas) || [];
-
-    el.innerHTML = `
-      <h2 class="section-title">💰 Fator (F) por vendedora <button class="btn-grafico" id="btnGraficoFator">📊 Ver gráfico</button></h2>
-      <p class="section-sub">Calculado a partir do produto vendido em cada ordem (Configurações → Categorias/Subcategorias/Produtos no Painel de Ordens).</p>
-      <div class="filters">
-        <select id="fatLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
-        <input type="date" id="fatDataIni" title="De">
-        <input type="date" id="fatDataFim" title="Até">
-        <button class="btn btn-ghost" id="btnLimparFiltroFator">Limpar</button>
-      </div>
-      <div class="card"><div id="tabelaFator"></div></div>
-    `;
-
-    function ordensComFator(){
-      return ordensVisiveis().filter(o=>{
-        if(!o.produtoId || !(Number(o.fatorPercentual)>0)) return false;
-        if(filtrosFator.loja && o.loja!==filtrosFator.loja) return false;
-        if(filtrosFator.dataIni && o.data < filtrosFator.dataIni) return false;
-        if(filtrosFator.dataFim && o.data > filtrosFator.dataFim) return false;
-        return true;
-      });
-    }
-
-    function atualizar(){
-      const lista = ordensComFator();
-      const porVendedora = new Map();
-      lista.forEach(o=>{
-        const nome = nomeVendedoraNormalizado(o.vendedora) || "—";
-        const fatorValor = (Number(o.valorTotal)||0) * (Number(o.fatorPercentual)||0) / 100;
-        if(!porVendedora.has(nome)) porVendedora.set(nome, { vendas:0, totalVendido:0, totalFator:0 });
-        const e = porVendedora.get(nome);
-        e.vendas += 1;
-        e.totalVendido += Number(o.valorTotal)||0;
-        e.totalFator += fatorValor;
-      });
-
-      const wrap = document.getElementById("tabelaFator");
-      if(porVendedora.size===0){ wrap.innerHTML = `<div class="empty">Nenhuma venda com Fator encontrada com esses filtros.</div>`; return; }
-      const linhas = [...porVendedora.entries()].sort((a,b)=>b[1].totalFator-a[1].totalFator);
-      const totalGeral = linhas.reduce((acc,[,e])=>acc+e.totalFator, 0);
-      wrap.innerHTML = `
-        <table>
-          <thead><tr><th>Vendedora</th><th>Vendas com F</th><th>Total vendido</th><th>Total em F</th></tr></thead>
-          <tbody>
-            ${linhas.map(([nome,e])=>`
-              <tr>
-                <td>${escapeHtml(nome)}</td>
-                <td>${e.vendas}</td>
-                <td>${fmtMoeda(e.totalVendido)}</td>
-                <td><b>${fmtMoeda(e.totalFator)}</b></td>
-              </tr>
-            `).join("")}
-            <tr><td><b>Total geral</b></td><td></td><td></td><td><b>${fmtMoeda(totalGeral)}</b></td></tr>
-          </tbody>
-        </table>
-      `;
-    }
-
-    document.getElementById("fatLoja").addEventListener("change", e=>{ filtrosFator.loja=e.target.value; atualizar(); });
-    document.getElementById("fatDataIni").addEventListener("change", e=>{ filtrosFator.dataIni=e.target.value; atualizar(); });
-    document.getElementById("fatDataFim").addEventListener("change", e=>{ filtrosFator.dataFim=e.target.value; atualizar(); });
-    document.getElementById("btnLimparFiltroFator").addEventListener("click", ()=>{
-      filtrosFator = { loja:"", dataIni:"", dataFim:"" };
-      renderSecaoFator();
-    });
-    document.getElementById("btnGraficoFator").addEventListener("click", ()=>{
-      const lista = ordensComFator();
-      const porVendedora = new Map();
-      lista.forEach(o=>{
-        const nome = nomeVendedoraNormalizado(o.vendedora) || "—";
-        const fatorValor = (Number(o.valorTotal)||0) * (Number(o.fatorPercentual)||0) / 100;
-        porVendedora.set(nome, (porVendedora.get(nome)||0) + fatorValor);
-      });
-      const itens = [...porVendedora.entries()].map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
-      abrirGraficoBarras("Fator (F) por vendedora", `${lista.length} ordem(ns) com fator, considerando os filtros atuais`, itens, fmtMoeda);
-    });
-
-    atualizar();
   }
 
   function renderSecaoPagamentos(){
