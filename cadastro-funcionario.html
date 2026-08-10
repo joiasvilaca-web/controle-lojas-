@@ -6,6 +6,7 @@
 <title>Complete seu cadastro · Vilaça Joias</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
   --bg:#FBEEDF; --surface:#FFFFFF;
@@ -61,6 +62,26 @@ async function call(body){
   }catch(e){ return { error: 'Não foi possível conectar. Verifique sua internet.' }; }
 }
 
+const realSupabaseClient = (window.supabase && typeof window.supabase.createClient==='function')
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+function readFileAsDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function uploadFotoParaDrive(dataUrl, filename){
+  if(!realSupabaseClient) throw new Error('upload indisponível');
+  const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
+    body: { dataUrl, filename, pasta:'funcionarios', tratar:false }
+  });
+  if(error) throw error;
+  if(!data || !data.url) throw new Error('Resposta inválida do upload para o Drive');
+  return data;
+}
+
 const params = new URLSearchParams(window.location.search);
 const token = params.get('token');
 
@@ -88,6 +109,9 @@ function mostrarErroForm(msg){
   }
   document.getElementById('subtitulo').textContent = `Olá, ${r.nome}! Preencha seus dados abaixo pra concluir seu cadastro.${r.cargo?(' Função: '+r.cargo+'.'):''}`;
   document.getElementById('formArea').innerHTML = `
+    <div class="section-label" style="margin-top:4px;">Sua foto</div>
+    <div id="areaFoto"></div>
+
     <div class="section-label">Como te chamamos</div>
     <div class="field"><label>Apelido <span style="text-transform:none; font-weight:500;">(como vai aparecer nas telas do sistema)</span></label><input id="apelido"></div>
 
@@ -123,7 +147,7 @@ function mostrarErroForm(msg){
     </div>
     <div class="field"><label>Complemento <span style="text-transform:none; font-weight:500;">(opcional)</span></label><input id="complemento"></div>
 
-    <div class="section-label">Filhos</div>
+    <div class="section-label">Filhos <span style="text-transform:none; font-weight:500;">(pra contabilidade avaliar Salário-Família)</span></div>
     <div class="field"><label>Tem filhos?</label>
       <select id="temFilhos"><option value="nao">Não</option><option value="sim">Sim</option></select>
     </div>
@@ -173,27 +197,70 @@ function mostrarErroForm(msg){
     <button class="btn" id="btnSalvar">Concluir cadastro</button>
     <p class="hint">Sua senha fica visível pra diretoria dentro do sistema (é assim que o acesso funciona aqui), então escolha algo simples de lembrar — não precisa ser uma senha complexa. Seus dados podem ser conferidos e ajustados depois pela diretoria, se precisar.</p>
   `;
+  let foto = '';
+  function montarFoto(){
+    const area = document.getElementById('areaFoto');
+    area.innerHTML = `
+      <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px;">
+        ${foto ? `<img src="${foto}" style="width:84px; height:84px; border-radius:50%; object-fit:cover; border:1px solid var(--line);">` : `<div style="width:84px; height:84px; border-radius:50%; background:#F7E9DA; display:flex; align-items:center; justify-content:center; color:var(--ink-faint); font-size:11px; text-align:center;">Sem foto</div>`}
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input type="file" accept="image/*" id="inputAnexarFoto" style="display:none;">
+          <input type="file" accept="image/*" capture="user" id="inputTirarFoto" style="display:none;">
+          <button type="button" class="btn" style="width:auto; background:var(--surface-2,#F7E9DA); color:var(--ink); border:1px solid var(--line);" id="btnAnexarFoto">📎 Anexar foto</button>
+          <button type="button" class="btn" style="width:auto; background:var(--surface-2,#F7E9DA); color:var(--ink); border:1px solid var(--line);" id="btnTirarFoto">📷 Tirar foto</button>
+          ${foto ? `<button type="button" class="btn" style="width:auto; background:var(--danger-soft); color:var(--danger); border:1px solid var(--line);" id="btnRemoverFoto">Remover</button>` : ''}
+        </div>
+      </div>
+      <div class="muted" id="fotoStatus" style="margin-bottom:14px;"></div>
+    `;
+    document.getElementById('btnAnexarFoto').addEventListener('click', ()=> document.getElementById('inputAnexarFoto').click());
+    document.getElementById('btnTirarFoto').addEventListener('click', ()=> document.getElementById('inputTirarFoto').click());
+    document.getElementById('inputAnexarFoto').addEventListener('change', e=> processarFoto(e.target.files[0]));
+    document.getElementById('inputTirarFoto').addEventListener('change', e=> processarFoto(e.target.files[0]));
+    const btnRemover = document.getElementById('btnRemoverFoto');
+    if(btnRemover) btnRemover.addEventListener('click', ()=>{ foto = ''; montarFoto(); });
+  }
+  async function processarFoto(file){
+    if(!file) return;
+    const status = document.getElementById('fotoStatus');
+    status.textContent = 'Enviando foto...';
+    try{
+      const dataUrl = await readFileAsDataUrl(file);
+      const nomeArquivo = 'funcionario_autocadastro_' + Date.now() + '.jpg';
+      const resultado = await uploadFotoParaDrive(dataUrl, nomeArquivo);
+      foto = resultado.url;
+      status.textContent = '';
+      montarFoto();
+    }catch(e){
+      console.error('erro ao enviar foto', e);
+      status.textContent = 'Não foi possível enviar a foto. Você pode continuar sem ela e a diretoria adiciona depois.';
+    }
+  }
+  montarFoto();
+
   let filhos = [];
   function desenharFilhos(){
     const area = document.getElementById('areaFilhos');
     if(document.getElementById('temFilhos').value!=='sim'){ area.innerHTML=''; filhos=[]; return; }
-    if(filhos.length===0) filhos = [{ nome:'', idade:'' }];
+    if(filhos.length===0) filhos = [{ idade:'' }];
     area.innerHTML = `
-      <div id="listaFilhos"></div>
-      <button type="button" class="btn" id="btnAddFilho" style="background:var(--surface-2,#F7E9DA); color:var(--ink); border:1px solid var(--line); margin-bottom:14px;">+ Adicionar outro filho</button>
+      <div class="field" style="max-width:160px;"><label>Quantos filhos?</label><input type="number" min="1" max="20" id="qtdFilhos" value="${filhos.length}"></div>
+      <div id="listaFilhos" class="grid-2"></div>
     `;
     function desenharLista(){
       document.getElementById('listaFilhos').innerHTML = filhos.map((f,i)=>`
-        <div class="grid-2">
-          <div class="field"><label>Nome — filho(a) ${i+1}</label><input data-filhonome="${i}" value="${f.nome||''}"></div>
-          <div class="field"><label>Idade</label><input type="number" min="0" max="120" data-filhoidade="${i}" value="${f.idade||''}"></div>
-        </div>
+        <div class="field"><label>Idade — filho(a) ${i+1}</label><input type="number" min="0" max="120" data-filhoidade="${i}" value="${f.idade||''}"></div>
       `).join('');
-      document.querySelectorAll('[data-filhonome]').forEach(el=> el.addEventListener('input', ()=>{ filhos[Number(el.dataset.filhonome)].nome = el.value; }));
       document.querySelectorAll('[data-filhoidade]').forEach(el=> el.addEventListener('input', ()=>{ filhos[Number(el.dataset.filhoidade)].idade = el.value; }));
     }
     desenharLista();
-    document.getElementById('btnAddFilho').addEventListener('click', ()=>{ filhos.push({ nome:'', idade:'' }); desenharLista(); });
+    document.getElementById('qtdFilhos').addEventListener('input', e=>{
+      const qtd = Math.max(1, Math.min(20, parseInt(e.target.value)||1));
+      const atual = filhos.length;
+      if(qtd > atual){ for(let i=atual;i<qtd;i++) filhos.push({ idade:'' }); }
+      else if(qtd < atual){ filhos = filhos.slice(0, qtd); }
+      desenharLista();
+    });
   }
   document.getElementById('temFilhos').addEventListener('change', desenharFilhos);
 
@@ -207,6 +274,7 @@ function mostrarErroForm(msg){
     const dados = {
       apelido: val('apelido'), cpf: val('cpf'), rg: val('rg'), dataNascimento: val('dataNascimento'), estadoCivil: val('estadoCivil'),
       celularParticular: val('celularParticular'), telefoneFixo: val('telefoneFixo'), celularLoja: val('celularLoja'),
+      foto: foto,
       temFilhos: val('temFilhos'), filhos: val('temFilhos')==='sim' ? filhos : [],
       cep: val('cep'), cidade: val('cidade'), endereco: val('endereco'), numero: val('numero'), bairro: val('bairro'), estado: val('estado').toUpperCase(), complemento: val('complemento'),
       contatoEmergenciaNome: val('contatoEmergenciaNome'), contatoEmergenciaTelefone: val('contatoEmergenciaTelefone'),
