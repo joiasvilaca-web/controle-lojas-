@@ -564,7 +564,18 @@ function renderFuncionarios(main){
         </td>
       </tr>
     `).join('');
-    tbody.querySelectorAll('[data-verfunc]').forEach(b=> b.addEventListener('click', ()=> abrirFuncionarioModal(funcionarios.find(f=>f.id===b.dataset.verfunc)) ));
+    tbody.querySelectorAll('[data-verfunc]').forEach(b=> b.addEventListener('click', async ()=>{
+      // Busca fresca antes de abrir: evita mostrar uma ficha desatualizada (ex: o
+      // funcionário acabou de preencher o link de autocadastro dele) e mantém DP e
+      // Cadastro sempre olhando pro mesmo cadastro, sem duplicar.
+      const idClicado = b.dataset.verfunc;
+      const alvoAntigo = funcionarios.find(f=>f.id===idClicado);
+      const funcionarioIdAlvo = alvoAntigo ? alvoAntigo.funcionarioId : null;
+      funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+      if(window.__redrawFuncionarios) window.__redrawFuncionarios();
+      const atualizado = funcionarios.find(f=> (funcionarioIdAlvo && f.funcionarioId===funcionarioIdAlvo) || f.id===idClicado);
+      abrirFuncionarioModal(atualizado || alvoAntigo);
+    }));
   }
   draw();
   window.__redrawFuncionarios = draw;
@@ -691,12 +702,21 @@ function abrirFuncionarioModal(f, onSalvarExtra){
   if(document.getElementById('btnSalvarFunc'))
   document.getElementById('btnSalvarFunc').addEventListener('click', async ()=>{
     if(!d.nome || !d.nome.trim()){ abaAtiva='Pessoais'; renderCorpo(); renderAbas(); showToast('Informe o nome do funcionário.'); return; }
+    // Confere de novo, fresco, se já não existe uma ficha real pra esse funcionário (ex:
+    // ele preencheu o link de autocadastro dele enquanto esta tela estava aberta) —
+    // assim nunca cria uma ficha duplicada.
+    let idFinal = f ? f.id : uid('func');
+    if(f && f.funcionarioId){
+      const frescos = await funcionariosGet();
+      const existente = frescos.find(p=>p.funcionarioId===f.funcionarioId);
+      if(existente) idFinal = existente.id;
+    }
     // Espalha o registro original ANTES do formulário: assim o funcionarioId (elo com o
     // cadastro central) e os campos que só existem no módulo Cadastro (foto, celulares,
     // filhos, experiências, PIX...) não somem ao salvar por aqui.
     const dados = {
       ...(f||{}),
-      id: f?f.id:uid('func'),
+      id: idFinal,
       ...d,
       salario: d.salario===''||d.salario===null?null:parseFloat(d.salario),
       criadoEm: f?f.criadoEm:Date.now(),

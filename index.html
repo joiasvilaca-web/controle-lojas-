@@ -2075,7 +2075,7 @@ const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','A
  * primeira vez que alguém salva dados de RH pra esse funcionário.
  */
 async function abrirFuncionarioCompletoModal(funcionario){
-  const todosPerfis = await dpFuncionariosGetTodos();
+  const todosPerfis = await dpFuncionariosGetTodos(true); // busca fresca: garante ver o que o funcionário já preencheu pelo link
   let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
   const abasVisiveis = currentUser.nivel==='diretoria' ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
   const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
@@ -2412,9 +2412,13 @@ async function abrirFuncionarioCompletoModal(funcionario){
     funcionario.apelido = (d.apelido||'').trim();
     funcionario.cargos = d.cargos;
     const okConfig = await configSave();
-    // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId
+    // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId — confere de
+    // novo, fresco, se já não existe uma ficha (ex: o funcionário preencheu o link de
+    // autocadastro dele enquanto esta tela estava aberta), pra nunca duplicar o cadastro.
+    const perfisFrescos = await dpFuncionariosGetTodos(true);
+    const perfilAtual = perfisFrescos.find(p=>p.funcionarioId===funcionario.id) || perfil;
     const perfilFinal = {
-      id: perfil ? perfil.id : uid('func'),
+      id: perfilAtual ? perfilAtual.id : uid('func'),
       funcionarioId: funcionario.id,
       nome: d.nome.trim(), apelido: (d.apelido||'').trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
       telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
@@ -2428,7 +2432,7 @@ async function abrirFuncionarioCompletoModal(funcionario){
       salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), ctpsNumero:d.ctpsNumero, ctpsSerie:d.ctpsSerie, pis:d.pis,
       status:d.status, dataDesligamento:d.dataDesligamento,
       banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta, tipoPix:d.tipoPix, chavePix:d.chavePix,
-      criadoEm: perfil ? perfil.criadoEm : Date.now(),
+      criadoEm: perfilAtual ? perfilAtual.criadoEm : Date.now(),
     };
     const okPerfil = await dpFuncionarioSalvar(perfilFinal);
     if(okConfig && okPerfil){
@@ -2822,13 +2826,22 @@ async function produtosEstoqueGet(){
 }
 let vendasParaHistoricoProduto = null; // carregado sob demanda, só quando alguém abre o histórico de um produto
 let dpFuncionariosCache = null; // carregado sob demanda, só quando alguém abre o cadastro completo de um funcionário
-async function dpFuncionariosGetTodos(){
-  if(dpFuncionariosCache !== null) return dpFuncionariosCache;
+/**
+ * @param {boolean} forcar - se true, ignora o cache e busca direto no Supabase.
+ * Usado sempre que se abre ou salva o cadastro completo de um funcionário, pra nunca
+ * mostrar (ou salvar por cima de) uma ficha desatualizada — ex: o funcionário preencheu
+ * o link de autocadastro dele depois que essa aba já tinha carregado a lista antiga.
+ */
+async function dpFuncionariosGetTodos(forcar){
+  if(dpFuncionariosCache !== null && !forcar) return dpFuncionariosCache;
   try{
     const { data, error } = await supabaseClient.from('dp_funcionarios').select('id,payload').order('created_at', { ascending:true });
     if(error) throw error;
     dpFuncionariosCache = (data||[]).map(r=>r.payload);
-  }catch(e){ console.error('erro ao carregar perfis do Departamento Pessoal', e); dpFuncionariosCache = []; }
+  }catch(e){
+    console.error('erro ao carregar perfis do Departamento Pessoal', e);
+    if(dpFuncionariosCache === null) dpFuncionariosCache = []; // mantém o cache antigo se a busca fresca falhar
+  }
   return dpFuncionariosCache;
 }
 async function dpFuncionarioSalvar(perfil){
