@@ -26,6 +26,7 @@
     --danger-soft:#FBE7E5;
     --ok:#1E7A46;
     --ok-soft:#E3F5EA;
+    --loja-cor:#7a1f3d;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
@@ -219,7 +220,10 @@
     background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line); padding:8px 15px; border-radius:999px; font-size:13px; font-weight:700; cursor:pointer;
   }
   .shell-topbar button.active{background:var(--gold); color:#fff; border-color:var(--gold);}
-  .shell-content{flex:1; overflow-y:auto; padding:24px; position:relative; color:var(--ink);}
+  .shell-content{flex:1; overflow-y:auto; padding:24px; position:relative; color:var(--ink); border-top:4px solid var(--loja-cor); transition:border-color .2s;}
+  .loja-btn{display:flex; align-items:center; gap:14px; width:100%; text-align:left; padding:16px 20px; border-radius:12px; border:none; cursor:pointer; color:#fff; font-family:'Cormorant Garamond',serif; font-size:19px; font-weight:700; margin-bottom:10px; box-shadow:0 2px 8px rgba(0,0,0,.15);}
+  .loja-btn .loja-btn-abrev{width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.25); display:flex; align-items:center; justify-content:center; font-size:14px; font-family:'Inter',sans-serif;}
+  .loja-badge{display:none; font-size:10.5px; font-weight:800; padding:2px 8px; border-radius:999px; color:#fff; margin-left:6px; letter-spacing:.4px;}
   #configPanelShell{max-width:900px; margin:0 auto; color:var(--ink);}
   #moduleIframesWrap{position:absolute; inset:0; pointer-events:none;}
   .vendas-home-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
@@ -293,6 +297,7 @@
       <div class="who-shell">
         <b id="shellWhoName"></b>
         <span class="level-pill" id="shellWhoLevel"></span>
+        <span class="loja-badge" id="shellLojaBadge"></span>
       </div>
       <button class="btn btn-ghost btn-sm" id="btnLogoutShell" style="width:100%; margin-top:8px; background:rgba(179,38,30,0.18); color:#ffb3ac;">🚪 Sair</button>
     </div>
@@ -312,6 +317,13 @@
         </div>
         <div class="cfg-tabs" id="cfgTabs"></div>
         <div id="cfgBody"></div>
+      </div>
+      <div id="lojaPanelShell" style="display:none; max-width:640px; margin:0 auto; padding:24px 20px;">
+        <div style="text-align:center; margin-bottom:26px;">
+          <h1 style="font-family:'Cormorant Garamond',serif; font-size:30px; font-weight:700; margin:0 0 6px; color:var(--ink);">Escolha a loja</h1>
+          <p style="color:var(--muted); font-size:14px; margin:0;">Você pode trocar de loja a qualquer momento pelo menu.</p>
+        </div>
+        <div id="lojaPanelBotoes"></div>
       </div>
       <div id="vendasHome" style="display:none; max-width:760px; margin:0 auto; padding:24px 20px;">
         <div style="text-align:center; margin-bottom:26px;">
@@ -596,7 +608,84 @@ async function loadConfig(){
 let currentUser = null;
 let currentPermissoes = null;
 let moduloAtual = null;
+let lojaAtual = null; // id da loja selecionada (ex: 'loja_mc') — null = ainda não escolhida
 const iframesCriados = {};
+
+function lerLojaSalva(){
+  try{ return localStorage.getItem('vilaca_loja_atual') || null; }catch(e){ return null; }
+}
+function salvarLojaAtual(id){
+  lojaAtual = id;
+  try{ localStorage.setItem('vilaca_loja_atual', id||''); }catch(e){}
+  aplicarCorLoja();
+  avisarLojaAtualizada();
+}
+function lojaInfo(id){
+  return (config.lojas||[]).find(l=>l.id===id) || null;
+}
+/* Aplica a cor da loja atual como destaque visual no shell (marca na sidebar e badge). */
+function aplicarCorLoja(){
+  const info = lojaInfo(lojaAtual);
+  const cor = info ? (info.cor || '#7a5230') : null;
+  document.documentElement.style.setProperty('--loja-cor', cor || '#7a1f3d');
+  const badge = document.getElementById('shellLojaBadge');
+  if(badge){
+    if(info){
+      badge.style.display = '';
+      badge.style.background = cor;
+      badge.textContent = info.abreviacao || info.nome;
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+}
+/* Avisa os módulos já abertos qual é a loja ativa agora — usado pela Etapa 3
+ * (Vendas, O.S., Orçamentos, Caixa, Estoque) pra filtrar pela loja selecionada. */
+function avisarLojaAtualizada(){
+  const info = lojaInfo(lojaAtual);
+  Object.values(iframesCriados).forEach(f=>{
+    try{ if(f && f.contentWindow) f.contentWindow.postMessage({ type:'lojaAtual', lojaId:lojaAtual, cor:info?info.cor:null, nome:info?info.nome:null }, '*'); }
+    catch(e){ /* iframe ainda carregando */ }
+  });
+}
+
+/* Renderiza a tela de seleção de loja com um botão colorido por loja liberada. */
+function renderLojaPanel(){
+  const lojasPermitidas = (config.lojas||[]).filter(l=>Array.isArray(currentUser.lojas) && currentUser.lojas.includes(l.id));
+  const wrap = document.getElementById('lojaPanelBotoes');
+  if(lojasPermitidas.length===0){
+    wrap.innerHTML = '<p class="muted">Nenhuma loja liberada pro seu acesso. Fale com a diretoria.</p>';
+    return;
+  }
+  wrap.innerHTML = lojasPermitidas.map(l=>`
+    <button type="button" class="loja-btn" data-lojaid="${l.id}" style="background:${l.cor||'#7a1f3d'};">
+      <span class="loja-btn-abrev">${escapeHtml(l.abreviacao||'')}</span>
+      <span>${escapeHtml(l.nome)}</span>
+      ${lojaAtual===l.id?'<span style="margin-left:auto; font-size:12px;">✓ atual</span>':''}
+    </button>
+  `).join('');
+  wrap.querySelectorAll('[data-lojaid]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const escolhida = b.dataset.lojaid;
+      salvarLojaAtual(escolhida);
+      showToast('Loja alterada: ' + (lojaInfo(escolhida)?lojaInfo(escolhida).nome:''));
+      const proximo = (moduloAtual && moduloAtual!=='loja') ? moduloAtual : 'dashboard';
+      selecionarModulo(podeVerModulo(SIDEBAR_MODULES.find(m=>m.id===proximo)||{id:proximo}) ? proximo : 'dashboard');
+    });
+  });
+}
+
+/* Decide a loja ativa ao entrar no shell: se só existe 1 loja liberada, entra
+ * direto nela sem mostrar tela. Se a loja salva na sessão anterior ainda é
+ * válida pro usuário, reaproveita. Senão, força a tela de seleção. */
+function decidirLojaInicial(){
+  const permitidas = Array.isArray(currentUser.lojas) ? currentUser.lojas : [];
+  if(permitidas.length===0){ lojaAtual = null; aplicarCorLoja(); return null; }
+  if(permitidas.length===1){ salvarLojaAtual(permitidas[0]); return permitidas[0]; }
+  const salva = lerLojaSalva();
+  if(salva && permitidas.includes(salva)){ salvarLojaAtual(salva); return salva; }
+  return 'PRECISA_ESCOLHER';
+}
 
 /**
  * Avisa TODOS os módulos já abertos que o cadastro de clientes mudou.
@@ -613,6 +702,7 @@ function avisarClientesAtualizados(){
 const tabsCache = {};
 
 const SIDEBAR_MODULES = [
+  { id:'loja', label:'Loja', icon:'🏬', src:null },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'vendas', label:'Vendas', icon:'🛒', src:null },
   { id:'caixa', label:'Caixa', icon:'💰', src:'caixa.html' },
@@ -636,6 +726,9 @@ let vendasSubAtual = null; // null = tela dos 2 botões; 'pdv' ou 'os' = dentro 
 
 // O módulo "Vendas" (unificado) fica disponível se a pessoa puder acessar o PDV OU a O.S.
 function podeVerModulo(m){
+  if(m.id==='loja'){
+    return Array.isArray(currentUser.lojas) && currentUser.lojas.length>0;
+  }
   if(m.id==='vendas'){
     return (currentPermissoes['vendas'] && currentPermissoes['vendas'].ativo) ||
            (currentPermissoes['os'] && currentPermissoes['os'].ativo);
@@ -761,9 +854,14 @@ function enterShell(moduloInicial){
   document.getElementById('shellWhoName').textContent = currentUser.nome;
   document.getElementById('shellWhoLevel').textContent = levelLabel(currentUser.nivel);
   buildSidebar();
+  const decisaoLoja = decidirLojaInicial();
   // Alerta de contas vencendo hoje (módulo Gastos) — aparece sempre ao logar
   verificarAlertaGastos();
   const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
+  if(decisaoLoja==='PRECISA_ESCOLHER'){
+    selecionarModulo('loja');
+    return;
+  }
   if(permitidos.length===0){
     document.getElementById('moduleIframesWrap').innerHTML = '';
     document.getElementById('configPanelShell').style.display = 'none';
@@ -831,6 +929,7 @@ function selecionarModulo(moduloId, subVendas){
   document.getElementById('shellEmptyState').style.display = 'none';
   document.querySelectorAll('.side-item').forEach(b=> b.classList.toggle('active', b.dataset.modulo===moduloId));
   document.getElementById('configPanelShell').style.display = 'none';
+  document.getElementById('lojaPanelShell').style.display = 'none';
   document.getElementById('vendasHome').style.display = 'none';
   Object.values(iframesCriados).forEach(f=> f.style.display = 'none');
 
@@ -839,6 +938,13 @@ function selecionarModulo(moduloId, subVendas){
     document.getElementById('configPanelShell').style.display = 'block';
     buildCfgTabs();
     renderCfgTab(currentCfgTab);
+    return;
+  }
+
+  if(moduloId==='loja'){
+    document.getElementById('shellTopTabs').innerHTML = ''; document.getElementById('shellTopTabs').style.display = 'none';
+    document.getElementById('lojaPanelShell').style.display = 'block';
+    renderLojaPanel();
     return;
   }
 
@@ -864,6 +970,7 @@ function selecionarModulo(moduloId, subVendas){
       iframeV.dataset.modulo = sub.permModulo; // usa o id de permissão real (os/vendas) no handshake
       document.getElementById('moduleIframesWrap').appendChild(iframeV);
       iframesCriados[chaveIframe] = iframeV;
+      iframeV.addEventListener('load', ()=>{ if(lojaAtual) avisarLojaAtualizada(); });
     }
     iframeV.style.display = 'block';
     // barra superior com botão Voltar + as abas internas da sub-tela
@@ -880,6 +987,7 @@ function selecionarModulo(moduloId, subVendas){
     iframe.dataset.modulo = moduloId;
     document.getElementById('moduleIframesWrap').appendChild(iframe);
     iframesCriados[moduloId] = iframe;
+    iframe.addEventListener('load', ()=>{ if(lojaAtual) avisarLojaAtualizada(); });
   }
   iframe.style.display = 'block';
 
