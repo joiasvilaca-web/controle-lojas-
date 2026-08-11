@@ -3025,16 +3025,19 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
 }
 
 /* ============================================================
-   FATOR — cotação do dia do ouro (R$/grama) e do dólar (R$), buscadas
-   automaticamente de fontes públicas. Nenhum dos dois valores pode ser
-   digitado/alterado manualmente — só "atualizar agora" (busca de novo na fonte).
+   FATOR — cotação do dia do ouro, prata e dólar (buscadas automaticamente de
+   fontes públicas, nenhuma editável manualmente — só "atualizar agora"), mais
+   os campos de Compra Metal e Venda, esses sim preenchidos à mão.
    ============================================================ */
 function garantirConfigFator(){
   if(!config.fator || typeof config.fator !== 'object'){
-    config.fator = { ouro:null, dolar:null };
+    config.fator = { ouro:null, dolar:null, prata:null, compraMetal:{}, venda:{} };
   }
   if(!config.fator.ouro) config.fator.ouro = null;
   if(!config.fator.dolar) config.fator.dolar = null;
+  if(!config.fator.prata) config.fator.prata = null;
+  if(!config.fator.compraMetal || typeof config.fator.compraMetal !== 'object') config.fator.compraMetal = {};
+  if(!config.fator.venda || typeof config.fator.venda !== 'object') config.fator.venda = {};
 }
 function hojeSaoPaulo(){
   // Data de hoje no fuso de São Paulo, formato YYYY-MM-DD (evita cair no dia errado por fuso).
@@ -3051,6 +3054,15 @@ async function buscarCotacaoOuroDia(){
   if(!valor || isNaN(valor)) throw new Error('Resposta inválida da fonte de ouro');
   return valor;
 }
+/** Busca o preço da prata do dia em R$/grama — mesma fonte e mesma regra do ouro. */
+async function buscarCotacaoPrataDia(){
+  const res = await fetch('https://api.goldprice.dev/v1/convert?from=XAG&to=BRL&amount=1&unit=gram');
+  if(!res.ok) throw new Error('Falha ao buscar cotação da prata (HTTP '+res.status+')');
+  const data = await res.json();
+  const valor = parseFloat(data.result);
+  if(!valor || isNaN(valor)) throw new Error('Resposta inválida da fonte de prata');
+  return valor;
+}
 /** Busca o dólar comercial (venda) do dia via API oficial do Banco Central do Brasil
  * (SGS, série 1 — Taxa de câmbio livre, dólar americano, venda, diária). */
 async function buscarCotacaoDolarDia(){
@@ -3062,13 +3074,40 @@ async function buscarCotacaoDolarDia(){
   if(!valor || isNaN(valor)) throw new Error('Resposta inválida do Banco Central');
   return valor;
 }
+const CAMPOS_COMPRA_METAL = [
+  { id:'ouroDtvm', label:'Valor do ouro DTVM' },
+  { id:'ouroGarimpo', label:'Valor do ouro garimpo' },
+  { id:'ouroBalcao', label:'Valor do ouro balcão' },
+  { id:'prataDtvm', label:'Valor prata DTVM' },
+];
+const CAMPOS_VENDA_FATOR = [
+  { id:'joiaRepresentanteOuro', label:'Joia representante ouro' },
+  { id:'joiaRepresentantePrata', label:'Joia representante prata' },
+  { id:'aliancaPrata', label:'Aliança prata' },
+  { id:'aliancaOuro', label:'Aliança ouro' },
+  { id:'joiaVilacaOuro', label:'Joia Vilaça ouro' },
+  { id:'joiaVilacaPrata', label:'Joias Vilaça prata' },
+  { id:'servico', label:'Serviço' },
+];
 async function renderFatorTab(main){
   garantirConfigFator();
   main.innerHTML = `
     <div class="card">
       <div class="section-label">Fator do dia</div>
       <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Cotação do dia buscada automaticamente — ninguém digita esse valor, nem a diretoria. Atualiza sozinha uma vez por dia; use "Atualizar agora" se quiser forçar uma nova busca.</p>
-      <div class="grid-2" id="fatorCards"></div>
+      <div class="grid-3" id="fatorCards"></div>
+    </div>
+    <div class="card">
+      <div class="section-label">Compra Metal</div>
+      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Preenchido manualmente. Use ponto pra casas decimais (ex: 285.50), nunca vírgula.</p>
+      <div class="grid-2" id="compraMetalFields"></div>
+      <button class="btn btn-accent btn-sm" id="btnSalvarCompraMetal" style="margin-top:14px;">Salvar Compra Metal</button>
+    </div>
+    <div class="card">
+      <div class="section-label">Venda</div>
+      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Preenchido manualmente. Use ponto pra casas decimais (ex: 12.5), nunca vírgula.</p>
+      <div class="grid-2" id="vendaFields"></div>
+      <button class="btn btn-accent btn-sm" id="btnSalvarVenda" style="margin-top:14px;">Salvar Venda</button>
     </div>
   `;
   const cardsWrap = document.getElementById('fatorCards');
@@ -3080,49 +3119,44 @@ async function renderFatorTab(main){
     return d.toLocaleString('pt-BR', { timeZone:'America/Sao_Paulo', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
   }
 
-  function renderCards(){
-    const ouro = config.fator.ouro;
-    const dolar = config.fator.dolar;
-    cardsWrap.innerHTML = `
+  function cardAutoHtml(chave, icone, titulo, fonte, dadoAtual){
+    return `
       <div class="card" style="background:var(--surface-2);">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
           <div>
-            <div class="muted" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">🥇 Ouro do dia (R$/grama)</div>
-            <div style="font-size:28px;font-weight:800;color:var(--gold-ink);margin-top:4px;">${fmtBRL(ouro?ouro.valor:null)}</div>
-            <div class="muted" style="font-size:11px;margin-top:4px;">${ouro?('Atualizado em '+fmtCarimbo(ouro.atualizadoEm)):'Ainda não buscado'}</div>
-            <div class="muted" style="font-size:11px;">Fonte: cotação internacional do ouro (XAU/USD) convertida pra reais — goldprice.dev</div>
+            <div class="muted" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">${icone} ${titulo}</div>
+            <div style="font-size:26px;font-weight:800;color:var(--gold-ink);margin-top:4px;">${fmtBRL(dadoAtual?dadoAtual.valor:null)}</div>
+            <div class="muted" style="font-size:11px;margin-top:4px;">${dadoAtual?('Atualizado em '+fmtCarimbo(dadoAtual.atualizadoEm)):'Ainda não buscado'}</div>
+            <div class="muted" style="font-size:11px;">Fonte: ${fonte}</div>
           </div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnAtualizarOuro">↻ Atualizar</button>
-        </div>
-      </div>
-      <div class="card" style="background:var(--surface-2);">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-          <div>
-            <div class="muted" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">💵 Dólar do dia</div>
-            <div style="font-size:28px;font-weight:800;color:var(--gold-ink);margin-top:4px;">${fmtBRL(dolar?dolar.valor:null)}</div>
-            <div class="muted" style="font-size:11px;margin-top:4px;">${dolar?('Atualizado em '+fmtCarimbo(dolar.atualizadoEm)):'Ainda não buscado'}</div>
-            <div class="muted" style="font-size:11px;">Fonte: Banco Central do Brasil (câmbio comercial, venda)</div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnAtualizarDolar">↻ Atualizar</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-atualizarfator="${chave}">↻ Atualizar</button>
         </div>
       </div>
     `;
-    document.getElementById('btnAtualizarOuro').addEventListener('click', ()=> atualizar('ouro', true));
-    document.getElementById('btnAtualizarDolar').addEventListener('click', ()=> atualizar('dolar', true));
+  }
+
+  function renderCards(){
+    cardsWrap.innerHTML =
+      cardAutoHtml('ouro', '🥇', 'Ouro do dia (R$/grama)', 'cotação internacional do ouro (XAU/USD) convertida pra reais — goldprice.dev', config.fator.ouro) +
+      cardAutoHtml('prata', '🥈', 'Prata do dia (R$/grama)', 'cotação internacional da prata (XAG/USD) convertida pra reais — goldprice.dev', config.fator.prata) +
+      cardAutoHtml('dolar', '💵', 'Dólar do dia', 'Banco Central do Brasil (câmbio comercial, venda)', config.fator.dolar);
+    cardsWrap.querySelectorAll('[data-atualizarfator]').forEach(b=>{
+      b.addEventListener('click', ()=> atualizar(b.dataset.atualizarfator, true));
+    });
   }
 
   async function atualizar(qual, forcado){
-    const btn = document.getElementById(qual==='ouro'?'btnAtualizarOuro':'btnAtualizarDolar');
+    const btn = cardsWrap.querySelector(`[data-atualizarfator="${qual}"]`);
     if(btn){ btn.disabled = true; btn.textContent = 'Buscando...'; }
     try{
-      const valor = qual==='ouro' ? await buscarCotacaoOuroDia() : await buscarCotacaoDolarDia();
+      const valor = qual==='ouro' ? await buscarCotacaoOuroDia() : qual==='prata' ? await buscarCotacaoPrataDia() : await buscarCotacaoDolarDia();
       config.fator[qual] = { valor, dataCotacao: hojeSaoPaulo(), atualizadoEm: new Date().toISOString() };
       await configSave();
       renderCards();
-      if(forcado) showToast((qual==='ouro'?'Ouro':'Dólar') + ' atualizado.');
+      if(forcado) showToast({ouro:'Ouro', prata:'Prata', dolar:'Dólar'}[qual] + ' atualizado.');
     }catch(e){
       console.error('erro ao buscar cotação de '+qual, e);
-      if(btn){ btn.disabled=false; btn.textContent='↻ Atualizar'; }
+      renderCards();
       showToast('Não foi possível buscar a cotação agora' + (config.fator[qual]?' — mantendo o último valor salvo.':'.'));
     }
   }
@@ -3131,8 +3165,38 @@ async function renderFatorTab(main){
   // Busca automática: se a cotação salva não é de hoje (fuso de SP), busca sozinho ao abrir a aba.
   const hoje = hojeSaoPaulo();
   if(!config.fator.ouro || config.fator.ouro.dataCotacao !== hoje) atualizar('ouro', false);
+  if(!config.fator.prata || config.fator.prata.dataCotacao !== hoje) atualizar('prata', false);
   if(!config.fator.dolar || config.fator.dolar.dataCotacao !== hoje) atualizar('dolar', false);
+
+  // ---- Compra Metal (manual) ----
+  const compraWrap = document.getElementById('compraMetalFields');
+  compraWrap.innerHTML = CAMPOS_COMPRA_METAL.map(c=>`
+    <div class="field"><label>${c.label}</label><input type="number" step="0.01" id="cm_${c.id}" placeholder="0.00" value="${config.fator.compraMetal[c.id]!=null?config.fator.compraMetal[c.id]:''}"></div>
+  `).join('');
+  document.getElementById('btnSalvarCompraMetal').addEventListener('click', async ()=>{
+    CAMPOS_COMPRA_METAL.forEach(c=>{
+      const v = document.getElementById('cm_'+c.id).value;
+      config.fator.compraMetal[c.id] = v===''?null:parseFloat(v);
+    });
+    const ok = await configSave();
+    if(ok) showToast('Compra Metal salva.');
+  });
+
+  // ---- Venda (manual) ----
+  const vendaWrap = document.getElementById('vendaFields');
+  vendaWrap.innerHTML = CAMPOS_VENDA_FATOR.map(c=>`
+    <div class="field"><label>${c.label}</label><input type="number" step="0.01" id="vd_${c.id}" placeholder="0.00" value="${config.fator.venda[c.id]!=null?config.fator.venda[c.id]:''}"></div>
+  `).join('');
+  document.getElementById('btnSalvarVenda').addEventListener('click', async ()=>{
+    CAMPOS_VENDA_FATOR.forEach(c=>{
+      const v = document.getElementById('vd_'+c.id).value;
+      config.fator.venda[c.id] = v===''?null:parseFloat(v);
+    });
+    const ok = await configSave();
+    if(ok) showToast('Venda salva.');
+  });
 }
+
 
 async function renderEstoqueTab(main){
   main.innerHTML = `<div class="card"><div class="empty">Carregando...</div></div>`;
