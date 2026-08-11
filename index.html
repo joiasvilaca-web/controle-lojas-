@@ -2599,6 +2599,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     cfop: base ? (base.cfop||'') : '',
     cstCsosn: base ? (base.cstCsosn||'') : '',
     fornecedor: base ? (base.fornecedor||'') : '',
+    fator: base && base.fator!=null ? base.fator : null,
     gtin: base ? (base.gtin||'') : '',
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
     custo: base && base.custo!==undefined ? base.custo : null,
@@ -2665,9 +2666,14 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             </div>
           </div>
         </div>
-        <div class="field"><label>Fornecedor <span class="muted">opcional</span></label>
-          <select id="pe_fornecedor"><option value="">Selecione</option>${config.fornecedores.map(f=>`<option value="${escapeHtml(f.empresa)}" ${d.fornecedor===f.empresa?'selected':''}>${escapeHtml(f.empresa)}</option>`).join('')}</select>
-          ${config.fornecedores.length===0?`<p class="muted" style="margin:4px 0 0;font-size:12px;">Nenhum cadastrado ainda — cadastre em Cadastro → Fornecedor.</p>`:''}
+        <div class="grid-2">
+          <div class="field"><label>Fornecedor <span class="muted">opcional</span></label>
+            <select id="pe_fornecedor"><option value="">Selecione</option>${config.fornecedores.map(f=>`<option value="${escapeHtml(f.empresa)}" ${d.fornecedor===f.empresa?'selected':''}>${escapeHtml(f.empresa)}</option>`).join('')}</select>
+            ${config.fornecedores.length===0?`<p class="muted" style="margin:4px 0 0;font-size:12px;">Nenhum cadastrado ainda — cadastre em Cadastro → Fornecedor.</p>`:''}
+          </div>
+          <div class="field"><label>Fator <span class="muted">vem do fornecedor selecionado</span></label>
+            <input type="number" step="0.01" id="pe_fator" placeholder="0.00" value="${d.fator!=null?d.fator:''}">
+          </div>
         </div>
         <div class="section-label" style="margin-top:6px; border:none; padding:0;">Dimensões e peso <span class="muted" style="text-transform:none; font-weight:400;">— use ponto pra casas decimais (ex: 0.2), nunca vírgula</span></div>
         <div class="grid-3">
@@ -2736,7 +2742,16 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       document.getElementById('pe_tipo').addEventListener('change', e=> d.tipo=e.target.value);
       document.getElementById('pe_categoriaId').addEventListener('change', e=>{ d.categoriaId=e.target.value; renderPeTabBody(); });
       document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
-      document.getElementById('pe_fornecedor').addEventListener('change', e=> d.fornecedor=e.target.value);
+      document.getElementById('pe_fornecedor').addEventListener('change', e=>{
+        d.fornecedor = e.target.value;
+        const forn = config.fornecedores.find(f=>f.empresa===d.fornecedor);
+        if(forn && forn.fator!=null){
+          d.fator = forn.fator;
+          const campoFator = document.getElementById('pe_fator');
+          if(campoFator) campoFator.value = forn.fator;
+        }
+      });
+      document.getElementById('pe_fator').addEventListener('input', e=> d.fator = e.target.value===''?null:parseFloat(e.target.value));
       document.getElementById('pe_comprimento').addEventListener('input', e=> d.comprimento=e.target.value);
       document.getElementById('pe_altura').addEventListener('input', e=> d.altura=e.target.value);
       document.getElementById('pe_espessura').addEventListener('input', e=> d.espessura=e.target.value);
@@ -2868,25 +2883,26 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         });
       });
       /** Valor de compra atualizado: se a subcategoria escolhida (aba Nome) tem "ouro" no
-       * nome, usa peso (g) × Valor do ouro DTVM (Cadastro → Fator → Compra Metal); se tem
-       * "prata", usa peso × Valor da prata DTVM; qualquer outra subcategoria (ou nenhuma),
-       * só repete o Valor de compra na data. */
+       * nome, usa (peso × Fator) × Valor do ouro DTVM (Cadastro → Fator → Compra Metal);
+       * se tem "prata", usa (peso × Fator) × Valor da prata DTVM; qualquer outra
+       * subcategoria (ou nenhuma), só repete o Valor de compra na data. */
       function recalcularValorAtualizado(){
         garantirConfigFator();
         const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
         const nomeSub = (sub?sub.nome:'').toLowerCase();
         const peso = (d.peso!=null && d.peso!=='') ? parseFloat(d.peso) : null;
+        const fator = (d.fator!=null && d.fator!=='') ? parseFloat(d.fator) : null;
         const custoData = (d.custo!=null && d.custo!=='') ? parseFloat(d.custo) : null;
         const cm = config.fator.compraMetal || {};
         const campoRegra = document.getElementById('pe_valorAtualizadoRegra');
         const campoValor = document.getElementById('pe_valorCompraAtualizado');
         let resultado = null, regra = '';
         if(nomeSub.includes('ouro')){
-          regra = 'peso × Valor do ouro DTVM';
-          if(peso!=null && cm.ouroDtvm!=null) resultado = peso * cm.ouroDtvm;
+          regra = '(peso × Fator) × Valor do ouro DTVM';
+          if(peso!=null && fator!=null && cm.ouroDtvm!=null) resultado = (peso * fator) * cm.ouroDtvm;
         } else if(nomeSub.includes('prata')){
-          regra = 'peso × Valor da prata DTVM';
-          if(peso!=null && cm.prataDtvm!=null) resultado = peso * cm.prataDtvm;
+          regra = '(peso × Fator) × Valor da prata DTVM';
+          if(peso!=null && fator!=null && cm.prataDtvm!=null) resultado = (peso * fator) * cm.prataDtvm;
         } else {
           regra = 'repete o valor de compra na data';
           resultado = custoData;
@@ -2979,6 +2995,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       cfop: (d.cfop||'').trim(),
       cstCsosn: (d.cstCsosn||'').trim(),
       fornecedor: (d.fornecedor||'').trim(),
+      fator: d.fator===null || d.fator==='' ? null : parseFloat(d.fator),
       gtin: (d.gtin||'').trim(),
       estoquePorLoja: Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0])),
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
@@ -3034,7 +3051,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           nome: d.nome, unidade: d.unidade, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
           tipo: d.tipo, comprimento: d.comprimento, altura: d.altura, espessura: d.espessura,
           numeroAro: d.numeroAro, peso: d.peso, vendavel: d.vendavel,
-          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, gtin: d.gtin,
+          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, gtin: d.gtin,
           estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
           medidas: JSON.parse(JSON.stringify(medidas)),
           pedras: JSON.parse(JSON.stringify(pedras)),
