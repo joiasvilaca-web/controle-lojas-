@@ -2024,13 +2024,6 @@ async function renderProdutoUnificadoTab(main){
           </select>
           <button type="button" class="icon-btn" id="btnCadastrarSubcategoria" title="Cadastrar subcategoria">+</button>
         </div>
-        <div style="display:flex;gap:4px;align-items:center;">
-          <select id="peUnifFiltroTipoProduto" style="padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
-            <option value="">Tipo de produto: todos</option>
-            ${(config.tiposProduto||[]).map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
-          </select>
-          <button type="button" class="icon-btn" id="btnCadastrarTipoProduto" title="Cadastrar tipo de produto">+</button>
-        </div>
       </div>
       <div id="peUnifRows"></div>
     </div>
@@ -2041,13 +2034,11 @@ async function renderProdutoUnificadoTab(main){
     const tipoSel = (document.getElementById('peUnifFiltroTipo')||{}).value||'';
     const catSel = (document.getElementById('peUnifFiltroCat')||{}).value||'';
     const subSel = (document.getElementById('peUnifFiltroSub')||{}).value||'';
-    const tipoProdutoSel = (document.getElementById('peUnifFiltroTipoProduto')||{}).value||'';
     let lista = [...produtosEstoque];
     if(q) lista = lista.filter(p=>(p.nome||'').toLowerCase().includes(q.toLowerCase())||(p.codigoInterno||'').toLowerCase().includes(q.toLowerCase()));
     if(tipoSel) lista = lista.filter(p=>p.tipo===tipoSel);
     if(catSel) lista = lista.filter(p=>p.categoriaId===catSel);
     if(subSel) lista = lista.filter(p=>p.subcategoriaId===subSel);
-    if(tipoProdutoSel) lista = lista.filter(p=>p.tipoProduto===tipoProdutoSel);
     lista.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
     const wrap = document.getElementById('peUnifRows');
     if(!wrap) return;
@@ -2061,7 +2052,6 @@ async function renderProdutoUnificadoTab(main){
             ${p.tipo?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">${escapeHtml(tipoProdutoLabel(p.tipo))}</span>`:''}
             ${catNome(p.categoriaId)?`<span class="chip">${escapeHtml(catNome(p.categoriaId))}</span>`:''}
             ${subNome(p.subcategoriaId)?`<span class="chip">${escapeHtml(subNome(p.subcategoriaId))}</span>`:''}
-            ${p.tipoProduto?`<span class="chip">${escapeHtml(p.tipoProduto)}</span>`:''}
             ${p.tipo!=='servico'?`<span class="chip">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>`:''}
             ${p.composicao&&p.composicao.length>0?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Composição: ${p.composicao.length}</span>`:''}
             ${p.vendavel===false?`<span class="chip">Só interno</span>`:`<span class="chip" style="background:var(--ok-soft);color:var(--ok);">Vendável</span>`}
@@ -2096,7 +2086,6 @@ async function renderProdutoUnificadoTab(main){
   document.getElementById('btnGerenciarTiposServico').addEventListener('click', ()=> abrirGerenciarTiposServicoModal());
   document.getElementById('btnCadastrarCategoria').addEventListener('click', ()=> abrirCadastroRapidoObjeto('Categoria', config.produtosOtica.categorias, 'cat', ()=> renderProdutoUnificadoTab(main)));
   document.getElementById('btnCadastrarSubcategoria').addEventListener('click', ()=> abrirCadastroRapidoObjeto('Subcategoria', config.produtosOtica.subcategorias, 'sub', ()=> renderProdutoUnificadoTab(main)));
-  document.getElementById('btnCadastrarTipoProduto').addEventListener('click', ()=> abrirCadastroRapidoLista('Tipo de produto', config.tiposProduto, ()=> renderProdutoUnificadoTab(main)));
 
   renderRows();
 }
@@ -2205,10 +2194,10 @@ function garantirConfigProduto(){
   if(!config.produtosOtica) config.produtosOtica = { categorias:[], subcategorias:[] };
   if(!config.produtosOtica.proximoCodigo) config.produtosOtica.proximoCodigo = 1;
 }
-/** A partir do texto do tipo de produto, decide qual variável de medida mostrar:
+/** A partir do texto do nome da categoria, decide qual variável de medida mostrar:
  * "aro" pra anéis, "comprimento" pra cordão/pulseira, ou nada pros demais. */
-function categoriaMedidaDoTipoProduto(tipoProduto){
-  const t = (tipoProduto||'').toLowerCase();
+function categoriaMedidaDaCategoria(nomeCategoria){
+  const t = (nomeCategoria||'').toLowerCase();
   if(t.includes('anel')) return 'aro';
   if(t.includes('cord') || t.includes('pulseira')) return 'comprimento';
   return null;
@@ -2579,43 +2568,50 @@ function desenharBarcodeProduto(valor){
   }catch(e){ console.error('erro ao gerar código de barras', e); holder.innerHTML = '<p class="muted" style="font-size:12px;">Não foi possível gerar o código de barras pra esse valor.</p>'; }
 }
 
-function abrirProdutoEstoqueModal(produto){
+function abrirProdutoEstoqueModal(produto, clonarDe){
   garantirConfigProduto();
   const editando = !!produto;
+  const base = produto || clonarDe || null; // fonte dos valores (produto real, ou um clone a partir de outro)
   const idAtual = produto ? produto.id : uid('prodest');
   const outrosDisponiveis = produtosEstoque.filter(p=> !produto || p.id !== produto.id);
-  const fotosHolder = { fotos: (produto && produto.fotos) ? JSON.parse(JSON.stringify(produto.fotos)) : [] };
-  const composicao = (produto && produto.composicao) ? JSON.parse(JSON.stringify(produto.composicao)) : [];
-  const medidas = (produto && Array.isArray(produto.medidas)) ? JSON.parse(JSON.stringify(produto.medidas)) : [];
-  const pedras = (produto && Array.isArray(produto.pedras)) ? JSON.parse(JSON.stringify(produto.pedras)) : [];
+  const fotosHolder = { fotos: (base && base.fotos) ? JSON.parse(JSON.stringify(base.fotos)) : [] };
+  const composicao = (base && base.composicao) ? JSON.parse(JSON.stringify(base.composicao)) : [];
+  const medidas = (base && Array.isArray(base.medidas)) ? JSON.parse(JSON.stringify(base.medidas)) : [];
+  const pedras = (base && Array.isArray(base.pedras)) ? JSON.parse(JSON.stringify(base.pedras)) : [];
   const d = {
-    nome: produto ? (produto.nome||'') : '',
-    unidade: produto ? (produto.unidade||'un') : 'un',
-    codigoInterno: produto ? (produto.codigoInterno||'') : '',
-    categoriaId: produto ? (produto.categoriaId||'') : '',
-    subcategoriaId: produto ? (produto.subcategoriaId||'') : '',
-    tipo: produto ? (produto.tipo||'estoque') : 'estoque',
-    tipoProduto: produto ? (produto.tipoProduto||'') : '',
-    comprimento: produto && produto.comprimento!==undefined ? produto.comprimento : null,
-    altura: produto && produto.altura!==undefined ? produto.altura : null,
-    espessura: produto && produto.espessura!==undefined ? produto.espessura : null,
-    numeroAro: produto && produto.numeroAro!==undefined ? produto.numeroAro : null,
-    peso: produto && produto.peso!==undefined ? produto.peso : null,
-    vendavel: !produto || produto.vendavel !== false,
-    ncm: produto ? (produto.ncm||'') : '',
-    cfop: produto ? (produto.cfop||'') : '',
-    cstCsosn: produto ? (produto.cstCsosn||'') : '',
-    fornecedor: produto ? (produto.fornecedor||'') : '',
-    gtin: produto ? (produto.gtin||'') : '',
-    estoquePorLoja: produto && produto.estoquePorLoja ? {...produto.estoquePorLoja} : (produto && produto.estoque ? estoqueLegadoDivididoPorLoja(produto.estoque) : {}),
-    custo: produto && produto.custo!==undefined ? produto.custo : null,
-    precoVenda: produto && produto.precoVenda!==undefined ? produto.precoVenda : null,
+    nome: base ? (base.nome||'') : '',
+    unidade: base ? (base.unidade||'un') : 'un',
+    codigoInterno: produto ? (produto.codigoInterno||'') : '', // clone NUNCA herda o código — gera um novo, ver abaixo
+    categoriaId: base ? (base.categoriaId||'') : '',
+    subcategoriaId: base ? (base.subcategoriaId||'') : '',
+    tipo: base ? (base.tipo||'estoque') : 'estoque',
+    comprimento: base && base.comprimento!==undefined ? base.comprimento : null,
+    altura: base && base.altura!==undefined ? base.altura : null,
+    espessura: base && base.espessura!==undefined ? base.espessura : null,
+    numeroAro: base && base.numeroAro!==undefined ? base.numeroAro : null,
+    peso: base && base.peso!==undefined ? base.peso : null,
+    vendavel: !base || base.vendavel !== false,
+    ncm: base ? (base.ncm||'') : '',
+    cfop: base ? (base.cfop||'') : '',
+    cstCsosn: base ? (base.cstCsosn||'') : '',
+    fornecedor: base ? (base.fornecedor||'') : '',
+    gtin: base ? (base.gtin||'') : '',
+    estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
+    custo: base && base.custo!==undefined ? base.custo : null,
+    precoVenda: base && base.precoVenda!==undefined ? base.precoVenda : null,
   };
   let peTabAtiva = 'nomenclatura';
   // Controle do código interno gerado automaticamente: só é "reservado" de vez (o contador
   // avança) quando o produto é realmente salvo com esse código. Ver btnSalvarProdutoEstoque.
   let codigoReservadoTexto = null;
   let codigoReservadoSeq = null;
+  if(clonarDe && !produto){
+    // Clone: já deixa o próximo código da sequência pronto (só reserva de vez ao salvar).
+    const seq = config.produtosOtica.proximoCodigo || 1;
+    d.codigoInterno = 'PRD' + String(seq).padStart(6,'0');
+    codigoReservadoTexto = d.codigoInterno;
+    codigoReservadoSeq = seq;
+  }
 
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
@@ -2627,7 +2623,8 @@ function abrirProdutoEstoqueModal(produto){
   function renderPeTabBody(){
     const body = document.getElementById('peModalBody');
     if(peTabAtiva==='nomenclatura'){
-      const catMedida = categoriaMedidaDoTipoProduto(d.tipoProduto);
+      const catObj = (config.produtosOtica.categorias||[]).find(c=>c.id===d.categoriaId);
+      const catMedida = categoriaMedidaDaCategoria(catObj ? catObj.nome : '');
       const listaMedidas = catMedida==='aro' ? config.medidasAnel : catMedida==='comprimento' ? config.medidasComprimento : [];
       const rotuloMedida = catMedida==='aro' ? 'Medida (aro)' : 'Comprimento';
       body.innerHTML = `
@@ -2647,16 +2644,8 @@ function abrirProdutoEstoqueModal(produto){
             </div>
           </div>
         </div>
-        <div class="grid-2">
-          <div class="field"><label>Tipo</label>
-            <select id="pe_tipo">${TIPOS_PRODUTO.map(t=>`<option value="${t.id}" ${d.tipo===t.id?'selected':''}>${t.label}</option>`).join('')}</select>
-          </div>
-          <div class="field"><label>Tipo de produto <span class="muted">opcional</span></label>
-            <div style="display:flex; gap:6px;">
-              <select id="pe_tipoProduto" style="flex:1;"><option value="">—</option>${(config.tiposProduto||[]).map(v=>`<option value="${escapeHtml(v)}" ${d.tipoProduto===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
-              <button type="button" class="icon-btn" id="btnEditarTipoProduto" title="Cadastrar/editar tipos de produto">✎</button>
-            </div>
-          </div>
+        <div class="field"><label>Tipo</label>
+          <select id="pe_tipo">${TIPOS_PRODUTO.map(t=>`<option value="${t.id}" ${d.tipo===t.id?'selected':''}>${t.label}</option>`).join('')}</select>
         </div>
         <div class="grid-2">
           <div class="field"><label>Categoria <span class="muted">opcional</span></label>
@@ -2737,8 +2726,7 @@ function abrirProdutoEstoqueModal(produto){
       document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
       document.getElementById('btnEditarUnidade').addEventListener('click', ()=> abrirGerenciarListaStrings('Unidades', config.unidadesProduto, ()=> montarShellModalProduto()));
       document.getElementById('pe_tipo').addEventListener('change', e=> d.tipo=e.target.value);
-      document.getElementById('pe_tipoProduto').addEventListener('change', e=>{ d.tipoProduto=e.target.value; renderPeTabBody(); });
-      document.getElementById('pe_categoriaId').addEventListener('change', e=> d.categoriaId=e.target.value);
+      document.getElementById('pe_categoriaId').addEventListener('change', e=>{ d.categoriaId=e.target.value; renderPeTabBody(); });
       document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
       document.getElementById('pe_comprimento').addEventListener('input', e=> d.comprimento=e.target.value);
       document.getElementById('pe_altura').addEventListener('input', e=> d.altura=e.target.value);
@@ -2748,7 +2736,6 @@ function abrirProdutoEstoqueModal(produto){
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
       document.getElementById('btnEditarCategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Categorias', config.produtosOtica.categorias, 'cat', ()=> montarShellModalProduto()));
       document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> montarShellModalProduto()));
-      document.getElementById('btnEditarTipoProduto').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos de produto', config.tiposProduto, ()=> montarShellModalProduto()));
 
       function renderMedidasRows(){
         const wrap = document.getElementById('pe_medidasRows');
@@ -2950,7 +2937,6 @@ function abrirProdutoEstoqueModal(produto){
       categoriaId: d.categoriaId||'',
       subcategoriaId: d.subcategoriaId||'',
       tipo: d.tipo||'estoque',
-      tipoProduto: d.tipoProduto||'',
       comprimento: d.comprimento===null || d.comprimento==='' ? null : parseFloat(d.comprimento),
       altura: d.altura===null || d.altura==='' ? null : parseFloat(d.altura),
       espessura: d.espessura===null || d.espessura==='' ? null : parseFloat(d.espessura),
@@ -3000,8 +2986,9 @@ function abrirProdutoEstoqueModal(produto){
       </div>
       <div id="peModalBody"></div>
       <div id="pe_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
-      <div style="display:flex; gap:10px; margin-top:18px;">
+      <div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">
         <button class="btn btn-accent" id="btnSalvarProdutoEstoque">Salvar</button>
+        ${editando ? `<button class="btn btn-ghost" id="btnClonarProdutoEstoque" title="Cria uma cópia deste produto, com código interno novo, pra você editar e salvar como outro item">⧉ Clonar</button>` : ''}
         <button class="btn btn-ghost" id="btnCancelarProdutoEstoque">Cancelar</button>
       </div>
     `);
@@ -3011,6 +2998,25 @@ function abrirProdutoEstoqueModal(produto){
     });
     document.getElementById('btnCancelarProdutoEstoque').addEventListener('click', closeModal);
     document.getElementById('btnSalvarProdutoEstoque').addEventListener('click', handleSalvarProdutoEstoque);
+    if(editando){
+      document.getElementById('btnClonarProdutoEstoque').addEventListener('click', ()=>{
+        const clone = {
+          nome: d.nome, unidade: d.unidade, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
+          tipo: d.tipo, comprimento: d.comprimento, altura: d.altura, espessura: d.espessura,
+          numeroAro: d.numeroAro, peso: d.peso, vendavel: d.vendavel,
+          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, gtin: d.gtin,
+          estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
+          medidas: JSON.parse(JSON.stringify(medidas)),
+          pedras: JSON.parse(JSON.stringify(pedras)),
+          composicao: JSON.parse(JSON.stringify(composicao)),
+          fotos: JSON.parse(JSON.stringify(fotosHolder.fotos)),
+          // codigoInterno propositalmente NÃO vai — o clone gera o próprio (próximo da sequência)
+        };
+        closeModal();
+        abrirProdutoEstoqueModal(null, clone);
+        showToast('Produto clonado — revise e salve pra criar o novo item.');
+      });
+    }
     renderPeTabBody();
     renderPeTabs();
   }
