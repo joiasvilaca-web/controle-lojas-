@@ -3043,37 +3043,29 @@ function hojeSaoPaulo(){
   // Data de hoje no fuso de São Paulo, formato YYYY-MM-DD (evita cair no dia errado por fuso).
   return new Date().toLocaleDateString('en-CA', { timeZone:'America/Sao_Paulo' });
 }
-/** Busca o preço do ouro do dia em R$/grama via goldprice.dev (conversão do spot
- * internacional XAU/BRL — não é o pregão específico da B3, que não tem API pública
- * gratuita; é a referência de mercado internacional convertida pra reais). */
-async function buscarCotacaoOuroDia(){
-  const res = await fetch('https://api.goldprice.dev/v1/convert?from=XAU&to=BRL&amount=1&unit=gram');
-  if(!res.ok) throw new Error('Falha ao buscar cotação do ouro (HTTP '+res.status+')');
+const COTACOES_MERCADO_URL = SUPABASE_URL + "/functions/v1/cotacoes-mercado";
+/** Busca uma cotação (ouro/prata/dólar) através da Edge Function cotacoes-mercado — ela
+ * busca as fontes externas pelo servidor (evita depender de CORS liberado pelo navegador,
+ * que foi o motivo do ouro/prata não aparecerem quando a busca era feita direto daqui). */
+async function buscarCotacaoMercado(ativo){
+  const res = await fetch(COTACOES_MERCADO_URL + '?ativo=' + ativo, {
+    headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY },
+  });
+  if(!res.ok) throw new Error('Servidor de cotações respondeu ' + res.status);
   const data = await res.json();
-  const valor = parseFloat(data.result);
-  if(!valor || isNaN(valor)) throw new Error('Resposta inválida da fonte de ouro');
-  return valor;
+  const item = data[ativo];
+  if(!item || item.erro || item.valor==null) throw new Error((item&&item.erro) || 'Resposta inválida do servidor de cotações');
+  return item.valor;
 }
-/** Busca o preço da prata do dia em R$/grama — mesma fonte e mesma regra do ouro. */
-async function buscarCotacaoPrataDia(){
-  const res = await fetch('https://api.goldprice.dev/v1/convert?from=XAG&to=BRL&amount=1&unit=gram');
-  if(!res.ok) throw new Error('Falha ao buscar cotação da prata (HTTP '+res.status+')');
-  const data = await res.json();
-  const valor = parseFloat(data.result);
-  if(!valor || isNaN(valor)) throw new Error('Resposta inválida da fonte de prata');
-  return valor;
-}
-/** Busca o dólar comercial (venda) do dia via API oficial do Banco Central do Brasil
+/** Preço do ouro do dia em R$/grama (conversão do spot internacional XAU/BRL — não é o
+ * pregão específico da B3, que não tem API pública gratuita; é a referência de mercado
+ * internacional convertida pra reais). */
+async function buscarCotacaoOuroDia(){ return buscarCotacaoMercado('ouro'); }
+/** Preço da prata do dia em R$/grama — mesma fonte e mesma regra do ouro. */
+async function buscarCotacaoPrataDia(){ return buscarCotacaoMercado('prata'); }
+/** Dólar comercial (venda) do dia via API oficial do Banco Central do Brasil
  * (SGS, série 1 — Taxa de câmbio livre, dólar americano, venda, diária). */
-async function buscarCotacaoDolarDia(){
-  const res = await fetch('https://api.bcb.gov.br/dados/serie/bcdata.sgs.1/dados/ultimos/1?formato=json');
-  if(!res.ok) throw new Error('Falha ao buscar cotação do dólar (HTTP '+res.status+')');
-  const data = await res.json();
-  if(!Array.isArray(data) || data.length===0) throw new Error('Resposta inválida do Banco Central');
-  const valor = parseFloat(String(data[0].valor).replace(',', '.'));
-  if(!valor || isNaN(valor)) throw new Error('Resposta inválida do Banco Central');
-  return valor;
-}
+async function buscarCotacaoDolarDia(){ return buscarCotacaoMercado('dolar'); }
 const CAMPOS_COMPRA_METAL = [
   { id:'ouroDtvm', label:'Valor do ouro DTVM' },
   { id:'ouroGarimpo', label:'Valor do ouro garimpo' },
