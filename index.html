@@ -1088,6 +1088,7 @@ const CFG_TABS = [
   { id:'clientes', label:'Clientes' },
   { id:'produto', label:'Produto' },
   { id:'fator', label:'Fator' },
+  { id:'fornecedor', label:'Fornecedor' },
   { id:'lojas', label:'Lojas' },
   { id:'pagamento', label:'Formas de Pagamento' },
   { id:'impressao', label:'Impressão & Etiquetas' },
@@ -1116,6 +1117,7 @@ function renderCfgTab(tab){
   if(tab==='clientes') return renderClientesTab(body);
   if(tab==='produto') return renderProdutoUnificadoTab(body);
   if(tab==='fator') return renderFatorTab(body);
+  if(tab==='fornecedor') return renderFornecedorTab(body);
   if(tab==='lojas') return renderLojasTab(body);
   if(tab==='produtos') return renderProdutosTab(body);
   if(tab==='joias') return renderJoiasTab(body);
@@ -2189,7 +2191,7 @@ function garantirConfigProduto(){
   if(!Array.isArray(config.medidasComprimento)) config.medidasComprimento = [];
   if(!Array.isArray(config.tiposPedra)) config.tiposPedra = [];
   if(!Array.isArray(config.coresPedra)) config.coresPedra = [];
-  if(!Array.isArray(config.fornecedores)) config.fornecedores = [];
+  garantirConfigFornecedor();
   if(!Array.isArray(config.representantes)) config.representantes = [];
   if(!Array.isArray(config.tiposProduto)) config.tiposProduto = [];
   if(!Array.isArray(config.unidadesProduto)) config.unidadesProduto = ['un','g','kg'];
@@ -2796,10 +2798,8 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         <div class="grid-2">
           <div class="field"><label>CST/CSOSN</label><input id="pe_cstCsosn" value="${escapeHtml(d.cstCsosn)}"></div>
           <div class="field"><label>Fornecedor</label>
-            <div style="display:flex; gap:6px;">
-              <select id="pe_fornecedor" style="flex:1;"><option value="">—</option>${config.fornecedores.map(v=>`<option value="${escapeHtml(v)}" ${d.fornecedor===v?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>
-              <button type="button" class="icon-btn" id="btnEditarFornecedor" title="Cadastrar/editar fornecedores">✎</button>
-            </div>
+            <select id="pe_fornecedor"><option value="">—</option>${config.fornecedores.map(f=>`<option value="${escapeHtml(f.empresa)}" ${d.fornecedor===f.empresa?'selected':''}>${escapeHtml(f.empresa)}</option>`).join('')}</select>
+            ${config.fornecedores.length===0?`<p class="muted" style="margin:4px 0 0;font-size:12px;">Nenhum cadastrado ainda — cadastre em Cadastro → Fornecedor.</p>`:''}
           </div>
         </div>
         <div class="grid-2">
@@ -2822,7 +2822,6 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       document.getElementById('pe_cfop').addEventListener('input', e=> d.cfop=e.target.value);
       document.getElementById('pe_cstCsosn').addEventListener('input', e=> d.cstCsosn=e.target.value);
       document.getElementById('pe_fornecedor').addEventListener('change', e=> d.fornecedor=e.target.value);
-      document.getElementById('btnEditarFornecedor').addEventListener('click', ()=> abrirGerenciarListaStrings('Fornecedores', config.fornecedores, ()=> montarShellModalProduto()));
       document.getElementById('pe_representante').addEventListener('change', e=> d.representante=e.target.value);
       document.getElementById('btnEditarRepresentante').addEventListener('click', ()=> abrirGerenciarListaStrings('Representantes', config.representantes, ()=> montarShellModalProduto()));
       document.getElementById('pe_gtin').addEventListener('input', e=>{ d.gtin=e.target.value; desenharBarcodeProduto(d.gtin); });
@@ -3234,6 +3233,132 @@ async function renderFatorTab(main){
   });
 }
 
+/* ============================================================
+   FORNECEDOR — cadastro completo de fornecedores (aba própria do Cadastro).
+   ============================================================ */
+function garantirConfigFornecedor(){
+  if(!Array.isArray(config.fornecedores)) config.fornecedores = [];
+  // Compatibilidade: se algum fornecedor antigo foi salvo só como texto (sistema anterior,
+  // mais simples), converte pro formato completo em vez de quebrar a tela.
+  config.fornecedores = config.fornecedores.map(f=>{
+    if(typeof f === 'string') return { id: uid('forn'), codigo:'', empresa:f, endereco:'', telefone:'', site:'', email:'', representanteLocal:'', telefoneRepresentante:'', subcategoriaId:'', fator:null };
+    return f;
+  });
+  if(!config.proximoCodigoRepresentante) config.proximoCodigoRepresentante = 1;
+}
+async function renderFornecedorTab(main){
+  garantirConfigFornecedor();
+  main.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div class="section-label">Fornecedores</div>
+          <p class="muted" style="margin:2px 0 0;font-size:12px;">Empresa, contato, representante local e o tipo de mercadoria que cada um trabalha.</p>
+        </div>
+        <button class="btn btn-accent btn-sm" id="btnNovoFornecedor">+ Adicionar fornecedor</button>
+      </div>
+      <div id="fornecedorRows"></div>
+    </div>
+  `;
+  function subcategoriaNome(id){ const s = (config.produtosOtica.subcategorias||[]).find(x=>x.id===id); return s?s.nome:''; }
+  function renderRows(){
+    const wrap = document.getElementById('fornecedorRows');
+    const lista = config.fornecedores.slice().sort((a,b)=>(a.empresa||'').localeCompare(b.empresa||''));
+    if(lista.length===0){ wrap.innerHTML = `<div class="empty">Nenhum fornecedor cadastrado ainda.</div>`; return; }
+    wrap.innerHTML = lista.map(f=>`
+      <div class="code-list-item" style="flex-wrap:wrap;gap:8px;">
+        <div style="flex:1;min-width:220px;">
+          <b>${escapeHtml(f.empresa||'(sem nome)')}</b>
+          ${f.codigo?`<span class="muted" style="font-size:11px;"> · #${escapeHtml(f.codigo)}</span>`:''}
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
+            ${f.representanteLocal?`<span class="chip">Rep: ${escapeHtml(f.representanteLocal)}${f.telefoneRepresentante?' · '+escapeHtml(f.telefoneRepresentante):''}</span>`:''}
+            ${subcategoriaNome(f.subcategoriaId)?`<span class="chip">${escapeHtml(subcategoriaNome(f.subcategoriaId))}</span>`:''}
+            ${f.telefone?`<span class="chip">☎ ${escapeHtml(f.telefone)}</span>`:''}
+            ${f.email?`<span class="chip">${escapeHtml(f.email)}</span>`:''}
+            ${f.fator!=null?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Fator: ${f.fator}</span>`:''}
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button class="icon-btn" data-fedit="${f.id}" title="Editar">✎</button>
+          <button class="icon-btn" data-fdel="${f.id}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-fedit]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fedit))));
+    wrap.querySelectorAll('[data-fdel]').forEach(b=> b.addEventListener('click', async ()=>{
+      config.fornecedores = config.fornecedores.filter(x=>x.id!==b.dataset.fdel);
+      const ok = await configSave();
+      if(ok){ renderRows(); showToast('Fornecedor removido.'); }
+    }));
+  }
+  function abrirFornecedorModal(fornecedor){
+    const editando = !!fornecedor;
+    const d = {
+      empresa: fornecedor?fornecedor.empresa||'':'',
+      endereco: fornecedor?fornecedor.endereco||'':'',
+      telefone: fornecedor?fornecedor.telefone||'':'',
+      site: fornecedor?fornecedor.site||'':'',
+      email: fornecedor?fornecedor.email||'':'',
+      representanteLocal: fornecedor?fornecedor.representanteLocal||'':'',
+      telefoneRepresentante: fornecedor?fornecedor.telefoneRepresentante||'':'',
+      subcategoriaId: fornecedor?fornecedor.subcategoriaId||'':'',
+      fator: fornecedor&&fornecedor.fator!=null?fornecedor.fator:null,
+    };
+    openModal(`
+      <div class="section-label">${editando?'Editar fornecedor':'Novo fornecedor'}</div>
+      ${editando&&fornecedor.codigo?`<p class="muted" style="margin:-4px 0 12px;">Código do representante: <b>${escapeHtml(fornecedor.codigo)}</b></p>`:`<p class="muted" style="margin:-4px 0 12px;">O código do representante é gerado automaticamente ao salvar.</p>`}
+      <div class="field"><label>Empresa</label><input id="fn_empresa" value="${escapeHtml(d.empresa)}"></div>
+      <div class="field"><label>Endereço completo</label><input id="fn_endereco" value="${escapeHtml(d.endereco)}"></div>
+      <div class="grid-2">
+        <div class="field"><label>Telefone completo</label><input id="fn_telefone" value="${escapeHtml(d.telefone)}"></div>
+        <div class="field"><label>Site <span class="muted">opcional</span></label><input id="fn_site" value="${escapeHtml(d.site)}" placeholder="https://"></div>
+      </div>
+      <div class="field"><label>E-mail</label><input type="email" id="fn_email" value="${escapeHtml(d.email)}"></div>
+      <div class="grid-2">
+        <div class="field"><label>Representante local</label><input id="fn_representanteLocal" value="${escapeHtml(d.representanteLocal)}"></div>
+        <div class="field"><label>Telefone do representante</label><input id="fn_telefoneRepresentante" value="${escapeHtml(d.telefoneRepresentante)}"></div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>Tipo de mercadoria <span class="muted">opcional</span></label>
+          <select id="fn_subcategoriaId"><option value="">—</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Fator</label><input type="number" step="0.01" id="fn_fator" placeholder="0.00" value="${d.fator!=null?d.fator:''}"></div>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:14px;">
+        <button class="btn btn-accent" id="btnSalvarFornecedor">Salvar</button>
+        <button class="btn btn-ghost" id="btnCancelarFornecedor">Cancelar</button>
+      </div>
+    `);
+    document.getElementById('btnCancelarFornecedor').addEventListener('click', closeModal);
+    document.getElementById('btnSalvarFornecedor').addEventListener('click', async ()=>{
+      const empresa = document.getElementById('fn_empresa').value.trim();
+      if(!empresa){ showToast('Informe o nome da empresa.'); return; }
+      const dados = {
+        id: fornecedor ? fornecedor.id : uid('forn'),
+        codigo: fornecedor ? fornecedor.codigo : ('REP' + String(config.proximoCodigoRepresentante).padStart(6,'0')),
+        empresa,
+        endereco: document.getElementById('fn_endereco').value.trim(),
+        telefone: document.getElementById('fn_telefone').value.trim(),
+        site: document.getElementById('fn_site').value.trim(),
+        email: document.getElementById('fn_email').value.trim(),
+        representanteLocal: document.getElementById('fn_representanteLocal').value.trim(),
+        telefoneRepresentante: document.getElementById('fn_telefoneRepresentante').value.trim(),
+        subcategoriaId: document.getElementById('fn_subcategoriaId').value,
+        fator: document.getElementById('fn_fator').value===''?null:parseFloat(document.getElementById('fn_fator').value),
+      };
+      if(!fornecedor) config.proximoCodigoRepresentante += 1;
+      const idx = config.fornecedores.findIndex(x=>x.id===dados.id);
+      if(idx>=0) config.fornecedores[idx] = dados; else config.fornecedores.push(dados);
+      const ok = await configSave();
+      if(!ok) return;
+      closeModal();
+      renderRows();
+      showToast(editando?'Fornecedor atualizado.':'Fornecedor cadastrado.');
+    });
+  }
+  document.getElementById('btnNovoFornecedor').addEventListener('click', ()=> abrirFornecedorModal(null));
+  renderRows();
+}
 
 async function renderEstoqueTab(main){
   main.innerHTML = `<div class="card"><div class="empty">Carregando...</div></div>`;
@@ -3711,6 +3836,7 @@ const MODULOS_APP = {
     { id:'clientes', label:'Clientes' },
     { id:'produto', label:'Produto' },
     { id:'fator', label:'Fator' },
+    { id:'fornecedor', label:'Fornecedor' },
     { id:'lojas', label:'Lojas' },
     { id:'pagamento', label:'Formas de Pagamento' },
     { id:'impressao', label:'Impressão & Etiquetas' },
@@ -3767,7 +3893,7 @@ function permissoesPadrao(nivel){
     ia:{ ativo:true },
     gastos:{ ativo:true, abas:{ lancamentos:true, agenda:true } },
     marketing:{ ativo:true, abas:todasAbas('marketing') },
-    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, fator:false, lojas:false, pagamento:false, impressao:false, statusOrcamento:false, mensagens:false } },
+    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, fator:false, fornecedor:false, lojas:false, pagamento:false, impressao:false, statusOrcamento:false, mensagens:false } },
   };
 }
 function permissoesDoUsuario(u){
