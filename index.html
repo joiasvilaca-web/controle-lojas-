@@ -3097,7 +3097,7 @@ async function renderFatorTab(main){
     <div class="card">
       <div class="section-label">Venda</div>
       <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Preenchido manualmente. Use ponto pra casas decimais (ex: 12.5), nunca vírgula.</p>
-      <div class="grid-2" id="vendaFields"></div>
+      <div id="vendaFields"></div>
       <button class="btn btn-accent btn-sm" id="btnSalvarVenda" style="margin-top:14px;">Salvar Venda</button>
     </div>
   `;
@@ -3173,15 +3173,48 @@ async function renderFatorTab(main){
     if(ok) showToast('Compra Metal salva.');
   });
 
-  // ---- Venda (manual) ----
+  // ---- Venda (manual) — cada campo agora tem Valor, Desconto (%) e Valor c/ desconto (calculado) ----
   const vendaWrap = document.getElementById('vendaFields');
-  vendaWrap.innerHTML = CAMPOS_VENDA_FATOR.map(c=>`
-    <div class="field"><label>${c.label}</label><input type="number" step="0.01" id="vd_${c.id}" placeholder="0.00" value="${config.fator.venda[c.id]!=null?config.fator.venda[c.id]:''}"></div>
-  `).join('');
+  function calcComDesconto(valor, desconto){
+    if(valor==null || isNaN(valor)) return null;
+    const d = (desconto==null || isNaN(desconto)) ? 0 : desconto;
+    return valor * (1 - d/100);
+  }
+  vendaWrap.innerHTML = CAMPOS_VENDA_FATOR.map(c=>{
+    const valorAtual = config.fator.venda[c.id];
+    const descontoAtual = config.fator.venda[c.id+'Desconto'];
+    return `
+    <div style="border-bottom:1px solid var(--line); padding:10px 0;">
+      <div class="muted" style="font-size:12px; font-weight:700; margin-bottom:6px;">${c.label}</div>
+      <div class="grid-3">
+        <div class="field" style="margin-bottom:0;"><label>Valor</label><input type="number" step="0.01" id="vd_${c.id}" placeholder="0.00" value="${valorAtual!=null?valorAtual:''}"></div>
+        <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
+        <div class="field" style="margin-bottom:0;"><label>Valor com desconto</label><input type="text" id="vdc_${c.id}" disabled value="${calcComDesconto(valorAtual, descontoAtual)!=null?calcComDesconto(valorAtual, descontoAtual).toFixed(2):''}"></div>
+      </div>
+    </div>
+  `;}).join('');
+  function religarCalculoVenda(){
+    CAMPOS_VENDA_FATOR.forEach(c=>{
+      const inpValor = document.getElementById('vd_'+c.id);
+      const inpDesc = document.getElementById('vdd_'+c.id);
+      const inpCalc = document.getElementById('vdc_'+c.id);
+      function recalcular(){
+        const valor = inpValor.value===''?null:parseFloat(inpValor.value);
+        const desconto = inpDesc.value===''?null:parseFloat(inpDesc.value);
+        const resultado = calcComDesconto(valor, desconto);
+        inpCalc.value = resultado!=null ? resultado.toFixed(2) : '';
+      }
+      inpValor.addEventListener('input', recalcular);
+      inpDesc.addEventListener('input', recalcular);
+    });
+  }
+  religarCalculoVenda();
   document.getElementById('btnSalvarVenda').addEventListener('click', async ()=>{
     CAMPOS_VENDA_FATOR.forEach(c=>{
       const v = document.getElementById('vd_'+c.id).value;
+      const d = document.getElementById('vdd_'+c.id).value;
       config.fator.venda[c.id] = v===''?null:parseFloat(v);
+      config.fator.venda[c.id+'Desconto'] = d===''?null:parseFloat(d);
     });
     const ok = await configSave();
     if(ok) showToast('Venda salva.');
