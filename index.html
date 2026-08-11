@@ -2863,7 +2863,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           <div class="muted" id="pe_estoqueTotalHint" style="margin-top:2px;">Total: <b>${totalEstoque} ${unidadeLabel(d.unidade)}</b></div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
+          <div class="field"><label>Valor de compra na data (R$) <span class="muted">manual</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
+          <div class="field"><label>Valor de compra atualizado (R$) <span class="muted" id="pe_valorAtualizadoRegra"></span></label><input type="text" id="pe_valorCompraAtualizado" disabled></div>
+        </div>
+        <div class="grid-2">
           <div class="field"><label>Preço de venda (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
         </div>
       `;
@@ -2875,7 +2878,35 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           if(hint) hint.innerHTML = `Total: <b>${total} ${unidadeLabel(d.unidade)}</b>`;
         });
       });
-      document.getElementById('pe_custo').addEventListener('input', e=> d.custo=e.target.value);
+      /** Valor de compra atualizado: se a subcategoria escolhida (aba Nome) tem "ouro" no
+       * nome, usa peso (g) × Valor do ouro DTVM (Cadastro → Fator → Compra Metal); se tem
+       * "prata", usa peso × Valor da prata DTVM; qualquer outra subcategoria (ou nenhuma),
+       * só repete o Valor de compra na data. */
+      function recalcularValorAtualizado(){
+        garantirConfigFator();
+        const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
+        const nomeSub = (sub?sub.nome:'').toLowerCase();
+        const peso = (d.peso!=null && d.peso!=='') ? parseFloat(d.peso) : null;
+        const custoData = (d.custo!=null && d.custo!=='') ? parseFloat(d.custo) : null;
+        const cm = config.fator.compraMetal || {};
+        const campoRegra = document.getElementById('pe_valorAtualizadoRegra');
+        const campoValor = document.getElementById('pe_valorCompraAtualizado');
+        let resultado = null, regra = '';
+        if(nomeSub.includes('ouro')){
+          regra = 'peso × Valor do ouro DTVM';
+          if(peso!=null && cm.ouroDtvm!=null) resultado = peso * cm.ouroDtvm;
+        } else if(nomeSub.includes('prata')){
+          regra = 'peso × Valor da prata DTVM';
+          if(peso!=null && cm.prataDtvm!=null) resultado = peso * cm.prataDtvm;
+        } else {
+          regra = 'repete o valor de compra na data';
+          resultado = custoData;
+        }
+        if(campoRegra) campoRegra.textContent = '(' + regra + ')';
+        if(campoValor) campoValor.value = resultado!=null ? resultado.toFixed(2) : '—';
+      }
+      recalcularValorAtualizado();
+      document.getElementById('pe_custo').addEventListener('input', e=>{ d.custo=e.target.value; recalcularValorAtualizado(); });
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
     }
     else if(peTabAtiva==='historico'){
