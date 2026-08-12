@@ -527,6 +527,18 @@ async function uploadFotoParaDrive(dataUrl, filename, pasta, tratar){
 let config = null;
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+/** Aplica máscara de telefone/celular com DDD entre parênteses enquanto a pessoa digita:
+ * (11) 91234-5678 pra celular (11 dígitos) ou (11) 1234-5678 pra fixo (10 dígitos). */
+function aplicarMascaraTelefone(input){
+  if(!input) return;
+  input.addEventListener('input', ()=>{
+    let v = input.value.replace(/\D/g,'').slice(0,11);
+    if(v.length > 6) v = v.length>10 ? v.replace(/^(\d{2})(\d{5})(\d{0,4}).*/, '($1) $2-$3') : v.replace(/^(\d{2})(\d{4})(\d{0,4}).*/, '($1) $2-$3');
+    else if(v.length > 2) v = v.replace(/^(\d{2})(\d{0,5})/, '($1) $2');
+    else if(v.length > 0) v = v.replace(/^(\d{0,2})/, '($1');
+    input.value = v;
+  });
+}
 function fmtMoedaPE(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function fmtDatePE(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -1190,7 +1202,7 @@ function renderClientesTable(lista){
   el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
     <thead><tr>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nome</th>
-      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Telefone</th>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Celular</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">E-mail</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nascimento</th>
       <th style="padding:10px 14px;border-bottom:1.5px solid var(--line);"></th>
@@ -1202,12 +1214,14 @@ function renderClientesTable(lista){
         <td style="padding:10px 14px;">${escapeHtml(c.email||'—')}</td>
         <td style="padding:10px 14px;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
         <td style="padding:10px 14px;white-space:nowrap;">
-          <button class="btn btn-sm btn-ghost" data-cfgedi="${escapeHtml(c.id)}">✎</button>
-          <button class="btn btn-sm" style="background:var(--danger-soft);color:var(--danger);border:none;" data-cfgdel="${escapeHtml(c.id)}">🗑</button>
+          <button class="btn btn-sm btn-ghost" data-cfgver="${escapeHtml(c.id)}" title="Ver">👁</button>
+          <button class="btn btn-sm btn-ghost" data-cfgedi="${escapeHtml(c.id)}" title="Editar">✎</button>
+          <button class="btn btn-sm" style="background:var(--danger-soft);color:var(--danger);border:none;" data-cfgdel="${escapeHtml(c.id)}" title="Excluir">🗑</button>
         </td>
       </tr>
     `).join('')}
     </tbody></table>`;
+  el.querySelectorAll('[data-cfgver]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgver), true)));
   el.querySelectorAll('[data-cfgedi]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgedi))));
   el.querySelectorAll('[data-cfgdel]').forEach(b=>b.addEventListener('click',()=> deletarClienteCadastro(b.dataset.cfgdel)));
 }
@@ -1217,7 +1231,7 @@ function clienteModalHtml(c){
     <div class="grid-2">
       <div class="field"><label>Nome *</label><input id="ccNome" value="${escapeHtml(c.nome||'')}"></div>
       <div class="field"><label>CPF</label><input id="ccCpf" value="${escapeHtml(c.cpf||'')}"></div>
-      <div class="field"><label>Telefone</label><input id="ccTel" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>Celular</label><input id="ccTel" placeholder="(00) 00000-0000" value="${escapeHtml(c.telefone||'')}"></div>
       <div class="field"><label>E-mail</label><input type="email" id="ccEmail" value="${escapeHtml(c.email||'')}"></div>
       <div class="field"><label>Data de nascimento</label><input type="date" id="ccNasc" value="${c.dataNascimento||''}"></div>
       <div class="field"><label>CEP</label><input id="ccCep" value="${escapeHtml(c.cep||'')}"></div>
@@ -1617,7 +1631,7 @@ async function abrirHistoricoCliente(cli){
     </div>`;
 }
 
-function openClienteModalCadastro(cli){
+function openClienteModalCadastro(cli, somenteVer){
   const resumoExtras = cli ? `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px;padding-top:12px;border-top:1px solid var(--line);">
       <button class="btn btn-ghost btn-sm" id="ccBtnCredito">💳 Crédito: <b style="color:var(--ok);">&nbsp;${fmtMoedaCli(cli.credito||0)}</b></button>
@@ -1625,20 +1639,25 @@ function openClienteModalCadastro(cli){
       <button class="btn btn-ghost btn-sm" id="ccBtnHistorico">📋 Histórico de compras e O.S.</button>
     </div>` : '';
   openModal(`
-    <h3 style="margin:0 0 16px;">${cli?'Editar cliente':'Novo cliente'}</h3>
+    <h3 style="margin:0 0 16px;">${somenteVer?'Ver cliente':cli?'Editar cliente':'Novo cliente'}</h3>
     ${clienteModalHtml(cli)}
     ${resumoExtras}
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="ccCancelar">Cancelar</button>
-      <button class="btn btn-accent" id="ccSalvar">Salvar</button>
+      <button class="btn btn-ghost" id="ccCancelar">${somenteVer?'Fechar':'Cancelar'}</button>
+      ${somenteVer?'':'<button class="btn btn-accent" id="ccSalvar">Salvar</button>'}
     </div>
   `);
+  aplicarMascaraTelefone(document.getElementById('ccTel'));
   if(cli){
     document.getElementById('ccBtnCredito').addEventListener('click', ()=>{ closeModal(); abrirCreditoModal(cli); });
     document.getElementById('ccBtnDebitos').addEventListener('click', ()=>{ closeModal(); abrirDebitosModal(cli); });
     document.getElementById('ccBtnHistorico').addEventListener('click', ()=>{ closeModal(); abrirHistoricoCliente(cli); });
   }
   document.getElementById('ccCancelar').addEventListener('click', closeModal);
+  if(somenteVer){
+    document.querySelectorAll('#modalBox input').forEach(el=> el.disabled = true);
+    return;
+  }
   // CEP auto-fill
   document.getElementById('ccCep').addEventListener('blur', async ()=>{
     const d = document.getElementById('ccCep').value.replace(/\D/g,'');
@@ -1879,7 +1898,7 @@ function lojaFieldsHtml(prefix, l){
       <div class="field"><label>Inscrição Estadual</label><input id="${prefix}_ie" value="${escapeHtml(l.inscricaoEstadual||'')}"></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Telefone</label><input id="${prefix}_tel" value="${escapeHtml(l.telefone||'')}"></div>
+      <div class="field"><label>Telefone</label><input id="${prefix}_tel" placeholder="(00) 00000-0000" value="${escapeHtml(l.telefone||'')}"></div>
       <div class="field"><label>E-mail</label><input id="${prefix}_email" value="${escapeHtml(l.email||'')}"></div>
     </div>
     <div class="grid-3">
@@ -1895,18 +1914,59 @@ function lojaFieldsHtml(prefix, l){
       <div class="field"><label>Cidade</label><input id="${prefix}_cidade" value="${escapeHtml(l.cidade||'')}"></div>
       <div class="field"><label>Estado</label><input id="${prefix}_estado" maxlength="2" style="text-transform:uppercase" value="${escapeHtml(l.estado||'')}"></div>
     </div>
+    <div class="field"><label>Observação</label><textarea id="${prefix}_obs" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(l.observacao||'')}</textarea></div>
+    <div class="section-label" style="margin-top:10px;">Contas bancárias</div>
+    <div id="${prefix}_contasRows"></div>
+    <button type="button" class="btn btn-ghost btn-sm" id="${prefix}_btnAddConta">+ Adicionar conta bancária</button>
   `;
 }
-function openLojaModal(loja){
+function lojaContasWire(prefix, contasIniciais){
+  const contas = contasIniciais ? JSON.parse(JSON.stringify(contasIniciais)) : [];
+  function renderContas(somenteVer){
+    const wrap = document.getElementById(prefix+'_contasRows');
+    if(!wrap) return;
+    wrap.innerHTML = contas.length===0 ? `<div class="empty" style="padding:6px 0;">Nenhuma conta cadastrada.</div>` : contas.map((c,i)=>`
+      <div class="grid-2" style="align-items:end; margin-bottom:6px; padding-bottom:6px; border-bottom:1px dashed var(--line);">
+        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Banco</label><input data-contaf="banco" data-contai="${i}" value="${escapeHtml(c.banco||'')}" ${somenteVer?'disabled':''}></div>
+        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Tipo de conta</label>
+          <select data-contaf="tipo" data-contai="${i}" ${somenteVer?'disabled':''}>
+            <option value="" ${!c.tipo?'selected':''}>Selecione</option>
+            <option value="corrente" ${c.tipo==='corrente'?'selected':''}>Corrente</option>
+            <option value="poupanca" ${c.tipo==='poupanca'?'selected':''}>Poupança</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Agência</label><input data-contaf="agencia" data-contai="${i}" value="${escapeHtml(c.agencia||'')}" ${somenteVer?'disabled':''}></div>
+        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Conta</label><input data-contaf="conta" data-contai="${i}" value="${escapeHtml(c.conta||'')}" ${somenteVer?'disabled':''}></div>
+        ${somenteVer?'':`<button type="button" class="icon-btn" data-contadel="${i}" style="grid-column:span 2; justify-self:start;">✕ Remover esta conta</button>`}
+      </div>
+    `).join('');
+    if(somenteVer) return;
+    wrap.querySelectorAll('[data-contaf]').forEach(inp=>{
+      inp.addEventListener('input', ()=>{ contas[Number(inp.dataset.contai)][inp.dataset.contaf] = inp.value; });
+      inp.addEventListener('change', ()=>{ contas[Number(inp.dataset.contai)][inp.dataset.contaf] = inp.value; });
+    });
+    wrap.querySelectorAll('[data-contadel]').forEach(b=> b.addEventListener('click', ()=>{ contas.splice(Number(b.dataset.contadel),1); renderContas(); }));
+  }
+  return { contas, renderContas };
+}
+function openLojaModal(loja, somenteVer){
   openModal(`
-    <div class="section-label">${loja?'Editar loja':'Nova loja'}</div>
+    <div class="section-label">${somenteVer?'Ver loja':loja?'Editar loja':'Nova loja'}</div>
     ${lojaFieldsHtml('lj', loja)}
     <div style="display:flex; gap:10px; margin-top:16px;">
-      <button class="btn btn-accent" id="btnSalvarLoja">Salvar</button>
-      <button class="btn btn-ghost" id="btnCancelarLoja">Cancelar</button>
+      ${somenteVer?'':'<button class="btn btn-accent" id="btnSalvarLoja">Salvar</button>'}
+      <button class="btn btn-ghost" id="btnCancelarLoja">${somenteVer?'Fechar':'Cancelar'}</button>
     </div>
   `);
+  const { contas, renderContas } = lojaContasWire('lj', loja&&loja.contasBancarias);
+  renderContas(somenteVer);
   document.getElementById('btnCancelarLoja').addEventListener('click', closeModal);
+  aplicarMascaraTelefone(document.getElementById('lj_tel'));
+  if(somenteVer){
+    document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=> el.disabled = true);
+    return;
+  }
+  document.getElementById('lj_btnAddConta').addEventListener('click', ()=>{ contas.push({ banco:'', tipo:'', agencia:'', conta:'' }); renderContas(); });
   document.getElementById('btnSalvarLoja').addEventListener('click', async ()=>{
     const nome = document.getElementById('lj_nome').value.trim();
     const abreviacao = document.getElementById('lj_abrev').value.trim().toUpperCase();
@@ -1924,6 +1984,8 @@ function openLojaModal(loja){
       bairro: document.getElementById('lj_bairro').value.trim(),
       cidade: document.getElementById('lj_cidade').value.trim(),
       estado: document.getElementById('lj_estado').value.trim(),
+      observacao: document.getElementById('lj_obs').value.trim(),
+      contasBancarias: contas,
     };
     if(loja){ Object.assign(loja, dados); }
     else{ config.lojas.push({ id: uid('loja'), ...dados }); }
@@ -1949,11 +2011,13 @@ function renderLojasTab(main){
       <div class="code-list-item">
         <div><span class="code-chip" style="font-size:11.5px; padding:4px 10px;">${escapeHtml(l.abreviacao)}</span> <b style="margin-left:8px;">${escapeHtml(l.nome)}</b>${l.cnpj?`<div class="muted" style="margin-top:2px;">${escapeHtml(l.cnpj)}</div>`:''}</div>
         <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-ver="${i}" title="Ver">👁</button>
           <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
           <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
         </div>
       </div>
     `).join('');
+    wrap.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.ver)], true) ));
     wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.edit)]) ));
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
@@ -1968,6 +2032,7 @@ function renderLojasTab(main){
   renderRows();
   document.getElementById('btnNovaLoja').addEventListener('click', ()=> openLojaModal(null) );
 }
+
 
 /* ---------- FUNCIONÁRIOS ---------- */
 /* ---------- PRODUTOS (ÓTICA: categorias/subcategorias/fator) ---------- */
@@ -3272,11 +3337,14 @@ async function renderFatorTab(main){
    ============================================================ */
 function garantirConfigFornecedor(){
   if(!Array.isArray(config.fornecedores)) config.fornecedores = [];
-  // Compatibilidade: se algum fornecedor antigo foi salvo só como texto (sistema anterior,
-  // mais simples), converte pro formato completo em vez de quebrar a tela.
+  // Compatibilidade: converte fornecedores no formato antigo (texto simples, ou endereço
+  // como campo único) pro formato completo em vez de quebrar a tela.
   config.fornecedores = config.fornecedores.map(f=>{
-    if(typeof f === 'string') return { id: uid('forn'), codigo:'', empresa:f, endereco:'', telefone:'', site:'', email:'', representanteLocal:'', telefoneRepresentante:'', subcategoriaId:'', fator:null };
-    return f;
+    if(typeof f === 'string') return { id: uid('forn'), codigo:'', empresa:f, endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', telefone:'', site:'', email:'', representanteLocal:'', telefoneRepresentante:'', subcategoriaId:'', fator:null, observacao:'' };
+    return {
+      numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', observacao:'',
+      ...f,
+    };
   });
   if(!config.proximoCodigoRepresentante) config.proximoCodigoRepresentante = 1;
 }
@@ -3313,11 +3381,13 @@ async function renderFornecedorTab(main){
           </div>
         </div>
         <div style="display:flex;gap:4px;align-items:center;">
+          <button class="icon-btn" data-fver="${f.id}" title="Ver">👁</button>
           <button class="icon-btn" data-fedit="${f.id}" title="Editar">✎</button>
           <button class="icon-btn" data-fdel="${f.id}" title="Remover">✕</button>
         </div>
       </div>
     `).join('');
+    wrap.querySelectorAll('[data-fver]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fver), true)));
     wrap.querySelectorAll('[data-fedit]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fedit))));
     wrap.querySelectorAll('[data-fdel]').forEach(b=> b.addEventListener('click', async ()=>{
       config.fornecedores = config.fornecedores.filter(x=>x.id!==b.dataset.fdel);
@@ -3325,11 +3395,17 @@ async function renderFornecedorTab(main){
       if(ok){ renderRows(); showToast('Fornecedor removido.'); }
     }));
   }
-  function abrirFornecedorModal(fornecedor){
+  function abrirFornecedorModal(fornecedor, somenteVer){
     const editando = !!fornecedor;
     const d = {
       empresa: fornecedor?fornecedor.empresa||'':'',
+      cep: fornecedor?fornecedor.cep||'':'',
       endereco: fornecedor?fornecedor.endereco||'':'',
+      numero: fornecedor?fornecedor.numero||'':'',
+      complemento: fornecedor?fornecedor.complemento||'':'',
+      bairro: fornecedor?fornecedor.bairro||'':'',
+      cidade: fornecedor?fornecedor.cidade||'':'',
+      estado: fornecedor?fornecedor.estado||'':'',
       telefone: fornecedor?fornecedor.telefone||'':'',
       site: fornecedor?fornecedor.site||'':'',
       email: fornecedor?fornecedor.email||'':'',
@@ -3337,33 +3413,68 @@ async function renderFornecedorTab(main){
       telefoneRepresentante: fornecedor?fornecedor.telefoneRepresentante||'':'',
       subcategoriaId: fornecedor?fornecedor.subcategoriaId||'':'',
       fator: fornecedor&&fornecedor.fator!=null?fornecedor.fator:null,
+      observacao: fornecedor?fornecedor.observacao||'':'',
     };
     openModal(`
-      <div class="section-label">${editando?'Editar fornecedor':'Novo fornecedor'}</div>
+      <div class="section-label">${somenteVer?'Ver fornecedor':editando?'Editar fornecedor':'Novo fornecedor'}</div>
       ${editando&&fornecedor.codigo?`<p class="muted" style="margin:-4px 0 12px;">Código do representante: <b>${escapeHtml(fornecedor.codigo)}</b></p>`:`<p class="muted" style="margin:-4px 0 12px;">O código do representante é gerado automaticamente ao salvar.</p>`}
       <div class="field"><label>Empresa</label><input id="fn_empresa" value="${escapeHtml(d.empresa)}"></div>
-      <div class="field"><label>Endereço completo</label><input id="fn_endereco" value="${escapeHtml(d.endereco)}"></div>
+      <div class="grid-3">
+        <div class="field"><label>CEP</label><input id="fn_cep" value="${escapeHtml(d.cep)}"></div>
+        <div class="field" style="grid-column:span 2;"><label>Endereço</label><input id="fn_endereco" value="${escapeHtml(d.endereco)}"></div>
+      </div>
+      <div class="grid-3">
+        <div class="field"><label>Número</label><input id="fn_numero" value="${escapeHtml(d.numero)}"></div>
+        <div class="field"><label>Complemento</label><input id="fn_complemento" value="${escapeHtml(d.complemento)}"></div>
+        <div class="field"><label>Bairro</label><input id="fn_bairro" value="${escapeHtml(d.bairro)}"></div>
+      </div>
       <div class="grid-2">
-        <div class="field"><label>Telefone completo</label><input id="fn_telefone" value="${escapeHtml(d.telefone)}"></div>
+        <div class="field"><label>Cidade</label><input id="fn_cidade" value="${escapeHtml(d.cidade)}"></div>
+        <div class="field"><label>Estado</label><input id="fn_estado" maxlength="2" style="text-transform:uppercase" value="${escapeHtml(d.estado)}"></div>
+      </div>
+      <div class="grid-2">
+        <div class="field"><label>Telefone completo</label><input id="fn_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(d.telefone)}"></div>
         <div class="field"><label>Site <span class="muted">opcional</span></label><input id="fn_site" value="${escapeHtml(d.site)}" placeholder="https://"></div>
       </div>
       <div class="field"><label>E-mail</label><input type="email" id="fn_email" value="${escapeHtml(d.email)}"></div>
       <div class="grid-2">
         <div class="field"><label>Representante local</label><input id="fn_representanteLocal" value="${escapeHtml(d.representanteLocal)}"></div>
-        <div class="field"><label>Telefone do representante</label><input id="fn_telefoneRepresentante" value="${escapeHtml(d.telefoneRepresentante)}"></div>
+        <div class="field"><label>Telefone do representante</label><input id="fn_telefoneRepresentante" placeholder="(00) 00000-0000" value="${escapeHtml(d.telefoneRepresentante)}"></div>
       </div>
       <div class="grid-2">
         <div class="field"><label>Tipo de mercadoria <span class="muted">opcional</span></label>
-          <select id="fn_subcategoriaId"><option value="">—</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+          <select id="fn_subcategoriaId"><option value="">Selecione</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
         </div>
         <div class="field"><label>Fator</label><input type="number" step="0.01" id="fn_fator" placeholder="0.00" value="${d.fator!=null?d.fator:''}"></div>
       </div>
+      <div class="field"><label>Observação</label><textarea id="fn_observacao" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(d.observacao)}</textarea></div>
       <div style="display:flex; gap:10px; margin-top:14px;">
-        <button class="btn btn-accent" id="btnSalvarFornecedor">Salvar</button>
-        <button class="btn btn-ghost" id="btnCancelarFornecedor">Cancelar</button>
+        ${somenteVer?'':'<button class="btn btn-accent" id="btnSalvarFornecedor">Salvar</button>'}
+        <button class="btn btn-ghost" id="btnCancelarFornecedor">${somenteVer?'Fechar':'Cancelar'}</button>
       </div>
     `);
     document.getElementById('btnCancelarFornecedor').addEventListener('click', closeModal);
+    aplicarMascaraTelefone(document.getElementById('fn_telefone'));
+    aplicarMascaraTelefone(document.getElementById('fn_telefoneRepresentante'));
+    if(somenteVer){
+      document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=> el.disabled = true);
+      return;
+    }
+    document.getElementById('fn_cep').addEventListener('blur', async ()=>{
+      const cep = document.getElementById('fn_cep').value.replace(/\D/g,'');
+      if(cep.length!==8) return;
+      try{
+        const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+        const data = await res.json();
+        if(!data.erro){
+          document.getElementById('fn_endereco').value = data.logradouro||'';
+          document.getElementById('fn_bairro').value = data.bairro||'';
+          document.getElementById('fn_cidade').value = data.localidade||'';
+          document.getElementById('fn_estado').value = data.uf||'';
+          showToast('CEP preenchido!');
+        }
+      }catch(e){}
+    });
     document.getElementById('btnSalvarFornecedor').addEventListener('click', async ()=>{
       const empresa = document.getElementById('fn_empresa').value.trim();
       if(!empresa){ showToast('Informe o nome da empresa.'); return; }
@@ -3371,7 +3482,13 @@ async function renderFornecedorTab(main){
         id: fornecedor ? fornecedor.id : uid('forn'),
         codigo: fornecedor ? fornecedor.codigo : ('REP' + String(config.proximoCodigoRepresentante).padStart(6,'0')),
         empresa,
+        cep: document.getElementById('fn_cep').value.trim(),
         endereco: document.getElementById('fn_endereco').value.trim(),
+        numero: document.getElementById('fn_numero').value.trim(),
+        complemento: document.getElementById('fn_complemento').value.trim(),
+        bairro: document.getElementById('fn_bairro').value.trim(),
+        cidade: document.getElementById('fn_cidade').value.trim(),
+        estado: document.getElementById('fn_estado').value.trim().toUpperCase(),
         telefone: document.getElementById('fn_telefone').value.trim(),
         site: document.getElementById('fn_site').value.trim(),
         email: document.getElementById('fn_email').value.trim(),
@@ -3379,6 +3496,7 @@ async function renderFornecedorTab(main){
         telefoneRepresentante: document.getElementById('fn_telefoneRepresentante').value.trim(),
         subcategoriaId: document.getElementById('fn_subcategoriaId').value,
         fator: document.getElementById('fn_fator').value===''?null:parseFloat(document.getElementById('fn_fator').value),
+        observacao: document.getElementById('fn_observacao').value.trim(),
       };
       if(!fornecedor) config.proximoCodigoRepresentante += 1;
       const idx = config.fornecedores.findIndex(x=>x.id===dados.id);
@@ -3511,7 +3629,6 @@ function renderPagamentoTab(main){
   main.innerHTML = `
     <div class="card">
       <div class="section-label">Formas de pagamento</div>
-      <p class="muted" style="margin:-4px 0 14px;">Aparecem em todos os módulos que envolvem pagamento (O.S., Vendas).</p>
       <div id="payRows"></div>
       <div style="margin-top:14px; display:flex; gap:10px;">
         <div class="field" style="flex:1; margin-bottom:0;"><input id="pt_nome" placeholder="Nome da forma de pagamento"></div>
@@ -3522,8 +3639,15 @@ function renderPagamentoTab(main){
   function renderRows(){
     const wrap = document.getElementById('payRows');
     wrap.innerHTML = config.formasPagamento.length===0 ? `<div class="empty">Nenhuma forma de pagamento cadastrada.</div>` : config.formasPagamento.map((pt,i)=>`
-      <div class="code-list-item"><div>${escapeHtml(pt.nome)}</div><button class="icon-btn" data-del="${i}">✕</button></div>
+      <div class="code-list-item"><input data-payi="${i}" value="${escapeHtml(pt.nome)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;"><button class="icon-btn" data-del="${i}">✕</button></div>
     `).join('');
+    wrap.querySelectorAll('[data-payi]').forEach(inp=> inp.addEventListener('change', async ()=>{
+      const nome = inp.value.trim();
+      if(!nome){ showToast('O nome não pode ficar vazio.'); inp.value = config.formasPagamento[Number(inp.dataset.payi)].nome; return; }
+      config.formasPagamento[Number(inp.dataset.payi)].nome = nome;
+      const ok = await configSave();
+      if(ok) showToast('Forma de pagamento atualizada.');
+    }));
     wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
       config.formasPagamento.splice(Number(b.dataset.del),1); await configSave(); renderRows(); showToast('Forma de pagamento removida.');
     }));
