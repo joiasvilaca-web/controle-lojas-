@@ -122,6 +122,13 @@
   .pend-checklist li{display:flex;align-items:flex-start;gap:6px;}
   .pend-checklist li::before{content:"○";flex:0 0 auto;font-size:10px;line-height:1.6;opacity:0.75;}
 
+  .gerente-alert-overlay{position:fixed;inset:0;background:rgba(24,10,18,0.55);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;}
+  .gerente-alert-box{background:#B3261E;color:#fff;border-radius:16px;max-width:420px;width:100%;padding:26px 24px;box-shadow:0 12px 40px rgba(0,0,0,0.35);text-align:center;}
+  .gerente-alert-title{font-size:16px;font-weight:800;letter-spacing:0.02em;margin-bottom:10px;}
+  .gerente-alert-msg{font-size:14px;font-weight:700;line-height:1.6;letter-spacing:0.01em;margin-bottom:18px;}
+  .gerente-alert-btn{background:#fff;color:#B3261E;border:none;border-radius:10px;padding:10px 22px;font-size:13.5px;font-weight:800;letter-spacing:0.02em;}
+  .gerente-alert-btn:hover{filter:brightness(0.95);}
+
   .card-body{display:none;padding:2px 14px 16px;border-top:1px solid var(--line);}
   .card.open .card-body{display:block;padding-top:14px;}
 
@@ -226,6 +233,13 @@
 </style>
 </head>
 <body>
+<div id="gerenteAlertOverlay" class="gerente-alert-overlay" style="display:none;">
+  <div class="gerente-alert-box">
+    <div class="gerente-alert-title">⚠ Atenção, gerente</div>
+    <div class="gerente-alert-msg">CONFIRA AS PENDÊNCIAS DE SUAS VENDEDORAS.<br>FAÇA O FILTRO POR LOJA + PENDÊNCIAS.</div>
+    <button id="btnFecharGerenteAlert" class="gerente-alert-btn">Entendi</button>
+  </div>
+</div>
 <div class="shell">
 
   <div class="masthead">
@@ -279,6 +293,7 @@
   "use strict";
 
   let STORES = ["JN","JV","MC"];
+  let LOJA_ID_TO_ABREV = {}; // preenchido em loadConfig(), mapeia id da loja (cfg.lojas) -> abreviação (JN/JV/MC)
   let PRODUCTS = ["Anel","Pingente","Cordão","Pulseira","Brinco","Relógio"];
 
   const state = {
@@ -329,9 +344,12 @@
       if(ev.data.type === "auth"){
         permissoesAbasOverride = ev.data.abas || null;
         __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
+        currentUserNivel = ev.data.user ? ev.data.user.nivel : null;
+        currentUserLojaIds = (ev.data.user && Array.isArray(ev.data.user.lojas)) ? ev.data.user.lojas : [];
         await loadConfig();
         await loadData();
         await loadProdutosEstoque();
+        aplicarAlertaPorCargo();
         render();
         const permitidas = tabsPermitidas();
         if(!permitidas.some(t=>t.id===state.tab)) setTab(permitidas[0] ? permitidas[0].id : "transferencias");
@@ -339,6 +357,38 @@
       } else if(ev.data.type === "gotoTab"){
         setTab(ev.data.tabId);
       }
+    });
+  }
+
+  /* ================= ALERTA POR CARGO (pendências da loja) =================
+   * Vendedora: abre o módulo já filtrado pela sua loja + pendências (visto que falta).
+   * Gerente: mostra um popup vermelho lembrando de checar as vendedoras e filtrar
+   *          manualmente (loja + pendências), já que um gerente pode ter mais de uma loja.
+   * Diretoria (e Oficina, por decisão do Felipe): sem alteração — continua vendo tudo.
+   */
+  let currentUserNivel = null;
+  let currentUserLojaIds = [];
+
+  function aplicarAlertaPorCargo(){
+    if(currentUserNivel === "vendedora"){
+      const lojaId = currentUserLojaIds[0];
+      const abrev = lojaId ? LOJA_ID_TO_ABREV[lojaId] : null;
+      if(abrev && STORES.includes(abrev)){
+        state.storeFilter = abrev;
+        state.statusFilter = "ERRO";
+      }
+    } else if(currentUserNivel === "gerente"){
+      const overlay = document.getElementById("gerenteAlertOverlay");
+      if(overlay) overlay.style.display = "flex";
+    }
+    // diretoria e oficina: nenhuma alteração, mantém "Todas" / "Todas" (vê tudo)
+  }
+
+  const btnFecharGerenteAlert = document.getElementById("btnFecharGerenteAlert");
+  if(btnFecharGerenteAlert){
+    btnFecharGerenteAlert.addEventListener("click", ()=>{
+      const overlay = document.getElementById("gerenteAlertOverlay");
+      if(overlay) overlay.style.display = "none";
     });
   }
 
@@ -678,6 +728,8 @@
       unificadoBruto = cfg;
       const lojas = Array.isArray(cfg.lojas) ? cfg.lojas : [];
       if(lojas.length){ STORES.length = 0; STORES.push(...lojas.map(l=>l.abreviacao)); }
+      LOJA_ID_TO_ABREV = {};
+      lojas.forEach(l=>{ if(l && l.id) LOJA_ID_TO_ABREV[l.id] = l.abreviacao; });
       if(Array.isArray(cfg.joiasProdutos) && cfg.joiasProdutos.length){ PRODUCTS.length = 0; PRODUCTS.push(...cfg.joiasProdutos); }
       if(Array.isArray(cfg.metais) && cfg.metais.length){ METALS.length = 0; METALS.push(...cfg.metais); }
       state.funcionarios = (Array.isArray(cfg.funcionarios) ? cfg.funcionarios : []).map(f=>{
@@ -778,7 +830,7 @@
   }
   function getLoja(r){ return state.tab === "transferencias" ? (r.lojaOrigem || "") : (r.loja || ""); }
   function statusClass(status){ if(status==="OK") return "st-ok"; if(status==="ERRO") return "st-erro"; if(status==="JUST") return "st-just"; return "st-pend"; }
-  function statusLabel(status){ if(status==="OK") return "OK"; if(status==="ERRO") return "Erro"; if(status==="JUST") return "Justificado"; return "Em aberto"; }
+  function statusLabel(status){ if(status==="OK") return "OK"; if(status==="ERRO") return "Pendência"; if(status==="JUST") return "Justificado"; return "Em aberto"; }
 
   function matchesFilters(r){
     const {status} = getStatus(r);
