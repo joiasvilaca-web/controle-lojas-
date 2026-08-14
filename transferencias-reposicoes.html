@@ -421,19 +421,7 @@
       {f:"metal", type:"select", opts:METALS},
       {f:"quantidade", type:"number", ph:"Qtd"},
     ],
-    vendaItens: [
-      {f:"produto", type:"select", opts:PRODUCTS},
-      {f:"metal", type:"select", opts:METALS},
-      {f:"qtdLoja", type:"number", ph:"Qtd loja"},
-      {f:"qtdEcommerce", type:"number", ph:"Qtd e-commerce"},
-    ],
     disponibilizadoItens: [
-      {f:"produto", type:"select", opts:PRODUCTS},
-      {f:"metal", type:"select", opts:METALS},
-      {f:"quantidade", type:"number", ph:"Qtd"},
-      {f:"fator", type:"text", ph:"Fator"},
-    ],
-    recebimentoItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
       {f:"quantidade", type:"number", ph:"Qtd"},
@@ -443,9 +431,7 @@
   const ITEM_FACTORIES = {
     transferItens: ()=>({produto:"",produtoEstoqueId:"",metal:"",quantidade:"",fator:""}),
     pedidoItens: ()=>({produto:"",metal:"",quantidade:""}),
-    vendaItens: ()=>({produto:"",metal:"",qtdLoja:"",qtdEcommerce:""}),
     disponibilizadoItens: ()=>({produto:"",metal:"",quantidade:"",fator:""}),
-    recebimentoItens: ()=>({produto:"",metal:"",quantidade:"",fator:""}),
   };
 
   /* ================= DATA MODELS ================= */
@@ -470,17 +456,14 @@
       id: uid(), kind:"reposicao",
       data: todayISO(), solicitante:"", loja:"",
       pedidoItens: [ITEM_FACTORIES.pedidoItens()],
-      vendaItens: [ITEM_FACTORIES.vendaItens()],
       disponibilizadoItens: [ITEM_FACTORIES.disponibilizadoItens()],
-      recebimentoItens: [ITEM_FACTORIES.recebimentoItens()],
 
-      vistoDiretoria:false, nomeDiretoria:"", dataDiretoria:"",
-      vistoAdministrativo:false, nomeAdministrativo:"", dataAdministrativo:"",
-      vistoRecebimentoLoja:false, nomeRecebimentoLoja:"", dataRecebimentoLoja:"",
-      vistoSistema:false, nomeSistema:"", dataSistema:"",
+      vistoDiretoria:false, nomeDiretoria:"", dataDiretoria:"", obsDiretoria:"",
+      vistoAdministrativo:false, nomeAdministrativo:"", dataAdministrativo:"", obsAdministrativo:"",
+      vistoRecebimentoLoja:false, nomeRecebimentoLoja:"", dataRecebimentoLoja:"", obsRecebimentoLoja:"",
+      vistoSistema:false, nomeSistema:"", dataSistema:"", obsSistema:"",
 
-      justificativa:"",
-      vistoDiretoriaCorrecao:false, nomeDiretoriaCorrecao:"", dataDiretoriaCorrecao:"",
+      vistoDiretoriaCorrecao:false, nomeDiretoriaCorrecao:"", dataDiretoriaCorrecao:"", obsDiretoriaCorrecao:"",
     };
   }
 
@@ -503,18 +486,7 @@
     return map;
   }
 
-  function sumVendaByProduto(items){
-    const map = new Map();
-    items.forEach(it=>{
-      if(!it.produto) return;
-      const qtdLoja = it.qtdLoja === "" || it.qtdLoja === null || it.qtdLoja === undefined ? 0 : Number(it.qtdLoja);
-      const qtdEco = it.qtdEcommerce === "" || it.qtdEcommerce === null || it.qtdEcommerce === undefined ? 0 : Number(it.qtdEcommerce);
-      if(it.qtdLoja === "" && it.qtdEcommerce === "") return;
-      if(!map.has(it.produto)) map.set(it.produto, {qty:0, fatores:[]});
-      map.get(it.produto).qty += qtdLoja + qtdEco;
-    });
-    return map;
-  }
+
 
   /* ================= STATUS LOGIC ================= */
   // Lista as etapas do fluxo de transferência (mesma ordem/condições de sempre),
@@ -537,13 +509,14 @@
     return steps;
   }
 
-  // Lista as 4 etapas de visto do fluxo de reposição, na mesma ordem em que aparecem no formulário.
+  // Lista as 5 etapas de visto do fluxo de reposição, na mesma ordem em que aparecem no formulário.
   function getReposicaoStepsMeta(r){
     return [
       {key:"vistoDiretoria", title:"Visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)},
       {key:"vistoAdministrativo", title:"Visto do administrativo", done: stepDone(r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo)},
-      {key:"vistoRecebimentoLoja", title:"Visto do recebimento na loja", done: stepDone(r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja)},
-      {key:"vistoSistema", title:"Visto do sistema", done: stepDone(r.vistoSistema, r.nomeSistema, r.dataSistema)},
+      {key:"vistoRecebimentoLoja", title:"Visto de recebimento na loja", done: stepDone(r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja)},
+      {key:"vistoSistema", title:"Visto da gerente (Inclusão no sistema)", done: stepDone(r.vistoSistema, r.nomeSistema, r.dataSistema)},
+      {key:"vistoDiretoriaCorrecao", title:"Visto final de conferência", done: stepDone(r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao)},
     ];
   }
 
@@ -566,50 +539,15 @@
     const pedidoMap = sumByProduto(r.pedidoItens, false);
     if(pedidoMap.size === 0) return {status:"", label:"", pendItems:[], doneSteps:0, totalSteps:0};
 
-    const vendaMap = sumVendaByProduto(r.vendaItens);
-    const dispMap = sumByProduto(r.disponibilizadoItens, true);
-    const recMap = sumByProduto(r.recebimentoItens, true);
-
-    let mismatches = [];
-    pedidoMap.forEach((v, produto)=>{
-      if(vendaMap.has(produto)){
-        const vv = vendaMap.get(produto);
-        if(vv.qty !== v.qty){
-          mismatches.push(`${produto}: buraco (${v.qty}) não bate com a quantidade vendida (${vv.qty}) — verificar onde está o produto`);
-        }
-      }
-    });
-
-    const dispProdutos = new Set([...dispMap.keys(), ...recMap.keys()]);
-    dispProdutos.forEach(produto=>{
-      if(dispMap.has(produto) && recMap.has(produto)){
-        const d = dispMap.get(produto), rr = recMap.get(produto);
-        if(d.qty !== rr.qty){
-          mismatches.push(`${produto}: quantidade disponibilizada (${d.qty}) diverge da recebida (${rr.qty})`);
-        }else if(!multisetEqual(d.fatores, rr.fatores)){
-          mismatches.push(`${produto}: fator(es) disponibilizado(s) não bate(m) com o(s) recebido(s)`);
-        }
-      }
-    });
-
-    const divergente = mismatches.length > 0;
-
     const steps = getReposicaoStepsMeta(r);
     const doneSteps = steps.filter(s=>s.done).length;
     const totalSteps = steps.length;
-    const allDone = doneSteps === totalSteps;
 
-    if(!divergente && allDone){
-      return {status:"OK", label:"Tudo certo — fluxo completo, buracos conferem com as vendas", pendItems:[], doneSteps, totalSteps};
+    if(doneSteps === totalSteps){
+      return {status:"OK", label:"Tudo certo — fluxo completo", pendItems:[], doneSteps, totalSteps};
     }
-    const justOk = r.justificativa && r.justificativa.trim() !== "" && stepDone(r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao);
-    if(divergente && justOk){
-      return {status:"JUST", label:"Divergência justificada pela diretoria — " + r.justificativa, pendItems:[], doneSteps, totalSteps};
-    }
-
     let pend = [];
     steps.filter(s=>!s.done).forEach(s=> pend.push(`Falta visto/nome/data — ${s.title}`));
-    pend.push(...mismatches);
     return {status:"ERRO", label: pend.join("; "), pendItems: pend, doneSteps, totalSteps};
   }
 
@@ -633,23 +571,19 @@
   }
 
   function normalizeReposicao(r){
-    ["pedidoItens","vendaItens","disponibilizadoItens","recebimentoItens"].forEach(k=>{
+    ["pedidoItens","disponibilizadoItens"].forEach(k=>{
       if(Array.isArray(r[k])){
         r[k].forEach(it=>{ if(it.metal === undefined) it.metal = ""; });
       }
     });
-    if(Array.isArray(r.vendaItens)){
-      r.vendaItens.forEach(it=>{
-        if(it.qtdLoja === undefined) it.qtdLoja = it.quantidade !== undefined ? it.quantidade : "";
-        if(it.qtdEcommerce === undefined) it.qtdEcommerce = "";
-      });
-    }
     ["vistoDiretoria","vistoAdministrativo","vistoRecebimentoLoja","vistoSistema","vistoDiretoriaCorrecao"].forEach(f=>{
       if(r[f] === undefined) r[f] = false;
     });
-    ["nomeDiretoria","dataDiretoria","nomeAdministrativo","dataAdministrativo",
-     "nomeRecebimentoLoja","dataRecebimentoLoja","nomeSistema","dataSistema",
-     "justificativa","nomeDiretoriaCorrecao","dataDiretoriaCorrecao"].forEach(f=>{
+    ["nomeDiretoria","dataDiretoria","obsDiretoria",
+     "nomeAdministrativo","dataAdministrativo","obsAdministrativo",
+     "nomeRecebimentoLoja","dataRecebimentoLoja","obsRecebimentoLoja",
+     "nomeSistema","dataSistema","obsSistema",
+     "nomeDiretoriaCorrecao","dataDiretoriaCorrecao","obsDiretoriaCorrecao"].forEach(f=>{
       if(r[f] === undefined) r[f] = "";
     });
     return r;
@@ -969,12 +903,16 @@
     return `<table class="print-table"><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
   }
 
-  function vistoPrintLine(label, visto, nome, data){
-    if(!visto) return `<div class="print-visto">${escapeHtml(label)}: <span class="print-muted">pendente</span></div>`;
+  function vistoPrintLine(label, visto, nome, data, obs){
+    if(!visto){
+      const obsHtml = obs ? ` <span class="print-muted">(obs: ${escapeHtml(obs)})</span>` : "";
+      return `<div class="print-visto">${escapeHtml(label)}: <span class="print-muted">pendente</span>${obsHtml}</div>`;
+    }
     const partes = [];
     if(nome) partes.push(escapeHtml(nome));
     if(data) partes.push(data);
-    return `<div class="print-visto">${escapeHtml(label)}: <b>OK</b>${partes.length ? " — " + partes.join(" · ") : ""}</div>`;
+    const obsHtml = obs ? ` <span class="print-muted">(obs: ${escapeHtml(obs)})</span>` : "";
+    return `<div class="print-visto">${escapeHtml(label)}: <b>OK</b>${partes.length ? " — " + partes.join(" · ") : ""}${obsHtml}</div>`;
   }
 
   /**
@@ -1021,26 +959,15 @@
         <div class="print-section-title">Pedido (o que está faltando)</div>
         ${itemsTablePrintHtml(r.pedidoItens, "pedidoItens")}
 
-        <div class="print-section-title">Venda / Nota Fiscal</div>
-        ${itemsTablePrintHtml(r.vendaItens, "vendaItens")}
-
         <div class="print-section-title">Quantidade Disponibilizada</div>
         ${itemsTablePrintHtml(r.disponibilizadoItens, "disponibilizadoItens")}
 
-        <div class="print-section-title">Recebimento</div>
-        ${itemsTablePrintHtml(r.recebimentoItens, "recebimentoItens")}
-
         <div class="print-section-title">Aprovações</div>
-        ${vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)}
-        ${vistoPrintLine("Administrativo", r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo)}
-        ${vistoPrintLine("Recebimento na loja", r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja)}
-        ${vistoPrintLine("Sistema", r.vistoSistema, r.nomeSistema, r.dataSistema)}
-
-        ${r.justificativa ? `
-        <div class="print-section-title">Correção</div>
-        <div>${escapeHtml(r.justificativa)}</div>
-        ${vistoPrintLine("Diretoria (correção)", r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao)}
-        ` : ""}
+        ${vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria, r.obsDiretoria)}
+        ${vistoPrintLine("Administrativo", r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo, r.obsAdministrativo)}
+        ${vistoPrintLine("Recebimento na loja", r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja, r.obsRecebimentoLoja)}
+        ${vistoPrintLine("Gerente (inclusão no sistema)", r.vistoSistema, r.nomeSistema, r.dataSistema, r.obsSistema)}
+        ${vistoPrintLine("Visto final de conferência", r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao, r.obsDiretoriaCorrecao)}
       `;
     }
 
@@ -1372,6 +1299,15 @@
     `;
   }
 
+  function obsFieldHtml(r, field){
+    return `
+      <div class="field" style="margin-top:8px; margin-bottom:2px;">
+        <label>Observação</label>
+        <input type="text" data-f="${field}" value="${escapeHtml(r[field])}" placeholder="Observação (opcional)">
+      </div>
+    `;
+  }
+
   /* ================= TRANSFERÊNCIAS body ================= */
   const TIPO_DESC = {
     "TROCA": "O produto sai e depois retorna (ou outro de mesmo fator retorna) para a loja de origem.",
@@ -1558,50 +1494,42 @@
         ${renderItemArray(r, "pedidoItens", "+ Adicionar produto")}
       </div>
 
-      <div class="divider"></div>
-
-      <div class="group">
-        <div class="group-title">Venda / Nota Fiscal</div>
-        <div class="group-hint">A venda que gerou o buraco — a quantidade por produto precisa bater com o pedido da loja.</div>
-        ${renderItemArray(r, "vendaItens", "+ Adicionar venda")}
-      </div>
-
       <div class="divider divider-thick"></div>
 
       <div class="group">
         <div class="group-title">Quantidade Disponibilizada</div>
-        <div class="group-hint">O que foi separado/enviado para a loja — quantidade e fator por produto precisam bater com o Recebimento.</div>
+        <div class="group-hint">O que foi separado/enviado para a loja.</div>
         ${renderItemArray(r, "disponibilizadoItens", "+ Adicionar peça")}
         <div class="divider"></div>
         ${stepBadge("vistoDiretoria")}
         ${vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdi", "diretor")}
+        ${obsFieldHtml(r, "obsDiretoria")}
         <div class="divider divider-thick"></div>
         ${stepBadge("vistoAdministrativo")}
         ${vistoRowHtml(r, "vistoAdministrativo", "nomeAdministrativo", "dataAdministrativo", "Visto do administrativo", "vad", "todos")}
+        ${obsFieldHtml(r, "obsAdministrativo")}
       </div>
 
       <div class="divider divider-thick"></div>
 
       <div class="group">
         <div class="group-title">Recebimento</div>
-        ${renderItemArray(r, "recebimentoItens", "+ Adicionar peça")}
-        <div class="divider"></div>
         ${stepBadge("vistoRecebimentoLoja")}
         ${vistoRowHtml(r, "vistoRecebimentoLoja", "nomeRecebimentoLoja", "dataRecebimentoLoja", "Visto de recebimento na loja", "vrl", "vendedora")}
+        ${obsFieldHtml(r, "obsRecebimentoLoja")}
         <div class="divider divider-thick"></div>
         ${stepBadge("vistoSistema")}
-        ${vistoRowHtml(r, "vistoSistema", "nomeSistema", "dataSistema", "Visto do sistema", "vsi", "todos")}
+        ${vistoRowHtml(r, "vistoSistema", "nomeSistema", "dataSistema", "Visto da gerente (Inclusão no sistema)", "vsi", "gerente")}
+        ${obsFieldHtml(r, "obsSistema")}
       </div>
 
       <div class="divider divider-thick"></div>
 
       <div class="correction-box">
-        <div class="group-title">Correção de erro (se houver divergência)</div>
-        <div class="field" style="margin-bottom:8px;">
-          <label>Justificativa <span class="required-mark">*obrigatória em caso de divergência</span></label>
-          <input type="text" data-f="justificativa" placeholder="Explique o motivo da divergência…" value="${escapeHtml(r.justificativa)}">
-        </div>
-        ${vistoRowHtml(r, "vistoDiretoriaCorrecao", "nomeDiretoriaCorrecao", "dataDiretoriaCorrecao", "Visto da diretoria na correção", "vdc", "diretor")}
+        <div class="group-title">Visto final de conferência</div>
+        ${stepBadge("vistoDiretoriaCorrecao")}
+        ${vistoRowHtml(r, "vistoDiretoriaCorrecao", "nomeDiretoriaCorrecao", "dataDiretoriaCorrecao", "Visto final de conferência", "vdc", "diretor")}
+        ${obsFieldHtml(r, "obsDiretoriaCorrecao")}
       </div>
 
       <div class="row-actions"><button class="btn-cancel" type="button" data-action="print-registro">🖨️ Imprimir</button><button class="btn-cancel" type="button" data-action="cancel-edit">↩ Sair</button><button class="btn-edit" type="button" data-action="toggle-edit">✎ Editar</button><button class="btn-del" type="button" data-action="delete">🗑 Excluir</button></div>
