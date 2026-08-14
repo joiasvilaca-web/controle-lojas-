@@ -108,10 +108,19 @@
   .chevron{flex:0 0 auto;color:var(--muted);font-size:12px;transition:transform .15s ease;}
   .card.open .chevron{transform:rotate(180deg);}
 
-  .pend-line{margin:0 14px 12px;padding:9px 11px;border-radius:8px;font-size:12.5px;line-height:1.5;background:var(--pend-bg);color:var(--pend-ink);}
+  .pend-line{margin:0 14px 12px;padding:10px 12px;border-radius:8px;font-size:12.5px;line-height:1.5;background:var(--pend-bg);color:var(--pend-ink);}
   .card.st-erro .pend-line{background:var(--erro-bg);color:var(--erro-ink);}
   .card.st-just .pend-line{background:var(--just-bg);color:var(--just-ink);}
   .card.st-ok .pend-line{background:var(--ok-bg);color:var(--ok-ink);}
+
+  .pend-ok-line{font-weight:700;}
+  .pend-progress-row{display:flex;align-items:center;gap:9px;margin-bottom:8px;}
+  .pend-progress-track{flex:1;height:6px;border-radius:999px;background:rgba(0,0,0,0.10);overflow:hidden;}
+  .pend-progress-fill{height:100%;background:var(--ok-line);border-radius:999px;transition:width .2s ease;}
+  .pend-progress-text{font-size:11px;font-weight:800;white-space:nowrap;flex:0 0 auto;}
+  .pend-checklist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;}
+  .pend-checklist li{display:flex;align-items:flex-start;gap:6px;}
+  .pend-checklist li::before{content:"○";flex:0 0 auto;font-size:10px;line-height:1.6;opacity:0.75;}
 
   .card-body{display:none;padding:2px 14px 16px;border-top:1px solid var(--line);}
   .card.open .card-body{display:block;padding-top:14px;}
@@ -457,33 +466,41 @@
   }
 
   /* ================= STATUS LOGIC ================= */
+  // Lista as etapas do fluxo de transferência (mesma ordem/condições de sempre),
+  // usada tanto para calcular o status/pendências quanto para montar a timeline.
+  function getTransferStepsMeta(r){
+    const steps = [];
+    steps.push({key:"saida", title:`Saída${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoSaida, r.nomeSaida, r.dataSaida)});
+    if(r.tipoTransf === "SAÍDA"){
+      steps.push({key:"baixaEstoque", title:`Baixa no estoque${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoBaixaEstoque, r.nomeBaixaEstoque, r.dataBaixaEstoque)});
+    }
+    steps.push({key:"entrada", title:`Entrada${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoEntrada, r.nomeEntrada, r.dataEntrada)});
+    if(r.tipoTransf === "SAÍDA"){
+      steps.push({key:"entradaEstoque", title:`Entrada no estoque${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque)});
+    }
+    if(r.tipoTransf === "TROCA"){
+      steps.push({key:"retornoSaida", title:`Saída (retorno)${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida)});
+      steps.push({key:"retornoEntrada", title:`Entrada (retorno)${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada)});
+    }
+    steps.push({key:"diretoria", title:"Fechamento — visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)});
+    return steps;
+  }
+
   function computeStatusTransfer(r){
-    if(!r.tipoTransf) return {status:"", label:""};
+    if(!r.tipoTransf) return {status:"", label:"", pendItems:[], doneSteps:0, totalSteps:0};
     const itemsValid = r.transferItens.some(it => it.produto && it.quantidade !== "" && it.quantidade !== null && it.quantidade !== undefined);
+    const steps = getTransferStepsMeta(r);
+    const doneSteps = steps.filter(s=>s.done).length;
+    const totalSteps = steps.length;
 
-    const stepSaida = stepDone(r.vistoSaida, r.nomeSaida, r.dataSaida);
-    const stepEntrada = stepDone(r.vistoEntrada, r.nomeEntrada, r.dataEntrada);
-    const stepRetornoSaida = r.tipoTransf === "TROCA" ? stepDone(r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida) : true;
-    const stepRetornoEntrada = r.tipoTransf === "TROCA" ? stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada) : true;
-    const stepBaixa = r.tipoTransf === "SAÍDA" ? stepDone(r.vistoBaixaEstoque, r.nomeBaixaEstoque, r.dataBaixaEstoque) : true;
-    const stepEntradaEstoque = r.tipoTransf === "SAÍDA" ? stepDone(r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque) : true;
-    const stepSup = stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria);
-
-    if(itemsValid && stepSaida && stepEntrada && stepRetornoSaida && stepRetornoEntrada && stepBaixa && stepEntradaEstoque && stepSup){
-      return {status:"OK", label:"Tudo certo — fluxo completo"};
+    if(itemsValid && doneSteps === totalSteps){
+      return {status:"OK", label:"Tudo certo — fluxo completo", pendItems:[], doneSteps, totalSteps};
     }
     let pend = [];
     if(!itemsValid) pend.push("Adicione ao menos um item (produto e quantidade)");
-    if(!stepSaida) pend.push(`Falta visto/nome/data de saída${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`);
-    if(r.tipoTransf === "SAÍDA" && !stepBaixa) pend.push(`Falta visto/nome/data de baixa no estoque${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`);
-    if(!stepEntrada) pend.push(`Falta visto/nome/data de entrada${r.lojaDestino ? " — " + r.lojaDestino : ""}`);
-    if(r.tipoTransf === "SAÍDA" && !stepEntradaEstoque) pend.push(`Falta visto/nome/data de entrada no estoque${r.lojaDestino ? " — " + r.lojaDestino : ""}`);
-    if(r.tipoTransf === "TROCA" && !stepRetornoSaida) pend.push(`Falta visto/nome/data de saída (retorno)${r.lojaDestino ? " — " + r.lojaDestino : ""}`);
-    if(r.tipoTransf === "TROCA" && !stepRetornoEntrada) pend.push(`Falta visto/nome/data de entrada (retorno)${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`);
-    if(!stepSup) pend.push("Falta visto/nome/data da diretoria");
-    return {status:"ERRO", label: pend.join("; ")};
+    steps.filter(s=>!s.done).forEach(s=> pend.push(`Falta visto/nome/data — ${s.title}`));
+    return {status:"ERRO", label: pend.join("; "), pendItems: pend, doneSteps, totalSteps};
   }
-
   function computeStatusReposicao(r){
     const pedidoMap = sumByProduto(r.pedidoItens, false);
     if(pedidoMap.size === 0) return {status:"", label:""};
@@ -738,6 +755,27 @@
 
   function getRecords(){ return state.tab === "transferencias" ? state.transferencias : state.reposicao; }
   function getStatus(r){ return state.tab === "transferencias" ? computeStatusTransfer(r) : computeStatusReposicao(r); }
+
+  // Monta o conteúdo (innerHTML) da faixa de pendências do card fechado.
+  // Para a aba Transferências: barra de progresso + checklist das etapas que faltam.
+  // Para a aba Reposição (não alterada): mantém o texto simples de sempre.
+  function pendLineHtml(statusData){
+    const { label, pendItems, doneSteps, totalSteps } = statusData;
+    if(!Array.isArray(pendItems)){
+      return escapeHtml(label);
+    }
+    if(pendItems.length === 0){
+      return `<div class="pend-ok-line">✓ ${escapeHtml(label)}</div>`;
+    }
+    const pct = totalSteps ? Math.round((doneSteps/totalSteps)*100) : 0;
+    return `
+      <div class="pend-progress-row">
+        <div class="pend-progress-track"><div class="pend-progress-fill" style="width:${pct}%;"></div></div>
+        <span class="pend-progress-text">${doneSteps}/${totalSteps} etapas</span>
+      </div>
+      <ul class="pend-checklist">${pendItems.map(i=>`<li>${escapeHtml(i)}</li>`).join("")}</ul>
+    `;
+  }
   function getLoja(r){ return state.tab === "transferencias" ? (r.lojaOrigem || "") : (r.loja || ""); }
   function statusClass(status){ if(status==="OK") return "st-ok"; if(status==="ERRO") return "st-erro"; if(status==="JUST") return "st-just"; return "st-pend"; }
   function statusLabel(status){ if(status==="OK") return "OK"; if(status==="ERRO") return "Erro"; if(status==="JUST") return "Justificado"; return "Em aberto"; }
@@ -985,7 +1023,8 @@
   }
 
   function renderCard(r){
-    const {status, label} = getStatus(r);
+    const statusData = getStatus(r);
+    const {status, label} = statusData;
     const cls = statusClass(status);
     const isOpen = state.openIds.has(r.id);
     const card = document.createElement("div");
@@ -1014,7 +1053,7 @@
     if(label){
       const pl = document.createElement("div");
       pl.className = "pend-line";
-      pl.textContent = label;
+      pl.innerHTML = pendLineHtml(statusData);
       card.appendChild(pl);
     }
 
@@ -1715,7 +1754,8 @@
   function patchCard(r){
     const card = listWrap.querySelector(`.card[data-id="${r.id}"]`);
     if(!card) return;
-    const {status, label} = getStatus(r);
+    const statusData = getStatus(r);
+    const {status, label} = statusData;
     const cls = statusClass(status);
     card.className = "card " + cls + (state.openIds.has(r.id) ? " open" : "");
     const badge = card.querySelector(".status-badge");
@@ -1739,7 +1779,7 @@
         pendEl.className = "pend-line";
         card.querySelector(".card-head").after(pendEl);
       }
-      pendEl.textContent = label;
+      pendEl.innerHTML = pendLineHtml(statusData);
     }else if(pendEl){
       pendEl.remove();
     }
