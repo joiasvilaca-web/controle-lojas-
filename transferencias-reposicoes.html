@@ -191,6 +191,7 @@
   .step-title-tag.step-done{background:var(--ok-bg);color:var(--ok-ink);}
   .step-title-tag.step-current{background:var(--just-bg);color:var(--just-ink);}
   .step-item.step-pending .step-content{opacity:0.72;}
+  .step-circle.small{width:22px;height:22px;font-size:11px;flex:0 0 22px;}
   .required-mark{color:var(--erro-ink);}
   .row-actions{display:flex;justify-content:flex-end;margin-top:14px;}
   .btn-del{border:none;background:none;color:var(--erro-ink);font-size:12px;font-weight:700;padding:6px 8px;border-radius:6px;}
@@ -536,6 +537,16 @@
     return steps;
   }
 
+  // Lista as 4 etapas de visto do fluxo de reposição, na mesma ordem em que aparecem no formulário.
+  function getReposicaoStepsMeta(r){
+    return [
+      {key:"vistoDiretoria", title:"Visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)},
+      {key:"vistoAdministrativo", title:"Visto do administrativo", done: stepDone(r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo)},
+      {key:"vistoRecebimentoLoja", title:"Visto do recebimento na loja", done: stepDone(r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja)},
+      {key:"vistoSistema", title:"Visto do sistema", done: stepDone(r.vistoSistema, r.nomeSistema, r.dataSistema)},
+    ];
+  }
+
   function computeStatusTransfer(r){
     if(!r.tipoTransf) return {status:"", label:"", pendItems:[], doneSteps:0, totalSteps:0};
     const itemsValid = r.transferItens.some(it => it.produto && it.quantidade !== "" && it.quantidade !== null && it.quantidade !== undefined);
@@ -553,7 +564,7 @@
   }
   function computeStatusReposicao(r){
     const pedidoMap = sumByProduto(r.pedidoItens, false);
-    if(pedidoMap.size === 0) return {status:"", label:""};
+    if(pedidoMap.size === 0) return {status:"", label:"", pendItems:[], doneSteps:0, totalSteps:0};
 
     const vendaMap = sumVendaByProduto(r.vendaItens);
     const dispMap = sumByProduto(r.disponibilizadoItens, true);
@@ -583,27 +594,23 @@
 
     const divergente = mismatches.length > 0;
 
-    const stepDir = stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria);
-    const stepAdm = stepDone(r.vistoAdministrativo, r.nomeAdministrativo, r.dataAdministrativo);
-    const stepRecLoja = stepDone(r.vistoRecebimentoLoja, r.nomeRecebimentoLoja, r.dataRecebimentoLoja);
-    const stepSist = stepDone(r.vistoSistema, r.nomeSistema, r.dataSistema);
-    const allDone = stepDir && stepAdm && stepRecLoja && stepSist;
+    const steps = getReposicaoStepsMeta(r);
+    const doneSteps = steps.filter(s=>s.done).length;
+    const totalSteps = steps.length;
+    const allDone = doneSteps === totalSteps;
 
     if(!divergente && allDone){
-      return {status:"OK", label:"Tudo certo — fluxo completo, buracos conferem com as vendas"};
+      return {status:"OK", label:"Tudo certo — fluxo completo, buracos conferem com as vendas", pendItems:[], doneSteps, totalSteps};
     }
     const justOk = r.justificativa && r.justificativa.trim() !== "" && stepDone(r.vistoDiretoriaCorrecao, r.nomeDiretoriaCorrecao, r.dataDiretoriaCorrecao);
     if(divergente && justOk){
-      return {status:"JUST", label:"Divergência justificada pela diretoria — " + r.justificativa};
+      return {status:"JUST", label:"Divergência justificada pela diretoria — " + r.justificativa, pendItems:[], doneSteps, totalSteps};
     }
 
     let pend = [];
-    if(!stepDir) pend.push("Falta visto/nome/data da diretoria");
-    if(!stepAdm) pend.push("Falta visto/nome/data do administrativo");
-    if(!stepRecLoja) pend.push("Falta visto/nome/data do recebimento na loja");
-    if(!stepSist) pend.push("Falta visto/nome/data do sistema");
+    steps.filter(s=>!s.done).forEach(s=> pend.push(`Falta visto/nome/data — ${s.title}`));
     pend.push(...mismatches);
-    return {status:"ERRO", label: pend.join("; ")};
+    return {status:"ERRO", label: pend.join("; "), pendItems: pend, doneSteps, totalSteps};
   }
 
   /* ================= STORAGE ================= */
@@ -1516,7 +1523,29 @@
 
   /* ================= REPOSIÇÃO body ================= */
   function reposicaoBodyHtml(r){
+    const repSteps = getReposicaoStepsMeta(r);
+    const repDone = repSteps.filter(s=>s.done).length;
+    const repTotal = repSteps.length;
+    const repPct = repTotal ? Math.round((repDone/repTotal)*100) : 0;
+    const repFirstPendingIdx = repSteps.findIndex(s=>!s.done);
+    function stepBadge(key){
+      const idx = repSteps.findIndex(s=>s.key===key);
+      const s = repSteps[idx];
+      const stateClass = s.done ? "step-done" : (idx===repFirstPendingIdx ? "step-current" : "step-pending");
+      return `
+        <div class="step-title-row">
+          <div class="step-circle small ${stateClass}">${s.done ? "✓" : (idx+1)}</div>
+          <div class="step-title">${s.title}</div>
+          ${s.done ? `<div class="step-title-tag step-done">concluído</div>` : (idx===repFirstPendingIdx ? `<div class="step-title-tag step-current">próxima etapa</div>` : "")}
+        </div>
+      `;
+    }
     return `
+      <div class="progress-wrap" style="margin:2px 14px 14px;">
+        <div class="progress-label"><span>Etapas do fluxo</span><b>${repDone} de ${repTotal} concluídas</b></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${repPct}%;"></div></div>
+      </div>
+
       <div class="group">
         <div class="group-title">Loja — o que está faltando</div>
         <div class="grid">
@@ -1544,8 +1573,10 @@
         <div class="group-hint">O que foi separado/enviado para a loja — quantidade e fator por produto precisam bater com o Recebimento.</div>
         ${renderItemArray(r, "disponibilizadoItens", "+ Adicionar peça")}
         <div class="divider"></div>
+        ${stepBadge("vistoDiretoria")}
         ${vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdi", "diretor")}
         <div class="divider divider-thick"></div>
+        ${stepBadge("vistoAdministrativo")}
         ${vistoRowHtml(r, "vistoAdministrativo", "nomeAdministrativo", "dataAdministrativo", "Visto do administrativo", "vad", "todos")}
       </div>
 
@@ -1555,8 +1586,10 @@
         <div class="group-title">Recebimento</div>
         ${renderItemArray(r, "recebimentoItens", "+ Adicionar peça")}
         <div class="divider"></div>
+        ${stepBadge("vistoRecebimentoLoja")}
         ${vistoRowHtml(r, "vistoRecebimentoLoja", "nomeRecebimentoLoja", "dataRecebimentoLoja", "Visto de recebimento na loja", "vrl", "vendedora")}
         <div class="divider divider-thick"></div>
+        ${stepBadge("vistoSistema")}
         ${vistoRowHtml(r, "vistoSistema", "nomeSistema", "dataSistema", "Visto do sistema", "vsi", "todos")}
       </div>
 
