@@ -383,6 +383,16 @@
     </div>
   </div>
 </div>
+<div id="ecOrigemOverlay" class="gerente-alert-overlay" style="display:none;">
+  <div class="gerente-alert-box">
+    <div class="gerente-alert-title">⚠ Ecommerce não pode ser a loja de origem</div>
+    <div class="gerente-alert-msg">A LOJA ECOMMERCE APENAS RECEBE MERCADORIA E LANÇA EM SEU ESTOQUE. PARA FORNECER MERCADORIA, É PRECISO SOLICITAR UMA REPOSIÇÃO AO ESCRITÓRIO. VAMOS FINALIZAR, DESCARTAR ESTE RASCUNHO E INICIAR UMA REPOSIÇÃO PARA A SUA LOJA.</div>
+    <div style="display:flex; gap:10px; justify-content:center; margin-top:4px;">
+      <button type="button" id="btnEcOrigemCancelar" class="gerente-alert-btn" style="background:transparent; border:1.5px solid #fff; color:#fff;">Cancelar</button>
+      <button type="button" id="btnEcOrigemOk" class="gerente-alert-btn">Descartar e iniciar Reposição</button>
+    </div>
+  </div>
+</div>
 <div id="fullscreenWrap"></div>
 <div class="shell">
 
@@ -1140,6 +1150,41 @@
     state.editIds.add(rec.id);
     state.unsavedNew.add(rec.id);
     render();
+  }
+
+  /* ================= ECOMMERCE NUNCA É ORIGEM (só recebe) ================= */
+  let ecOrigemPendingRecord = null;
+  function showEcOrigemBloqueada(r){
+    ecOrigemPendingRecord = r;
+    document.getElementById("ecOrigemOverlay").style.display = "flex";
+  }
+  const btnEcOrigemCancelar = document.getElementById("btnEcOrigemCancelar");
+  if(btnEcOrigemCancelar){
+    btnEcOrigemCancelar.addEventListener("click", ()=>{
+      ecOrigemPendingRecord = null;
+      document.getElementById("ecOrigemOverlay").style.display = "none";
+    });
+  }
+  const btnEcOrigemOk = document.getElementById("btnEcOrigemOk");
+  if(btnEcOrigemOk){
+    btnEcOrigemOk.addEventListener("click", ()=>{
+      const r = ecOrigemPendingRecord;
+      ecOrigemPendingRecord = null;
+      document.getElementById("ecOrigemOverlay").style.display = "none";
+      if(!r) return;
+      // finaliza/descarta o rascunho de transferência atual
+      state.transferencias = state.transferencias.filter(x=>x.id !== r.id);
+      state.unsavedNew.delete(r.id);
+      state.editIds.delete(r.id);
+      state.editSnapshots.delete(r.id);
+      state.openIds.delete(r.id);
+      deleteRecord("transferencias", r.id);
+      // já inicia uma reposição nova pra loja do usuário
+      const rec = newReposicao();
+      state.reposicao.push(rec);
+      state.tab = "reposicao";
+      abrirRegistroNovoEmTelaCheia(rec);
+    });
   }
 
   /* ================= AÇÕES DAS LINHAS COMPACTAS (Home / Finalizadas) ================= */
@@ -2112,6 +2157,21 @@
             r[field] = novoValor;
             patchCard(r);
           });
+        });
+        return;
+      }
+
+      // Ecommerce nunca é loja de ORIGEM numa transferência (só recebe — de JV, MC ou JN).
+      // Se escolherem EC aqui, avisa e redireciona pro fluxo de Reposição.
+      if(field === "lojaOrigem"){
+        el.addEventListener("change", ()=>{
+          if(el.value === "EC"){
+            el.value = r.lojaOrigem || "";
+            showEcOrigemBloqueada(r);
+            return;
+          }
+          r.lojaOrigem = el.value;
+          rebuildBody(r);
         });
         return;
       }
