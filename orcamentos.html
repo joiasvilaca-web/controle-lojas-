@@ -89,8 +89,8 @@ input[type=text], input[type=number], input[type=password], input[type=date], se
 .badge-rascunho{background:#EDEDED; color:#666; border:1px dashed #b3b3b3;}
 .chip-vendedora{display:inline-flex; align-items:center; gap:6px; background:#fff; color:var(--danger); border:1.5px solid var(--danger); border-radius:999px; padding:7px 14px; font-size:12.5px; font-weight:800; cursor:pointer; transition:background .15s,color .15s;}
 .chip-vendedora:hover{background:var(--danger); color:#fff;}
-.link-msg-auto{background:none; border:none; color:var(--danger); font-size:12px; font-weight:700; cursor:pointer; padding:4px 2px; text-decoration:underline; text-underline-offset:2px;}
-.msg-enviada-tag{color:var(--ok); font-size:11.5px; font-weight:600;}
+.link-msg-auto{background:none; border:none; color:var(--danger); font-size:12px; font-weight:700; cursor:pointer; padding:4px 2px; text-decoration:underline; text-underline-offset:2px; white-space:nowrap;}
+.msg-enviada-tag{color:var(--ok); font-size:11.5px; font-weight:600; white-space:nowrap;}
 .filters{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
 .filters select, .filters input{padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); font-size:13px;}
 table{width:100%; border-collapse:collapse; font-size:13.5px;}
@@ -338,11 +338,20 @@ async function salvarPrazosAutoMsg(prazos){
   return true;
 }
 function diasDesdeCriacao(o){
-  const base = o.data || (o.criadoEm ? new Date(o.criadoEm).toISOString().slice(0,10) : null);
+  const base = o.autoBaseData || o.data || (o.criadoEm ? new Date(o.criadoEm).toISOString().slice(0,10) : null);
   if(!base) return 0;
   const hoje = new Date(todayStr()+'T00:00:00');
   const d0 = new Date(base+'T00:00:00');
   return Math.max(0, Math.floor((hoje - d0) / 86400000));
+}
+/** Reinicia o acompanhamento automático a partir de hoje — chamado sempre que o status é
+ * trocado manualmente (qualquer direção). Assim, um orçamento que já tinha passado do prazo
+ * (ex: virou "Recusado" sozinho) e volta pra um status em aberto começa a contar os prazos
+ * de novo a partir dessa mudança, em vez de continuar usando a data de criação original. */
+function reiniciarAutoAposMudancaManual(o){
+  o.autoBaseData = todayStr();
+  o.autoMensagensEnviadas = 0;
+  o.editadoManualmente = false;
 }
 /* Acompanhamento automático (local a este módulo — não escreve nos status configuráveis
  * de Cadastro, só sobrepõe o rótulo/cor enquanto o orçamento está em aberto):
@@ -971,7 +980,7 @@ function renderLista(main){
     </div>
     <div class="card" style="padding:14px 18px; overflow-x:auto;">
       <table id="tabelaOrc">
-        <thead><tr><th>Cliente</th><th>Loja</th><th>Vendedora</th><th>Validade</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
+        <thead><tr><th>Cliente</th><th>Loja</th><th>Vendedora</th><th>Validade</th><th>Valor</th><th>Status</th><th style="text-align:right;">Ações</th></tr></thead>
         <tbody id="tbodyOrc"></tbody>
       </table>
     </div>
@@ -1032,11 +1041,13 @@ function renderLista(main){
         <td>
           <span class="badge ${classeBadge}" data-orcstatus="${o.id}" title="${o.rascunho ? 'Clique para continuar preenchendo' : 'Clique para mudar o status'}" style="cursor:pointer;">${escapeHtml(rotuloStatus)}</span>
         </td>
-        <td style="white-space:nowrap;">
-          ${acaoMsgHtml}
-          <button class="icon-btn" data-editar="${o.id}" title="Editar">✎</button>
-          <button class="icon-btn" data-ver="${o.id}" title="Ver / editar">👁️</button>
-          <button class="icon-btn" data-excluir="${o.id}" title="Excluir" style="color:var(--danger);">🗑️</button>
+        <td style="white-space:nowrap; text-align:right;">
+          <div style="display:inline-flex; align-items:center; justify-content:flex-end; gap:4px; flex-wrap:nowrap;">
+            ${acaoMsgHtml}
+            <button class="icon-btn" data-editar="${o.id}" title="Editar">✎</button>
+            <button class="icon-btn" data-ver="${o.id}" title="Ver / editar">👁️</button>
+            <button class="icon-btn" data-excluir="${o.id}" title="Excluir" style="color:var(--danger);">🗑️</button>
+          </div>
         </td>
       </tr>`;
     }).join('');
@@ -1109,6 +1120,7 @@ async function mudarStatusOrcRapido(orcId){
   document.getElementById('btnSalvarStatusRapido').addEventListener('click', async ()=>{
     o.status = document.getElementById('novoStatusSelRapido').value;
     o.rascunho = false;
+    reiniciarAutoAposMudancaManual(o);
     const ok = await orcamentoSalvar(o);
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
@@ -1298,6 +1310,7 @@ function abrirDetalheOrcamento(o){
   document.getElementById('btnSalvarStatusOrc').addEventListener('click', async ()=>{
     o.status = document.getElementById('orcStatusSel').value;
     o.rascunho = false;
+    reiniciarAutoAposMudancaManual(o);
     const ok = await orcamentoSalvar(o);
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
