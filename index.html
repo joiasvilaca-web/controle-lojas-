@@ -8,7 +8,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <style>
   :root{
     --bg:#2B0F1F;
@@ -222,12 +221,6 @@
   }
   .shell-topbar button.active{background:var(--gold); color:#fff; border-color:var(--gold);}
   .shell-content{flex:1; overflow-y:auto; padding:24px; position:relative; color:var(--ink);}
-  #lojaHeaderBand{
-    width:100%; padding:10px 20px; background:var(--loja-cor); color:#fff; font-family:'Cormorant Garamond',serif;
-    font-size:17px; font-weight:700; text-align:center; letter-spacing:.02em; flex-shrink:0;
-    display:flex; align-items:center; justify-content:center; gap:8px;
-    text-shadow:0 1px 2px rgba(0,0,0,.25);
-  }
   .loja-btn{display:flex; align-items:center; gap:14px; width:100%; text-align:left; padding:16px 20px; border-radius:12px; border:none; cursor:pointer; color:#fff; font-family:'Cormorant Garamond',serif; font-size:19px; font-weight:700; margin-bottom:10px; box-shadow:0 2px 8px rgba(0,0,0,.15);}
   .loja-btn .loja-btn-abrev{width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.25); display:flex; align-items:center; justify-content:center; font-size:14px; font-family:'Inter',sans-serif;}
   .loja-badge{display:none; font-size:10.5px; font-weight:800; padding:2px 8px; border-radius:999px; color:#fff; margin-left:6px; letter-spacing:.4px;}
@@ -310,7 +303,6 @@
     </div>
   </aside>
   <div class="shell-main">
-    <div id="lojaHeaderBand" style="display:none;"></div>
     <div class="mobile-topbar" id="mobileTopbar">
       <button class="hamburger-btn" id="btnToggleSidebar" aria-label="Abrir menu">☰</button>
       <div class="mobile-topbar-title" id="mobileTopbarTitle">Gestão e Controle</div>
@@ -436,6 +428,20 @@ async function gatewayCall(body){
 async function gatewayLogin(senhaTentativa){
   return gatewayCall({ op:'login', senha: senhaTentativa });
 }
+const FUNCIONARIO_ACESSO_URL = SUPABASE_URL + "/functions/v1/funcionario-acesso";
+async function chamarFuncionarioAcesso(body){
+  try{
+    const res = await fetch(FUNCIONARIO_ACESSO_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  }catch(e){
+    console.error('erro ao falar com o servidor (acesso)', e);
+    return { error: 'Não foi possível conectar. Verifique sua internet.' };
+  }
+}
 /** Shim com a mesma "forma" do cliente Supabase antigo, pra não precisar reescrever
  * cada chamada existente — só troca o que acontece por baixo dos panos. */
 const supabaseClient = {
@@ -527,26 +533,6 @@ async function uploadFotoParaDrive(dataUrl, filename, pasta, tratar){
 let config = null;
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
-/** Aplica máscara de telefone/celular com DDD entre parênteses enquanto a pessoa digita:
- * (11) 91234-5678 pra celular (11 dígitos) ou (11) 1234-5678 pra fixo (10 dígitos). */
-function aplicarMascaraTelefone(input){
-  if(!input) return;
-  input.addEventListener('input', ()=>{
-    let v = input.value.replace(/\D/g,'').slice(0,11);
-    if(v.length > 6) v = v.length>10 ? v.replace(/^(\d{2})(\d{5})(\d{0,4}).*/, '($1) $2-$3') : v.replace(/^(\d{2})(\d{4})(\d{0,4}).*/, '($1) $2-$3');
-    else if(v.length > 2) v = v.replace(/^(\d{2})(\d{0,5})/, '($1) $2');
-    else if(v.length > 0) v = v.replace(/^(\d{0,2})/, '($1');
-    input.value = v;
-  });
-}
-/** Em vez de instruir "use ponto, não vírgula", converte sozinho: se a pessoa digitar
- * vírgula num campo numérico, vira ponto na hora, sem precisar avisar nada. */
-function aplicarAutoPontoDecimal(input){
-  if(!input) return;
-  input.addEventListener('input', ()=>{
-    if(input.value.indexOf(',')>=0) input.value = input.value.replace(/,/g,'.');
-  });
-}
 function fmtMoedaPE(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function fmtDatePE(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -650,15 +636,6 @@ function aplicarCorLoja(){
       badge.textContent = info.abreviacao || info.nome;
     } else {
       badge.style.display = 'none';
-    }
-  }
-  const banda = document.getElementById('lojaHeaderBand');
-  if(banda){
-    if(info){
-      banda.style.display = 'flex';
-      banda.textContent = `🏬 ${info.nome}`;
-    } else {
-      banda.style.display = 'none';
     }
   }
 }
@@ -1037,22 +1014,13 @@ function renderVendasHome(){
   });
 }
 
-/* Barra superior com um botão "Voltar" à esquerda + as abas internas do módulo. */
+/* Barra superior com as abas internas do módulo (o botão "Voltar" agora é só o de dentro do módulo). */
 function renderShellTabsComVoltar(moduloId, tabs, active, aoVoltar){
   const wrap = document.getElementById('shellTopTabs');
-  // O módulo de Transferências/Reposição tem sua própria navegação interna
-  // (Home com botões + botão "Voltar" próprio) e já é acessado pelo menu lateral,
-  // então essa barra superior do shell (Voltar + abas) não faz mais sentido nele.
-  if(moduloId === 'transferencias'){
-    wrap.style.display = 'none';
-    wrap.innerHTML = '';
-    return;
-  }
-  wrap.style.display = '';
-  const btnVoltar = `<button class="shell-back-btn" id="btnVoltarShell">← Voltar</button>`;
   const abasHtml = (tabs && tabs.length) ? tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===active?'active':''}">${t.icon?t.icon+' ':''}${escapeHtml(t.label)}</button>`).join('') : '';
-  wrap.innerHTML = btnVoltar + abasHtml;
-  document.getElementById('btnVoltarShell').addEventListener('click', aoVoltar);
+  if(!abasHtml){ wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+  wrap.style.display = '';
+  wrap.innerHTML = abasHtml;
   wrap.querySelectorAll('button[data-tab]').forEach(b=>{
     b.addEventListener('click', ()=>{
       wrap.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('active', x===b));
@@ -1115,12 +1083,13 @@ window.addEventListener('message', (ev)=>{
 const CFG_TABS = [
   { id:'clientes', label:'Clientes' },
   { id:'produto', label:'Produto' },
-  { id:'fator', label:'Fator' },
-  { id:'fornecedor', label:'Fornecedor' },
   { id:'lojas', label:'Lojas' },
+  { id:'funcionarios', label:'Funcionários' },
+  { id:'servicos', label:'Tipos de Serviço' },
   { id:'pagamento', label:'Formas de Pagamento' },
   { id:'impressao', label:'Impressão & Etiquetas' },
   { id:'statusOrcamento', label:'Status de Orçamento' },
+  { id:'acessos', label:'Perfis de Acesso' },
   { id:'mensagens', label:'Mensagens' },
 ];
 let currentCfgTab = 'clientes';
@@ -1144,15 +1113,16 @@ function renderCfgTab(tab){
   const body = document.getElementById('cfgBody');
   if(tab==='clientes') return renderClientesTab(body);
   if(tab==='produto') return renderProdutoUnificadoTab(body);
-  if(tab==='fator') return renderFatorTab(body);
-  if(tab==='fornecedor') return renderFornecedorTab(body);
   if(tab==='lojas') return renderLojasTab(body);
+  if(tab==='funcionarios') return renderFuncionariosTab(body);
   if(tab==='produtos') return renderProdutosTab(body);
   if(tab==='joias') return renderJoiasTab(body);
   if(tab==='estoque') return renderEstoqueTab(body);
+  if(tab==='servicos') return renderServicosTab(body);
   if(tab==='pagamento') return renderPagamentoTab(body);
   if(tab==='impressao') return renderImpressaoTab(body);
   if(tab==='statusOrcamento') return renderStatusOrcamentoTab(body);
+  if(tab==='acessos') return renderAcessosTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
 }
 
@@ -1215,32 +1185,27 @@ function renderClientesTable(lista){
   const el = document.getElementById('cfgClientesTable');
   if(!el) return;
   if(l.length===0){ el.innerHTML='<div style="padding:32px;text-align:center;color:var(--muted);">Nenhum cliente encontrado.</div>'; return; }
-  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;">
-    <colgroup>
-      <col style="width:26%;"><col style="width:16%;"><col style="width:24%;"><col style="width:14%;"><col style="width:118px;">
-    </colgroup>
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
     <thead><tr>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nome</th>
-      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Celular</th>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Telefone</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">E-mail</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nascimento</th>
       <th style="padding:10px 14px;border-bottom:1.5px solid var(--line);"></th>
     </tr></thead><tbody>
     ${l.map(c=>`
       <tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}</td>
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.telefone||'—')}</td>
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(c.email||'')}">${escapeHtml(c.email||'—')}</td>
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
-        <td style="padding:6px 8px;white-space:nowrap;text-align:right;">
-          <button class="btn btn-sm btn-ghost" style="padding:5px 7px;" data-cfgver="${escapeHtml(c.id)}" title="Ver">👁</button>
-          <button class="btn btn-sm btn-ghost" style="padding:5px 7px;" data-cfgedi="${escapeHtml(c.id)}" title="Editar">✎</button>
-          <button class="btn btn-sm" style="padding:5px 7px;background:var(--danger-soft);color:var(--danger);border:none;" data-cfgdel="${escapeHtml(c.id)}" title="Excluir">🗑</button>
+        <td style="padding:10px 14px;"><b>${escapeHtml(c.nome)}</b>${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}</td>
+        <td style="padding:10px 14px;">${escapeHtml(c.telefone||'—')}</td>
+        <td style="padding:10px 14px;">${escapeHtml(c.email||'—')}</td>
+        <td style="padding:10px 14px;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
+        <td style="padding:10px 14px;white-space:nowrap;">
+          <button class="btn btn-sm btn-ghost" data-cfgedi="${escapeHtml(c.id)}">✎</button>
+          <button class="btn btn-sm" style="background:var(--danger-soft);color:var(--danger);border:none;" data-cfgdel="${escapeHtml(c.id)}">🗑</button>
         </td>
       </tr>
     `).join('')}
     </tbody></table>`;
-  el.querySelectorAll('[data-cfgver]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgver), true)));
   el.querySelectorAll('[data-cfgedi]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgedi))));
   el.querySelectorAll('[data-cfgdel]').forEach(b=>b.addEventListener('click',()=> deletarClienteCadastro(b.dataset.cfgdel)));
 }
@@ -1250,7 +1215,7 @@ function clienteModalHtml(c){
     <div class="grid-2">
       <div class="field"><label>Nome *</label><input id="ccNome" value="${escapeHtml(c.nome||'')}"></div>
       <div class="field"><label>CPF</label><input id="ccCpf" value="${escapeHtml(c.cpf||'')}"></div>
-      <div class="field"><label>Celular</label><input id="ccTel" placeholder="(00) 00000-0000" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>Telefone</label><input id="ccTel" value="${escapeHtml(c.telefone||'')}"></div>
       <div class="field"><label>E-mail</label><input type="email" id="ccEmail" value="${escapeHtml(c.email||'')}"></div>
       <div class="field"><label>Data de nascimento</label><input type="date" id="ccNasc" value="${c.dataNascimento||''}"></div>
       <div class="field"><label>CEP</label><input id="ccCep" value="${escapeHtml(c.cep||'')}"></div>
@@ -1650,7 +1615,7 @@ async function abrirHistoricoCliente(cli){
     </div>`;
 }
 
-function openClienteModalCadastro(cli, somenteVer){
+function openClienteModalCadastro(cli){
   const resumoExtras = cli ? `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px;padding-top:12px;border-top:1px solid var(--line);">
       <button class="btn btn-ghost btn-sm" id="ccBtnCredito">💳 Crédito: <b style="color:var(--ok);">&nbsp;${fmtMoedaCli(cli.credito||0)}</b></button>
@@ -1658,25 +1623,20 @@ function openClienteModalCadastro(cli, somenteVer){
       <button class="btn btn-ghost btn-sm" id="ccBtnHistorico">📋 Histórico de compras e O.S.</button>
     </div>` : '';
   openModal(`
-    <h3 style="margin:0 0 16px;">${somenteVer?'Ver cliente':cli?'Editar cliente':'Novo cliente'}</h3>
+    <h3 style="margin:0 0 16px;">${cli?'Editar cliente':'Novo cliente'}</h3>
     ${clienteModalHtml(cli)}
     ${resumoExtras}
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="ccCancelar">${somenteVer?'Fechar':'Cancelar'}</button>
-      ${somenteVer?'':'<button class="btn btn-accent" id="ccSalvar">Salvar</button>'}
+      <button class="btn btn-ghost" id="ccCancelar">Cancelar</button>
+      <button class="btn btn-accent" id="ccSalvar">Salvar</button>
     </div>
   `);
-  aplicarMascaraTelefone(document.getElementById('ccTel'));
   if(cli){
     document.getElementById('ccBtnCredito').addEventListener('click', ()=>{ closeModal(); abrirCreditoModal(cli); });
     document.getElementById('ccBtnDebitos').addEventListener('click', ()=>{ closeModal(); abrirDebitosModal(cli); });
     document.getElementById('ccBtnHistorico').addEventListener('click', ()=>{ closeModal(); abrirHistoricoCliente(cli); });
   }
   document.getElementById('ccCancelar').addEventListener('click', closeModal);
-  if(somenteVer){
-    document.querySelectorAll('#modalBox input').forEach(el=> el.disabled = true);
-    return;
-  }
   // CEP auto-fill
   document.getElementById('ccCep').addEventListener('blur', async ()=>{
     const d = document.getElementById('ccCep').value.replace(/\D/g,'');
@@ -1917,7 +1877,7 @@ function lojaFieldsHtml(prefix, l){
       <div class="field"><label>Inscrição Estadual</label><input id="${prefix}_ie" value="${escapeHtml(l.inscricaoEstadual||'')}"></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Telefone</label><input id="${prefix}_tel" placeholder="(00) 00000-0000" value="${escapeHtml(l.telefone||'')}"></div>
+      <div class="field"><label>Telefone</label><input id="${prefix}_tel" value="${escapeHtml(l.telefone||'')}"></div>
       <div class="field"><label>E-mail</label><input id="${prefix}_email" value="${escapeHtml(l.email||'')}"></div>
     </div>
     <div class="grid-3">
@@ -1933,59 +1893,18 @@ function lojaFieldsHtml(prefix, l){
       <div class="field"><label>Cidade</label><input id="${prefix}_cidade" value="${escapeHtml(l.cidade||'')}"></div>
       <div class="field"><label>Estado</label><input id="${prefix}_estado" maxlength="2" style="text-transform:uppercase" value="${escapeHtml(l.estado||'')}"></div>
     </div>
-    <div class="field"><label>Observação</label><textarea id="${prefix}_obs" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(l.observacao||'')}</textarea></div>
-    <div class="section-label" style="margin-top:10px;">Contas bancárias</div>
-    <div id="${prefix}_contasRows"></div>
-    <button type="button" class="btn btn-ghost btn-sm" id="${prefix}_btnAddConta">+ Adicionar conta bancária</button>
   `;
 }
-function lojaContasWire(prefix, contasIniciais){
-  const contas = contasIniciais ? JSON.parse(JSON.stringify(contasIniciais)) : [];
-  function renderContas(somenteVer){
-    const wrap = document.getElementById(prefix+'_contasRows');
-    if(!wrap) return;
-    wrap.innerHTML = contas.length===0 ? `<div class="empty" style="padding:6px 0;">Nenhuma conta cadastrada.</div>` : contas.map((c,i)=>`
-      <div class="grid-2" style="align-items:end; margin-bottom:6px; padding-bottom:6px; border-bottom:1px dashed var(--line);">
-        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Banco</label><input data-contaf="banco" data-contai="${i}" value="${escapeHtml(c.banco||'')}" ${somenteVer?'disabled':''}></div>
-        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Tipo de conta</label>
-          <select data-contaf="tipo" data-contai="${i}" ${somenteVer?'disabled':''}>
-            <option value="" ${!c.tipo?'selected':''}>Selecione</option>
-            <option value="corrente" ${c.tipo==='corrente'?'selected':''}>Corrente</option>
-            <option value="poupanca" ${c.tipo==='poupanca'?'selected':''}>Poupança</option>
-          </select>
-        </div>
-        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Agência</label><input data-contaf="agencia" data-contai="${i}" value="${escapeHtml(c.agencia||'')}" ${somenteVer?'disabled':''}></div>
-        <div class="field" style="margin-bottom:0;"><label style="font-size:11px;">Conta</label><input data-contaf="conta" data-contai="${i}" value="${escapeHtml(c.conta||'')}" ${somenteVer?'disabled':''}></div>
-        ${somenteVer?'':`<button type="button" class="icon-btn" data-contadel="${i}" style="grid-column:span 2; justify-self:start;">✕ Remover esta conta</button>`}
-      </div>
-    `).join('');
-    if(somenteVer) return;
-    wrap.querySelectorAll('[data-contaf]').forEach(inp=>{
-      inp.addEventListener('input', ()=>{ contas[Number(inp.dataset.contai)][inp.dataset.contaf] = inp.value; });
-      inp.addEventListener('change', ()=>{ contas[Number(inp.dataset.contai)][inp.dataset.contaf] = inp.value; });
-    });
-    wrap.querySelectorAll('[data-contadel]').forEach(b=> b.addEventListener('click', ()=>{ contas.splice(Number(b.dataset.contadel),1); renderContas(); }));
-  }
-  return { contas, renderContas };
-}
-function openLojaModal(loja, somenteVer){
+function openLojaModal(loja){
   openModal(`
-    <div class="section-label">${somenteVer?'Ver loja':loja?'Editar loja':'Nova loja'}</div>
+    <div class="section-label">${loja?'Editar loja':'Nova loja'}</div>
     ${lojaFieldsHtml('lj', loja)}
     <div style="display:flex; gap:10px; margin-top:16px;">
-      ${somenteVer?'':'<button class="btn btn-accent" id="btnSalvarLoja">Salvar</button>'}
-      <button class="btn btn-ghost" id="btnCancelarLoja">${somenteVer?'Fechar':'Cancelar'}</button>
+      <button class="btn btn-accent" id="btnSalvarLoja">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarLoja">Cancelar</button>
     </div>
   `);
-  const { contas, renderContas } = lojaContasWire('lj', loja&&loja.contasBancarias);
-  renderContas(somenteVer);
   document.getElementById('btnCancelarLoja').addEventListener('click', closeModal);
-  aplicarMascaraTelefone(document.getElementById('lj_tel'));
-  if(somenteVer){
-    document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=> el.disabled = true);
-    return;
-  }
-  document.getElementById('lj_btnAddConta').addEventListener('click', ()=>{ contas.push({ banco:'', tipo:'', agencia:'', conta:'' }); renderContas(); });
   document.getElementById('btnSalvarLoja').addEventListener('click', async ()=>{
     const nome = document.getElementById('lj_nome').value.trim();
     const abreviacao = document.getElementById('lj_abrev').value.trim().toUpperCase();
@@ -2003,8 +1922,6 @@ function openLojaModal(loja, somenteVer){
       bairro: document.getElementById('lj_bairro').value.trim(),
       cidade: document.getElementById('lj_cidade').value.trim(),
       estado: document.getElementById('lj_estado').value.trim(),
-      observacao: document.getElementById('lj_obs').value.trim(),
-      contasBancarias: contas,
     };
     if(loja){ Object.assign(loja, dados); }
     else{ config.lojas.push({ id: uid('loja'), ...dados }); }
@@ -2030,13 +1947,11 @@ function renderLojasTab(main){
       <div class="code-list-item">
         <div><span class="code-chip" style="font-size:11.5px; padding:4px 10px;">${escapeHtml(l.abreviacao)}</span> <b style="margin-left:8px;">${escapeHtml(l.nome)}</b>${l.cnpj?`<div class="muted" style="margin-top:2px;">${escapeHtml(l.cnpj)}</div>`:''}</div>
         <div style="display:flex; gap:4px;">
-          <button class="icon-btn" data-ver="${i}" title="Ver">👁</button>
           <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
           <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
         </div>
       </div>
     `).join('');
-    wrap.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.ver)], true) ));
     wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.edit)]) ));
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
@@ -2052,313 +1967,699 @@ function renderLojasTab(main){
   document.getElementById('btnNovaLoja').addEventListener('click', ()=> openLojaModal(null) );
 }
 
-
 /* ---------- FUNCIONÁRIOS ---------- */
+function renderFuncionariosTab(main){
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Funcionários</div>
+      <p class="muted" style="margin:-4px 0 14px;">Cadastro único por funcionário: função (usada nos módulos), dados pessoais, profissionais e bancários — tudo numa aba só. Clique em ✎ pra abrir o cadastro completo.</p>
+      <div id="funcRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
+        <div class="field" style="flex:0 1 150px; min-width:120px; margin-bottom:0;"><input id="func_apelido" placeholder="Apelido (opcional)"></div>
+        <div class="cargo-checks">
+          <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
+          <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
+          <label><input type="checkbox" value="gerente" class="func_cargo_new"> Gerente</label>
+          <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
+        </div>
+        <div class="field" style="flex:0 1 200px; min-width:170px; margin-bottom:0;">
+          <select id="func_lojaNova"><option value="">Loja de acesso...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
+        </div>
+        <div class="field" style="flex:0 1 220px; min-width:180px; margin-bottom:0;"><input type="email" id="func_emailNovo" placeholder="E-mail (opcional — envia link de cadastro)"></div>
+        <button class="btn btn-accent btn-sm" id="btnAddFunc">+ Adicionar</button>
+      </div>
+    </div>
+  `;
+  function cargoLabel(c){ return c==='vendedora'?'Vendedora':c==='oficina'?'Oficina':'Diretor(a)'; }
+  function renderRows(){
+    const wrap = document.getElementById('funcRows');
+    if(config.funcionarios.length===0){ wrap.innerHTML = `<div class="empty">Nenhum funcionário cadastrado.</div>`; return; }
+    wrap.innerHTML = config.funcionarios.map((f,i)=>`
+      <div class="code-list-item">
+        <div><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''} ${(f.cargos||[]).map(c=>`<span class="chip" style="margin-left:6px;">${cargoLabel(c)}</span>`).join('')}</div>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-editfunc="${i}" title="Cadastro completo (RH)">✎</button>
+          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-editfunc]').forEach(b=>{
+      b.addEventListener('click', ()=> abrirFuncionarioCompletoModal(config.funcionarios[Number(b.dataset.editfunc)]) );
+    });
+    wrap.querySelectorAll('[data-del]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        config.funcionarios.splice(Number(b.dataset.del),1);
+        await configSave();
+        renderRows();
+        showToast('Funcionário removido.');
+      });
+    });
+  }
+  renderRows();
+  document.getElementById('btnAddFunc').addEventListener('click', async ()=>{
+    const nome = document.getElementById('func_nome').value.trim();
+    const apelido = document.getElementById('func_apelido').value.trim();
+    const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
+    const lojaEscolhida = document.getElementById('func_lojaNova').value;
+    const email = document.getElementById('func_emailNovo').value.trim();
+    if(!nome){ showToast('Informe o nome do funcionário.'); return; }
+    if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
+    if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
+    const novoId = uid('func');
+    config.funcionarios.push({ id: novoId, nome, apelido, cargos });
+    await configSave();
+    // Já deixa o acesso inicializado (nível Vendedora + a loja escolhida aqui).
+    // A diretoria pode ajustar depois pela aba Acesso do cadastro completo.
+    await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
+    let mensagem = 'Funcionário cadastrado.';
+    if(email){
+      const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
+      mensagem = (rConvite && rConvite.ok)
+        ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).'
+        : 'Funcionário cadastrado, mas não foi possível enviar o link por e-mail: ' + ((rConvite && rConvite.error) || 'erro desconhecido');
+    }
+    document.getElementById('func_nome').value = '';
+    document.getElementById('func_apelido').value = '';
+    document.getElementById('func_lojaNova').value = '';
+    document.getElementById('func_emailNovo').value = '';
+    document.querySelectorAll('.func_cargo_new').forEach(c=>c.checked=false);
+    renderRows();
+    showToast(mensagem);
+  });
+}
+
+const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','Acesso'];
+/**
+ * Cadastro completo e unificado de um funcionário: a função/cargo (usada em todo o
+ * app pros módulos de venda/O.S./Venda PG) fica na mesma tela que os dados de RH
+ * (pessoais/profissionais/bancários, que também aparecem no Departamento Pessoal).
+ * Ligação entre as duas tabelas é por "funcionarioId" — criada automaticamente na
+ * primeira vez que alguém salva dados de RH pra esse funcionário.
+ */
+async function abrirFuncionarioCompletoModal(funcionario){
+  const todosPerfis = await dpFuncionariosGetTodos();
+  let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
+  const abasVisiveis = currentUser.nivel==='diretoria' ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
+  const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
+  const d = {
+    nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
+    cpf: perfil?perfil.cpf:'', rg: perfil?perfil.rg:'', dataNascimento: perfil?perfil.dataNascimento:'', estadoCivil: perfil?perfil.estadoCivil:'',
+    telefoneFixo: perfil?perfil.telefoneFixo:'', celularParticular: perfil?perfil.celularParticular:'', celularLoja: perfil?perfil.celularLoja:'',
+    temFilhos: perfil?(perfil.temFilhos||'nao'):'nao', filhos: perfil&&Array.isArray(perfil.filhos)?perfil.filhos.map(f=>({...f})):[],
+    email: perfil?perfil.email:'', endereco: perfil?perfil.endereco:'', numero: perfil?perfil.numero:'',
+    complemento: perfil?perfil.complemento:'', bairro: perfil?perfil.bairro:'', cidade: perfil?perfil.cidade:'', estado: perfil?perfil.estado:'', cep: perfil?perfil.cep:'',
+    contatoEmergenciaNome: perfil?perfil.contatoEmergenciaNome:'', contatoEmergenciaTelefone: perfil?perfil.contatoEmergenciaTelefone:'',
+    loja: perfil?perfil.loja:'', dataAdmissao: perfil?perfil.dataAdmissao:'', tipoContrato: perfil?(perfil.tipoContrato||'CLT'):'CLT',
+    experiencia1Data: perfil?perfil.experiencia1Data:'', experiencia1Dias: perfil?perfil.experiencia1Dias:'',
+    experiencia2Data: perfil?perfil.experiencia2Data:'', experiencia2Dias: perfil?perfil.experiencia2Dias:'',
+    salario: perfil&&perfil.salario!==undefined?perfil.salario:null, ctpsNumero: perfil?perfil.ctpsNumero:'', ctpsSerie: perfil?perfil.ctpsSerie:'', pis: perfil?perfil.pis:'',
+    status: perfil?(perfil.status||'ativo'):'ativo', dataDesligamento: perfil?perfil.dataDesligamento:'',
+    banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
+    tipoPix: perfil?(perfil.tipoPix||''):'', chavePix: perfil?perfil.chavePix:'',
+    nivelAcesso: usuarioAcesso?usuarioAcesso.nivel:'vendedora',
+    lojasAcesso: usuarioAcesso&&Array.isArray(usuarioAcesso.lojas)?[...usuarioAcesso.lojas]:[],
+  };
+  let abaAtiva = 'Básico';
+  openModal(`
+    <div class="section-label">Cadastro completo — ${escapeHtml(funcionario.nome)}</div>
+    <div class="mini-tabs" id="fcAbas" style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;">${abasVisiveis.map(a=>`<button type="button" class="btn btn-ghost btn-sm" data-fctab="${a}">${a}</button>`).join('')}</div>
+    <div id="fcAbaBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-accent" id="btnSalvarFuncCompleto">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarFuncCompleto">Cancelar</button>
+    </div>
+  `);
+  function renderAbas(){
+    document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=>{
+      b.classList.toggle('btn-accent', b.dataset.fctab===abaAtiva);
+      b.classList.toggle('btn-ghost', b.dataset.fctab!==abaAtiva);
+    });
+  }
+  document.querySelectorAll('#fcAbas [data-fctab]').forEach(b=> b.addEventListener('click', ()=>{ abaAtiva=b.dataset.fctab; renderCorpo(); renderAbas(); }));
+
+  function renderCorpo(){
+    const body = document.getElementById('fcAbaBody');
+    if(!body) return; // modal já foi fechado (ex: usuário saiu enquanto uma ação assíncrona ainda rodava)
+    if(abaAtiva==='Básico'){
+      body.innerHTML = `
+        <div class="field"><label>Nome completo</label><input id="fc_nome" value="${escapeHtml(d.nome)}"></div>
+        <div class="field"><label>Apelido</label><input id="fc_apelido" value="${escapeHtml(d.apelido||'')}" placeholder="Como aparece nas listas dos módulos">
+          <p class="muted" style="margin:4px 0 0; font-size:12px;">É este nome que aparece nas listas de seleção dos outros módulos (venda, O.S., orçamento, transferências, Venda PG). Se ficar em branco, usa o nome completo.</p>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função (usada nos módulos de venda, O.S., Venda PG...)</div>
+        <div class="cargo-checks">
+          <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''}> Vendedora</label>
+          <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''}> Oficina</label>
+          <label><input type="checkbox" value="gerente" class="fc_cargo" ${d.cargos.includes('gerente')?'checked':''}> Gerente</label>
+          <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''}> Diretor(a)</label>
+        </div>
+        <p class="muted" style="margin-top:10px;">O que você preencher nas abas Pessoais/Profissionais/Bancários também fica disponível no módulo Departamento Pessoal.</p>
+        <div id="fc_fotoArea"></div>
+      `;
+      montarFotoFuncionario();
+      document.getElementById('fc_nome').addEventListener('input', e=> d.nome = e.target.value);
+      document.querySelectorAll('.fc_cargo').forEach(el=>{
+        el.addEventListener('change', ()=>{
+          d.cargos = Array.from(document.querySelectorAll('.fc_cargo:checked')).map(c=>c.value);
+        });
+      });
+      function montarFotoFuncionario(){
+        const area = document.getElementById('fc_fotoArea');
+        area.innerHTML = `
+          <div class="section-label" style="margin-top:14px;">Foto do funcionário</div>
+          <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+            ${d.foto ? `<img src="${escapeHtml(d.foto)}" style="width:84px; height:84px; border-radius:50%; object-fit:cover; border:1px solid var(--line);">` : `<div style="width:84px; height:84px; border-radius:50%; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--ink-faint); font-size:11px; text-align:center;">Sem foto</div>`}
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <input type="file" accept="image/*" id="fc_inputAnexarFoto" style="display:none;">
+              <input type="file" accept="image/*" capture="user" id="fc_inputTirarFoto" style="display:none;">
+              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnAnexarFoto">📎 Anexar foto</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="fc_btnTirarFoto">📷 Tirar foto</button>
+              ${d.foto ? `<button type="button" class="btn btn-ghost btn-sm" id="fc_btnRemoverFoto" style="color:var(--danger);">Remover</button>` : ''}
+            </div>
+          </div>
+          <div class="muted" id="fc_fotoStatus" style="margin-top:6px;"></div>
+        `;
+        document.getElementById('fc_btnAnexarFoto').addEventListener('click', ()=> document.getElementById('fc_inputAnexarFoto').click());
+        document.getElementById('fc_btnTirarFoto').addEventListener('click', ()=> document.getElementById('fc_inputTirarFoto').click());
+        document.getElementById('fc_inputAnexarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
+        document.getElementById('fc_inputTirarFoto').addEventListener('change', e=> processarFotoFuncionario(e.target.files[0]));
+        const btnRemover = document.getElementById('fc_btnRemoverFoto');
+        if(btnRemover) btnRemover.addEventListener('click', ()=>{ d.foto = ''; montarFotoFuncionario(); });
+      }
+      async function processarFotoFuncionario(file){
+        if(!file) return;
+        const status = document.getElementById('fc_fotoStatus');
+        status.textContent = 'Enviando foto...';
+        try{
+          const dataUrl = await readFileAsDataUrl(file);
+          const nomeArquivo = 'funcionario_' + (funcionario.id||'novo') + '_' + Date.now() + '.jpg';
+          const resultado = await uploadFotoParaDrive(dataUrl, nomeArquivo, 'funcionarios', false);
+          d.foto = resultado.url;
+          status.textContent = '';
+          montarFotoFuncionario();
+        }catch(e){
+          console.error('erro ao enviar foto do funcionário', e);
+          status.textContent = 'Não foi possível enviar a foto. Tente novamente.';
+        }
+      }
+    } else if(abaAtiva==='Pessoais'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>CPF</label><input id="fc_cpf" value="${escapeHtml(d.cpf)}"></div>
+          <div class="field"><label>RG</label><input id="fc_rg" value="${escapeHtml(d.rg)}"></div>
+          <div class="field"><label>Data de nascimento</label><input type="date" id="fc_dataNascimento" value="${d.dataNascimento||''}"></div>
+          <div class="field"><label>Estado civil</label><select id="fc_estadoCivil">
+            <option value="">—</option>
+            ${['Solteiro(a)','Casado(a)','União estável','Divorciado(a)','Viúvo(a)'].map(o=>`<option value="${o}" ${d.estadoCivil===o?'selected':''}>${o}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>E-mail</label><input type="email" id="fc_email" value="${escapeHtml(d.email)}"></div>
+          <div class="field"><label>CEP</label><input id="fc_cep" value="${escapeHtml(d.cep)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Telefones</div>
+        <div class="grid-3">
+          <div class="field"><label>Fixo</label><input id="fc_telefoneFixo" value="${escapeHtml(d.telefoneFixo)}"></div>
+          <div class="field"><label>Celular particular</label><input id="fc_celularParticular" value="${escapeHtml(d.celularParticular)}"></div>
+          <div class="field"><label>Celular da loja</label><input id="fc_celularLoja" value="${escapeHtml(d.celularLoja)}"></div>
+        </div>
+        <div class="grid-3">
+          <div class="field"><label>Endereço</label><input id="fc_endereco" value="${escapeHtml(d.endereco)}"></div>
+          <div class="field"><label>Número</label><input id="fc_numero" value="${escapeHtml(d.numero)}"></div>
+          <div class="field"><label>Complemento</label><input id="fc_complemento" value="${escapeHtml(d.complemento)}"></div>
+        </div>
+        <div class="grid-3">
+          <div class="field"><label>Bairro</label><input id="fc_bairro" value="${escapeHtml(d.bairro)}"></div>
+          <div class="field"><label>Cidade</label><input id="fc_cidade" value="${escapeHtml(d.cidade)}"></div>
+          <div class="field"><label>Estado</label><input id="fc_estado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml(d.estado)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Contato de emergência</label><input id="fc_contatoEmergenciaNome" value="${escapeHtml(d.contatoEmergenciaNome)}"></div>
+          <div class="field"><label>Telefone do contato</label><input id="fc_contatoEmergenciaTelefone" value="${escapeHtml(d.contatoEmergenciaTelefone)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Filhos</div>
+        <div class="field"><label>Tem filhos?</label>
+          <select id="fc_temFilhos">
+            <option value="nao" ${d.temFilhos==='nao'?'selected':''}>Não</option>
+            <option value="sim" ${d.temFilhos==='sim'?'selected':''}>Sim</option>
+          </select>
+        </div>
+        <div id="fc_filhosArea"></div>
+      `;
+      ligarCampos(body);
+      montarSecaoFilhos();
+      document.getElementById('fc_temFilhos').addEventListener('change', e=>{
+        d.temFilhos = e.target.value;
+        if(d.temFilhos==='sim' && d.filhos.length===0) d.filhos = [{ dataNascimento:'' }];
+        if(d.temFilhos==='nao') d.filhos = [];
+        montarSecaoFilhos();
+      });
+      function montarSecaoFilhos(){
+        const area = document.getElementById('fc_filhosArea');
+        if(d.temFilhos!=='sim'){ area.innerHTML=''; return; }
+        area.innerHTML = `
+          <div class="field" style="max-width:160px;"><label>Quantos filhos?</label><input type="number" min="1" id="fc_qtdFilhos" value="${d.filhos.length||1}"></div>
+          <div id="fc_filhosLista"></div>
+        `;
+        desenharListaFilhos();
+        document.getElementById('fc_qtdFilhos').addEventListener('input', e=>{
+          const qtd = Math.max(1, parseInt(e.target.value)||1);
+          const atual = d.filhos.length;
+          if(qtd > atual){ for(let i=atual;i<qtd;i++) d.filhos.push({ dataNascimento:'' }); }
+          else if(qtd < atual){ d.filhos = d.filhos.slice(0, qtd); }
+          desenharListaFilhos();
+        });
+      }
+      function calcularIdade(dataNasc){
+        if(!dataNasc) return null;
+        const hoje = new Date(); const nasc = new Date(dataNasc+'T00:00:00');
+        let idade = hoje.getFullYear() - nasc.getFullYear();
+        const m = hoje.getMonth() - nasc.getMonth();
+        if(m<0 || (m===0 && hoje.getDate()<nasc.getDate())) idade--;
+        return idade>=0 ? idade : null;
+      }
+      function desenharListaFilhos(){
+        const lista = document.getElementById('fc_filhosLista');
+        lista.innerHTML = d.filhos.map((f,i)=>{
+          const idade = calcularIdade(f.dataNascimento);
+          return `
+          <div class="grid-2" style="align-items:end;">
+            <div class="field"><label>Data de nascimento — filho(a) ${i+1}</label><input type="date" data-filhodata="${i}" value="${f.dataNascimento||''}"></div>
+            <div class="field"><label>Idade atual</label><input value="${idade!==null?idade+' anos':'—'}" disabled></div>
+          </div>
+        `;
+        }).join('');
+        lista.querySelectorAll('[data-filhodata]').forEach(el=>{
+          el.addEventListener('input', ()=>{
+            d.filhos[Number(el.dataset.filhodata)].dataNascimento = el.value;
+            desenharListaFilhos();
+          });
+        });
+      }
+    } else if(abaAtiva==='Profissionais'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>Loja</label><select id="fc_loja"><option value="">—</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.nome)}" ${d.loja===l.nome?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+          <div class="field"><label>Data de admissão</label><input type="date" id="fc_dataAdmissao" value="${d.dataAdmissao||''}"></div>
+          <div class="field"><label>Tipo de contrato</label><select id="fc_tipoContrato">${['CLT','Estágio','PJ','Autônomo'].map(t=>`<option value="${t}" ${d.tipoContrato===t?'selected':''}>${t}</option>`).join('')}</select></div>
+          ${currentUser.nivel==='diretoria' ? `<div class="field"><label>Salário (R$)</label><input type="number" step="0.01" id="fc_salario" value="${d.salario!==null?d.salario:''}"></div>` : ''}
+          <div class="field"><label>PIS/PASEP</label><input id="fc_pis" value="${escapeHtml(d.pis)}"></div>
+          <div class="field"><label>CTPS — número</label><input id="fc_ctpsNumero" value="${escapeHtml(d.ctpsNumero)}"></div>
+          <div class="field"><label>CTPS — série</label><input id="fc_ctpsSerie" value="${escapeHtml(d.ctpsSerie)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Status</label><select id="fc_status"><option value="ativo" ${d.status==='ativo'?'selected':''}>Ativo</option><option value="desligado" ${d.status==='desligado'?'selected':''}>Desligado</option></select></div>
+          <div class="field"><label>Data de desligamento <span class="muted">(se houver)</span></label><input type="date" id="fc_dataDesligamento" value="${d.dataDesligamento||''}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">Período de experiência <span class="muted" style="text-transform:none; font-weight:400;">(a CLT permite até 2 períodos)</span></div>
+        <div class="grid-2">
+          <div class="field"><label>Experiência 1 — início</label><input type="date" id="fc_experiencia1Data" value="${d.experiencia1Data||''}"></div>
+          <div class="field"><label>Experiência 1 — duração (dias)</label><input type="number" min="1" id="fc_experiencia1Dias" value="${d.experiencia1Dias||''}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Experiência 2 — início <span class="muted">(se houver prorrogação)</span></label><input type="date" id="fc_experiencia2Data" value="${d.experiencia2Data||''}"></div>
+          <div class="field"><label>Experiência 2 — duração (dias)</label><input type="number" min="1" id="fc_experiencia2Dias" value="${d.experiencia2Dias||''}"></div>
+        </div>
+      `;
+      ligarCampos(body);
+    } else if(abaAtiva==='Bancários'){
+      body.innerHTML = `
+        <div class="grid-2">
+          <div class="field"><label>Banco</label><input id="fc_banco" value="${escapeHtml(d.banco)}"></div>
+          <div class="field"><label>Tipo de conta</label><select id="fc_tipoConta"><option value="corrente" ${d.tipoConta==='corrente'?'selected':''}>Corrente</option><option value="poupanca" ${d.tipoConta==='poupanca'?'selected':''}>Poupança</option></select></div>
+          <div class="field"><label>Agência</label><input id="fc_agencia" value="${escapeHtml(d.agencia)}"></div>
+          <div class="field"><label>Conta</label><input id="fc_conta" value="${escapeHtml(d.conta)}"></div>
+        </div>
+        <div class="section-label" style="margin-top:6px; border:none; padding:0;">PIX</div>
+        <div class="grid-2">
+          <div class="field"><label>Tipo de PIX</label><select id="fc_tipoPix">
+            <option value="">—</option>
+            ${['CPF','CNPJ','E-mail','Telefone','Chave aleatória'].map(o=>`<option value="${o}" ${d.tipoPix===o?'selected':''}>${o}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>Número do PIX</label><input id="fc_chavePix" value="${escapeHtml(d.chavePix)}"></div>
+        </div>
+      `;
+      ligarCampos(body);
+    } else if(abaAtiva==='Acesso' && currentUser.nivel==='diretoria'){
+      const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
+      const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
+      const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
+      const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
+      body.innerHTML = `
+        <div class="field"><label>Nível de acesso</label>
+          <select id="fc_nivelAcesso">${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Lojas liberadas</label>
+          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
+        </div>
+        <button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>
+        <hr style="margin:16px 0; border-color:var(--surface-2);">
+        <div class="field"><label>E-mail (recebe o link pra definir a senha)</label><input type="email" id="fc_emailAcesso" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
+        <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
+        ${status==='ativo' ? `<p class="muted">Senha atual (visível só pra diretoria): <b style="color:var(--ink); letter-spacing:1px;">${escapeHtml(usuarioLigado.senha||'')}</b></p>` : ''}
+        <button type="button" class="btn btn-accent btn-sm" id="btnEnviarConvite">${status==='sem_acesso' ? '📧 Enviar convite de acesso' : '📧 Reenviar convite (gera nova senha)'}</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnEnviarConviteCadastro" style="margin-left:6px;">📋 Enviar link de cadastro completo (1 dia)</button>
+        <p class="muted" style="margin-top:10px;">Salve o nível e as lojas antes de enviar o convite. O funcionário recebe um e-mail com um link pra escolher a própria senha — o nível e as lojas não mudam com o convite. O link de "cadastro completo" deixa o próprio funcionário preencher os dados pessoais/profissionais/bancários dele e já escolher a senha, tudo numa página só, válida por 24h.</p>
+      `;
+      document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
+      document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
+        chk.addEventListener('change', ()=>{
+          d.lojasAcesso = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
+        });
+      });
+      document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
+        const btn = document.getElementById('btnSalvarAcesso');
+        btn.disabled = true; btn.textContent = 'Salvando...';
+        const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: d.nivelAcesso, lojas: d.lojasAcesso });
+        btn.disabled = false; btn.textContent = '💾 Salvar nível e lojas';
+        if(r && r.ok){
+          showToast('Acesso atualizado.');
+          const configAtualizada = await configGet();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+        } else {
+          showToast((r && r.error) || 'Não foi possível salvar o acesso.');
+        }
+      });
+      document.getElementById('fc_emailAcesso').addEventListener('input', e=>{ d.emailAcesso = e.target.value; });
+      document.getElementById('btnEnviarConvite').addEventListener('click', async ()=>{
+        const email = document.getElementById('fc_emailAcesso').value.trim();
+        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
+        const btn = document.getElementById('btnEnviarConvite');
+        btn.disabled = true; btn.textContent = 'Enviando...';
+        const r = await chamarFuncionarioAcesso({ op:'enviarConvite', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
+        btn.disabled = false;
+        if(r && r.ok){
+          showToast('Convite enviado! O funcionário vai receber um e-mail pra definir a senha.');
+          const configAtualizada = await configGet();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível enviar o convite.');
+          renderCorpo();
+        }
+      });
+      document.getElementById('btnEnviarConviteCadastro').addEventListener('click', async ()=>{
+        const email = document.getElementById('fc_emailAcesso').value.trim();
+        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
+        const btn = document.getElementById('btnEnviarConviteCadastro');
+        btn.disabled = true; btn.textContent = 'Enviando...';
+        const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
+        btn.disabled = false; btn.textContent = '📋 Enviar link de cadastro completo (1 dia)';
+        if(r && r.ok){
+          showToast('Link de cadastro completo enviado! Válido por 24 horas.');
+          const configAtualizada = await configGet();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível enviar o link de cadastro.');
+        }
+      });
+    }
+  }
+  function ligarCampos(body){
+    body.querySelectorAll('input, select').forEach(el=>{
+      const campo = el.id.replace('fc_','');
+      const handler = ()=>{ d[campo] = el.value; };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
+    });
+  }
+  renderCorpo(); renderAbas();
+
+  document.getElementById('btnCancelarFuncCompleto').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarFuncCompleto').addEventListener('click', async ()=>{
+    if(!d.nome || !d.nome.trim()){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Informe o nome.'); return; }
+    if(d.cargos.length===0){ abaAtiva='Básico'; renderCorpo(); renderAbas(); showToast('Selecione ao menos uma função.'); return; }
+    // 1) Atualiza o básico (config.funcionarios) — usado em todo o app
+    funcionario.nome = d.nome.trim();
+    funcionario.apelido = (d.apelido||'').trim();
+    funcionario.cargos = d.cargos;
+    const okConfig = await configSave();
+    // 2) Atualiza/cria o perfil de RH (dp_funcionarios), ligado por funcionarioId
+    const perfilFinal = {
+      id: perfil ? perfil.id : uid('func'),
+      funcionarioId: funcionario.id,
+      nome: d.nome.trim(), apelido: (d.apelido||'').trim(), foto: d.foto, cpf:d.cpf, rg:d.rg, dataNascimento:d.dataNascimento, estadoCivil:d.estadoCivil,
+      telefoneFixo:d.telefoneFixo, celularParticular:d.celularParticular, celularLoja:d.celularLoja,
+      temFilhos:d.temFilhos, filhos: d.temFilhos==='sim' ? d.filhos : [],
+      email:d.email, endereco:d.endereco, numero:d.numero, complemento:d.complemento,
+      bairro:d.bairro, cidade:d.cidade, estado:d.estado, cep:d.cep,
+      contatoEmergenciaNome:d.contatoEmergenciaNome, contatoEmergenciaTelefone:d.contatoEmergenciaTelefone,
+      cargo: cargoLabelPrincipal(d.cargos), loja:d.loja, dataAdmissao:d.dataAdmissao, tipoContrato:d.tipoContrato,
+      experiencia1Data:d.experiencia1Data, experiencia1Dias: d.experiencia1Dias===''?null:parseInt(d.experiencia1Dias),
+      experiencia2Data:d.experiencia2Data, experiencia2Dias: d.experiencia2Dias===''?null:parseInt(d.experiencia2Dias),
+      salario: d.salario===''||d.salario===null?null:parseFloat(d.salario), ctpsNumero:d.ctpsNumero, ctpsSerie:d.ctpsSerie, pis:d.pis,
+      status:d.status, dataDesligamento:d.dataDesligamento,
+      banco:d.banco, agencia:d.agencia, conta:d.conta, tipoConta:d.tipoConta, tipoPix:d.tipoPix, chavePix:d.chavePix,
+      criadoEm: perfil ? perfil.criadoEm : Date.now(),
+    };
+    const okPerfil = await dpFuncionarioSalvar(perfilFinal);
+    if(okConfig && okPerfil){
+      closeModal();
+      renderFuncionariosTab(document.getElementById('cfgBody'));
+      showToast('Cadastro do funcionário atualizado.');
+    }
+  });
+}
+function cargoLabelPrincipal(cargos){
+  if(cargos.includes('diretor')) return 'Diretor(a)';
+  if(cargos.includes('gerente')) return 'Gerente';
+  if(cargos.includes('vendedora')) return 'Vendedora';
+  if(cargos.includes('oficina')) return 'Oficina';
+  return '';
+}
+
 /* ---------- PRODUTOS (ÓTICA: categorias/subcategorias/fator) ---------- */
 /* ============================================================
    PRODUTO UNIFICADO — Categorias + Subcategorias + Joias/Metais + Estoque/Composição
    Substitui as 3 abas separadas (Categoria, Joias & Metais, Produtos & Estoque).
    ============================================================ */
-const TIPOS_PRODUTO = [
-  { id:'servico', label:'Serviço' },
-  { id:'estoque', label:'Produto em estoque' },
-  { id:'encomenda', label:'Produto por encomenda' },
-];
-function tipoProdutoLabel(id){ return (TIPOS_PRODUTO.find(t=>t.id===id)||{}).label || ''; }
-
 async function renderProdutoUnificadoTab(main){
-  garantirConfigProduto();
   // Carrega produtos do estoque se necessário
   if(!produtosEstoqueCarregado){
     produtosEstoque = await produtosEstoqueGet();
     produtosEstoqueCarregado = true;
   }
-  const cats = config.produtosOtica.categorias||[];
-  const subs = config.produtosOtica.subcategorias||[];
-  const catNome = (id)=> (cats.find(c=>c.id===id)||{}).nome||'';
-  const subNome = (id)=> (subs.find(s=>s.id===id)||{}).nome||'';
 
-  main.innerHTML = `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-        <div>
-          <div class="section-label">Produtos</div>
-          <p class="muted" style="margin:2px 0 0;font-size:12px;">Serviços, produtos em estoque e produtos por encomenda — tudo num só cadastro.</p>
-        </div>
-        <button class="btn btn-accent btn-sm" id="btnNovoProdutoUnif">+ Cadastrar produto</button>
+  const subAbas = [
+    { id:'cadastro', label:'📦 Produtos & Estoque' },
+    { id:'categorias', label:'🏷️ Categorias' },
+    { id:'subcategorias', label:'🔖 Subcategorias' },
+    { id:'joias', label:'💎 Joias & Metais' },
+  ];
+  let subAbaAtiva = 'cadastro';
+
+  function renderSubAbas(){
+    main.innerHTML = `
+      <div style="display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap;border-bottom:1.5px solid var(--line);padding-bottom:0;">
+        ${subAbas.map(a=>`<button data-psa="${a.id}" style="padding:8px 14px;border:none;background:transparent;font-size:13px;font-weight:600;color:${subAbaAtiva===a.id?'var(--accent)':'var(--ink-faint)'};border-bottom:${subAbaAtiva===a.id?'2.5px solid var(--accent)':'2.5px solid transparent'};margin-bottom:-2px;border-radius:6px 6px 0 0;cursor:pointer;">${a.label}</button>`).join('')}
       </div>
-      <div style="margin-bottom:12px;">
-        <input type="text" id="peUnifBusca" placeholder="Buscar produto..." style="width:100%;padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-        <div style="display:flex;gap:4px;align-items:center;">
-          <select id="peUnifFiltroTipo" style="padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
-            <option value="">Tipo: todos</option>
-            ${TIPOS_PRODUTO.map(t=>`<option value="${t.id}">${t.label}</option>`).join('')}
-          </select>
-          <button type="button" class="icon-btn" id="btnGerenciarTiposServico" title="Cadastrar tipos de serviço">+</button>
+      <div id="produtoSubConteudo"></div>
+    `;
+    main.querySelectorAll('[data-psa]').forEach(b=>b.addEventListener('click', ()=>{ subAbaAtiva=b.dataset.psa; renderSubAbas(); }));
+    const conteudo = document.getElementById('produtoSubConteudo');
+    if(subAbaAtiva==='cadastro') renderProdutoCadastro(conteudo);
+    if(subAbaAtiva==='categorias') renderProdutoCategorias(conteudo);
+    if(subAbaAtiva==='subcategorias') renderProdutoSubcategorias(conteudo);
+    if(subAbaAtiva==='joias') renderProdutoJoiasMetais(conteudo);
+  }
+
+  // --- SUB-ABA: Produtos & Estoque (com composição) ---
+  function renderProdutoCadastro(el){
+    const cats = config.produtosOtica.categorias||[];
+    const subs = config.produtosOtica.subcategorias||[];
+    el.innerHTML = `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div class="section-label">Produtos, insumos e matérias-primas</div>
+            <p class="muted" style="margin:2px 0 0;font-size:12px;">Cadastro completo com categoria, subcategoria, joias/metais, composição e estoque.</p>
+          </div>
+          <button class="btn btn-accent btn-sm" id="btnNovoProdutoUnif">+ Novo produto</button>
         </div>
-        <div style="display:flex;gap:4px;align-items:center;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <input type="text" id="peUnifBusca" placeholder="Buscar produto..." style="flex:1;min-width:160px;padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
           <select id="peUnifFiltroCat" style="padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
-            <option value="">Categoria: todas</option>
-            ${cats.map(c=>`<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join('')}
+            <option value="">Todas as categorias</option>
+            ${cats.map(c=>`<option value="${escapeHtml(c.id||c.nome)}">${escapeHtml(c.nome)}</option>`).join('')}
           </select>
-          <button type="button" class="icon-btn" id="btnCadastrarCategoria" title="Cadastrar categoria">+</button>
         </div>
-        <div style="display:flex;gap:4px;align-items:center;">
-          <select id="peUnifFiltroSub" style="padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
-            <option value="">Subcategoria: todas</option>
-            ${subs.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}
-          </select>
-          <button type="button" class="icon-btn" id="btnCadastrarSubcategoria" title="Cadastrar subcategoria">+</button>
-        </div>
+        <div id="peUnifRows"></div>
       </div>
-      <div id="peUnifRows"></div>
-    </div>
-  `;
-
-  function renderRows(){
-    const q = (document.getElementById('peUnifBusca')||{}).value||'';
-    const tipoSel = (document.getElementById('peUnifFiltroTipo')||{}).value||'';
-    const catSel = (document.getElementById('peUnifFiltroCat')||{}).value||'';
-    const subSel = (document.getElementById('peUnifFiltroSub')||{}).value||'';
-    let lista = [...produtosEstoque];
-    if(q) lista = lista.filter(p=>(p.nome||'').toLowerCase().includes(q.toLowerCase())||(p.codigoInterno||'').toLowerCase().includes(q.toLowerCase()));
-    if(tipoSel) lista = lista.filter(p=>p.tipo===tipoSel);
-    if(catSel) lista = lista.filter(p=>p.categoriaId===catSel);
-    if(subSel) lista = lista.filter(p=>p.subcategoriaId===subSel);
-    lista.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
-    const wrap = document.getElementById('peUnifRows');
-    if(!wrap) return;
-    if(lista.length===0){ wrap.innerHTML=`<div class="empty">Nenhum produto encontrado.</div>`; return; }
-    wrap.innerHTML = lista.map(p=>`
-      <div class="code-list-item" style="flex-wrap:wrap;gap:8px;">
-        <div style="flex:1;min-width:180px;">
-          <b>${escapeHtml(p.nome)}</b>
-          ${p.codigoInterno?`<span class="muted" style="font-size:11px;"> · #${escapeHtml(p.codigoInterno)}</span>`:''}
-          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-            ${p.tipo?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">${escapeHtml(tipoProdutoLabel(p.tipo))}</span>`:''}
-            ${catNome(p.categoriaId)?`<span class="chip">${escapeHtml(catNome(p.categoriaId))}</span>`:''}
-            ${subNome(p.subcategoriaId)?`<span class="chip">${escapeHtml(subNome(p.subcategoriaId))}</span>`:''}
-            ${p.tipo!=='servico'?`<span class="chip">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>`:''}
-            ${p.composicao&&p.composicao.length>0?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Composição: ${p.composicao.length}</span>`:''}
-            ${p.vendavel===false?`<span class="chip">Só interno</span>`:`<span class="chip" style="background:var(--ok-soft);color:var(--ok);">Vendável</span>`}
-            ${p.precoVenda!=null?`<span class="chip" style="background:var(--accent);color:#fff;">R$ ${Number(p.precoVenda).toFixed(2)}</span>`:''}
+    `;
+    function renderRows(){
+      const q = (document.getElementById('peUnifBusca')||{}).value||'';
+      const catSel = (document.getElementById('peUnifFiltroCat')||{}).value||'';
+      let lista = [...produtosEstoque];
+      if(q) lista = lista.filter(p=>(p.nome||'').toLowerCase().includes(q.toLowerCase())||(p.codigoInterno||'').toLowerCase().includes(q.toLowerCase()));
+      if(catSel) lista = lista.filter(p=>p.categoriaId===catSel||p.categoria===catSel);
+      lista.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
+      const wrap = document.getElementById('peUnifRows');
+      if(!wrap) return;
+      if(lista.length===0){ wrap.innerHTML=`<div class="empty">Nenhum produto encontrado.</div>`; return; }
+      const catNome = (id)=> cats.find(c=>c.id===id||c.nome===id)?.nome||'';
+      const subNome = (id)=> subs.find(s=>s.id===id||s.nome===id)?.nome||'';
+      wrap.innerHTML = lista.map(p=>`
+        <div class="code-list-item" style="flex-wrap:wrap;gap:8px;">
+          <div style="flex:1;min-width:180px;">
+            <b>${escapeHtml(p.nome)}</b>
+            ${p.codigoInterno?`<span class="muted" style="font-size:11px;"> · #${escapeHtml(p.codigoInterno)}</span>`:''}
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
+              ${catNome(p.categoriaId||p.categoria)?`<span class="chip">${escapeHtml(catNome(p.categoriaId||p.categoria))}</span>`:''}
+              ${subNome(p.subcategoriaId||p.subcategoria)?`<span class="chip">${escapeHtml(subNome(p.subcategoriaId||p.subcategoria))}</span>`:''}
+              <span class="chip">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>
+              ${p.composicao&&p.composicao.length>0?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Composição: ${p.composicao.length}</span>`:'<span class="chip">Matéria-prima</span>'}
+              ${p.vendavel===false?`<span class="chip">Só interno</span>`:`<span class="chip" style="background:var(--ok-soft);color:var(--ok);">Vendável</span>`}
+              ${p.precoVenda!=null?`<span class="chip" style="background:var(--accent);color:#fff;">R$ ${Number(p.precoVenda).toFixed(2)}</span>`:''}
+            </div>
+          </div>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <button class="icon-btn" data-petiqueta="${escapeHtml(p.id)}" title="Etiqueta">🏷️</button>
+            <button class="icon-btn" data-pedit="${escapeHtml(p.id)}" title="Editar">✎</button>
+            <button class="icon-btn" data-pdel="${escapeHtml(p.id)}" title="Remover">✕</button>
           </div>
         </div>
-        <div style="display:flex;gap:4px;align-items:center;">
-          <button class="icon-btn" data-petiqueta="${escapeHtml(p.id)}" title="Etiqueta">🏷️</button>
-          <button class="icon-btn" data-pedit="${escapeHtml(p.id)}" title="Editar">✎</button>
-          <button class="icon-btn" data-pdel="${escapeHtml(p.id)}" title="Remover">✕</button>
+      `).join('');
+      wrap.querySelectorAll('[data-petiqueta]').forEach(b=>b.addEventListener('click',()=>imprimirEtiquetaProduto(produtosEstoque.find(p=>p.id===b.dataset.petiqueta))));
+      wrap.querySelectorAll('[data-pedit]').forEach(b=>b.addEventListener('click',()=>abrirProdutoEstoqueModal(produtosEstoque.find(p=>p.id===b.dataset.pedit))));
+      wrap.querySelectorAll('[data-pdel]').forEach(b=>b.addEventListener('click',async()=>{
+        const p = produtosEstoque.find(x=>x.id===b.dataset.pdel);
+        if(!p) return;
+        const usadoEmComp = produtosEstoque.some(x=>x.id!==p.id&&(x.composicao||[]).some(c=>c.insumoId===p.id));
+        if(usadoEmComp){ showToast('Esse item é usado na composição de outro produto.'); return; }
+        const ok = await produtoEstoqueExcluir(p.id);
+        if(ok){ produtosEstoque=produtosEstoque.filter(x=>x.id!==p.id); renderRows(); showToast('Removido.'); }
+      }));
+    }
+    document.getElementById('peUnifBusca').addEventListener('input', renderRows);
+    document.getElementById('peUnifFiltroCat').addEventListener('change', renderRows);
+    document.getElementById('btnNovoProdutoUnif').addEventListener('click', ()=>{
+      abrirProdutoEstoqueModal(null, ()=>renderRows());
+    });
+    renderRows();
+  }
+
+  // --- SUB-ABA: Categorias ---
+  function renderProdutoCategorias(el){
+    const cats = config.produtosOtica.categorias;
+    el.innerHTML = `
+      <div class="card">
+        <div class="section-label">Categorias de produto</div>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px;">Ex: Anéis, Colares, Brincos, Pulseiras…</p>
+        <div id="catRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:160px;margin-bottom:0;"><input id="cat2_nome" placeholder="Nome da categoria"></div>
+          <div class="field" style="flex:2;min-width:200px;margin-bottom:0;"><input id="cat2_desc" placeholder="Descrição (opcional)"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddCat2">+ Adicionar</button>
         </div>
       </div>
-    `).join('');
-    wrap.querySelectorAll('[data-petiqueta]').forEach(b=>b.addEventListener('click',()=>imprimirEtiquetaProduto(produtosEstoque.find(p=>p.id===b.dataset.petiqueta))));
-    wrap.querySelectorAll('[data-pedit]').forEach(b=>b.addEventListener('click',()=>abrirProdutoEstoqueModal(produtosEstoque.find(p=>p.id===b.dataset.pedit))));
-    wrap.querySelectorAll('[data-pdel]').forEach(b=>b.addEventListener('click',async()=>{
-      const p = produtosEstoque.find(x=>x.id===b.dataset.pdel);
-      if(!p) return;
-      const usadoEmComp = produtosEstoque.some(x=>x.id!==p.id&&(x.composicao||[]).some(c=>c.insumoId===p.id));
-      if(usadoEmComp){ showToast('Esse item é usado na composição de outro produto.'); return; }
-      const ok = await produtoEstoqueExcluir(p.id);
-      if(ok){ produtosEstoque=produtosEstoque.filter(x=>x.id!==p.id); renderRows(); showToast('Removido.'); }
-    }));
-  }
-
-  document.getElementById('peUnifBusca').addEventListener('input', renderRows);
-  document.getElementById('peUnifFiltroTipo').addEventListener('change', renderRows);
-  document.getElementById('peUnifFiltroCat').addEventListener('change', renderRows);
-  document.getElementById('peUnifFiltroSub').addEventListener('change', renderRows);
-  document.getElementById('btnNovoProdutoUnif').addEventListener('click', ()=>{ abrirProdutoEstoqueModal(null); });
-  document.getElementById('btnGerenciarTiposServico').addEventListener('click', ()=> abrirGerenciarTiposServicoModal());
-  document.getElementById('btnCadastrarCategoria').addEventListener('click', ()=> abrirCadastroRapidoObjeto('Categoria', config.produtosOtica.categorias, 'cat', ()=> renderProdutoUnificadoTab(main)));
-  document.getElementById('btnCadastrarSubcategoria').addEventListener('click', ()=> abrirCadastroRapidoObjeto('Subcategoria', config.produtosOtica.subcategorias, 'sub', ()=> renderProdutoUnificadoTab(main)));
-
-  renderRows();
-}
-
-/* ---------- CADASTRO RÁPIDO (usado pelos botões "+" dos filtros da aba Produtos) ---------- */
-function abrirCadastroRapidoObjeto(rotulo, lista, prefixoId, aoSalvar){
-  openModal(`
-    <div class="section-label">Cadastrar ${rotulo.toLowerCase()}</div>
-    <div class="field"><label>Nome</label><input id="cr_nome" placeholder="Nome"></div>
-    <div class="field"><label>Descrição <span class="muted">opcional</span></label><input id="cr_desc"></div>
-    <div style="display:flex;gap:10px;margin-top:14px;">
-      <button class="btn btn-accent" id="cr_salvar">Cadastrar</button>
-      <button class="btn btn-ghost" id="cr_cancelar">Cancelar</button>
-    </div>
-  `);
-  document.getElementById('cr_cancelar').addEventListener('click', closeModal);
-  document.getElementById('cr_salvar').addEventListener('click', async ()=>{
-    const nome = document.getElementById('cr_nome').value.trim();
-    if(!nome){ showToast('Informe o nome.'); return; }
-    const descricao = document.getElementById('cr_desc').value.trim();
-    lista.push({ id: uid(prefixoId), nome, descricao });
-    await configSave();
-    closeModal();
-    showToast(rotulo + ' cadastrada.');
-    if(aoSalvar) aoSalvar();
-  });
-}
-function abrirCadastroRapidoLista(rotulo, lista, aoSalvar){
-  openModal(`
-    <div class="section-label">Cadastrar ${rotulo.toLowerCase()}</div>
-    <div class="field"><label>Nome</label><input id="crl_nome" placeholder="Nome"></div>
-    <div style="display:flex;gap:10px;margin-top:14px;">
-      <button class="btn btn-accent" id="crl_salvar">Cadastrar</button>
-      <button class="btn btn-ghost" id="crl_cancelar">Cancelar</button>
-    </div>
-  `);
-  document.getElementById('crl_cancelar').addEventListener('click', closeModal);
-  document.getElementById('crl_salvar').addEventListener('click', async ()=>{
-    const nome = document.getElementById('crl_nome').value.trim();
-    if(!nome){ showToast('Informe o nome.'); return; }
-    if(lista.includes(nome)){ showToast('Já cadastrado.'); return; }
-    lista.push(nome);
-    await configSave();
-    closeModal();
-    showToast(rotulo + ' cadastrado.');
-    if(aoSalvar) aoSalvar();
-  });
-}
-
-/* ---------- TIPOS DE SERVIÇO (antes uma aba própria do portfólio — agora vive dentro
-   do cadastro de Produto, no filtro "Tipo"). A estrutura de dados (config.tiposServico)
-   não muda, então o Painel de O.S. continua lendo exatamente como antes. ---------- */
-function abrirGerenciarTiposServicoModal(){
-  openModal(`
-    <div class="section-label">Tipos de serviço (O.S.)</div>
-    <p class="muted" style="margin:-4px 0 14px;">Usados no Painel de O.S. pra limitar quantos por dia e o prazo mínimo de entrega.</p>
-    <div class="config-row" style="border-bottom:none; padding-top:0;">
-      <div class="muted">Nome do serviço</div><div class="muted">Máx. por dia</div><div class="muted">Prazo mínimo (dias)</div><div></div>
-    </div>
-    <div id="gtsRows"></div>
-    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-      <button class="btn btn-ghost btn-sm" id="btnAddGts">+ Adicionar tipo de serviço</button>
-      <button class="btn btn-accent btn-sm" id="btnSalvarGts">Salvar alterações</button>
-      <button class="btn btn-ghost btn-sm" id="btnFecharGts">Fechar</button>
-    </div>
-  `);
-  function renderRows(){
-    const wrap = document.getElementById('gtsRows');
-    wrap.innerHTML = config.tiposServico.map((s,i)=>`
-      <div class="config-row" data-idx="${i}">
-        <input value="${escapeHtml(s.nome)}" data-field="nome">
-        <input type="number" min="1" value="${s.maxPorDia}" data-field="maxPorDia">
-        <input type="number" min="0" value="${s.prazoMinimoDias}" data-field="prazoMinimoDias">
-        <button class="icon-btn" data-remove="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-remove]').forEach(b=> b.addEventListener('click', ()=>{ config.tiposServico.splice(Number(b.dataset.remove),1); renderRows(); }));
-  }
-  renderRows();
-  document.getElementById('btnAddGts').addEventListener('click', ()=>{
-    config.tiposServico.push({ id: uid('st'), nome:'Novo serviço', maxPorDia:5, prazoMinimoDias:1 });
-    renderRows();
-  });
-  document.getElementById('btnSalvarGts').addEventListener('click', async ()=>{
-    document.querySelectorAll('#gtsRows .config-row').forEach((row,i)=>{
-      config.tiposServico[i].nome = row.querySelector('[data-field="nome"]').value.trim() || 'Serviço';
-      config.tiposServico[i].maxPorDia = Math.max(1, parseInt(row.querySelector('[data-field="maxPorDia"]').value)||1);
-      config.tiposServico[i].prazoMinimoDias = Math.max(0, parseInt(row.querySelector('[data-field="prazoMinimoDias"]').value)||0);
+    `;
+    function renderCats(){
+      const wrap = document.getElementById('catRows2');
+      wrap.innerHTML = cats.length===0?`<div class="empty">Nenhuma categoria.</div>`:cats.map((c,i)=>`
+        <div class="code-list-item">
+          <div><b>${escapeHtml(c.nome)}</b>${c.descricao?` <span class="muted">— ${escapeHtml(c.descricao)}</span>`:''}</div>
+          <button class="icon-btn" data-delcat="${i}">✕</button>
+        </div>`).join('');
+      wrap.querySelectorAll('[data-delcat]').forEach(b=>b.addEventListener('click',async()=>{
+        cats.splice(Number(b.dataset.delcat),1); await configSave(); renderCats(); showToast('Categoria removida.');
+      }));
+    }
+    renderCats();
+    document.getElementById('btnAddCat2').addEventListener('click', async ()=>{
+      const nome = document.getElementById('cat2_nome').value.trim();
+      if(!nome) return;
+      if(!config.produtosOtica.categorias) config.produtosOtica.categorias=[];
+      config.produtosOtica.categorias.push({ id:'cat_'+Date.now(), nome, descricao: document.getElementById('cat2_desc').value.trim() });
+      await configSave(); document.getElementById('cat2_nome').value=''; document.getElementById('cat2_desc').value='';
+      renderCats(); showToast('Categoria adicionada.');
     });
-    await configSave();
-    showToast('Tipos de serviço salvos.');
-    renderRows();
-  });
-  document.getElementById('btnFecharGts').addEventListener('click', closeModal);
-}
-
-/* ---------- CADASTRO DE PRODUTO: garante as listas novas (medidas, pedras, fornecedores, sequencial) ---------- */
-function garantirConfigProduto(){
-  if(!Array.isArray(config.medidasAnel)) config.medidasAnel = [];
-  if(!Array.isArray(config.medidasComprimento)) config.medidasComprimento = [];
-  if(!Array.isArray(config.tiposPedra)) config.tiposPedra = [];
-  if(!Array.isArray(config.coresPedra)) config.coresPedra = [];
-  garantirConfigFornecedor();
-  if(!Array.isArray(config.representantes)) config.representantes = [];
-  if(!Array.isArray(config.tiposProduto)) config.tiposProduto = [];
-  if(!Array.isArray(config.unidadesProduto)) config.unidadesProduto = ['un','g','kg'];
-  if(!config.produtosOtica) config.produtosOtica = { categorias:[], subcategorias:[] };
-  if(!config.produtosOtica.proximoCodigo) config.produtosOtica.proximoCodigo = 1;
-}
-
-/* ---------- GERENCIAR LISTAS (editar, não só cadastrar) — usado pelos "✎" do cadastro de produto ---------- */
-/** Lista de objetos {id,nome,descricao} — categorias e subcategorias. */
-function abrirGerenciarListaObjetos(rotulo, lista, prefixoId, aoFechar){
-  openModal(`
-    <div class="section-label">Gerenciar ${rotulo.toLowerCase()}</div>
-    <div id="gloRows"></div>
-    <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; align-items:flex-end;">
-      <div class="field" style="flex:1; min-width:140px; margin-bottom:0;"><input id="glo_nome" placeholder="Nome novo"></div>
-      <div class="field" style="flex:2; min-width:160px; margin-bottom:0;"><input id="glo_desc" placeholder="Descrição (opcional)"></div>
-      <button class="btn btn-accent btn-sm" id="glo_add">+ Adicionar</button>
-    </div>
-    <div style="margin-top:16px;"><button class="btn btn-ghost" id="glo_fechar">Fechar</button></div>
-  `);
-  function renderRows(){
-    const wrap = document.getElementById('gloRows');
-    wrap.innerHTML = lista.length===0 ? `<div class="empty">Nenhum cadastrado ainda.</div>` : lista.map((item,i)=>`
-      <div class="code-list-item" style="gap:8px; flex-wrap:wrap;">
-        <input data-glonome="${i}" value="${escapeHtml(item.nome)}" style="flex:1; min-width:120px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
-        <input data-glodesc="${i}" value="${escapeHtml(item.descricao||'')}" placeholder="Descrição" style="flex:1; min-width:120px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
-        <button type="button" class="icon-btn" data-glodel="${i}" title="Remover">✕</button>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-glonome]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glonome)].nome = inp.value.trim(); }));
-    wrap.querySelectorAll('[data-glodesc]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glodesc)].descricao = inp.value.trim(); }));
-    wrap.querySelectorAll('[data-glodel]').forEach(b=> b.addEventListener('click', ()=>{ lista.splice(Number(b.dataset.glodel),1); renderRows(); }));
   }
-  renderRows();
-  document.getElementById('glo_add').addEventListener('click', ()=>{
-    const nome = document.getElementById('glo_nome').value.trim();
-    if(!nome){ showToast('Informe o nome.'); return; }
-    lista.push({ id: uid(prefixoId), nome, descricao: document.getElementById('glo_desc').value.trim() });
-    document.getElementById('glo_nome').value=''; document.getElementById('glo_desc').value='';
-    renderRows();
-  });
-  document.getElementById('glo_fechar').addEventListener('click', async ()=>{
-    const ok = await configSave();
-    closeModal();
-    if(ok && aoFechar) aoFechar();
-  });
-}
-/** Lista simples de strings — tipo de joia, tipo de metal, medidas, tipos de pedra, fornecedores. */
-function abrirGerenciarListaStrings(rotulo, lista, aoFechar){
-  openModal(`
-    <div class="section-label">Gerenciar ${rotulo.toLowerCase()}</div>
-    <div id="glsRows"></div>
-    <div style="display:flex; gap:10px; margin-top:14px;">
-      <div class="field" style="flex:1; margin-bottom:0;"><input id="gls_nome" placeholder="Novo item"></div>
-      <button class="btn btn-accent btn-sm" id="gls_add">+ Adicionar</button>
-    </div>
-    <div style="margin-top:16px;"><button class="btn btn-ghost" id="gls_fechar">Fechar</button></div>
-  `);
-  function renderRows(){
-    const wrap = document.getElementById('glsRows');
-    wrap.innerHTML = lista.length===0 ? `<div class="empty">Nenhum cadastrado ainda.</div>` : lista.map((v,i)=>`
-      <div class="code-list-item" style="gap:8px;">
-        <input data-glsval="${i}" value="${escapeHtml(v)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
-        <button type="button" class="icon-btn" data-glsdel="${i}" title="Remover">✕</button>
+
+  // --- SUB-ABA: Subcategorias ---
+  function renderProdutoSubcategorias(el){
+    const subs = config.produtosOtica.subcategorias;
+    el.innerHTML = `
+      <div class="card">
+        <div class="section-label">Subcategorias de produto</div>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px;">Ex: Solitário, Aparador, Meia-aliança, Riviera…</p>
+        <div id="subRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+          <div class="field" style="flex:1;min-width:160px;margin-bottom:0;"><input id="sub2_nome" placeholder="Nome da subcategoria"></div>
+          <div class="field" style="flex:2;min-width:200px;margin-bottom:0;"><input id="sub2_desc" placeholder="Descrição (opcional)"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddSub2">+ Adicionar</button>
+        </div>
       </div>
-    `).join('');
-    wrap.querySelectorAll('[data-glsval]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glsval)] = inp.value.trim(); }));
-    wrap.querySelectorAll('[data-glsdel]').forEach(b=> b.addEventListener('click', ()=>{ lista.splice(Number(b.dataset.glsdel),1); renderRows(); }));
+    `;
+    function renderSubs(){
+      const wrap = document.getElementById('subRows2');
+      wrap.innerHTML = subs.length===0?`<div class="empty">Nenhuma subcategoria.</div>`:subs.map((s,i)=>`
+        <div class="code-list-item">
+          <div><b>${escapeHtml(s.nome)}</b>${s.descricao?` <span class="muted">— ${escapeHtml(s.descricao)}</span>`:''}</div>
+          <button class="icon-btn" data-delsub="${i}">✕</button>
+        </div>`).join('');
+      wrap.querySelectorAll('[data-delsub]').forEach(b=>b.addEventListener('click',async()=>{
+        subs.splice(Number(b.dataset.delsub),1); await configSave(); renderSubs(); showToast('Subcategoria removida.');
+      }));
+    }
+    renderSubs();
+    document.getElementById('btnAddSub2').addEventListener('click', async ()=>{
+      const nome = document.getElementById('sub2_nome').value.trim();
+      if(!nome) return;
+      if(!config.produtosOtica.subcategorias) config.produtosOtica.subcategorias=[];
+      config.produtosOtica.subcategorias.push({ id:'sub_'+Date.now(), nome, descricao: document.getElementById('sub2_desc').value.trim() });
+      await configSave(); document.getElementById('sub2_nome').value=''; document.getElementById('sub2_desc').value='';
+      renderSubs(); showToast('Subcategoria adicionada.');
+    });
   }
-  renderRows();
-  document.getElementById('gls_add').addEventListener('click', ()=>{
-    const v = document.getElementById('gls_nome').value.trim();
-    if(!v){ showToast('Informe o nome.'); return; }
-    if(lista.includes(v)){ showToast('Já cadastrado.'); return; }
-    lista.push(v);
-    document.getElementById('gls_nome').value='';
-    renderRows();
-  });
-  document.getElementById('gls_fechar').addEventListener('click', async ()=>{
-    const ok = await configSave();
-    closeModal();
-    if(ok && aoFechar) aoFechar();
-  });
+
+  // --- SUB-ABA: Joias & Metais ---
+  function renderProdutoJoiasMetais(el){
+    el.innerHTML = `
+      <div class="card">
+        <div class="section-label">Produtos de joalheria</div>
+        <p class="muted" style="margin:-4px 0 14px;font-size:12px;">Lista de produtos usados em Transferências e Reposições.</p>
+        <div id="joiaRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <div class="field" style="flex:1;margin-bottom:0;"><input id="joia2_nome" placeholder="Nome do produto"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddJoia2">+ Adicionar</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-label">Metais</div>
+        <div id="metalRows2"></div>
+        <div style="margin-top:14px;display:flex;gap:10px;">
+          <div class="field" style="flex:1;margin-bottom:0;"><input id="metal2_nome" placeholder="Nome do metal"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddMetal2">+ Adicionar</button>
+        </div>
+      </div>
+    `;
+    function renderJoias(){ document.getElementById('joiaRows2').innerHTML = chipListEditable(config.joiasProdutos,'deljoia2');
+      document.querySelectorAll('[data-deljoia2]').forEach(b=>b.addEventListener('click',async()=>{
+        if(config.joiasProdutos.length<=1){showToast('Mantenha ao menos um.');return;}
+        config.joiasProdutos.splice(Number(b.dataset.deljoia2),1); await configSave(); renderJoias(); showToast('Removido.');
+      }));
+    }
+    function renderMetais(){ document.getElementById('metalRows2').innerHTML = chipListEditable(config.metais,'delmetal2');
+      document.querySelectorAll('[data-delmetal2]').forEach(b=>b.addEventListener('click',async()=>{
+        if(config.metais.length<=1){showToast('Mantenha ao menos um.');return;}
+        config.metais.splice(Number(b.dataset.delmetal2),1); await configSave(); renderMetais(); showToast('Removido.');
+      }));
+    }
+    renderJoias(); renderMetais();
+    document.getElementById('btnAddJoia2').addEventListener('click',async()=>{
+      const v=document.getElementById('joia2_nome').value.trim(); if(!v) return;
+      if(config.joiasProdutos.includes(v)){showToast('Já cadastrado.');return;}
+      config.joiasProdutos.push(v); await configSave(); document.getElementById('joia2_nome').value=''; renderJoias(); showToast('Produto cadastrado.');
+    });
+    document.getElementById('btnAddMetal2').addEventListener('click',async()=>{
+      const v=document.getElementById('metal2_nome').value.trim(); if(!v) return;
+      if(config.metais.includes(v)){showToast('Já cadastrado.');return;}
+      config.metais.push(v); await configSave(); document.getElementById('metal2_nome').value=''; renderMetais(); showToast('Metal cadastrado.');
+    });
+  }
+
+  renderSubAbas();
 }
 
 /* ---------- CATEGORIA / SUBCATEGORIA (abas legado — mantidas pra compatibilidade com código existente) ---------- */
@@ -2503,6 +2804,25 @@ async function produtosEstoqueGet(){
   }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
 }
 let vendasParaHistoricoProduto = null; // carregado sob demanda, só quando alguém abre o histórico de um produto
+let dpFuncionariosCache = null; // carregado sob demanda, só quando alguém abre o cadastro completo de um funcionário
+async function dpFuncionariosGetTodos(){
+  if(dpFuncionariosCache !== null) return dpFuncionariosCache;
+  try{
+    const { data, error } = await supabaseClient.from('dp_funcionarios').select('id,payload').order('created_at', { ascending:true });
+    if(error) throw error;
+    dpFuncionariosCache = (data||[]).map(r=>r.payload);
+  }catch(e){ console.error('erro ao carregar perfis do Departamento Pessoal', e); dpFuncionariosCache = []; }
+  return dpFuncionariosCache;
+}
+async function dpFuncionarioSalvar(perfil){
+  try{
+    const { error } = await supabaseClient.from('dp_funcionarios').upsert({ id: perfil.id, payload: perfil });
+    if(error) throw error;
+    const idx = dpFuncionariosCache ? dpFuncionariosCache.findIndex(p=>p.id===perfil.id) : -1;
+    if(idx>=0) dpFuncionariosCache[idx] = perfil; else if(dpFuncionariosCache) dpFuncionariosCache.push(perfil);
+    return true;
+  }catch(e){ console.error('erro ao salvar perfil do Departamento Pessoal', e); showToast('Não foi possível salvar os dados de RH.'); return false; }
+}
 async function vendasParaHistoricoProdutoGet(){
   if(vendasParaHistoricoProduto !== null) return vendasParaHistoricoProduto;
   try{
@@ -2527,7 +2847,7 @@ async function produtoEstoqueExcluir(id){
   }catch(e){ console.error('erro ao excluir produto/insumo', e); return false; }
 }
 
-function unidadeLabel(u){ if(u==='g') return 'gramas'; if(u==='kg') return 'kg'; if(u==='un') return 'unidade(s)'; return u||'unidade(s)'; }
+function unidadeLabel(u){ return u==='g' ? 'gramas' : u==='kg' ? 'kg' : 'unidade(s)'; }
 /** Compatibilidade: produto antigo (de antes do estoque virar por loja) só tinha um
  * número só. Divide esse número igualmente entre as lojas cadastradas, só pra dar um
  * ponto de partida — o valor certo por loja precisa ser ajustado manualmente depois. */
@@ -2629,71 +2949,53 @@ function mountFotosProduto(container, holder, produtoId){
 }
 
 const PE_TABS = [
-  { id:'nomenclatura', label:'Nome' },
-  { id:'dadosTecnicos', label:'Dados Técnicos' },
+  { id:'nomenclatura', label:'Nomenclatura' },
   { id:'fiscal', label:'Fiscal' },
   { id:'composicao', label:'Composição' },
-  { id:'valores', label:'Estoque' },
+  { id:'valores', label:'Valores' },
   { id:'historico', label:'Histórico' },
 ];
-/** Desenha um código de barras pequeno (CODE128) a partir do texto informado, usando
- * JsBarcode. Usado tanto no cadastro de produto quanto, futuramente, em etiquetas. */
-function desenharBarcodeProduto(valor){
-  const holder = document.getElementById('pe_barcodeSvg');
-  if(!holder) return;
-  const v = (valor||'').trim();
-  if(!v){ holder.innerHTML = ''; return; }
-  holder.innerHTML = '<svg id="pe_barcodeSvgEl"></svg>';
-  try{
-    JsBarcode('#pe_barcodeSvgEl', v, { format:'CODE128', width:1.2, height:32, fontSize:11, margin:2, displayValue:true });
-  }catch(e){ console.error('erro ao gerar código de barras', e); holder.innerHTML = '<p class="muted" style="font-size:12px;">Não foi possível gerar o código de barras pra esse valor.</p>'; }
-}
 
-function abrirProdutoEstoqueModal(produto, clonarDe){
-  garantirConfigProduto();
+function abrirProdutoEstoqueModal(produto){
   const editando = !!produto;
-  const base = produto || clonarDe || null; // fonte dos valores (produto real, ou um clone a partir de outro)
   const idAtual = produto ? produto.id : uid('prodest');
   const outrosDisponiveis = produtosEstoque.filter(p=> !produto || p.id !== produto.id);
-  const fotosHolder = { fotos: (base && base.fotos) ? JSON.parse(JSON.stringify(base.fotos)) : [] };
-  const composicao = (base && base.composicao) ? JSON.parse(JSON.stringify(base.composicao)) : [];
-  const numerosAro = (base && Array.isArray(base.numerosAro)) ? JSON.parse(JSON.stringify(base.numerosAro)) : [];
-  const pedras = (base && Array.isArray(base.pedras)) ? JSON.parse(JSON.stringify(base.pedras)) : [];
+  const fotosHolder = { fotos: (produto && produto.fotos) ? JSON.parse(JSON.stringify(produto.fotos)) : [] };
+  const composicao = (produto && produto.composicao) ? JSON.parse(JSON.stringify(produto.composicao)) : [];
   const d = {
-    nome: base ? (base.nome||'') : '',
-    unidade: base ? (base.unidade||'un') : '',
-    codigoInterno: produto ? (produto.codigoInterno||'') : '', // clone NUNCA herda o código — gera um novo, ver abaixo
-    categoriaId: base ? (base.categoriaId||'') : '',
-    subcategoriaId: base ? (base.subcategoriaId||'') : '',
-    tipo: base ? (base.tipo||'') : '',
-    comprimento: base && base.comprimento!==undefined ? base.comprimento : null,
-    altura: base && base.altura!==undefined ? base.altura : null,
-    espessura: base && base.espessura!==undefined ? base.espessura : null,
-    peso: base && base.peso!==undefined ? base.peso : null,
-    observacao: base ? (base.observacao||'') : '',
-    vendavel: !base || base.vendavel !== false,
-    ncm: base ? (base.ncm||'') : '',
-    cfop: base ? (base.cfop||'') : '',
-    cstCsosn: base ? (base.cstCsosn||'') : '',
-    fornecedor: base ? (base.fornecedor||'') : '',
-    fator: base && base.fator!=null ? base.fator : null,
-    gtin: base ? (base.gtin||'') : '',
-    estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
-    custo: base && base.custo!==undefined ? base.custo : null,
-    precoVenda: base && base.precoVenda!==undefined ? base.precoVenda : null,
+    nome: produto ? (produto.nome||'') : '',
+    unidade: produto ? (produto.unidade||'un') : 'un',
+    codigoInterno: produto ? (produto.codigoInterno||'') : '',
+    nomePopular: produto ? (produto.nomePopular||'') : '',
+    nomeTecnico: produto ? (produto.nomeTecnico||'') : '',
+    categoriaId: produto ? (produto.categoriaId||'') : '',
+    subcategoriaId: produto ? (produto.subcategoriaId||'') : '',
+    vendavel: !produto || produto.vendavel !== false,
+    ncm: produto ? (produto.ncm||'') : '',
+    cfop: produto ? (produto.cfop||'') : '',
+    cstCsosn: produto ? (produto.cstCsosn||'') : '',
+    origemMercadoria: produto ? (produto.origemMercadoria||'') : '',
+    gtin: produto ? (produto.gtin||'') : '',
+    estoquePorLoja: produto && produto.estoquePorLoja ? {...produto.estoquePorLoja} : (produto && produto.estoque ? estoqueLegadoDivididoPorLoja(produto.estoque) : {}),
+    custo: produto && produto.custo!==undefined ? produto.custo : null,
+    precoVenda: produto && produto.precoVenda!==undefined ? produto.precoVenda : null,
+    fatorPercentual: produto && produto.fatorPercentual!==undefined ? produto.fatorPercentual : null,
   };
   let peTabAtiva = 'nomenclatura';
-  // Controle do código interno gerado automaticamente: só é "reservado" de vez (o contador
-  // avança) quando o produto é realmente salvo com esse código. Ver btnSalvarProdutoEstoque.
-  let codigoReservadoTexto = null;
-  let codigoReservadoSeq = null;
-  if(clonarDe && !produto){
-    // Clone: já deixa o próximo código da sequência pronto (só reserva de vez ao salvar).
-    const seq = config.produtosOtica.proximoCodigo || 1;
-    d.codigoInterno = 'PRD' + String(seq).padStart(6,'0');
-    codigoReservadoTexto = d.codigoInterno;
-    codigoReservadoSeq = seq;
-  }
+
+  openModal(`
+    <div class="section-label">${editando ? 'Editar produto' : 'Novo produto'}</div>
+    <div style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;" id="peModalTabs">
+      ${PE_TABS.map(t=>`<button type="button" class="btn btn-ghost btn-sm" data-petab="${t.id}">${t.label}</button>`).join('')}
+    </div>
+    <div id="peModalBody"></div>
+    <div id="pe_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
+    <div style="display:flex; gap:10px; margin-top:18px;">
+      <button class="btn btn-accent" id="btnSalvarProdutoEstoque">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarProdutoEstoque">Cancelar</button>
+    </div>
+  `);
+  mountFotosProduto(document.getElementById('pe_fotosWrap'), fotosHolder, idAtual);
 
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
@@ -2701,6 +3003,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       b.classList.toggle('btn-ghost', b.dataset.petab!==peTabAtiva);
     });
   }
+  document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
+    b.addEventListener('click', ()=>{ peTabAtiva = b.dataset.petab; renderPeTabBody(); renderPeTabs(); });
+  });
 
   function renderPeTabBody(){
     const body = document.getElementById('peModalBody');
@@ -2708,175 +3013,39 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       body.innerHTML = `
         <div class="field"><label>Nome</label><input id="pe_nome" placeholder="Ex: Ouro 18k, Anel Solitário..." value="${escapeHtml(d.nome)}"></div>
         <div class="grid-2">
-          <div class="field"><label>Código interno / referência</label>
-            <div style="display:flex; gap:6px;">
-              <input id="pe_codigoInterno" value="${escapeHtml(d.codigoInterno)}" style="flex:1;">
-              <button type="button" class="btn btn-ghost btn-sm" id="btnGerarCodigoInterno" title="Gerar código sequencial automático">Gerar</button>
-            </div>
-            <p class="muted" style="margin:4px 0 0; font-size:12px;">Só é reservado de verdade quando o produto é salvo — se gerar e não cadastrar, o número volta a ficar livre.</p>
-          </div>
+          <div class="field"><label>Código interno / referência</label><input id="pe_codigoInterno" value="${escapeHtml(d.codigoInterno)}"></div>
           <div class="field"><label>Unidade</label>
-            <div style="display:flex; gap:6px;">
-              <select id="pe_unidade" style="flex:1;"><option value="" ${d.unidade===''?'selected':''}>Selecione</option>${config.unidadesProduto.map(u=>`<option value="${escapeHtml(u)}" ${d.unidade===u?'selected':''}>${escapeHtml(u)}</option>`).join('')}</select>
-              <button type="button" class="icon-btn" id="btnEditarUnidade" title="Cadastrar/editar unidades">✎</button>
-            </div>
-          </div>
-        </div>
-        <div class="field"><label>Disponibilidade</label>
-          <select id="pe_tipo"><option value="" ${d.tipo===''?'selected':''}>Selecione</option>${TIPOS_PRODUTO.map(t=>`<option value="${t.id}" ${d.tipo===t.id?'selected':''}>${t.label}</option>`).join('')}</select>
-        </div>
-        <div class="grid-2">
-          <div class="field"><label>Categoria</label>
-            <div style="display:flex; gap:6px;">
-              <select id="pe_categoriaId" style="flex:1;"><option value="">Selecione</option>${(config.produtosOtica.categorias||[]).map(c=>`<option value="${c.id}" ${d.categoriaId===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}</select>
-              <button type="button" class="icon-btn" id="btnEditarCategoria" title="Cadastrar/editar categorias">✎</button>
-            </div>
-          </div>
-          <div class="field"><label>Subcategoria</label>
-            <div style="display:flex; gap:6px;">
-              <select id="pe_subcategoriaId" style="flex:1;"><option value="">Selecione</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
-              <button type="button" class="icon-btn" id="btnEditarSubcategoria" title="Cadastrar/editar subcategorias">✎</button>
-            </div>
+            <select id="pe_unidade">
+              <option value="un" ${d.unidade==='un'?'selected':''}>Unidade</option>
+              <option value="g" ${d.unidade==='g'?'selected':''}>Gramas (g)</option>
+              <option value="kg" ${d.unidade==='kg'?'selected':''}>Quilos (kg)</option>
+            </select>
           </div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Fornecedor</label>
-            <select id="pe_fornecedor"><option value="">Selecione</option>${config.fornecedores.map(f=>`<option value="${escapeHtml(f.empresa)}" ${d.fornecedor===f.empresa?'selected':''}>${escapeHtml(f.empresa)}</option>`).join('')}</select>
-            ${config.fornecedores.length===0?`<p class="muted" style="margin:4px 0 0;font-size:12px;">Nenhum cadastrado ainda — cadastre em Cadastro → Fornecedor.</p>`:''}
+          <div class="field"><label>Nome popular <span class="muted">opcional</span></label><input id="pe_nomePopular" value="${escapeHtml(d.nomePopular)}"></div>
+          <div class="field"><label>Nome técnico <span class="muted">opcional</span></label><input id="pe_nomeTecnico" value="${escapeHtml(d.nomeTecnico)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Categoria <span class="muted">opcional</span></label>
+            <select id="pe_categoriaId"><option value="">—</option>${(config.produtosOtica.categorias||[]).map(c=>`<option value="${c.id}" ${d.categoriaId===c.id?'selected':''}>${escapeHtml(c.nome)}</option>`).join('')}</select>
           </div>
-          <div class="field"><label>Fator</label>
-            <input type="text" inputmode="decimal" id="pe_fator" placeholder="0.00" value="${d.fator!=null?d.fator:''}">
+          <div class="field"><label>Subcategoria <span class="muted">opcional</span></label>
+            <select id="pe_subcategoriaId"><option value="">—</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
           </div>
         </div>
-        <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:14px 0 0;">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:2px 0 0;">
           <input type="checkbox" id="pe_vendavel" ${d.vendavel?'checked':''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
         </label>
       `;
       document.getElementById('pe_nome').addEventListener('input', e=> d.nome=e.target.value);
-      document.getElementById('pe_codigoInterno').addEventListener('input', e=>{ d.codigoInterno=e.target.value; if(e.target.value!==codigoReservadoTexto) codigoReservadoTexto=null; });
-      document.getElementById('btnGerarCodigoInterno').addEventListener('click', ()=>{
-        const seq = config.produtosOtica.proximoCodigo || 1;
-        const codigo = 'PRD' + String(seq).padStart(6,'0');
-        d.codigoInterno = codigo;
-        codigoReservadoTexto = codigo;
-        codigoReservadoSeq = seq;
-        document.getElementById('pe_codigoInterno').value = codigo;
-        showToast('Código gerado (só é reservado de vez ao salvar o produto).');
-      });
+      document.getElementById('pe_codigoInterno').addEventListener('input', e=> d.codigoInterno=e.target.value);
       document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
-      document.getElementById('btnEditarUnidade').addEventListener('click', ()=> abrirGerenciarListaStrings('Unidades', config.unidadesProduto, ()=> montarShellModalProduto()));
-      document.getElementById('pe_tipo').addEventListener('change', e=> d.tipo=e.target.value);
+      document.getElementById('pe_nomePopular').addEventListener('input', e=> d.nomePopular=e.target.value);
+      document.getElementById('pe_nomeTecnico').addEventListener('input', e=> d.nomeTecnico=e.target.value);
       document.getElementById('pe_categoriaId').addEventListener('change', e=> d.categoriaId=e.target.value);
       document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
-      document.getElementById('pe_fornecedor').addEventListener('change', e=>{
-        d.fornecedor = e.target.value;
-        const forn = config.fornecedores.find(f=>f.empresa===d.fornecedor);
-        if(forn && forn.fator!=null){
-          d.fator = forn.fator;
-          const campoFator = document.getElementById('pe_fator');
-          if(campoFator) campoFator.value = forn.fator;
-        }
-      });
-      aplicarAutoPontoDecimal(document.getElementById('pe_fator'));
-      document.getElementById('pe_fator').addEventListener('input', e=> d.fator = e.target.value===''?null:parseFloat(e.target.value));
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
-      document.getElementById('btnEditarCategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Categorias', config.produtosOtica.categorias, 'cat', ()=> montarShellModalProduto()));
-      document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> montarShellModalProduto()));
-    }
-    else if(peTabAtiva==='dadosTecnicos'){
-      body.innerHTML = `
-        <div class="grid-3">
-          <div class="field"><label>Comprimento (cm)</label><input type="text" inputmode="decimal" id="pe_comprimento" placeholder="0.00" value="${d.comprimento!==null?d.comprimento:''}"></div>
-          <div class="field"><label>Altura (cm)</label><input type="text" inputmode="decimal" id="pe_altura" placeholder="0.00" value="${d.altura!==null?d.altura:''}"></div>
-          <div class="field"><label>Espessura (cm)</label><input type="text" inputmode="decimal" id="pe_espessura" placeholder="0.00" value="${d.espessura!==null?d.espessura:''}"></div>
-        </div>
-        <div class="field" style="max-width:220px;"><label>Peso (g)</label><input type="text" inputmode="decimal" id="pe_peso" placeholder="0.000" value="${d.peso!==null?d.peso:''}"></div>
-
-        <div class="section-label" style="margin-top:10px; border:none; padding:0;">Número do aro</div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-          <div class="field" style="flex:0 1 160px; min-width:120px; margin-bottom:0;"><input type="text" inputmode="decimal" id="pe_numeroAroNovo" placeholder="Ex: 18"></div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnAddNumeroAro">+ Adicionar</button>
-        </div>
-        <div id="pe_numerosAroRows" style="margin-top:8px;"></div>
-
-        <div class="section-label" style="margin-top:14px; border:none; padding:0;">Tipo de pedra</div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-          <div class="field" style="flex:1; min-width:110px; margin-bottom:0;">
-            <label style="font-size:11px;">Tipo</label>
-            <select id="pe_pedraSel">${config.tiposPedra.length===0?`<option value="">Nenhuma cadastrada</option>`:`<option value="">Selecione</option>`+config.tiposPedra.map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
-          </div>
-          <button type="button" class="icon-btn" id="btnEditarPedra" title="Cadastrar/editar tipos de pedra">✎</button>
-          <div class="field" style="flex:1; min-width:110px; margin-bottom:0;">
-            <label style="font-size:11px;">Cor</label>
-            <select id="pe_pedraCorSel">${config.coresPedra.length===0?`<option value="">Nenhuma cadastrada</option>`:`<option value="">Selecione</option>`+config.coresPedra.map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
-          </div>
-          <button type="button" class="icon-btn" id="btnEditarCorPedra" title="Cadastrar/editar cores de pedra">✎</button>
-          <div class="field" style="flex:0 1 80px; min-width:70px; margin-bottom:0;">
-            <label style="font-size:11px;">Qtd.</label>
-            <input type="number" min="1" id="pe_pedraQtd" value="1">
-          </div>
-        </div>
-        <div class="field" style="margin-top:6px;">
-          <label style="font-size:11px;">Obs</label>
-          <input id="pe_pedraObs" placeholder="Observação sobre a pedra">
-        </div>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnAddPedra" style="margin-top:6px;">+ Adicionar pedra</button>
-        <div id="pe_pedrasRows" style="margin-top:8px;"></div>
-
-        <div class="field" style="margin-top:14px;"><label>Observação</label>
-          <textarea id="pe_observacao" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(d.observacao||'')}</textarea>
-        </div>
-      `;
-      aplicarAutoPontoDecimal(document.getElementById('pe_comprimento'));
-      aplicarAutoPontoDecimal(document.getElementById('pe_altura'));
-      aplicarAutoPontoDecimal(document.getElementById('pe_espessura'));
-      aplicarAutoPontoDecimal(document.getElementById('pe_peso'));
-      aplicarAutoPontoDecimal(document.getElementById('pe_numeroAroNovo'));
-      document.getElementById('pe_comprimento').addEventListener('input', e=> d.comprimento=e.target.value);
-      document.getElementById('pe_altura').addEventListener('input', e=> d.altura=e.target.value);
-      document.getElementById('pe_espessura').addEventListener('input', e=> d.espessura=e.target.value);
-      document.getElementById('pe_peso').addEventListener('input', e=> d.peso=e.target.value);
-      document.getElementById('pe_observacao').addEventListener('input', e=> d.observacao=e.target.value);
-
-      function renderNumerosAroRows(){
-        const wrap = document.getElementById('pe_numerosAroRows');
-        if(!wrap) return;
-        wrap.innerHTML = numerosAro.length===0 ? `<div class="empty" style="padding:8px 0;">Nenhum número de aro adicionado.</div>` : numerosAro.map((n,i)=>`
-          <div class="code-list-item"><div>${escapeHtml(n)}</div><button type="button" class="icon-btn" data-arodel="${i}">✕</button></div>
-        `).join('');
-        wrap.querySelectorAll('[data-arodel]').forEach(b=> b.addEventListener('click', ()=>{ numerosAro.splice(Number(b.dataset.arodel),1); renderNumerosAroRows(); }));
-      }
-      renderNumerosAroRows();
-      document.getElementById('btnAddNumeroAro').addEventListener('click', ()=>{
-        const campo = document.getElementById('pe_numeroAroNovo');
-        const v = campo.value.trim();
-        if(!v){ showToast('Digite um número de aro.'); return; }
-        numerosAro.push(v);
-        campo.value = '';
-        renderNumerosAroRows();
-      });
-
-      function renderPedrasRows(){
-        const wrap = document.getElementById('pe_pedrasRows');
-        if(!wrap) return;
-        wrap.innerHTML = pedras.length===0 ? `<div class="empty" style="padding:8px 0;">Nenhuma pedra adicionada.</div>` : pedras.map((p,i)=>`
-          <div class="code-list-item"><div>${escapeHtml(p.tipo)}${p.cor?' '+escapeHtml(p.cor):''} — <b>${p.quantidade}</b> un.${p.obs?` <span class="muted">— ${escapeHtml(p.obs)}</span>`:''}</div><button type="button" class="icon-btn" data-pedradel="${i}">✕</button></div>
-        `).join('');
-        wrap.querySelectorAll('[data-pedradel]').forEach(b=> b.addEventListener('click', ()=>{ pedras.splice(Number(b.dataset.pedradel),1); renderPedrasRows(); }));
-      }
-      renderPedrasRows();
-      document.getElementById('btnEditarPedra').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos de pedra', config.tiposPedra, ()=> montarShellModalProduto()));
-      document.getElementById('btnEditarCorPedra').addEventListener('click', ()=> abrirGerenciarListaStrings('Cores de pedra', config.coresPedra, ()=> montarShellModalProduto()));
-      document.getElementById('btnAddPedra').addEventListener('click', ()=>{
-        const sel = document.getElementById('pe_pedraSel').value;
-        const cor = document.getElementById('pe_pedraCorSel').value;
-        const qtd = Math.max(1, parseInt(document.getElementById('pe_pedraQtd').value)||1);
-        const obs = document.getElementById('pe_pedraObs').value.trim();
-        if(!sel){ showToast('Cadastre ao menos um tipo de pedra primeiro (✎).'); return; }
-        pedras.push({ tipo:sel, cor:cor||'', quantidade:qtd, obs });
-        document.getElementById('pe_pedraObs').value = '';
-        renderPedrasRows();
-      });
     }
     else if(peTabAtiva==='fiscal'){
       body.innerHTML = `
@@ -2885,28 +3054,17 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           <div class="field"><label>NCM</label><input id="pe_ncm" value="${escapeHtml(d.ncm)}"></div>
           <div class="field"><label>CFOP</label><input id="pe_cfop" value="${escapeHtml(d.cfop)}"></div>
         </div>
-        <div class="field"><label>CST/CSOSN</label><input id="pe_cstCsosn" value="${escapeHtml(d.cstCsosn)}"></div>
-        <div class="field"><label>GTIN/EAN</label>
-          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-            <input id="pe_gtin" value="${escapeHtml(d.gtin)}" style="flex:1; min-width:140px;">
-            <button type="button" class="btn btn-ghost btn-sm" id="btnGerarBarcode">Gerar código de barras</button>
-          </div>
-          <div id="pe_barcodeSvg" style="margin-top:8px;"></div>
+        <div class="grid-2">
+          <div class="field"><label>CST/CSOSN</label><input id="pe_cstCsosn" value="${escapeHtml(d.cstCsosn)}"></div>
+          <div class="field"><label>Origem da mercadoria</label><input id="pe_origemMercadoria" value="${escapeHtml(d.origemMercadoria)}"></div>
         </div>
+        <div class="field"><label>GTIN/EAN <span class="muted">opcional</span></label><input id="pe_gtin" value="${escapeHtml(d.gtin)}"></div>
       `;
       document.getElementById('pe_ncm').addEventListener('input', e=> d.ncm=e.target.value);
       document.getElementById('pe_cfop').addEventListener('input', e=> d.cfop=e.target.value);
       document.getElementById('pe_cstCsosn').addEventListener('input', e=> d.cstCsosn=e.target.value);
-      document.getElementById('pe_gtin').addEventListener('input', e=>{ d.gtin=e.target.value; desenharBarcodeProduto(d.gtin); });
-      document.getElementById('btnGerarBarcode').addEventListener('click', ()=>{
-        let base = (d.codigoInterno||'').replace(/\D/g,'');
-        if(!base) base = String(Date.now()).slice(-8);
-        base = base.padStart(8,'0').slice(-12);
-        d.gtin = base;
-        document.getElementById('pe_gtin').value = base;
-        desenharBarcodeProduto(base);
-      });
-      desenharBarcodeProduto(d.gtin);
+      document.getElementById('pe_origemMercadoria').addEventListener('input', e=> d.origemMercadoria=e.target.value);
+      document.getElementById('pe_gtin').addEventListener('input', e=> d.gtin=e.target.value);
     }
     else if(peTabAtiva==='composicao'){
       body.innerHTML = `
@@ -2917,7 +3075,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       renderComposicaoRows();
       document.getElementById('btnAddComponente').addEventListener('click', ()=>{
         if(outrosDisponiveis.length===0){ showToast('Não há outros produtos/insumos cadastrados ainda.'); return; }
-        composicao.push({ insumoId: '', quantidade: '' });
+        composicao.push({ insumoId: outrosDisponiveis[0].id, quantidade: '' });
         renderComposicaoRows();
       });
     }
@@ -2938,11 +3096,11 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           <div class="muted" id="pe_estoqueTotalHint" style="margin-top:2px;">Total: <b>${totalEstoque} ${unidadeLabel(d.unidade)}</b></div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Valor de compra na data (R$) <span class="muted">manual</span></label><input type="text" inputmode="decimal" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
-          <div class="field"><label>Valor de compra atualizado (R$) <span class="muted" id="pe_valorAtualizadoRegra"></span></label><input type="text" id="pe_valorCompraAtualizado" disabled></div>
+          <div class="field"><label>Custo unitário (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
+          <div class="field"><label>Preço de venda (R$) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Preço de venda (R$)</label><input type="text" inputmode="decimal" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
+          <div class="field"><label>Fator/comissão (%) <span class="muted">opcional</span></label><input type="number" step="0.01" min="0" id="pe_fatorPercentual" value="${d.fatorPercentual!==null?d.fatorPercentual:''}"></div>
         </div>
       `;
       body.querySelectorAll('[data-estloja]').forEach(inp=>{
@@ -2953,39 +3111,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           if(hint) hint.innerHTML = `Total: <b>${total} ${unidadeLabel(d.unidade)}</b>`;
         });
       });
-      /** Valor de compra atualizado: se a subcategoria escolhida (aba Nome) tem "ouro" no
-       * nome, usa (peso × Fator) × Valor do ouro DTVM (Cadastro → Fator → Compra Metal);
-       * se tem "prata", usa (peso × Fator) × Valor da prata DTVM; qualquer outra
-       * subcategoria (ou nenhuma), só repete o Valor de compra na data. */
-      function recalcularValorAtualizado(){
-        garantirConfigFator();
-        const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
-        const nomeSub = (sub?sub.nome:'').toLowerCase();
-        const peso = (d.peso!=null && d.peso!=='') ? parseFloat(d.peso) : null;
-        const fator = (d.fator!=null && d.fator!=='') ? parseFloat(d.fator) : null;
-        const custoData = (d.custo!=null && d.custo!=='') ? parseFloat(d.custo) : null;
-        const cm = config.fator.compraMetal || {};
-        const campoRegra = document.getElementById('pe_valorAtualizadoRegra');
-        const campoValor = document.getElementById('pe_valorCompraAtualizado');
-        let resultado = null, regra = '';
-        if(nomeSub.includes('ouro')){
-          regra = '(peso × Fator) × Valor do ouro DTVM';
-          if(peso!=null && fator!=null && cm.ouroDtvm!=null) resultado = (peso * fator) * cm.ouroDtvm;
-        } else if(nomeSub.includes('prata')){
-          regra = '(peso × Fator) × Valor da prata DTVM';
-          if(peso!=null && fator!=null && cm.prataDtvm!=null) resultado = (peso * fator) * cm.prataDtvm;
-        } else {
-          regra = 'repete o valor de compra na data';
-          resultado = custoData;
-        }
-        if(campoRegra) campoRegra.textContent = '(' + regra + ')';
-        if(campoValor) campoValor.value = resultado!=null ? resultado.toFixed(2) : '—';
-      }
-      recalcularValorAtualizado();
-      aplicarAutoPontoDecimal(document.getElementById('pe_custo'));
-      aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
-      document.getElementById('pe_custo').addEventListener('input', e=>{ d.custo=e.target.value; recalcularValorAtualizado(); });
+      document.getElementById('pe_custo').addEventListener('input', e=> d.custo=e.target.value);
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
+      document.getElementById('pe_fatorPercentual').addEventListener('input', e=> d.fatorPercentual=e.target.value);
     }
     else if(peTabAtiva==='historico'){
       if(!editando){
@@ -3027,7 +3155,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     }
     wrap.innerHTML = composicao.map((c,i)=>`
       <div class="grid-3" style="margin-bottom:6px; align-items:center;">
-        <select data-comp-insumo="${i}"><option value="">Selecione</option>${outrosDisponiveis.map(p=>`<option value="${p.id}" ${c.insumoId===p.id?'selected':''}>${escapeHtml(p.nome)}</option>`).join('')}</select>
+        <select data-comp-insumo="${i}">${outrosDisponiveis.map(p=>`<option value="${p.id}" ${c.insumoId===p.id?'selected':''}>${escapeHtml(p.nome)}</option>`).join('')}</select>
         <input type="number" step="0.001" min="0" data-comp-qtd="${i}" placeholder="Quantidade" value="${c.quantidade!==undefined?c.quantidade:''}">
         <button type="button" class="icon-btn" data-comp-del="${i}" title="Remover">✕</button>
       </div>
@@ -3043,9 +3171,12 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     });
   }
 
-  async function handleSalvarProdutoEstoque(){
+  renderPeTabBody(); renderPeTabs();
+
+  document.getElementById('btnCancelarProdutoEstoque').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarProdutoEstoque').addEventListener('click', async ()=>{
     const nome = (d.nome||'').trim();
-    if(!nome){ showToast('Informe o nome do produto (aba Nome).'); peTabAtiva='nomenclatura'; renderPeTabBody(); renderPeTabs(); return; }
+    if(!nome){ showToast('Informe o nome do produto (aba Nomenclatura).'); peTabAtiva='nomenclatura'; renderPeTabBody(); renderPeTabs(); return; }
     const composicaoValida = composicao.filter(c=> c.insumoId && c.quantidade && Number(c.quantidade) > 0)
       .map(c=> ({ insumoId: c.insumoId, quantidade: Number(c.quantidade) }));
     const dados = {
@@ -3053,35 +3184,23 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       nome,
       unidade: d.unidade,
       codigoInterno: (d.codigoInterno||'').trim(),
+      nomePopular: (d.nomePopular||'').trim(),
+      nomeTecnico: (d.nomeTecnico||'').trim(),
       categoriaId: d.categoriaId||'',
       subcategoriaId: d.subcategoriaId||'',
-      tipo: d.tipo||'estoque',
-      comprimento: d.comprimento===null || d.comprimento==='' ? null : parseFloat(d.comprimento),
-      altura: d.altura===null || d.altura==='' ? null : parseFloat(d.altura),
-      espessura: d.espessura===null || d.espessura==='' ? null : parseFloat(d.espessura),
-      numerosAro: numerosAro,
-      peso: d.peso===null || d.peso==='' ? null : parseFloat(d.peso),
-      pedras: pedras,
-      observacao: (d.observacao||'').trim(),
       vendavel: d.vendavel,
       ncm: (d.ncm||'').trim(),
       cfop: (d.cfop||'').trim(),
       cstCsosn: (d.cstCsosn||'').trim(),
-      fornecedor: (d.fornecedor||'').trim(),
-      fator: d.fator===null || d.fator==='' ? null : parseFloat(d.fator),
+      origemMercadoria: (d.origemMercadoria||'').trim(),
       gtin: (d.gtin||'').trim(),
       estoquePorLoja: Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0])),
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
       precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
+      fatorPercentual: d.fatorPercentual===null || d.fatorPercentual==='' ? null : parseFloat(d.fatorPercentual),
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
     };
-    // Se o código interno salvo é o mesmo que foi gerado automaticamente, agora sim
-    // consome o número da sequência (evita "furos" quando alguém gera e desiste).
-    if(codigoReservadoTexto && dados.codigoInterno === codigoReservadoTexto && codigoReservadoSeq === (config.produtosOtica.proximoCodigo||1)){
-      config.produtosOtica.proximoCodigo = codigoReservadoSeq + 1;
-      await configSave();
-    }
     const ok = await produtoEstoqueSalvar(dados);
     if(ok){
       const idx = produtosEstoque.findIndex(p=>p.id===dados.id);
@@ -3090,434 +3209,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       renderProdutoUnificadoTab(document.getElementById('cfgBody'));
       showToast(editando ? 'Produto atualizado.' : 'Produto cadastrado.');
     }
-  }
-
-  /** Monta (ou remonta) o modal inteiro. Precisa ser uma função porque os cadastros
-   * rápidos (categoria, tipo de produto, medida, pedra, unidade, fornecedor...) abrem
-   * por cima usando o MESMO modal — o que apaga o HTML deste aqui. Sem remontar tudo de
-   * novo ao fechar aquele cadastro rápido, o modal ficava com #peModalBody inexistente
-   * e quebrava ("Cannot set properties of null"). d/medidas/pedras/etc continuam vivos
-   * na memória (closures), então nada do que já foi preenchido se perde ao remontar. */
-  function montarShellModalProduto(){
-    openModal(`
-      <div class="section-label">${editando ? 'Editar produto' : 'Novo produto'}</div>
-      <div style="display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;" id="peModalTabs">
-        ${PE_TABS.map(t=>`<button type="button" class="btn btn-ghost btn-sm" data-petab="${t.id}">${t.label}</button>`).join('')}
-      </div>
-      <div id="peModalBody"></div>
-      <div id="pe_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
-      <div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">
-        <button class="btn btn-accent" id="btnSalvarProdutoEstoque">Salvar</button>
-        ${editando ? `<button class="btn btn-ghost" id="btnClonarProdutoEstoque" title="Cria uma cópia deste produto, com código interno novo, pra você editar e salvar como outro item">⧉ Clonar</button>` : ''}
-        <button class="btn btn-ghost" id="btnCancelarProdutoEstoque">Cancelar</button>
-      </div>
-    `);
-    mountFotosProduto(document.getElementById('pe_fotosWrap'), fotosHolder, idAtual);
-    document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
-      b.addEventListener('click', ()=>{ peTabAtiva = b.dataset.petab; renderPeTabBody(); renderPeTabs(); });
-    });
-    document.getElementById('btnCancelarProdutoEstoque').addEventListener('click', closeModal);
-    document.getElementById('btnSalvarProdutoEstoque').addEventListener('click', handleSalvarProdutoEstoque);
-    if(editando){
-      document.getElementById('btnClonarProdutoEstoque').addEventListener('click', ()=>{
-        const clone = {
-          nome: d.nome, unidade: d.unidade, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
-          tipo: d.tipo, comprimento: d.comprimento, altura: d.altura, espessura: d.espessura,
-          peso: d.peso, vendavel: d.vendavel, observacao: d.observacao,
-          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, gtin: d.gtin,
-          estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
-          numerosAro: JSON.parse(JSON.stringify(numerosAro)),
-          pedras: JSON.parse(JSON.stringify(pedras)),
-          composicao: JSON.parse(JSON.stringify(composicao)),
-          fotos: JSON.parse(JSON.stringify(fotosHolder.fotos)),
-          // codigoInterno propositalmente NÃO vai — o clone gera o próprio (próximo da sequência)
-        };
-        closeModal();
-        abrirProdutoEstoqueModal(null, clone);
-        showToast('Produto clonado — revise e salve pra criar o novo item.');
-      });
-    }
-    renderPeTabBody();
-    renderPeTabs();
-  }
-  montarShellModalProduto();
-}
-
-/* ============================================================
-   FATOR — cotação do dia do ouro, prata e dólar (buscadas automaticamente de
-   fontes públicas, nenhuma editável manualmente — só "atualizar agora"), mais
-   os campos de Compra Metal e Venda, esses sim preenchidos à mão.
-   ============================================================ */
-function garantirConfigFator(){
-  if(!config.fator || typeof config.fator !== 'object'){
-    config.fator = { ouro:null, dolar:null, prata:null, compraMetal:{}, venda:{} };
-  }
-  if(!config.fator.ouro) config.fator.ouro = null;
-  if(!config.fator.dolar) config.fator.dolar = null;
-  if(!config.fator.prata) config.fator.prata = null;
-  if(!config.fator.compraMetal || typeof config.fator.compraMetal !== 'object') config.fator.compraMetal = {};
-  if(!config.fator.venda || typeof config.fator.venda !== 'object') config.fator.venda = {};
-}
-function hojeSaoPaulo(){
-  // Data de hoje no fuso de São Paulo, formato YYYY-MM-DD (evita cair no dia errado por fuso).
-  return new Date().toLocaleDateString('en-CA', { timeZone:'America/Sao_Paulo' });
-}
-const COTACOES_MERCADO_URL = SUPABASE_URL + "/functions/v1/cotacoes-mercado";
-/** Busca uma cotação (ouro/prata/dólar) através da Edge Function cotacoes-mercado — ela
- * busca as fontes externas pelo servidor (evita depender de CORS liberado pelo navegador,
- * que foi o motivo do ouro/prata não aparecerem quando a busca era feita direto daqui). */
-async function buscarCotacaoMercado(ativo){
-  const res = await fetch(COTACOES_MERCADO_URL + '?ativo=' + ativo, {
-    headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY },
   });
-  if(!res.ok) throw new Error('Servidor de cotações respondeu ' + res.status);
-  const data = await res.json();
-  const item = data[ativo];
-  if(!item || item.erro || item.valor==null) throw new Error((item&&item.erro) || 'Resposta inválida do servidor de cotações');
-  return item.valor;
-}
-/** Preço do ouro do dia em R$/grama (conversão do spot internacional XAU/BRL — não é o
- * pregão específico da B3, que não tem API pública gratuita; é a referência de mercado
- * internacional convertida pra reais). */
-async function buscarCotacaoOuroDia(){ return buscarCotacaoMercado('ouro'); }
-/** Preço da prata do dia em R$/grama — mesma fonte e mesma regra do ouro. */
-async function buscarCotacaoPrataDia(){ return buscarCotacaoMercado('prata'); }
-/** Dólar comercial (venda) do dia via API oficial do Banco Central do Brasil
- * (SGS, série 1 — Taxa de câmbio livre, dólar americano, venda, diária). */
-async function buscarCotacaoDolarDia(){ return buscarCotacaoMercado('dolar'); }
-const CAMPOS_COMPRA_METAL = [
-  { id:'ouroDtvm', label:'Valor do ouro DTVM' },
-  { id:'ouroGarimpo', label:'Valor do ouro garimpo' },
-  { id:'ouroBalcao', label:'Valor do ouro balcão' },
-  { id:'prataDtvm', label:'Valor prata DTVM' },
-];
-const CAMPOS_VENDA_FATOR = [
-  { id:'joiaRepresentanteOuro', label:'Joia representante ouro' },
-  { id:'joiaRepresentantePrata', label:'Joia representante prata' },
-  { id:'aliancaPrata', label:'Aliança prata' },
-  { id:'aliancaOuro', label:'Aliança ouro' },
-  { id:'joiaVilacaOuro', label:'Joia Vilaça ouro' },
-  { id:'joiaVilacaPrata', label:'Joias Vilaça prata' },
-];
-async function renderFatorTab(main){
-  garantirConfigFator();
-  main.innerHTML = `
-    <div class="card">
-      <div class="section-label">Fator do dia</div>
-      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Cotação do dia buscada automaticamente — ninguém digita esse valor, nem a diretoria. Atualiza sozinha uma vez por dia; use "Atualizar agora" se quiser forçar uma nova busca.</p>
-      <div class="grid-3" id="fatorCards"></div>
-    </div>
-    <div class="card">
-      <div class="section-label">Compra Metal</div>
-      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Preenchido manualmente. Use ponto pra casas decimais (ex: 285.50), nunca vírgula.</p>
-      <div class="grid-2" id="compraMetalFields"></div>
-      <button class="btn btn-accent btn-sm" id="btnSalvarCompraMetal" style="margin-top:14px;">Salvar Compra Metal</button>
-    </div>
-    <div class="card">
-      <div class="section-label">Venda</div>
-      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Preenchido manualmente. Use ponto pra casas decimais (ex: 12.5), nunca vírgula.</p>
-      <div id="vendaFields"></div>
-      <button class="btn btn-accent btn-sm" id="btnSalvarVenda" style="margin-top:14px;">Salvar Venda</button>
-    </div>
-  `;
-  const cardsWrap = document.getElementById('fatorCards');
-
-  function fmtBRL(v){ return v==null ? '—' : 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
-  function fmtCarimbo(iso){
-    if(!iso) return '';
-    const d = new Date(iso);
-    return d.toLocaleString('pt-BR', { timeZone:'America/Sao_Paulo', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
-  }
-
-  function cardAutoHtml(chave, icone, titulo, fonte, dadoAtual){
-    return `
-      <div class="card" style="background:var(--surface-2);">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-          <div>
-            <div class="muted" style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">${icone} ${titulo}</div>
-            <div style="font-size:26px;font-weight:800;color:var(--gold-ink);margin-top:4px;">${fmtBRL(dadoAtual?dadoAtual.valor:null)}</div>
-            <div class="muted" style="font-size:11px;margin-top:4px;">${dadoAtual?('Atualizado em '+fmtCarimbo(dadoAtual.atualizadoEm)):'Ainda não buscado'}</div>
-            <div class="muted" style="font-size:11px;">Fonte: ${fonte}</div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" data-atualizarfator="${chave}">↻ Atualizar</button>
-        </div>
-      </div>
-    `;
-  }
-
-  function renderCards(){
-    cardsWrap.innerHTML =
-      cardAutoHtml('ouro', '🥇', 'Ouro do dia (R$/grama)', 'cotação internacional do ouro (XAU/USD) convertida pra reais — goldprice.dev', config.fator.ouro) +
-      cardAutoHtml('prata', '🥈', 'Prata do dia (R$/grama)', 'cotação internacional da prata (XAG/USD) convertida pra reais — goldprice.dev', config.fator.prata) +
-      cardAutoHtml('dolar', '💵', 'Dólar do dia', 'Banco Central do Brasil (câmbio comercial, venda)', config.fator.dolar);
-    cardsWrap.querySelectorAll('[data-atualizarfator]').forEach(b=>{
-      b.addEventListener('click', ()=> atualizar(b.dataset.atualizarfator, true));
-    });
-  }
-
-  async function atualizar(qual, forcado){
-    const btn = cardsWrap.querySelector(`[data-atualizarfator="${qual}"]`);
-    if(btn){ btn.disabled = true; btn.textContent = 'Buscando...'; }
-    try{
-      const valor = qual==='ouro' ? await buscarCotacaoOuroDia() : qual==='prata' ? await buscarCotacaoPrataDia() : await buscarCotacaoDolarDia();
-      config.fator[qual] = { valor, dataCotacao: hojeSaoPaulo(), atualizadoEm: new Date().toISOString() };
-      await configSave();
-      renderCards();
-      if(forcado) showToast({ouro:'Ouro', prata:'Prata', dolar:'Dólar'}[qual] + ' atualizado.');
-    }catch(e){
-      console.error('erro ao buscar cotação de '+qual, e);
-      renderCards();
-      showToast('Não foi possível buscar a cotação agora' + (config.fator[qual]?' — mantendo o último valor salvo.':'.'));
-    }
-  }
-
-  renderCards();
-  // Busca automática: se a cotação salva não é de hoje (fuso de SP), busca sozinho ao abrir a aba.
-  const hoje = hojeSaoPaulo();
-  if(!config.fator.ouro || config.fator.ouro.dataCotacao !== hoje) atualizar('ouro', false);
-  if(!config.fator.prata || config.fator.prata.dataCotacao !== hoje) atualizar('prata', false);
-  if(!config.fator.dolar || config.fator.dolar.dataCotacao !== hoje) atualizar('dolar', false);
-
-  // ---- Compra Metal (manual) ----
-  const compraWrap = document.getElementById('compraMetalFields');
-  compraWrap.innerHTML = CAMPOS_COMPRA_METAL.map(c=>`
-    <div class="field"><label>${c.label}</label><input type="number" step="0.01" id="cm_${c.id}" placeholder="0.00" value="${config.fator.compraMetal[c.id]!=null?config.fator.compraMetal[c.id]:''}"></div>
-  `).join('');
-  document.getElementById('btnSalvarCompraMetal').addEventListener('click', async ()=>{
-    CAMPOS_COMPRA_METAL.forEach(c=>{
-      const v = document.getElementById('cm_'+c.id).value;
-      config.fator.compraMetal[c.id] = v===''?null:parseFloat(v);
-    });
-    const ok = await configSave();
-    if(ok) showToast('Compra Metal salva.');
-  });
-
-  // ---- Venda (manual) — cada campo agora tem Valor, Desconto (%) e Valor c/ desconto (calculado) ----
-  const vendaWrap = document.getElementById('vendaFields');
-  function calcComDesconto(valor, desconto){
-    if(valor==null || isNaN(valor)) return null;
-    const d = (desconto==null || isNaN(desconto)) ? 0 : desconto;
-    return valor * (1 - d/100);
-  }
-  vendaWrap.innerHTML = CAMPOS_VENDA_FATOR.map(c=>{
-    const valorAtual = config.fator.venda[c.id];
-    const descontoAtual = config.fator.venda[c.id+'Desconto'];
-    return `
-    <div style="border-bottom:1px solid var(--line); padding:10px 0;">
-      <div class="muted" style="font-size:12px; font-weight:700; margin-bottom:6px;">${c.label}</div>
-      <div class="grid-3">
-        <div class="field" style="margin-bottom:0;"><label>Valor</label><input type="number" step="0.01" id="vd_${c.id}" placeholder="0.00" value="${valorAtual!=null?valorAtual:''}"></div>
-        <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
-        <div class="field" style="margin-bottom:0;"><label>Valor com desconto</label><input type="text" id="vdc_${c.id}" disabled value="${calcComDesconto(valorAtual, descontoAtual)!=null?calcComDesconto(valorAtual, descontoAtual).toFixed(2):''}"></div>
-      </div>
-    </div>
-  `;}).join('');
-  function religarCalculoVenda(){
-    CAMPOS_VENDA_FATOR.forEach(c=>{
-      const inpValor = document.getElementById('vd_'+c.id);
-      const inpDesc = document.getElementById('vdd_'+c.id);
-      const inpCalc = document.getElementById('vdc_'+c.id);
-      function recalcular(){
-        const valor = inpValor.value===''?null:parseFloat(inpValor.value);
-        const desconto = inpDesc.value===''?null:parseFloat(inpDesc.value);
-        const resultado = calcComDesconto(valor, desconto);
-        inpCalc.value = resultado!=null ? resultado.toFixed(2) : '';
-      }
-      inpValor.addEventListener('input', recalcular);
-      inpDesc.addEventListener('input', recalcular);
-    });
-  }
-  religarCalculoVenda();
-  document.getElementById('btnSalvarVenda').addEventListener('click', async ()=>{
-    CAMPOS_VENDA_FATOR.forEach(c=>{
-      const v = document.getElementById('vd_'+c.id).value;
-      const d = document.getElementById('vdd_'+c.id).value;
-      config.fator.venda[c.id] = v===''?null:parseFloat(v);
-      config.fator.venda[c.id+'Desconto'] = d===''?null:parseFloat(d);
-    });
-    const ok = await configSave();
-    if(ok) showToast('Venda salva.');
-  });
-}
-
-/* ============================================================
-   FORNECEDOR — cadastro completo de fornecedores (aba própria do Cadastro).
-   ============================================================ */
-function garantirConfigFornecedor(){
-  if(!Array.isArray(config.fornecedores)) config.fornecedores = [];
-  // Compatibilidade: converte fornecedores no formato antigo (texto simples, ou endereço
-  // como campo único) pro formato completo em vez de quebrar a tela.
-  config.fornecedores = config.fornecedores.map(f=>{
-    if(typeof f === 'string') return { id: uid('forn'), codigo:'', empresa:f, endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', telefone:'', site:'', email:'', representanteLocal:'', telefoneRepresentante:'', subcategoriaId:'', fator:null, observacao:'' };
-    return {
-      numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', observacao:'',
-      ...f,
-    };
-  });
-  if(!config.proximoCodigoRepresentante) config.proximoCodigoRepresentante = 1;
-}
-async function renderFornecedorTab(main){
-  garantirConfigFornecedor();
-  main.innerHTML = `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-        <div>
-          <div class="section-label">Fornecedores</div>
-          <p class="muted" style="margin:2px 0 0;font-size:12px;">Empresa, contato, representante local e o tipo de mercadoria que cada um trabalha.</p>
-        </div>
-        <button class="btn btn-accent btn-sm" id="btnNovoFornecedor">+ Adicionar fornecedor</button>
-      </div>
-      <div id="fornecedorRows"></div>
-    </div>
-  `;
-  function subcategoriaNome(id){ const s = (config.produtosOtica.subcategorias||[]).find(x=>x.id===id); return s?s.nome:''; }
-  function renderRows(){
-    const wrap = document.getElementById('fornecedorRows');
-    const lista = config.fornecedores.slice().sort((a,b)=>(a.empresa||'').localeCompare(b.empresa||''));
-    if(lista.length===0){ wrap.innerHTML = `<div class="empty">Nenhum fornecedor cadastrado ainda.</div>`; return; }
-    wrap.innerHTML = lista.map(f=>`
-      <div class="code-list-item" style="flex-wrap:wrap;gap:8px;">
-        <div style="flex:1;min-width:220px;">
-          <b>${escapeHtml(f.empresa||'(sem nome)')}</b>
-          ${f.codigo?`<span class="muted" style="font-size:11px;"> · #${escapeHtml(f.codigo)}</span>`:''}
-          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
-            ${f.representanteLocal?`<span class="chip">Rep: ${escapeHtml(f.representanteLocal)}${f.telefoneRepresentante?' · '+escapeHtml(f.telefoneRepresentante):''}</span>`:''}
-            ${subcategoriaNome(f.subcategoriaId)?`<span class="chip">${escapeHtml(subcategoriaNome(f.subcategoriaId))}</span>`:''}
-            ${f.telefone?`<span class="chip">☎ ${escapeHtml(f.telefone)}</span>`:''}
-            ${f.email?`<span class="chip">${escapeHtml(f.email)}</span>`:''}
-            ${f.fator!=null?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Fator: ${f.fator}</span>`:''}
-          </div>
-        </div>
-        <div style="display:flex;gap:4px;align-items:center;">
-          <button class="icon-btn" data-fver="${f.id}" title="Ver">👁</button>
-          <button class="icon-btn" data-fedit="${f.id}" title="Editar">✎</button>
-          <button class="icon-btn" data-fdel="${f.id}" title="Remover">✕</button>
-        </div>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-fver]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fver), true)));
-    wrap.querySelectorAll('[data-fedit]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fedit))));
-    wrap.querySelectorAll('[data-fdel]').forEach(b=> b.addEventListener('click', async ()=>{
-      config.fornecedores = config.fornecedores.filter(x=>x.id!==b.dataset.fdel);
-      const ok = await configSave();
-      if(ok){ renderRows(); showToast('Fornecedor removido.'); }
-    }));
-  }
-  function abrirFornecedorModal(fornecedor, somenteVer){
-    const editando = !!fornecedor;
-    const d = {
-      empresa: fornecedor?fornecedor.empresa||'':'',
-      cep: fornecedor?fornecedor.cep||'':'',
-      endereco: fornecedor?fornecedor.endereco||'':'',
-      numero: fornecedor?fornecedor.numero||'':'',
-      complemento: fornecedor?fornecedor.complemento||'':'',
-      bairro: fornecedor?fornecedor.bairro||'':'',
-      cidade: fornecedor?fornecedor.cidade||'':'',
-      estado: fornecedor?fornecedor.estado||'':'',
-      telefone: fornecedor?fornecedor.telefone||'':'',
-      site: fornecedor?fornecedor.site||'':'',
-      email: fornecedor?fornecedor.email||'':'',
-      representanteLocal: fornecedor?fornecedor.representanteLocal||'':'',
-      telefoneRepresentante: fornecedor?fornecedor.telefoneRepresentante||'':'',
-      subcategoriaId: fornecedor?fornecedor.subcategoriaId||'':'',
-      fator: fornecedor&&fornecedor.fator!=null?fornecedor.fator:null,
-      observacao: fornecedor?fornecedor.observacao||'':'',
-    };
-    openModal(`
-      <div class="section-label">${somenteVer?'Ver fornecedor':editando?'Editar fornecedor':'Novo fornecedor'}</div>
-      ${editando&&fornecedor.codigo?`<p class="muted" style="margin:-4px 0 12px;">Código do representante: <b>${escapeHtml(fornecedor.codigo)}</b></p>`:`<p class="muted" style="margin:-4px 0 12px;">O código do representante é gerado automaticamente ao salvar.</p>`}
-      <div class="field"><label>Empresa</label><input id="fn_empresa" value="${escapeHtml(d.empresa)}"></div>
-      <div class="grid-3">
-        <div class="field"><label>CEP</label><input id="fn_cep" value="${escapeHtml(d.cep)}"></div>
-        <div class="field" style="grid-column:span 2;"><label>Endereço</label><input id="fn_endereco" value="${escapeHtml(d.endereco)}"></div>
-      </div>
-      <div class="grid-3">
-        <div class="field"><label>Número</label><input id="fn_numero" value="${escapeHtml(d.numero)}"></div>
-        <div class="field"><label>Complemento</label><input id="fn_complemento" value="${escapeHtml(d.complemento)}"></div>
-        <div class="field"><label>Bairro</label><input id="fn_bairro" value="${escapeHtml(d.bairro)}"></div>
-      </div>
-      <div class="grid-2">
-        <div class="field"><label>Cidade</label><input id="fn_cidade" value="${escapeHtml(d.cidade)}"></div>
-        <div class="field"><label>Estado</label><input id="fn_estado" maxlength="2" style="text-transform:uppercase" value="${escapeHtml(d.estado)}"></div>
-      </div>
-      <div class="grid-2">
-        <div class="field"><label>Telefone completo</label><input id="fn_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(d.telefone)}"></div>
-        <div class="field"><label>Site <span class="muted">opcional</span></label><input id="fn_site" value="${escapeHtml(d.site)}" placeholder="https://"></div>
-      </div>
-      <div class="field"><label>E-mail</label><input type="email" id="fn_email" value="${escapeHtml(d.email)}"></div>
-      <div class="grid-2">
-        <div class="field"><label>Representante local</label><input id="fn_representanteLocal" value="${escapeHtml(d.representanteLocal)}"></div>
-        <div class="field"><label>Telefone do representante</label><input id="fn_telefoneRepresentante" placeholder="(00) 00000-0000" value="${escapeHtml(d.telefoneRepresentante)}"></div>
-      </div>
-      <div class="grid-2">
-        <div class="field"><label>Tipo de mercadoria <span class="muted">opcional</span></label>
-          <select id="fn_subcategoriaId"><option value="">Selecione</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
-        </div>
-        <div class="field"><label>Fator</label><input type="number" step="0.01" id="fn_fator" placeholder="0.00" value="${d.fator!=null?d.fator:''}"></div>
-      </div>
-      <div class="field"><label>Observação</label><textarea id="fn_observacao" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(d.observacao)}</textarea></div>
-      <div style="display:flex; gap:10px; margin-top:14px;">
-        ${somenteVer?'':'<button class="btn btn-accent" id="btnSalvarFornecedor">Salvar</button>'}
-        <button class="btn btn-ghost" id="btnCancelarFornecedor">${somenteVer?'Fechar':'Cancelar'}</button>
-      </div>
-    `);
-    document.getElementById('btnCancelarFornecedor').addEventListener('click', closeModal);
-    aplicarMascaraTelefone(document.getElementById('fn_telefone'));
-    aplicarMascaraTelefone(document.getElementById('fn_telefoneRepresentante'));
-    if(somenteVer){
-      document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=> el.disabled = true);
-      return;
-    }
-    document.getElementById('fn_cep').addEventListener('blur', async ()=>{
-      const cep = document.getElementById('fn_cep').value.replace(/\D/g,'');
-      if(cep.length!==8) return;
-      try{
-        const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-        const data = await res.json();
-        if(!data.erro){
-          document.getElementById('fn_endereco').value = data.logradouro||'';
-          document.getElementById('fn_bairro').value = data.bairro||'';
-          document.getElementById('fn_cidade').value = data.localidade||'';
-          document.getElementById('fn_estado').value = data.uf||'';
-          showToast('CEP preenchido!');
-        }
-      }catch(e){}
-    });
-    document.getElementById('btnSalvarFornecedor').addEventListener('click', async ()=>{
-      const empresa = document.getElementById('fn_empresa').value.trim();
-      if(!empresa){ showToast('Informe o nome da empresa.'); return; }
-      const dados = {
-        id: fornecedor ? fornecedor.id : uid('forn'),
-        codigo: fornecedor ? fornecedor.codigo : ('REP' + String(config.proximoCodigoRepresentante).padStart(6,'0')),
-        empresa,
-        cep: document.getElementById('fn_cep').value.trim(),
-        endereco: document.getElementById('fn_endereco').value.trim(),
-        numero: document.getElementById('fn_numero').value.trim(),
-        complemento: document.getElementById('fn_complemento').value.trim(),
-        bairro: document.getElementById('fn_bairro').value.trim(),
-        cidade: document.getElementById('fn_cidade').value.trim(),
-        estado: document.getElementById('fn_estado').value.trim().toUpperCase(),
-        telefone: document.getElementById('fn_telefone').value.trim(),
-        site: document.getElementById('fn_site').value.trim(),
-        email: document.getElementById('fn_email').value.trim(),
-        representanteLocal: document.getElementById('fn_representanteLocal').value.trim(),
-        telefoneRepresentante: document.getElementById('fn_telefoneRepresentante').value.trim(),
-        subcategoriaId: document.getElementById('fn_subcategoriaId').value,
-        fator: document.getElementById('fn_fator').value===''?null:parseFloat(document.getElementById('fn_fator').value),
-        observacao: document.getElementById('fn_observacao').value.trim(),
-      };
-      if(!fornecedor) config.proximoCodigoRepresentante += 1;
-      const idx = config.fornecedores.findIndex(x=>x.id===dados.id);
-      if(idx>=0) config.fornecedores[idx] = dados; else config.fornecedores.push(dados);
-      const ok = await configSave();
-      if(!ok) return;
-      closeModal();
-      renderRows();
-      showToast(editando?'Fornecedor atualizado.':'Fornecedor cadastrado.');
-    });
-  }
-  document.getElementById('btnNovoFornecedor').addEventListener('click', ()=> abrirFornecedorModal(null));
-  renderRows();
 }
 
 async function renderEstoqueTab(main){
@@ -3580,7 +3272,7 @@ function imprimirEtiquetaProduto(produto){
   const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
 
   const linhas = [];
-  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nome)}</div>`);
+  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nomePopular || produto.nome)}</div>`);
   if(campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
   if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
   if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
@@ -3591,9 +3283,6 @@ function imprimirEtiquetaProduto(produto){
     linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
   }
 
-  const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
-  const pesoTexto = cfg.negrito!==false ? 700 : 500;
-  const reforcoCss = cfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -3601,10 +3290,9 @@ function imprimirEtiquetaProduto(produto){
 <title>Etiqueta - ${escapeHtml(produto.nome)}</title>
 <style>
   @page{ size:${cfg.larguraMm}mm ${cfg.alturaMm}mm; margin:0; }
-  *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:1.5mm; box-sizing:border-box; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; display:flex; flex-direction:column; justify-content:center; -webkit-font-smoothing:none; ${reforcoCss} }
-  .etq-nome{ font-weight:700; font-size:${px.nome}px; }
-  .etq-preco{ font-weight:700; font-size:${px.preco}px; margin-top:2px; }
+  body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:2mm; box-sizing:border-box; color:#000; font-size:9px; line-height:1.3; display:flex; flex-direction:column; justify-content:center; }
+  .etq-nome{ font-weight:700; font-size:10px; }
+  .etq-preco{ font-weight:700; font-size:11px; margin-top:2px; }
 </style>
   <!-- PWA e ícones Vilaça Joias -->
   <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAErklEQVR4nM2XyW+VVRjGf+d84x17aSmUFlMsQ9EWJLEIaCBQNUAIGBOJRqMmLhwWuvEPcGPcuXAlGxIxJhKCEA1KQpQYEmhsSEuhBCxDB9qi7b29vdze4bvf5OJ2sBOt0Kae9fed5/c+z3nPIN5f+5LPEg65lOL/CwB1sSYWAoQQAPg++P7MSS8agF3wsG0XfB9VU9ANdUaIRQHwPJ/yVWEqq2NomqS/O0VvVxJNVxk1ZfEAhAB8WLEqQqw0QCCksfvABjraBzjz/bXxWB4bQAgxrZqxrKUquHa5H9fxKBQcrjb38fFne/i77wEXz90hGNbxvGIc/6kLhBBIWVQtWA6ZkQIjDywyaYtMuoCVt8cdMEyVUERnWVmQ+z0p+nuG2fhMBUIK/r0U5uXAmG1W3saxPYJhncrqGBVVEcpWhglHDSIlJrfaB2g6f3d8wY05YpgqhlmUKhYwQTAngJSCfM4GoGZjOZsaKqlaE8MMaDiORz5rU7AcgmGdVDI37d9c1qF6fRnLKyJcbe7DcTwMc6IjZgUQopjpSNpi/dMr2LZ7DVKV9NweorXpHkODWXKZAo7j0XiwltZL94gPjBCKGPij+fp+EWLX3nUULIe2P3pRNTl3BEIIPNfDcTz2v1bHsvIgTec76bqVwHU8NF1B0xUsy+HQW5vxXJ/4wAiRqInregAoiiQ1nOPlV56ivqGKk0db6O9JEQhq4wsQZliEQoA3OskbH27FdX2OH7lM9+0EgaBGOGpgmCqu47FqdQm1myq4+OsdTFPDdT2EAKkIUskczzfWsO9wHT9801r8JjBZfEYHfB8cx+OdT7bT3z3MLyfaiZUG8GGidaQgn3No2FlNZ0ecocEskagBgOt6ZFIWjYdq2bl3Hce+auJ6y32CIX3unVBKwUja4sDr9ZgBlbMnrxMrDUyjdl2PSMygZuNyTn3TimGoCCHIpC2CYZ03P9pKNGby9ecXGBrMEIroeO7MZ8F4BEJAoeBSURVl254nOXf6Bqo6fZuQUpDP2mx+bjWJgQx93SlUTZJO5al7tpL3Pn2BoXiWo19eIp3KFzedWcQnOSCEoGA5bNnxBMl4lq5bCQxTnVa97/tousLmrVX8/nMHVs6mpNRk/+E6SkoD/PRdG50dCcKjkUz9f1aAsZbZUL+Cro4EtuViTDnBhBTkMgXqG6rIZ23amnvZ0VjDlu2ruXa5n5Zv25CKIBIzHlr1jABFeyUd7QP03k2iqJP7FUCMOlW7aSVXm/t49e0tBMM6p49dIZnIEooY4DNv8SkO+OiGwm8/3kRRJEZgcvVSCgqWS2l5iOq1peiGwo0rf9FysQczoBGOGHPaPacDALqhAv6k6oUUuI6HY7s0HqzlQSrP2RPXSSayhKMGvu8/kviMAFN7VQiBXXDRDYV3P9hOKGpw5IsLKIp8aHs9MsBkcXBsl3DU4MVDtQRCOudO3cD3QTOUxxaHed4Hdu1bjxCCuzcH6fwzjhnUFkT84QACXNcnENKpqS0jGNZpvtCNVEaPyQUas0fgT9wFzhxvJxnPkh7Oz3q7XXiA0SFl0XpVnf1qvagAAIapUWzNhX9GzgtgMYTHxpK/DZcc4B+HNBVnYr9itQAAAABJRU5ErkJggg==">
@@ -3630,13 +3318,56 @@ function imprimirEtiquetaProduto(produto){
   setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
 }
 
-/* ---------- TIPOS DE SERVIÇO: ver abrirGerenciarTiposServicoModal(), agora dentro da aba Produtos ---------- */
+/* ---------- TIPOS DE SERVIÇO ---------- */
+function renderServicosTab(main){
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Tipos de serviço (O.S.)</div>
+      <div class="config-row" style="border-bottom:none; padding-top:0;">
+        <div class="muted">Nome do serviço</div><div class="muted">Máx. por dia</div><div class="muted">Prazo mínimo (dias)</div><div></div>
+      </div>
+      <div id="servRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px;">
+        <button class="btn btn-ghost btn-sm" id="btnAddServ">+ Adicionar tipo de serviço</button>
+        <button class="btn btn-accent btn-sm" id="btnSalvarServ">Salvar alterações</button>
+      </div>
+    </div>
+  `;
+  function renderRows(){
+    const wrap = document.getElementById('servRows');
+    wrap.innerHTML = config.tiposServico.map((s,i)=>`
+      <div class="config-row" data-idx="${i}">
+        <input value="${escapeHtml(s.nome)}" data-field="nome">
+        <input type="number" min="1" value="${s.maxPorDia}" data-field="maxPorDia">
+        <input type="number" min="0" value="${s.prazoMinimoDias}" data-field="prazoMinimoDias">
+        <button class="icon-btn" data-remove="${i}" title="Remover">✕</button>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-remove]').forEach(b=> b.addEventListener('click', ()=>{ config.tiposServico.splice(Number(b.dataset.remove),1); renderRows(); }));
+  }
+  renderRows();
+  document.getElementById('btnAddServ').addEventListener('click', ()=>{
+    config.tiposServico.push({ id: uid('st'), nome:'Novo serviço', maxPorDia:5, prazoMinimoDias:1 });
+    renderRows();
+  });
+  document.getElementById('btnSalvarServ').addEventListener('click', async ()=>{
+    document.querySelectorAll('#servRows .config-row').forEach((row,i)=>{
+      config.tiposServico[i].nome = row.querySelector('[data-field="nome"]').value.trim() || 'Serviço';
+      config.tiposServico[i].maxPorDia = Math.max(1, parseInt(row.querySelector('[data-field="maxPorDia"]').value)||1);
+      config.tiposServico[i].prazoMinimoDias = Math.max(0, parseInt(row.querySelector('[data-field="prazoMinimoDias"]').value)||0);
+    });
+    await configSave();
+    showToast('Tipos de serviço salvos.');
+    renderRows();
+  });
+}
 
 /* ---------- FORMAS DE PAGAMENTO ---------- */
 function renderPagamentoTab(main){
   main.innerHTML = `
     <div class="card">
       <div class="section-label">Formas de pagamento</div>
+      <p class="muted" style="margin:-4px 0 14px;">Aparecem em todos os módulos que envolvem pagamento (O.S., Vendas).</p>
       <div id="payRows"></div>
       <div style="margin-top:14px; display:flex; gap:10px;">
         <div class="field" style="flex:1; margin-bottom:0;"><input id="pt_nome" placeholder="Nome da forma de pagamento"></div>
@@ -3647,15 +3378,8 @@ function renderPagamentoTab(main){
   function renderRows(){
     const wrap = document.getElementById('payRows');
     wrap.innerHTML = config.formasPagamento.length===0 ? `<div class="empty">Nenhuma forma de pagamento cadastrada.</div>` : config.formasPagamento.map((pt,i)=>`
-      <div class="code-list-item"><input data-payi="${i}" value="${escapeHtml(pt.nome)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;"><button class="icon-btn" data-del="${i}">✕</button></div>
+      <div class="code-list-item"><div>${escapeHtml(pt.nome)}</div><button class="icon-btn" data-del="${i}">✕</button></div>
     `).join('');
-    wrap.querySelectorAll('[data-payi]').forEach(inp=> inp.addEventListener('change', async ()=>{
-      const nome = inp.value.trim();
-      if(!nome){ showToast('O nome não pode ficar vazio.'); inp.value = config.formasPagamento[Number(inp.dataset.payi)].nome; return; }
-      config.formasPagamento[Number(inp.dataset.payi)].nome = nome;
-      const ok = await configSave();
-      if(ok) showToast('Forma de pagamento atualizada.');
-    }));
     wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
       config.formasPagamento.splice(Number(b.dataset.del),1); await configSave(); renderRows(); showToast('Forma de pagamento removida.');
     }));
@@ -3705,44 +3429,17 @@ const NOMES_MODULOS_IMPRESSAO = { os:'Ordens de Serviço', vendas:'Vendas (PDV)'
 
 function garantirConfigImpressao(){
   if(!config.impressao){
-    config.impressao = { larguraBobina: 80, escalaTexto:'media', negrito:true, reforcoTraco:false, mensagemRodape:'', os:{}, vendas:{}, orcamentos:{} };
+    config.impressao = { larguraBobina: 80, os:{}, vendas:{}, orcamentos:{} };
   }
-  if(!config.impressao.escalaTexto) config.impressao.escalaTexto = 'media';
-  if(config.impressao.negrito===undefined) config.impressao.negrito = true;
-  if(config.impressao.reforcoTraco===undefined) config.impressao.reforcoTraco = false;
-  if(config.impressao.mensagemRodape===undefined) config.impressao.mensagemRodape = '';
   Object.keys(CAMPOS_IMPRESSAO).forEach(mod=>{
     if(!config.impressao[mod]) config.impressao[mod] = {};
     CAMPOS_IMPRESSAO[mod].forEach(c=>{ if(config.impressao[mod][c.id]===undefined) config.impressao[mod][c.id] = true; });
   });
   if(!config.etiquetaJoia){
-    config.etiquetaJoia = { larguraMm:50, alturaMm:30, escalaTexto:'media', negrito:true, reforcoTraco:false, campos:{ nome:true, codigoInterno:true, precoVenda:true } };
+    config.etiquetaJoia = { larguraMm:40, alturaMm:25, campos:{ nome:true, codigoInterno:true, precoVenda:true } };
   }
   if(!config.etiquetaJoia.campos) config.etiquetaJoia.campos = {};
-  if(!config.etiquetaJoia.escalaTexto) config.etiquetaJoia.escalaTexto = 'media';
-  if(config.etiquetaJoia.negrito===undefined) config.etiquetaJoia.negrito = true;
-  if(config.etiquetaJoia.reforcoTraco===undefined) config.etiquetaJoia.reforcoTraco = false;
 }
-/** Tamanhos de fonte (em px, pra impressora térmica de bobina 58/80mm — bem maiores
- * que o padrão de tela, senão sai ilegível) por escala escolhida. */
-const ESCALA_BOBINA_PX = {
-  pequena: { base:12, titulo:14, sub:11 },
-  media:   { base:14, titulo:17, sub:12.5 },
-  grande:  { base:16.5, titulo:20, sub:14.5 },
-};
-/** Tamanhos de fonte (em px, pensados pra impressora térmica — bem maiores que o
- * padrão de tela) por escala escolhida, pra cada elemento da etiqueta. */
-const ESCALA_ETIQUETA_PX = {
-  pequena: { base:11, nome:13, preco:15 },
-  media:   { base:13, nome:16, preco:19 },
-  grande:  { base:16, nome:19, preco:23 },
-};
-const PRESETS_ETIQUETA = [
-  { id:'40x25', label:'40 × 25 mm (pequena)', larguraMm:40, alturaMm:25 },
-  { id:'50x30', label:'50 × 30 mm (padrão)', larguraMm:50, alturaMm:30 },
-  { id:'60x40', label:'60 × 40 mm (grande)', larguraMm:60, alturaMm:40 },
-  { id:'80x40', label:'80 × 40 mm (caixa/estojo)', larguraMm:80, alturaMm:40 },
-];
 
 function renderImpressaoTab(main){
   garantirConfigImpressao();
@@ -3750,68 +3447,22 @@ function renderImpressaoTab(main){
     <div class="card">
       <div class="section-label">Impressão (formato bobina)</div>
       <p class="muted" style="margin:-4px 0 14px;">Escolha o que aparece no recibo impresso de O.S., Vendas e Orçamentos. Sempre em formato de bobina (impressora térmica de recibo).</p>
-      <div class="grid-3" style="max-width:560px;">
-        <div class="field"><label>Largura da bobina</label>
-          <select id="impLargura">
-            <option value="58" ${config.impressao.larguraBobina===58?'selected':''}>58mm</option>
-            <option value="80" ${config.impressao.larguraBobina!==58?'selected':''}>80mm</option>
-          </select>
-        </div>
-        <div class="field"><label>Tamanho do texto</label>
-          <select id="impEscala">
-            <option value="pequena" ${config.impressao.escalaTexto==='pequena'?'selected':''}>Pequeno</option>
-            <option value="media" ${config.impressao.escalaTexto==='media'?'selected':''}>Médio</option>
-            <option value="grande" ${config.impressao.escalaTexto==='grande'?'selected':''}>Grande</option>
-          </select>
-        </div>
-        <div class="field"><label>Traço</label>
-          <select id="impNegrito">
-            <option value="1" ${config.impressao.negrito!==false?'selected':''}>Negrito (mais forte)</option>
-            <option value="0" ${config.impressao.negrito===false?'selected':''}>Normal</option>
-          </select>
-        </div>
-      </div>
-      <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:10px 0 0;">
-        <input type="checkbox" id="impReforco" ${config.impressao.reforcoTraco?'checked':''}> Reforço extra de traço (deixa o texto ainda mais escuro — use se a impressora estiver fraca mesmo com negrito)
-      </label>
-      <p class="muted" style="margin:6px 0 0; font-size:12px;">Texto mais grosso (negrito) sai bem mais forte e legível em impressora térmica do que traço fino — recomendado pra rolo de 8cm.</p>
-      <div class="field" style="margin-top:12px; max-width:520px;"><label>Mensagem de rodapé <span class="muted">opcional, aparece no fim de todo recibo</span></label>
-        <input id="impRodape" value="${escapeHtml(config.impressao.mensagemRodape||'')}" placeholder="Ex: Obrigado pela preferência! Volte sempre.">
+      <div class="field" style="max-width:220px;"><label>Largura da bobina</label>
+        <select id="impLargura">
+          <option value="58" ${config.impressao.larguraBobina===58?'selected':''}>58mm</option>
+          <option value="80" ${config.impressao.larguraBobina!==58?'selected':''}>80mm</option>
+        </select>
       </div>
       <div id="impCamposWrap" style="margin-top:10px;"></div>
       <button class="btn btn-accent btn-sm" id="btnSalvarImpressao" style="margin-top:14px;">Salvar impressão</button>
     </div>
     <div class="card">
       <div class="section-label">Etiqueta de joia</div>
-      <p class="muted" style="margin:-4px 0 14px;">O que aparece na etiqueta de preço/identificação de cada peça, o tamanho físico dela e a força do texto.</p>
-      <div class="field" style="max-width:320px;"><label>Tamanho pronto</label>
-        <select id="etqPreset">
-          <option value="">Personalizado (definir abaixo)</option>
-          ${PRESETS_ETIQUETA.map(p=>`<option value="${p.id}" ${config.etiquetaJoia.larguraMm===p.larguraMm&&config.etiquetaJoia.alturaMm===p.alturaMm?'selected':''}>${p.label}</option>`).join('')}
-        </select>
-      </div>
+      <p class="muted" style="margin:-4px 0 14px;">O que aparece na etiqueta de preço/identificação de cada peça, e o tamanho físico dela.</p>
       <div class="grid-2" style="max-width:360px;">
         <div class="field"><label>Largura (mm)</label><input type="number" min="10" id="etqLargura" value="${config.etiquetaJoia.larguraMm}"></div>
         <div class="field"><label>Altura (mm)</label><input type="number" min="10" id="etqAltura" value="${config.etiquetaJoia.alturaMm}"></div>
       </div>
-      <div class="grid-2" style="max-width:360px;">
-        <div class="field"><label>Tamanho do texto</label>
-          <select id="etqEscala">
-            <option value="pequena" ${config.etiquetaJoia.escalaTexto==='pequena'?'selected':''}>Pequeno</option>
-            <option value="media" ${config.etiquetaJoia.escalaTexto==='media'?'selected':''}>Médio</option>
-            <option value="grande" ${config.etiquetaJoia.escalaTexto==='grande'?'selected':''}>Grande</option>
-          </select>
-        </div>
-        <div class="field"><label>Traço</label>
-          <select id="etqNegrito">
-            <option value="1" ${config.etiquetaJoia.negrito!==false?'selected':''}>Negrito (mais forte)</option>
-            <option value="0" ${config.etiquetaJoia.negrito===false?'selected':''}>Normal</option>
-          </select>
-        </div>
-      </div>
-      <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:10px 0 0;">
-        <input type="checkbox" id="etqReforco" ${config.etiquetaJoia.reforcoTraco?'checked':''}> Reforço extra de traço (etiqueta saindo fraca mesmo com negrito)
-      </label>
       <div class="section-label" style="margin-top:10px;">Campos na etiqueta</div>
       <div id="etqCamposWrap"></div>
       <button class="btn btn-accent btn-sm" id="btnSalvarEtiqueta" style="margin-top:14px;">Salvar etiqueta</button>
@@ -3841,19 +3492,8 @@ function renderImpressaoTab(main){
     `).join('')}
   </div>`;
 
-  document.getElementById('etqPreset').addEventListener('change', e=>{
-    const preset = PRESETS_ETIQUETA.find(p=>p.id===e.target.value);
-    if(!preset) return;
-    document.getElementById('etqLargura').value = preset.larguraMm;
-    document.getElementById('etqAltura').value = preset.alturaMm;
-  });
-
   document.getElementById('btnSalvarImpressao').addEventListener('click', async ()=>{
     config.impressao.larguraBobina = Number(document.getElementById('impLargura').value);
-    config.impressao.escalaTexto = document.getElementById('impEscala').value;
-    config.impressao.negrito = document.getElementById('impNegrito').value === '1';
-    config.impressao.reforcoTraco = document.getElementById('impReforco').checked;
-    config.impressao.mensagemRodape = document.getElementById('impRodape').value;
     impWrap.querySelectorAll('[data-impmod]').forEach(chk=>{
       config.impressao[chk.dataset.impmod][chk.dataset.impcampo] = chk.checked;
     });
@@ -3863,9 +3503,6 @@ function renderImpressaoTab(main){
   document.getElementById('btnSalvarEtiqueta').addEventListener('click', async ()=>{
     config.etiquetaJoia.larguraMm = Number(document.getElementById('etqLargura').value) || 40;
     config.etiquetaJoia.alturaMm = Number(document.getElementById('etqAltura').value) || 25;
-    config.etiquetaJoia.escalaTexto = document.getElementById('etqEscala').value;
-    config.etiquetaJoia.negrito = document.getElementById('etqNegrito').value === '1';
-    config.etiquetaJoia.reforcoTraco = document.getElementById('etqReforco').checked;
     etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{
       config.etiquetaJoia.campos[chk.dataset.etqcampo] = chk.checked;
     });
@@ -4001,12 +3638,13 @@ const MODULOS_APP = {
   config: { nome:'Cadastro', abas:[
     { id:'clientes', label:'Clientes' },
     { id:'produto', label:'Produto' },
-    { id:'fator', label:'Fator' },
-    { id:'fornecedor', label:'Fornecedor' },
     { id:'lojas', label:'Lojas' },
+    { id:'funcionarios', label:'Funcionários' },
+    { id:'servicos', label:'Tipos de Serviço' },
     { id:'pagamento', label:'Formas de Pagamento' },
     { id:'impressao', label:'Impressão & Etiquetas' },
     { id:'statusOrcamento', label:'Status de Orçamento' },
+    { id:'acessos', label:'Perfis de Acesso' },
     { id:'mensagens', label:'Mensagens' },
   ]},
 };
@@ -4059,7 +3697,7 @@ function permissoesPadrao(nivel){
     ia:{ ativo:true },
     gastos:{ ativo:true, abas:{ lancamentos:true, agenda:true } },
     marketing:{ ativo:true, abas:todasAbas('marketing') },
-    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, fator:false, fornecedor:false, lojas:false, pagamento:false, impressao:false, statusOrcamento:false, mensagens:false } },
+    dashboard:{ ativo:true }, config:{ ativo:true, abas:{ clientes:true, produto:false, lojas:false, funcionarios:false, servicos:false, pagamento:false, impressao:false, statusOrcamento:false, acessos:false, mensagens:false } },
   };
 }
 function permissoesDoUsuario(u){
@@ -4078,6 +3716,154 @@ function permissoesDoUsuario(u){
     mesclado[moduloId] = { ativo: salvo.ativo, abas: { ...abasPadrao, ...abasSalvas } };
   });
   return mesclado;
+}
+function resumoPermissoesHtml(u){
+  const p = permissoesDoUsuario(u);
+  const chips = Object.keys(MODULOS_APP).filter(m=> p[m] && p[m].ativo).map(m=>MODULOS_APP[m].nome);
+  return chips.length ? chips.map(c=>`<span class="chip">${escapeHtml(c)}</span>`).join(' ') : `<span class="chip" style="background:var(--danger-soft); color:var(--danger);">Nenhum acesso</span>`;
+}
+
+function abasChecklistHtml(moduloId, permissoesModulo){
+  const mod = MODULOS_APP[moduloId];
+  if(!mod.abas.length) return '';
+  const abasAtuais = (permissoesModulo && permissoesModulo.abas) || {};
+  return `
+    <div class="cargo-checks" style="margin:6px 0 2px 22px; flex-direction:column; align-items:flex-start; gap:6px;" data-abaswrap="${moduloId}">
+      ${mod.abas.map(a=>`
+        <label><input type="checkbox" class="chk-aba" data-modulo="${moduloId}" data-aba="${a.id}" ${abasAtuais[a.id]?'checked':''}> ${escapeHtml(a.label)}</label>
+      `).join('')}
+    </div>
+  `;
+}
+function modulosChecklistHtml(permissoes){
+  return Object.keys(MODULOS_APP).map(moduloId=>{
+    const mod = MODULOS_APP[moduloId];
+    const ativo = permissoes[moduloId] && permissoes[moduloId].ativo;
+    return `
+      <div style="margin-bottom:10px;">
+        <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:13px; text-transform:none; letter-spacing:0;">
+          <input type="checkbox" class="chk-modulo" data-modulo="${moduloId}" ${ativo?'checked':''}> ${escapeHtml(mod.nome)}
+        </label>
+        <div data-abasslot="${moduloId}" style="display:${ativo?'':'none'};">${abasChecklistHtml(moduloId, permissoes[moduloId])}</div>
+      </div>
+    `;
+  }).join('');
+}
+function wirePermissoesChecklist(container){
+  container.querySelectorAll('.chk-modulo').forEach(chk=>{
+    chk.addEventListener('change', ()=>{
+      const slot = container.querySelector(`[data-abasslot="${chk.dataset.modulo}"]`);
+      if(slot) slot.style.display = chk.checked ? '' : 'none';
+    });
+  });
+}
+function lerPermissoesDoFormulario(container){
+  const permissoes = {};
+  Object.keys(MODULOS_APP).forEach(moduloId=>{
+    const chkModulo = container.querySelector(`.chk-modulo[data-modulo="${moduloId}"]`);
+    const ativo = !!(chkModulo && chkModulo.checked);
+    const abas = {};
+    container.querySelectorAll(`.chk-aba[data-modulo="${moduloId}"]`).forEach(chkAba=>{
+      abas[chkAba.dataset.aba] = chkAba.checked;
+    });
+    permissoes[moduloId] = MODULOS_APP[moduloId].abas.length ? { ativo, abas } : { ativo };
+  });
+  return permissoes;
+}
+
+function openAcessoModal(usuario){
+  const permissoesIniciais = usuario ? permissoesDoUsuario(usuario) : permissoesPadrao('vendedora');
+  openModal(`
+    <div class="section-label">${usuario ? 'Editar acesso' : 'Novo acesso'}</div>
+    <div class="grid-3">
+      <div class="field"><label>Nome</label><input id="ac_nome" value="${escapeHtml(usuario?usuario.nome:'')}" placeholder="Nome"></div>
+      <div class="field"><label>Senha</label><input id="ac_senha" value="${escapeHtml(usuario?usuario.senha:'')}" placeholder="Senha"></div>
+      <div class="field"><label>Nível (referência)</label>
+        <select id="ac_nivel">
+          <option value="vendedora" ${(!usuario||usuario.nivel==='vendedora')?'selected':''}>Vendedora</option>
+          <option value="oficina" ${usuario&&usuario.nivel==='oficina'?'selected':''}>Oficina</option>
+          <option value="diretoria" ${usuario&&usuario.nivel==='diretoria'?'selected':''}>Diretoria</option>
+          <option value="custom" ${usuario&&usuario.nivel==='custom'?'selected':''}>Personalizado</option>
+        </select>
+      </div>
+    </div>
+    <p class="muted" style="margin:2px 0 12px;">O nível só define o rótulo mostrado; o que realmente controla o acesso são os módulos e abas marcados abaixo.</p>
+    <div class="section-label" style="margin-top:10px;">Módulos e abas liberados</div>
+    <div id="acPermissoesWrap">${modulosChecklistHtml(permissoesIniciais)}</div>
+    <div style="display:flex; gap:10px; margin-top:16px;">
+      <button class="btn btn-accent" id="btnSalvarAcesso">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarAcesso">Cancelar</button>
+    </div>
+  `);
+  const permWrap = document.getElementById('acPermissoesWrap');
+  wirePermissoesChecklist(permWrap);
+  if(!usuario){
+    // Só em acesso NOVO: ao trocar o Nível, atualiza a lista pro padrão daquele nível
+    // (evita o problema de marcar "Diretoria" no rótulo mas salvar com permissões de vendedora,
+    // que ficaram do padrão inicial mostrado ao abrir o modal). Em edição de acesso já existente,
+    // o Nível continua sendo só um rótulo — não mexe nas permissões já customizadas da pessoa.
+    document.getElementById('ac_nivel').addEventListener('change', (e)=>{
+      const novoPadrao = permissoesPadrao(e.target.value);
+      document.getElementById('acPermissoesWrap').innerHTML = modulosChecklistHtml(novoPadrao);
+      wirePermissoesChecklist(document.getElementById('acPermissoesWrap'));
+      showToast('Marcações de módulos atualizadas pro padrão desse nível — revise antes de salvar.');
+    });
+  }
+  document.getElementById('btnCancelarAcesso').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
+    const nome = document.getElementById('ac_nome').value.trim();
+    const senha = document.getElementById('ac_senha').value.trim();
+    const nivel = document.getElementById('ac_nivel').value;
+    if(!nome || !senha){ showToast('Preencha nome e senha.'); return; }
+    const outroComMesmaSenha = config.users.some(u=> u.senha===senha && (!usuario || u.id!==usuario.id));
+    if(outroComMesmaSenha){ showToast('Essa senha já está em uso.'); return; }
+    const permissoes = lerPermissoesDoFormulario(permWrap);
+    if(usuario){
+      Object.assign(usuario, { nome, senha, nivel, permissoes });
+    }else{
+      config.users.push({ id: uid('u'), nome, senha, nivel, permissoes });
+    }
+    await configSave();
+    closeModal();
+    renderAcessosTab(document.getElementById('cfgBody'));
+    showToast('Acesso salvo.');
+  });
+}
+
+function renderAcessosTab(main){
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Perfis de Acesso</div>
+      <p class="muted" style="margin:-4px 0 14px;">Cada senha define quais módulos a pessoa vê e, dentro de cada módulo, quais abas ela pode usar. Válido para o Painel de O.S., Transferências, Vendas e Dashboard.</p>
+      <div id="userRows"></div>
+      <div style="margin-top:14px;">
+        <button class="btn btn-accent btn-sm" id="btnNovoAcesso">+ Novo acesso</button>
+      </div>
+    </div>
+  `;
+  function renderRows(){
+    const wrap = document.getElementById('userRows');
+    if(config.users.length===0){ wrap.innerHTML = `<div class="empty">Nenhum acesso cadastrado.</div>`; return; }
+    wrap.innerHTML = config.users.map((u,i)=>`
+      <div class="code-list-item" style="align-items:flex-start;">
+        <div style="flex:1;">
+          <div><b>${escapeHtml(u.nome)}</b> <span class="muted" style="margin-left:8px;">senha: ${escapeHtml(u.senha)}</span> <span class="level-pill" style="background:var(--surface-2); color:var(--ink-soft); margin-left:6px;">${levelLabel(u.nivel)}</span></div>
+          <div style="margin-top:6px; display:flex; gap:5px; flex-wrap:wrap;">${resumoPermissoesHtml(u)}</div>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
+          <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openAcessoModal(config.users[Number(b.dataset.edit)]) ));
+    wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
+      if(config.users.length<=1){ showToast('É necessário manter ao menos um acesso.'); return; }
+      config.users.splice(Number(b.dataset.del),1); await configSave(); renderRows(); showToast('Acesso removido.');
+    }));
+  }
+  renderRows();
+  document.getElementById('btnNovoAcesso').addEventListener('click', ()=> openAcessoModal(null) );
 }
 
 
