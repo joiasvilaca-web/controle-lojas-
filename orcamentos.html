@@ -45,6 +45,7 @@ a{color:inherit;}
 .who{display:flex; align-items:center; gap:10px; font-size:13px;}
 .level-pill{background:rgba(255,255,255,0.12); padding:4px 10px; border-radius:999px; font-size:11.5px; font-weight:700;}
 .icon-btn{background:none; border:none; color:inherit; font-size:16px; cursor:pointer; padding:5px 7px; border-radius:7px; text-decoration:none;}
+.icon-btn-wa{background:#e8faf0; border:1px solid #a8e6c5;}
 .icon-btn:hover{background:rgba(255,255,255,0.1);}
 #mainContent .icon-btn{color:var(--ink-faint);}
 #mainContent .icon-btn:hover{background:var(--surface-2); color:var(--ink);}
@@ -848,7 +849,7 @@ function renderLista(main){
     </div>
     <div class="card" style="padding:14px 18px; overflow-x:auto;">
       <table id="tabelaOrc">
-        <thead><tr><th>Cliente</th><th>Loja</th><th>Vendedora</th><th>Validade</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>Cliente</th><th>Loja</th><th>Vendedora</th><th>Validade</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead>
         <tbody id="tbodyOrc"></tbody>
       </table>
     </div>
@@ -893,11 +894,25 @@ function renderLista(main){
           <span class="badge ${info && info.encerra ? 'badge-aprovado' : 'badge-pendente'}">${escapeHtml(info ? info.nome : o.status)}</span>
           ${vencido ? `<span class="badge badge-recusado" style="margin-left:4px;">Vencido</span>` : ''}
         </td>
-        <td><button class="icon-btn" data-ver="${o.id}" title="Ver">👁️</button></td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-ghost btn-sm" data-orcstatus="${o.id}" title="Mudar status">📋 Status</button>
+          ${o.telefone ? `<button class="icon-btn icon-btn-wa" data-orcwa="${o.id}" title="WhatsApp">${waIconSvg()}</button>` : ''}
+          ${o.email ? `<button class="icon-btn" data-orcmail="${o.id}" title="E-mail">✉️</button>` : ''}
+          <button class="icon-btn" data-ver="${o.id}" title="Ver / editar">👁️</button>
+        </td>
       </tr>`;
     }).join('');
     tbody.querySelectorAll('[data-ver]').forEach(b=>{
       b.addEventListener('click', ()=> abrirDetalheOrcamento(orcamentos.find(o=>o.id===b.dataset.ver)) );
+    });
+    tbody.querySelectorAll('[data-orcstatus]').forEach(b=>{
+      b.addEventListener('click', ()=> mudarStatusOrcRapido(b.dataset.orcstatus) );
+    });
+    tbody.querySelectorAll('[data-orcwa]').forEach(b=>{
+      b.addEventListener('click', ()=> enviarWhatsAppOrcId(b.dataset.orcwa) );
+    });
+    tbody.querySelectorAll('[data-orcmail]').forEach(b=>{
+      b.addEventListener('click', ()=> enviarEmailOrcId(b.dataset.orcmail) );
     });
   }
   draw();
@@ -910,6 +925,58 @@ function renderLista(main){
     fLoja.value = window.__lojaAtual.id;
     fLoja.title = 'Filtrando pela loja ativa — selecione outra loja ou "Todas as lojas" pra ver as demais.';
     draw();
+  }
+}
+
+/* Ações rápidas direto na linha da lista (mesmo padrão usado no módulo Marketing):
+ * mudar status, WhatsApp e e-mail sem precisar abrir o detalhe completo. */
+async function mudarStatusOrcRapido(orcId){
+  const o = orcamentos.find(x=>x.id===orcId);
+  if(!o) return;
+  openModal(`
+    <h3 style="margin:0 0 16px;">Mudar status — ${escapeHtml(o.cliente||'—')}</h3>
+    <div class="field"><label>Novo status</label>
+      <select id="novoStatusSelRapido">${statusList().map(s=>`<option value="${s.id}" ${s.id===o.status?'selected':''}>${escapeHtml(s.nome)}${s.encerra?' (encerra)':''}</option>`).join('')}</select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-accent" id="btnSalvarStatusRapido">Salvar</button>
+      <button class="btn btn-ghost" id="btnCancelarStatusRapido">Cancelar</button>
+    </div>
+  `);
+  document.getElementById('btnCancelarStatusRapido').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarStatusRapido').addEventListener('click', async ()=>{
+    o.status = document.getElementById('novoStatusSelRapido').value;
+    const ok = await orcamentoSalvar(o);
+    if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
+  });
+}
+function enviarWhatsAppOrcId(orcId){
+  const o = orcamentos.find(x=>x.id===orcId);
+  if(!o || !o.telefone){ showToast('Este orçamento não tem telefone salvo.'); return; }
+  const info = statusInfoDe(o.status);
+  const template = (info && info.mensagemWhatsapp) || MENSAGEM_WHATSAPP_PADRAO;
+  const msg = encodeURIComponent(montarMensagemStatus(o, template));
+  const url = `https://wa.me/55${onlyDigits(o.telefone)}?text=${msg}`;
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+async function enviarEmailOrcId(orcId){
+  const o = orcamentos.find(x=>x.id===orcId);
+  if(!o || !o.email){ showToast('Este orçamento não tem e-mail salvo.'); return; }
+  const info = statusInfoDe(o.status);
+  const assunto = montarMensagemStatus(o, (info && info.assuntoEmail) || MENSAGEM_EMAIL_ASSUNTO_PADRAO);
+  const corpo = montarMensagemStatus(o, (info && info.mensagemEmail) || MENSAGEM_EMAIL_PADRAO);
+  try{
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({ to:o.email, subject:assunto, body:corpo })
+    });
+    if(!r.ok) throw new Error('falha no envio');
+    showToast('E-mail enviado!');
+  }catch(e){
+    showToast('Falha ao enviar e-mail.');
   }
 }
 
