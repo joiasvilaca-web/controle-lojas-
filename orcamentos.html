@@ -154,6 +154,7 @@ let config = null;
 let orcamentos = [];
 let currentUser = null;
 let currentTab = 'lista';
+let orcamentoEmEdicao = null;
 let __gatewaySenha = null;
 
 async function gatewayCall(body){
@@ -351,6 +352,12 @@ function montarMensagemStatus(o, mensagem){
     .replaceAll('{valor}', fmtMoeda(o.valorTotal))
     .replaceAll('{validade}', fmtDate(o.validade));
 }
+/* Mensagens padrão usadas quando o status atual do orçamento não tem uma mensagem
+ * própria configurada (Configurações → Mensagens) — assim os botões de WhatsApp/e-mail
+ * continuam disponíveis mesmo sem template específico pra aquele status. */
+const MENSAGEM_WHATSAPP_PADRAO = 'Olá {cliente}! Sobre seu orçamento na Vilaça Joias, no valor de {valor}, válido até {validade}. Qualquer dúvida, é só chamar por aqui 💛';
+const MENSAGEM_EMAIL_ASSUNTO_PADRAO = 'Seu orçamento na Vilaça Joias';
+const MENSAGEM_EMAIL_PADRAO = 'Olá {cliente},\n\nSegue seu orçamento na Vilaça Joias, no valor de {valor}, válido até {validade}.\n\nQualquer dúvida, estamos à disposição.';
 
 let clientes = [];
 
@@ -648,7 +655,7 @@ function renderTabs(){
 function renderView(){
   const main = document.getElementById('mainContent');
   main.innerHTML = '';
-  if(currentTab==='novo') renderNovo(main);
+  if(currentTab==='novo') renderNovo(main, orcamentoEmEdicao);
   else if(currentTab==='lista') renderLista(main);
 }
 
@@ -659,19 +666,20 @@ function produtoOptionsHtml(selected){
   const lista = config.joiasProdutos || [];
   return `<option value="">Selecione</option>` + lista.map(p=>`<option value="${escapeHtml(p)}" ${selected===p?'selected':''}>${escapeHtml(p)}</option>`).join('');
 }
-function renderNovo(main){
+function renderNovo(main, orcamentoEditando){
+  const editando = !!orcamentoEditando;
   const validadePadrao = new Date(); validadePadrao.setDate(validadePadrao.getDate()+15);
   main.innerHTML = `
     <div class="page-head">
       <button type="button" class="btn btn-ghost btn-sm" id="btnVoltarOrcLista" style="margin-bottom:12px;">← Voltar</button>
-      <h1 class="page-title">Novo orçamento</h1>
-      <p class="page-sub">Como uma pré-venda: fica pendente até você aprovar (e virar venda/O.S. de verdade) ou recusar.</p>
+      <h1 class="page-title">${editando ? 'Editar orçamento' : 'Novo orçamento'}</h1>
+      <p class="page-sub">${editando ? 'Altere os dados do orçamento e salve as alterações.' : 'Como uma pré-venda: fica pendente até você aprovar (e virar venda/O.S. de verdade) ou recusar.'}</p>
     </div>
     <div class="card">
       <div class="grid-3">
-        <div class="field"><label>Loja</label><select id="o_loja"><option value="">Selecione</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${window.__lojaAtual&&window.__lojaAtual.id===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
-        <div class="field"><label>Vendedora</label><select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>`<option value="${escapeHtml(nomeExibicaoFuncionario(f))}">${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select></div>
-        <div class="field"><label>Validade</label><input type="date" id="o_validade" value="${validadePadrao.toISOString().slice(0,10)}"></div>
+        <div class="field"><label>Loja</label><select id="o_loja"><option value="">Selecione</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${editando ? (orcamentoEditando.lojaId===l.id?'selected':'') : (window.__lojaAtual&&window.__lojaAtual.id===l.id?'selected':'')}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+        <div class="field"><label>Vendedora</label><select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>`<option value="${escapeHtml(nomeExibicaoFuncionario(f))}" ${editando && orcamentoEditando.vendedora===nomeExibicaoFuncionario(f)?'selected':''}>${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select></div>
+        <div class="field"><label>Validade</label><input type="date" id="o_validade" value="${editando ? (orcamentoEditando.validade||'') : validadePadrao.toISOString().slice(0,10)}"></div>
       </div>
       <div class="field" style="margin-top:10px;">
         <label>Cliente</label>
@@ -680,17 +688,19 @@ function renderNovo(main){
         </div>
         <button type="button" class="btn btn-ghost btn-sm" id="btnSelecionarClienteOrc">🔍 Selecionar / cadastrar cliente</button>
       </div>
-      <input type="hidden" id="o_cliente"><input type="hidden" id="o_telefone">
+      <input type="hidden" id="o_cliente" value="${editando ? escapeHtml(orcamentoEditando.cliente||'') : ''}">
+      <input type="hidden" id="o_telefone" value="${editando ? escapeHtml(orcamentoEditando.telefone||'') : ''}">
+      <input type="hidden" id="o_email" value="${editando ? escapeHtml(orcamentoEditando.email||'') : ''}">
       <div class="section-label" style="margin-top:14px;">Itens do orçamento</div>
       <div id="itensRows"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnAddItem">+ Adicionar item</button>
       <div class="muted" id="totalHint" style="margin-top:8px; font-weight:700;"></div>
-      <div class="field" style="margin-top:14px;"><label>Observações</label><textarea id="o_obs" rows="2"></textarea></div>
-      <button class="btn btn-accent" id="btnSalvarOrcamento" style="margin-top:10px;">Salvar orçamento</button>
+      <div class="field" style="margin-top:14px;"><label>Observações</label><textarea id="o_obs" rows="2">${editando ? escapeHtml(orcamentoEditando.observacoes||'') : ''}</textarea></div>
+      <button class="btn btn-accent" id="btnSalvarOrcamento" style="margin-top:10px;">${editando ? 'Salvar alterações' : 'Salvar orçamento'}</button>
     </div>
   `;
-  document.getElementById('btnVoltarOrcLista').addEventListener('click', ()=>{ currentTab = 'lista'; renderTabs(); renderView(); });
-  let itens = [];
+  document.getElementById('btnVoltarOrcLista').addEventListener('click', ()=>{ orcamentoEmEdicao = null; currentTab = 'lista'; renderTabs(); renderView(); });
+  let itens = editando ? JSON.parse(JSON.stringify(orcamentoEditando.itens||[])) : [];
   function drawItens(){
     const wrap = document.getElementById('itensRows');
     wrap.innerHTML = itens.map((it,i)=>`
@@ -723,14 +733,17 @@ function renderNovo(main){
   document.getElementById('btnAddItem').addEventListener('click', ()=>{ itens.push({produto:'', quantidade:1, valorUnitario:''}); drawItens(); });
 
   // Guarda o registro completo do cliente escolhido, pra o ✎ abrir o cadastro preenchido.
-  let clienteSelecionadoOrc = null;
+  let clienteSelecionadoOrc = editando
+    ? (clientes.find(c=> c.telefone && orcamentoEditando.telefone && onlyDigits(c.telefone)===onlyDigits(orcamentoEditando.telefone)) || { nome:orcamentoEditando.cliente, telefone:orcamentoEditando.telefone, email:orcamentoEditando.email })
+    : null;
   function atualizarResumoClienteOrc(){
     const nome = document.getElementById('o_cliente').value;
     const tel = document.getElementById('o_telefone').value;
+    const email = document.getElementById('o_email').value;
     const resumo = document.getElementById('o_clienteResumo');
     resumo.innerHTML = nome
-      ? `<div style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
-           <div><b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}</div>
+      ? `<div style="display:flex; align-items:center; gap:8px; justify-content:space-between; flex-wrap:wrap;">
+           <div><b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}${email ? ' — '+escapeHtml(email) : ''}</div>
            ${clienteSelecionadoOrc && clienteSelecionadoOrc.id ? `<button type="button" class="btn btn-ghost btn-sm" id="btnEditarClienteOrc" title="Editar cadastro deste cliente">✎ Editar cadastro</button>` : ''}
          </div>`
       : `<span class="muted">Nenhum cliente selecionado.</span>`;
@@ -741,6 +754,7 @@ function renderNovo(main){
     clienteSelecionadoOrc = clienteFinal;
     document.getElementById('o_cliente').value = clienteFinal.nome || '';
     document.getElementById('o_telefone').value = clienteFinal.telefone || '';
+    document.getElementById('o_email').value = clienteFinal.email || '';
     atualizarResumoClienteOrc();
   }
   /** O que for alterado aqui vale pro cadastro central, ou seja, pra todos os módulos. */
@@ -754,6 +768,7 @@ function renderNovo(main){
   document.getElementById('btnSelecionarClienteOrc').addEventListener('click', ()=>{
     abrirSeletorCliente((clienteFinal)=>{ aplicarClienteOrc(clienteFinal); });
   });
+  if(editando) atualizarResumoClienteOrc();
 
   document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
     const lojaId = document.getElementById('o_loja').value;
@@ -761,22 +776,35 @@ function renderNovo(main){
     const validade = document.getElementById('o_validade').value;
     const cliente = document.getElementById('o_cliente').value.trim();
     const telefone = document.getElementById('o_telefone').value.trim();
+    const email = document.getElementById('o_email').value.trim();
     const itensValidos = itens.filter(it=>it.produto && Number(it.quantidade)>0);
     if(!lojaId || !vendedora || !validade){ showToast('Preencha loja, vendedora e validade.'); return; }
     if(!cliente){ showToast('Informe o nome do cliente.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item.'); return; }
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
     const valorTotal = itensValidos.reduce((acc,it)=> acc + (Number(it.quantidade)||0)*(Number(it.valorUnitario)||0), 0);
-    const orcamento = {
+    const orcamento = editando ? {
+      ...orcamentoEditando,
+      loja: loja?loja.nome:'', lojaId, vendedora, validade,
+      cliente, telefone, email, itens: itensValidos, valorTotal,
+      observacoes: document.getElementById('o_obs').value.trim(),
+    } : {
       id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
-      data: todayStr(), cliente, telefone, itens: itensValidos, valorTotal,
+      data: todayStr(), cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
       status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
     };
     const ok = await orcamentoSalvar(orcamento);
     if(ok){
-      orcamentos.unshift(orcamento);
-      showToast('Orçamento salvo.');
+      if(editando){
+        const idx = orcamentos.findIndex(x=>x.id===orcamento.id);
+        if(idx>=0) orcamentos[idx] = orcamento; else orcamentos.unshift(orcamento);
+        showToast('Orçamento atualizado.');
+      } else {
+        orcamentos.unshift(orcamento);
+        showToast('Orçamento salvo.');
+      }
+      orcamentoEmEdicao = null;
       currentTab = 'lista'; renderTabs(); renderView();
     }
   });
@@ -827,7 +855,7 @@ function renderLista(main){
   `;
   const btnNovo = document.getElementById('btnNovoOrcamento');
   if(btnNovo){
-    btnNovo.addEventListener('click', ()=>{ currentTab = 'novo'; renderTabs(); renderView(); });
+    btnNovo.addEventListener('click', ()=>{ orcamentoEmEdicao = null; currentTab = 'novo'; renderTabs(); renderView(); });
   }
   document.querySelectorAll('[data-filtrovend]').forEach(b=>{
     b.addEventListener('click', ()=>{
@@ -897,20 +925,28 @@ function abrirDetalheOrcamento(o){
     </table>
     <p style="margin-top:10px; font-weight:700;">Total: ${fmtMoeda(o.valorTotal)}</p>
     ${o.observacoes ? `<p class="muted">${escapeHtml(o.observacoes)}</p>` : ''}
-    <div class="field" style="margin-top:14px;">
-      <label>Status</label>
+    <div class="section-label" style="margin-top:16px;">Mudar status</div>
+    <div class="field">
       <select id="orcStatusSel">${statusList().map(s=>`<option value="${s.id}" ${o.status===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-accent" id="btnSalvarStatusOrc">Salvar status</button>
-      ${o.telefone && infoAtual && infoAtual.mensagemWhatsapp ? `<button class="btn btn-wa" id="btnWhatsappOrc">${waIconSvg(16)} Enviar WhatsApp</button>` : ''}
-      ${o.email && infoAtual && infoAtual.mensagemEmail ? `<button class="btn btn-accent" id="btnEmailOrc">✉️ Enviar e-mail</button>` : ''}
+      <button class="btn btn-accent" id="btnSalvarStatusOrc">💾 Mudar status</button>
+      <button class="btn btn-ghost" id="btnEditarOrc">✎ Editar orçamento</button>
+      ${o.telefone ? `<button class="btn btn-wa" id="btnWhatsappOrc">${waIconSvg(16)} Enviar WhatsApp</button>` : ''}
+      ${o.email ? `<button class="btn btn-accent" id="btnEmailOrc">✉️ Enviar e-mail</button>` : ''}
       <button class="btn btn-accent" id="btnImprimirOrc">🖨️ Imprimir</button>
       <button class="btn btn-ghost" id="btnFecharDetalheOrc">Fechar</button>
     </div>
   `);
   document.getElementById('btnFecharDetalheOrc').addEventListener('click', closeModal);
   document.getElementById('btnImprimirOrc').addEventListener('click', ()=> printOrcamento(o));
+  document.getElementById('btnEditarOrc').addEventListener('click', ()=>{
+    orcamentoEmEdicao = o;
+    closeModal();
+    currentTab = 'novo';
+    renderTabs();
+    renderView();
+  });
 
   document.getElementById('btnSalvarStatusOrc').addEventListener('click', async ()=>{
     o.status = document.getElementById('orcStatusSel').value;
@@ -920,7 +956,8 @@ function abrirDetalheOrcamento(o){
   const btnWhatsapp = document.getElementById('btnWhatsappOrc');
   if(btnWhatsapp){
     btnWhatsapp.addEventListener('click', ()=>{
-      const msg = encodeURIComponent(montarMensagemStatus(o, infoAtual.mensagemWhatsapp));
+      const template = (infoAtual && infoAtual.mensagemWhatsapp) || MENSAGEM_WHATSAPP_PADRAO;
+      const msg = encodeURIComponent(montarMensagemStatus(o, template));
       const url = `https://wa.me/55${onlyDigits(o.telefone)}?text=${msg}`;
       const a = document.createElement('a');
       a.href = url; a.target = '_blank'; a.rel = 'noopener';
@@ -932,8 +969,8 @@ function abrirDetalheOrcamento(o){
     btnEmail.addEventListener('click', async ()=>{
       btnEmail.disabled = true; btnEmail.textContent = 'Enviando...';
       try{
-        const assunto = montarMensagemStatus(o, infoAtual.assuntoEmail || 'Seu orçamento na Vilaça Joias');
-        const corpo = montarMensagemStatus(o, infoAtual.mensagemEmail);
+        const assunto = montarMensagemStatus(o, (infoAtual && infoAtual.assuntoEmail) || MENSAGEM_EMAIL_ASSUNTO_PADRAO);
+        const corpo = montarMensagemStatus(o, (infoAtual && infoAtual.mensagemEmail) || MENSAGEM_EMAIL_PADRAO);
         const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
           method:'POST',
           headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
