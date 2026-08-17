@@ -946,7 +946,8 @@
     try{
       const { error } = await supabaseClient.from(table).upsert({ id: record.id, payload: record, updated_at: new Date().toISOString() });
       if(error) throw error;
-    }catch(e){ console.error("Erro ao salvar registro:", e); }
+      return true;
+    }catch(e){ console.error("Erro ao salvar registro:", e); return false; }
   }
 
   async function deleteRecord(tab, id){
@@ -954,7 +955,8 @@
     try{
       const { error } = await supabaseClient.from(table).delete().eq("id", id);
       if(error) throw error;
-    }catch(e){ console.error("Erro ao excluir registro:", e); }
+      return true;
+    }catch(e){ console.error("Erro ao excluir registro:", e); return false; }
   }
 
   /* ================= DOM refs ================= */
@@ -1150,7 +1152,7 @@
   // rascunho já existente sendo continuado, salva automaticamente como rascunho
   // (sem senha) em vez de descartar. Se for edição de um registro normal, reverte
   // as alterações não salvas (comportamento de "Sair" que já existia).
-  function fecharRegistroAberto(){
+  async function fecharRegistroAberto(){
     const id = [...state.openIds][0];
     if(id === undefined){ return; }
     const arr = state.tab === "transferencias" ? state.transferencias : state.reposicao;
@@ -1165,7 +1167,8 @@
       if(mudouAlgo){
         // usuário chegou a preencher algo: salva como rascunho
         r.rascunho = true;
-        saveRecord(state.tab, r);
+        const ok = await saveRecord(state.tab, r);
+        if(!ok) showToast("⚠ Não deu pra salvar o rascunho — sem internet? Confira sua conexão e tente preencher de novo.");
       }else{
         // só abriu e saiu sem tocar em nada: descarta, não vira rascunho
         state[state.tab] = state[state.tab].filter(x=>x.id!==id);
@@ -1174,7 +1177,8 @@
       if(r.rascunho){
         state.editIds.delete(id);
         state.editSnapshots.delete(id);
-        saveRecord(state.tab, r);
+        const ok = await saveRecord(state.tab, r);
+        if(!ok) showToast("⚠ Não deu pra salvar o rascunho — sem internet? Confira sua conexão e tente preencher de novo.");
       }else{
         const snap = state.editSnapshots.get(id);
         if(snap){
@@ -1348,10 +1352,14 @@
       btn.addEventListener("click", (e)=>{
         e.stopPropagation();
         const tab = btn.dataset.tab, id = btn.dataset.id;
-        requestPassword("Excluir este registro (ação definitiva) — digite a senha:").then(ok=>{
+        requestPassword("Excluir este registro (ação definitiva) — digite a senha:").then(async ok=>{
           if(!ok) return;
+          const sucesso = await deleteRecord(tab, id);
+          if(!sucesso){
+            showToast("⚠ Não deu pra excluir agora — sem internet? O registro continua na lista.");
+            return;
+          }
           state[tab] = state[tab].filter(x=>x.id!==id);
-          deleteRecord(tab, id);
           render();
         });
       });
@@ -2337,16 +2345,14 @@
         const estavaEditando = state.editIds.has(r.id);
         if(estavaEditando){
           const antes = state.editSnapshots.get(r.id);
-          state.editIds.delete(r.id);
-          state.editSnapshots.delete(r.id);
-          state.unsavedNew.delete(r.id);
-          state.pristineSnapshots.delete(r.id);
           if(state.tab === "transferencias" && antes && r.tipoTransf === "SAÍDA"){
             if(!antes.vistoBaixaEstoque && r.vistoBaixaEstoque) await moverEstoqueTransferencia(r, "baixa", -1);
             else if(antes.vistoBaixaEstoque && !r.vistoBaixaEstoque) await moverEstoqueTransferencia(r, "baixa", 1);
             if(!antes.vistoEntradaEstoque && r.vistoEntradaEstoque) await moverEstoqueTransferencia(r, "entrada", 1);
             else if(antes.vistoEntradaEstoque && !r.vistoEntradaEstoque) await moverEstoqueTransferencia(r, "entrada", -1);
           }
+          const rascunhoAntes = r.rascunho;
+          const numeroAntes = r.numero;
           // Ao concluir a edição explicitamente, o registro deixa de ser rascunho
           // (mesmo que ainda falte visto/nome/data — vira uma pendência normal).
           r.rascunho = false;
@@ -2356,7 +2362,20 @@
           if(!r.numero){
             r.numero = proximoNumeroTransacao(state.tab, r);
           }
-          saveRecord(state.tab, r); // só salva ao clicar em "Concluir edição"
+          const salvouOk = await saveRecord(state.tab, r); // só salva ao clicar em "Concluir edição"
+          if(!salvouOk){
+            // Não conseguiu salvar (sem internet, banco fora do ar, etc.) — desfaz as
+            // marcações que só fazem sentido se tivesse salvo, avisa claramente e
+            // MANTÉM a tela aberta em edição, pra não perder o que foi preenchido.
+            r.rascunho = rascunhoAntes;
+            r.numero = numeroAntes;
+            alert("⚠ Não foi possível salvar as alterações agora.\n\nVerifique sua internet e tente clicar em \"Concluir edição\" de novo. A tela não vai fechar sozinha pra você não perder o que preencheu.");
+            return;
+          }
+          state.editIds.delete(r.id);
+          state.editSnapshots.delete(r.id);
+          state.unsavedNew.delete(r.id);
+          state.pristineSnapshots.delete(r.id);
           // Concluir fecha a tela e volta pra tela anterior (Home/Finalizadas/etc.)
           state.openIds.delete(r.id);
           render();
