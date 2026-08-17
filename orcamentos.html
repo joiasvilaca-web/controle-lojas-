@@ -138,7 +138,6 @@ html.embedded .mobile-tabbar{display:none !important;}
       <button class="icon-btn icon-btn-sair" id="btnLogout" title="Sair">🚪</button>
     </div>
   </header>
-  <div id="lojaFaixa" style="display:none; width:100%; padding:8px 16px; color:#fff; font-family:'Cormorant Garamond',serif; font-size:15px; font-weight:700; text-align:center; text-shadow:0 1px 2px rgba(0,0,0,.25);"></div>
   <main id="mainContent"></main>
   <nav class="mobile-tabbar" id="mobileTabbar"></nav>
 </div>
@@ -154,7 +153,7 @@ const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 let config = null;
 let orcamentos = [];
 let currentUser = null;
-let currentTab = 'novo';
+let currentTab = 'lista';
 let __gatewaySenha = null;
 
 async function gatewayCall(body){
@@ -543,17 +542,6 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
 }
 
 const EMBEDDED = window.self !== window.top;
-function atualizarFaixaLoja(){
-  const faixa = document.getElementById('lojaFaixa');
-  if(!faixa) return;
-  if(window.__lojaAtual && window.__lojaAtual.nome){
-    faixa.style.display = 'block';
-    faixa.style.background = window.__lojaAtual.cor || '#7a1f3d';
-    faixa.textContent = '🏬 ' + window.__lojaAtual.nome;
-  } else {
-    faixa.style.display = 'none';
-  }
-}
 if(EMBEDDED){
   document.documentElement.classList.add('embedded');
   window.addEventListener('message', async (ev)=>{
@@ -574,7 +562,6 @@ if(EMBEDDED){
       if(__gatewaySenha){ clientes = await clientesGet(); }
     } else if(ev.data.type === 'lojaAtual'){
       window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
-      atualizarFaixaLoja();
       if(currentUser) renderView();
     }
   });
@@ -609,19 +596,24 @@ function enterApp(){
   document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
   buildTabs();
-  currentTab = 'novo';
+  currentTab = 'lista';
   if(EMBEDDED){
     const permitido = tabsForLevel();
-    if(!permitido.some(t=>t.id===currentTab)) currentTab = permitido[0] ? permitido[0].id : 'novo';
+    if(!permitido.some(t=>t.id===currentTab)) currentTab = permitido[0] ? permitido[0].id : (podeCriarOrcamento() ? 'novo' : 'lista');
     parent.postMessage({ type:'tabs', modulo:'orcamentos', tabs: permitido, active: currentTab }, '*');
   }
   renderTabs();
   renderView();
 }
 
+/* "Novo orçamento" deixou de ser aba própria (agora é um botão dentro de "Orçamentos"),
+ * mas a permissão por perfil (Cadastro → Perfis de Acesso) continua sendo respeitada aqui. */
+function podeCriarOrcamento(){
+  if(!window.__permissoesAbasOverride) return true;
+  return window.__permissoesAbasOverride.novo !== false;
+}
 function tabsForLevel(){
   const t = [
-    { id:'novo', label:'Novo orçamento', icon:'📝' },
     { id:'lista', label:'Orçamentos', icon:'📋' },
   ];
   if(window.__permissoesAbasOverride) return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
@@ -671,6 +663,7 @@ function renderNovo(main){
   const validadePadrao = new Date(); validadePadrao.setDate(validadePadrao.getDate()+15);
   main.innerHTML = `
     <div class="page-head">
+      <button type="button" class="btn btn-ghost btn-sm" id="btnVoltarOrcLista" style="margin-bottom:12px;">← Voltar</button>
       <h1 class="page-title">Novo orçamento</h1>
       <p class="page-sub">Como uma pré-venda: fica pendente até você aprovar (e virar venda/O.S. de verdade) ou recusar.</p>
     </div>
@@ -696,6 +689,7 @@ function renderNovo(main){
       <button class="btn btn-accent" id="btnSalvarOrcamento" style="margin-top:10px;">Salvar orçamento</button>
     </div>
   `;
+  document.getElementById('btnVoltarOrcLista').addEventListener('click', ()=>{ currentTab = 'lista'; renderTabs(); renderView(); });
   let itens = [];
   function drawItens(){
     const wrap = document.getElementById('itensRows');
@@ -800,6 +794,7 @@ function renderLista(main){
       <h1 class="page-title">Orçamentos</h1>
       <p class="page-sub">Acompanhe o status de cada orçamento (configurável em Configurações → Status de Orçamento).</p>
     </div>
+    ${podeCriarOrcamento() ? `<button type="button" class="btn btn-accent" id="btnNovoOrcamento" style="margin-bottom:18px;">📝 Novo orçamento</button>` : ''}
     ${avisos.length>0 ? `<div class="alerta-vencimento">⚠️ ${avisos.length} orçamento(s) vencendo em até 3 dias ou já vencido(s) sem decisão. Dá uma olhada na lista abaixo.</div>` : ''}
     ${abertos5dias.length>0 ? `
       <div class="card" style="border:1px solid var(--danger); background:var(--danger-soft);">
@@ -830,6 +825,10 @@ function renderLista(main){
       </table>
     </div>
   `;
+  const btnNovo = document.getElementById('btnNovoOrcamento');
+  if(btnNovo){
+    btnNovo.addEventListener('click', ()=>{ currentTab = 'novo'; renderTabs(); renderView(); });
+  }
   document.querySelectorAll('[data-filtrovend]').forEach(b=>{
     b.addEventListener('click', ()=>{
       document.getElementById('fVendedora').value = b.dataset.filtrovend;
@@ -881,8 +880,7 @@ function renderLista(main){
   if(window.__lojaAtual && window.__lojaAtual.id){
     const fLoja = document.getElementById('fLoja');
     fLoja.value = window.__lojaAtual.id;
-    fLoja.disabled = true;
-    fLoja.title = 'Filtrando pela loja ativa — pra ver outra loja, troque em "Loja" no menu.';
+    fLoja.title = 'Filtrando pela loja ativa — selecione outra loja ou "Todas as lojas" pra ver as demais.';
     draw();
   }
 }
