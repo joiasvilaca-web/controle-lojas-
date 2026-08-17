@@ -319,6 +319,27 @@ function estaVencido(o){
   if(info && info.encerra) return false;
   return !!(o.validade && o.validade < todayStr());
 }
+function diasDesdeCriacao(o){
+  const base = o.data || (o.criadoEm ? new Date(o.criadoEm).toISOString().slice(0,10) : null);
+  if(!base) return 0;
+  const hoje = new Date(todayStr()+'T00:00:00');
+  const d0 = new Date(base+'T00:00:00');
+  return Math.max(0, Math.floor((hoje - d0) / 86400000));
+}
+/* Acompanhamento automático (local a este módulo): a cada X dias sem decisão, o rótulo do
+ * status avança sozinho e libera um lembrete de "Enviar mensagem". Só some quando o
+ * orçamento é aprovado ou recusado de verdade (status que "encerra" o fluxo) — aí a
+ * progressão automática para. */
+function estagioAutoOrcamento(o){
+  if(o.rascunho) return null;
+  const info = statusInfoDe(o.status);
+  if(info && info.encerra) return null; // aprovado/recusado manual: desativa o automático
+  const dias = diasDesdeCriacao(o);
+  if(dias >= 15) return { nome:'Recusado', cor:'vermelho', flagMsg:'mensagemEnviadaAuto15', msgPadrao:'Olá {cliente}, seu orçamento na Vilaça Joias (valor {valor}) ficou muito tempo sem retorno e foi encerrado automaticamente. Se ainda tiver interesse, é só chamar 💛' };
+  if(dias >= 7) return { nome:'Prorrogado à ação', cor:'neutro', flagMsg:'mensagemEnviadaAuto7', msgPadrao:'Olá {cliente}! Seu orçamento na Vilaça Joias, no valor de {valor}, já está em aberto há uma semana. Podemos fechar?' };
+  if(dias >= 3) return { nome:'Ação de fixação', cor:'neutro', flagMsg:'mensagemEnviadaAuto3', msgPadrao:'Olá {cliente}! Passando pra saber se ficou alguma dúvida sobre o seu orçamento na Vilaça Joias, no valor de {valor}. Posso ajudar a fechar?' };
+  return { nome:'Aberto', cor:'neutro', flagMsg:null };
+}
 function diasParaVencer(o){
   if(!o.validade) return null;
   const hoje = new Date(todayStr()+'T00:00:00');
@@ -936,13 +957,13 @@ function renderLista(main){
     tbody.innerHTML = lista.map(o=>{
       const info = statusInfoDe(o.status);
       const vencido = estaVencido(o);
+      const auto = estagioAutoOrcamento(o);
       let classeBadge, rotuloStatus;
       if(o.rascunho){ classeBadge = 'badge-rascunho'; rotuloStatus = 'Rascunho'; }
-      else if(vencido){ classeBadge = 'badge-vencido'; rotuloStatus = info ? info.nome : o.status; }
-      else if(o.status==='cutucado'){ classeBadge = 'badge-cutucado'; rotuloStatus = info ? info.nome : o.status; }
-      else if(o.status==='recusado'){ classeBadge = 'badge-recusado-status'; rotuloStatus = info ? info.nome : o.status; }
-      else if(o.status==='aprovado' || (info && info.encerra)){ classeBadge = 'badge-aprovado'; rotuloStatus = info ? info.nome : o.status; }
+      else if(auto){ classeBadge = auto.cor==='vermelho' ? 'badge-vencido' : 'badge-pendente'; rotuloStatus = auto.nome; }
+      else if(info && info.encerra){ classeBadge = (o.status==='recusado') ? 'badge-vencido' : 'badge-aprovado'; rotuloStatus = info.nome; }
       else { classeBadge = 'badge-pendente'; rotuloStatus = info ? info.nome : o.status; }
+      const precisaMsg = auto && auto.flagMsg && !o[auto.flagMsg] && o.telefone;
       return `<tr>
         <td>${escapeHtml(o.cliente)}</td>
         <td><span class="badge badge-loja">${escapeHtml(o.loja||'—')}</span></td>
@@ -951,6 +972,7 @@ function renderLista(main){
         <td>${fmtMoeda(o.valorTotal)}</td>
         <td>
           <span class="badge ${classeBadge}" data-orcstatus="${o.id}" title="${o.rascunho ? 'Clique para continuar preenchendo' : 'Clique para mudar o status'}" style="cursor:pointer;">${escapeHtml(rotuloStatus)}</span>
+          ${precisaMsg ? `<button class="btn btn-sm" data-enviarmsgauto="${o.id}" style="margin-left:6px; background:var(--danger); color:#fff; border:none;">✉️ Enviar mensagem</button>` : ''}
         </td>
         <td style="white-space:nowrap;">
           ${o.telefone ? `<button class="icon-btn icon-btn-wa" data-orcwa="${o.id}" title="WhatsApp">${waIconSvg()}</button>` : ''}
@@ -963,6 +985,9 @@ function renderLista(main){
     }).join('');
     tbody.querySelectorAll('[data-ver]').forEach(b=>{
       b.addEventListener('click', ()=> abrirDetalheOrcamento(orcamentos.find(o=>o.id===b.dataset.ver)) );
+    });
+    tbody.querySelectorAll('[data-enviarmsgauto]').forEach(b=>{
+      b.addEventListener('click', ()=> enviarMensagemAutoOrc(b.dataset.enviarmsgauto) );
     });
     tbody.querySelectorAll('[data-editar]').forEach(b=>{
       b.addEventListener('click', ()=>{
@@ -1031,6 +1056,23 @@ async function mudarStatusOrcRapido(orcId){
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
 }
+/** Lembrete automático de follow-up (3/7/15 dias sem decisão) — dispara o WhatsApp com a
+ * mensagem do estágio atual e marca a flag pra o botão "Enviar mensagem" sumir depois. */
+async function enviarMensagemAutoOrc(orcId){
+  const o = orcamentos.find(x=>x.id===orcId);
+  if(!o || !o.telefone) return;
+  const auto = estagioAutoOrcamento(o);
+  if(!auto || !auto.flagMsg) return;
+  const msg = encodeURIComponent(montarMensagemStatus(o, auto.msgPadrao));
+  const url = `https://wa.me/55${onlyDigits(o.telefone)}?text=${msg}`;
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  o[auto.flagMsg] = true;
+  await orcamentoSalvar(o);
+  renderView();
+}
+
 function enviarWhatsAppOrcId(orcId){
   const o = orcamentos.find(x=>x.id===orcId);
   if(!o || !o.telefone){ showToast('Este orçamento não tem telefone salvo.'); return; }
