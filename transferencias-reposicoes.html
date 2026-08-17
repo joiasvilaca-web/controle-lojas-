@@ -623,7 +623,7 @@
   function newTransfer(){
     const hoje = todayISO();
     return {
-      id: uid(), kind:"transfer", rascunho:false,
+      id: uid(), kind:"transfer", rascunho:false, numero:"",
       data: hoje, solicitante:"", lojaSolicitante:"",
       transferItens: [ITEM_FACTORIES.transferItens()],
       lojaOrigem:"", lojaDestino:"", tipoTransf:"",
@@ -640,7 +640,7 @@
   function newReposicao(){
     const hoje = todayISO();
     return {
-      id: uid(), kind:"reposicao", rascunho:false,
+      id: uid(), kind:"reposicao", rascunho:false, numero:"",
       data: hoje, solicitante:"", loja:"", obsPedido:"",
       pedidoItens: [ITEM_FACTORIES.pedidoItens()],
       disponibilizadoItens: [ITEM_FACTORIES.disponibilizadoItens()],
@@ -741,6 +741,7 @@
   /* ================= STORAGE ================= */
   function normalizeTransfer(r){
     if(r.rascunho === undefined) r.rascunho = false;
+    if(r.numero === undefined) r.numero = "";
     if(r.lojaSolicitante === undefined) r.lojaSolicitante = "";
     if(r.osSaida === undefined) r.osSaida = "";
     if(r.osEntrada === undefined) r.osEntrada = "";
@@ -760,6 +761,7 @@
 
   function normalizeReposicao(r){
     if(r.rascunho === undefined) r.rascunho = false;
+    if(r.numero === undefined) r.numero = "";
     ["pedidoItens","disponibilizadoItens"].forEach(k=>{
       if(Array.isArray(r[k])){
         r[k].forEach(it=>{ if(it.metal === undefined) it.metal = ""; });
@@ -845,6 +847,56 @@
       if(error) throw error;
       state.reposicao = (data || []).map(row => normalizeReposicao(row.payload));
     }catch(e){ console.error("Erro ao carregar reposições:", e); state.reposicao = []; }
+    atribuirNumerosRetroativos();
+  }
+
+  /* ================= NÚMERO SEQUENCIAL DA TRANSAÇÃO (T-/S-/R-) ================= */
+  function prefixoTransacao(tab, r){
+    if(tab === "transferencias") return r.tipoTransf === "SAÍDA" ? "S" : "T";
+    return "R";
+  }
+  function proximoNumeroTransacao(tab, r){
+    const prefixo = prefixoTransacao(tab, r);
+    const arr = tab === "transferencias" ? state.transferencias : state.reposicao;
+    let maxN = 0;
+    arr.forEach(x=>{
+      if(x.numero && x.numero.indexOf(prefixo + "-") === 0){
+        const n = parseInt(x.numero.slice(prefixo.length + 1), 10);
+        if(!isNaN(n) && n > maxN) maxN = n;
+      }
+    });
+    return prefixo + "-" + (maxN + 1);
+  }
+  // Dá número sequencial pros registros já existentes (que ainda não têm), respeitando
+  // a ordem de criação (created_at) já usada em loadData(). Roda uma vez a cada carregamento;
+  // registros que já têm número são só usados pra não repetir a contagem.
+  function atribuirNumerosRetroativos(){
+    let contT = 0, contS = 0, contR = 0;
+    state.transferencias.forEach(r=>{
+      if(r.numero){
+        const m = /^([TS])-(\d+)$/.exec(r.numero);
+        if(m){ const n = parseInt(m[2],10); if(m[1]==="T" && n>contT) contT=n; if(m[1]==="S" && n>contS) contS=n; }
+      }
+    });
+    state.reposicao.forEach(r=>{
+      if(r.numero){
+        const m = /^R-(\d+)$/.exec(r.numero);
+        if(m){ const n = parseInt(m[1],10); if(n>contR) contR=n; }
+      }
+    });
+    state.transferencias.forEach(r=>{
+      if(!r.numero && r.tipoTransf){
+        if(r.tipoTransf === "SAÍDA"){ contS++; r.numero = "S-"+contS; }
+        else { contT++; r.numero = "T-"+contT; }
+        saveRecord("transferencias", r);
+      }
+    });
+    state.reposicao.forEach(r=>{
+      if(!r.numero){
+        contR++; r.numero = "R-"+contR;
+        saveRecord("reposicao", r);
+      }
+    });
   }
 
   const CONFIG_ROW_ID = "config";
@@ -1379,7 +1431,7 @@
         <div class="crow-top">
           <div class="crow-stamp">${escapeHtml(hp.loja)}</div>
           <div class="crow-main">
-            <div class="crow-title">${escapeHtml(hp.produtos)} · ${escapeHtml(hp.titleRight)}</div>
+            <div class="crow-title">${r.numero ? `<b>${escapeHtml(r.numero)}</b> · ` : ""}${escapeHtml(hp.produtos)} · ${escapeHtml(hp.titleRight)}</div>
             <div class="crow-sub">${isDraft ? "RASCUNHO · " : ""}${escapeHtml(hp.sub)}</div>
           </div>
           <div class="crow-actions">${icons}</div>
@@ -1572,6 +1624,7 @@
   *{ box-sizing:border-box; }
   html, body{ width:80mm; margin:0; }
   body{ font-family: Arial, Helvetica, sans-serif; padding:3mm; color:#000; font-weight:600; }
+  .print-numero{ font-size:14pt; font-weight:900; letter-spacing:.03em; color:#000; margin-bottom:1mm; }
   h1{ font-size:15pt; font-weight:800; margin:0 0 1.5mm; color:#000; line-height:1.25; }
   .print-sub{ color:#000; font-size:9pt; font-weight:700; margin-bottom:2.5mm; }
   .print-status{ display:inline-block; padding:1.5mm 3mm; border:1.6px solid #000; font-size:9pt; font-weight:800; margin-bottom:3mm; letter-spacing:.02em; }
@@ -1587,6 +1640,7 @@
 </style>
 </head>
 <body>
+  <div class="print-numero">${escapeHtml(r.numero || "—")}</div>
   <h1>${isTransf ? "Transferência entre lojas" : "Reposição de mercadoria"}</h1>
   <div class="print-sub">Registro de ${escapeHtml(r.data||"—")}</div>
   ${bodyHtml}
@@ -1619,7 +1673,7 @@
     head.innerHTML = `
       <div class="stamp">${escapeHtml(hp.loja)}</div>
       <div class="head-main">
-        <div class="head-title">${escapeHtml(hp.produtos)} · ${escapeHtml(hp.titleRight)}</div>
+        <div class="head-title">${r.numero ? `<b>${escapeHtml(r.numero)}</b> · ` : ""}${escapeHtml(hp.produtos)} · ${escapeHtml(hp.titleRight)}</div>
         <div class="head-sub">${escapeHtml(hp.sub)}</div>
       </div>
       <div class="status-badge ${cls}">${statusLabel(status)}</div>
@@ -2300,6 +2354,12 @@
           // Ao concluir a edição explicitamente, o registro deixa de ser rascunho
           // (mesmo que ainda falte visto/nome/data — vira uma pendência normal).
           r.rascunho = false;
+          // Gera o número sequencial da transação na primeira vez que for concluída
+          // (T-/S- para transferência conforme o tipo, R- para reposição). Uma vez
+          // gerado, não muda mais em edições seguintes.
+          if(!r.numero){
+            r.numero = proximoNumeroTransacao(state.tab, r);
+          }
           saveRecord(state.tab, r); // só salva ao clicar em "Concluir edição"
           // Concluir fecha a tela e volta pra tela anterior (Home/Finalizadas/etc.)
           state.openIds.delete(r.id);
