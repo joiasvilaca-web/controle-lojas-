@@ -156,6 +156,8 @@
   .back-btn:hover{background:var(--accent-soft);}
 
   .home-launch-grid{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;}
+  .home-launch-grid-3{grid-template-columns:1fr 1fr 1fr;}
+  @media (max-width:760px){ .home-launch-grid-3{grid-template-columns:1fr;} }
   @media (max-width:640px){ .home-launch-grid{grid-template-columns:1fr;} }
   .home-launch-btn{
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
@@ -167,6 +169,12 @@
   .home-launch-btn .vh-icon{font-size:40px;}
   .home-launch-btn .vh-label{font-size:17px; font-weight:800;}
   .home-launch-btn .vh-sub{font-size:12px; color:var(--muted); text-align:center;}
+  .home-launch-troca{background:linear-gradient(135deg,#EAF2FF,#D9E8FF); border-color:rgba(29,95,191,0.3);}
+  .home-launch-troca .vh-label{color:#1D4E96;}
+  .home-launch-troca:hover{border-color:#1D5FBF; box-shadow:0 6px 18px rgba(29,95,191,0.3);}
+  .home-launch-saida{background:linear-gradient(135deg,#FFF1E6,#FFE1CC); border-color:rgba(193,68,14,0.3);}
+  .home-launch-saida .vh-label{color:#A63A0C;}
+  .home-launch-saida:hover{border-color:#C1440E; box-shadow:0 6px 18px rgba(193,68,14,0.3);}
 
   .home-finalizados-btn{
     display:flex; align-items:center; justify-content:center; gap:8px; width:100%; text-align:center;
@@ -471,7 +479,9 @@
     editIds: new Set(),
     unsavedNew: new Set(),
     editSnapshots: new Map(),
-    screen: "home", // "home" | "tipoChoice" | "finalizados"
+    pristineSnapshots: new Map(), // snapshot do registro no instante em que foi criado — usado
+                                   // pra saber se o usuário chegou a preencher algo antes de sair
+    screen: "home", // "home" | "finalizados"
     screenStack: [],
     autoStoreFilter: null, // preenchido para vendedora (filtro automático de loja na Home)
   };
@@ -1037,7 +1047,6 @@
     if(storesRowEl) storesRowEl.innerHTML = STORES.map(s=>`<div class="store-stamp">${escapeHtml(s)}</div>`).join("");
     renderBackBar();
     renderFullscreenLayer();
-    if(state.screen === "tipoChoice"){ renderTipoChoiceScreen(); return; }
     if(state.screen === "finalizados"){ renderFinalizadosScreen(); return; }
     renderHomeScreen();
   }
@@ -1073,11 +1082,20 @@
     const arr = state.tab === "transferencias" ? state.transferencias : state.reposicao;
     const r = arr.find(x=>x.id===id);
     if(r && state.unsavedNew.has(id)){
-      r.rascunho = true;
+      const pristine = state.pristineSnapshots.get(id);
+      const mudouAlgo = pristine === undefined || JSON.stringify(r) !== pristine;
       state.unsavedNew.delete(id);
       state.editIds.delete(id);
       state.editSnapshots.delete(id);
-      saveRecord(state.tab, r);
+      state.pristineSnapshots.delete(id);
+      if(mudouAlgo){
+        // usuário chegou a preencher algo: salva como rascunho
+        r.rascunho = true;
+        saveRecord(state.tab, r);
+      }else{
+        // só abriu e saiu sem tocar em nada: descarta, não vira rascunho
+        state[state.tab] = state[state.tab].filter(x=>x.id!==id);
+      }
     }else if(r && state.editIds.has(id)){
       if(r.rascunho){
         state.editIds.delete(id);
@@ -1158,6 +1176,7 @@
     state.openIds.add(rec.id);
     state.editIds.add(rec.id);
     state.unsavedNew.add(rec.id);
+    state.pristineSnapshots.set(rec.id, JSON.stringify(rec));
     render();
   }
 
@@ -1229,6 +1248,7 @@
   function descartarRascunho(tab, id){
     // rascunho descartado pelo próprio autor: sem exigência de senha, conforme combinado
     state[tab] = state[tab].filter(x=>x.id!==id);
+    state.pristineSnapshots.delete(id);
     deleteRecord(tab, id);
     render();
   }
@@ -1367,12 +1387,15 @@
     listaR = listaR.slice().sort(sortFn);
 
     listWrap.innerHTML = `
-      <div class="home-launch-grid">
-        <button type="button" class="home-launch-btn" id="btnLaunchTransfer">
-          <span class="vh-icon">🔁</span><span class="vh-label">Transferência</span><span class="vh-sub">Enviar ou trocar produtos entre lojas</span>
+      <div class="home-launch-grid home-launch-grid-3">
+        <button type="button" class="home-launch-btn home-launch-troca" id="btnLaunchTroca">
+          <span class="vh-icon">${TIPO_ICON["TROCA"]}</span><span class="vh-label">TROCA</span><span class="vh-sub">Troca de produto entre lojas</span>
+        </button>
+        <button type="button" class="home-launch-btn home-launch-saida" id="btnLaunchSaida">
+          <span class="vh-icon">${TIPO_ICON["SAÍDA"]}</span><span class="vh-label">SAÍDA</span><span class="vh-sub">Saída definitiva de mercadoria entre lojas</span>
         </button>
         <button type="button" class="home-launch-btn" id="btnLaunchReposicao">
-          <span class="vh-icon">📦</span><span class="vh-label">Reposição</span><span class="vh-sub">Pedido de reposição de vitrine</span>
+          <span class="vh-icon">📦</span><span class="vh-label">REPOSIÇÃO</span><span class="vh-sub">Pedido de reposição de vitrine</span>
         </button>
       </div>
       <button type="button" class="home-finalizados-btn" id="btnLaunchFinalizados">📋 Transações Finalizadas</button>
@@ -1387,10 +1410,11 @@
         </div>
       </div>
     `;
-    document.getElementById("btnLaunchTransfer").addEventListener("click", ()=>{
-      state.screenStack.push(state.screen);
-      state.screen = "tipoChoice";
-      render();
+    document.getElementById("btnLaunchTroca").addEventListener("click", ()=>{
+      showStartConfirm("transfer", "TROCA");
+    });
+    document.getElementById("btnLaunchSaida").addEventListener("click", ()=>{
+      showStartConfirm("transfer", "SAÍDA");
     });
     document.getElementById("btnLaunchReposicao").addEventListener("click", ()=>{
       showStartConfirm("reposicao", null);
@@ -1401,28 +1425,6 @@
       render();
     });
     wireCompactRows(listWrap);
-  }
-
-  /* ================= TELA: ESCOLHA TROCA/SAÍDA ================= */
-  function renderTipoChoiceScreen(){
-    listWrap.innerHTML = `
-      <div class="tipo-choice-intro">Transferência entre lojas — escolha o tipo:</div>
-      <div class="type-picker tipo-choice-grid">
-        <div class="type-opt" data-tipo="TROCA" data-action="choice-tipo">
-          <span class="t-icon">${TIPO_ICON["TROCA"]}</span>
-          <div class="t-name">TROCA</div>
-          <div class="t-desc">${TIPO_DESC["TROCA"]}</div>
-        </div>
-        <div class="type-opt" data-tipo="SAÍDA" data-action="choice-tipo">
-          <span class="t-icon">${TIPO_ICON["SAÍDA"]}</span>
-          <div class="t-name">SAÍDA</div>
-          <div class="t-desc">${TIPO_DESC["SAÍDA"]}</div>
-        </div>
-      </div>
-    `;
-    listWrap.querySelectorAll('[data-action="choice-tipo"]').forEach(el=>{
-      el.addEventListener("click", ()=> showStartConfirm("transfer", el.dataset.tipo));
-    });
   }
 
   /* ================= TELA: TRANSAÇÕES FINALIZADAS ================= */
@@ -2258,9 +2260,7 @@
           state.editIds.delete(r.id);
           state.editSnapshots.delete(r.id);
           state.unsavedNew.delete(r.id);
-          // Se "Baixa no estoque" ou "Entrada no estoque" mudou nesta edição (marcou ou
-          // desmarcou), movimenta o estoque de verdade — só transferência tipo SAÍDA mexe
-          // em estoque (TROCA é um empréstimo temporário, sempre volta pra origem).
+          state.pristineSnapshots.delete(r.id);
           if(state.tab === "transferencias" && antes && r.tipoTransf === "SAÍDA"){
             if(!antes.vistoBaixaEstoque && r.vistoBaixaEstoque) await moverEstoqueTransferencia(r, "baixa", -1);
             else if(antes.vistoBaixaEstoque && !r.vistoBaixaEstoque) await moverEstoqueTransferencia(r, "baixa", 1);
