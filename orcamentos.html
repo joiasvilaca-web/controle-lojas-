@@ -86,6 +86,7 @@ input[type=text], input[type=number], input[type=password], input[type=date], se
 .badge-vencido{background:var(--danger); color:#fff;}
 .badge-cutucado{background:#EAE0FB; color:#6B3FA0;}
 .badge-recusado-status{background:#3A3F44; color:#fff;}
+.badge-rascunho{background:#EDEDED; color:#666; border:1px dashed #b3b3b3;}
 .chip-vendedora{display:inline-flex; align-items:center; gap:6px; background:#fff; color:var(--danger); border:1.5px solid var(--danger); border-radius:999px; padding:7px 14px; font-size:12.5px; font-weight:800; cursor:pointer; transition:background .15s,color .15s;}
 .chip-vendedora:hover{background:var(--danger); color:#fff;}
 .filters{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
@@ -705,7 +706,44 @@ function renderNovo(main, orcamentoEditando){
       <button class="btn btn-accent" id="btnSalvarOrcamento" style="margin-top:10px;">${editando ? 'Salvar alterações' : 'Salvar orçamento'}</button>
     </div>
   `;
-  document.getElementById('btnVoltarOrcLista').addEventListener('click', ()=>{ orcamentoEmEdicao = null; currentTab = 'lista'; renderTabs(); renderView(); });
+  document.getElementById('btnVoltarOrcLista').addEventListener('click', async ()=>{
+    if(!editando && formOrcTemDados()){
+      await salvarComoRascunho();
+    }
+    orcamentoEmEdicao = null;
+    currentTab = 'lista'; renderTabs(); renderView();
+  });
+  /* Considera "preenchimento iniciado" quando já tem cliente, observação ou algum item com produto/qtd. */
+  function formOrcTemDados(){
+    const cliente = (document.getElementById('o_cliente').value||'').trim();
+    const obs = (document.getElementById('o_obs').value||'').trim();
+    const itensPreenchidos = itens.some(it=>it.produto && Number(it.quantidade)>0);
+    return !!(cliente || obs || itensPreenchidos);
+  }
+  async function salvarComoRascunho(){
+    const lojaId = document.getElementById('o_loja').value;
+    const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+    const vendedora = document.getElementById('o_vendedora').value;
+    const validade = document.getElementById('o_validade').value;
+    const cliente = document.getElementById('o_cliente').value.trim();
+    const telefone = document.getElementById('o_telefone').value.trim();
+    const email = document.getElementById('o_email').value.trim();
+    const itensValidos = itens.filter(it=>it.produto && Number(it.quantidade)>0);
+    const valorTotal = itensValidos.reduce((acc,it)=> acc + (Number(it.quantidade)||0)*(Number(it.valorUnitario)||0), 0);
+    const orcamento = {
+      id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
+      data: todayStr(), cliente: cliente || '(rascunho sem nome)', telefone, email,
+      itens: itensValidos, valorTotal,
+      observacoes: document.getElementById('o_obs').value.trim(),
+      status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
+      rascunho: true,
+    };
+    const ok = await orcamentoSalvar(orcamento);
+    if(ok){
+      orcamentos.unshift(orcamento);
+      showToast('Orçamento não finalizado — salvo como rascunho.');
+    }
+  }
   let itens = editando ? JSON.parse(JSON.stringify(orcamentoEditando.itens||[])) : [];
   function drawItens(){
     const wrap = document.getElementById('itensRows');
@@ -794,11 +832,13 @@ function renderNovo(main, orcamentoEditando){
       loja: loja?loja.nome:'', lojaId, vendedora, validade,
       cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
+      rascunho: false,
     } : {
       id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
       data: todayStr(), cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
       status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
+      rascunho: false,
     };
     const ok = await orcamentoSalvar(orcamento);
     if(ok){
@@ -889,12 +929,13 @@ function renderLista(main){
     tbody.innerHTML = lista.map(o=>{
       const info = statusInfoDe(o.status);
       const vencido = estaVencido(o);
-      let classeBadge;
-      if(vencido) classeBadge = 'badge-vencido';
-      else if(o.status==='cutucado') classeBadge = 'badge-cutucado';
-      else if(o.status==='recusado') classeBadge = 'badge-recusado-status';
-      else if(o.status==='aprovado' || (info && info.encerra)) classeBadge = 'badge-aprovado';
-      else classeBadge = 'badge-pendente';
+      let classeBadge, rotuloStatus;
+      if(o.rascunho){ classeBadge = 'badge-rascunho'; rotuloStatus = 'Rascunho'; }
+      else if(vencido){ classeBadge = 'badge-vencido'; rotuloStatus = info ? info.nome : o.status; }
+      else if(o.status==='cutucado'){ classeBadge = 'badge-cutucado'; rotuloStatus = info ? info.nome : o.status; }
+      else if(o.status==='recusado'){ classeBadge = 'badge-recusado-status'; rotuloStatus = info ? info.nome : o.status; }
+      else if(o.status==='aprovado' || (info && info.encerra)){ classeBadge = 'badge-aprovado'; rotuloStatus = info ? info.nome : o.status; }
+      else { classeBadge = 'badge-pendente'; rotuloStatus = info ? info.nome : o.status; }
       return `<tr>
         <td>${escapeHtml(o.cliente)}</td>
         <td><span class="badge badge-loja">${escapeHtml(o.loja||'—')}</span></td>
@@ -902,7 +943,7 @@ function renderLista(main){
         <td>${fmtDate(o.validade)}</td>
         <td>${fmtMoeda(o.valorTotal)}</td>
         <td>
-          <span class="badge ${classeBadge}" data-orcstatus="${o.id}" title="Clique para mudar o status" style="cursor:pointer;">${escapeHtml(info ? info.nome : o.status)}</span>
+          <span class="badge ${classeBadge}" data-orcstatus="${o.id}" title="${o.rascunho ? 'Clique para continuar preenchendo' : 'Clique para mudar o status'}" style="cursor:pointer;">${escapeHtml(rotuloStatus)}</span>
         </td>
         <td style="white-space:nowrap;">
           ${o.telefone ? `<button class="icon-btn icon-btn-wa" data-orcwa="${o.id}" title="WhatsApp">${waIconSvg()}</button>` : ''}
@@ -924,7 +965,17 @@ function renderLista(main){
       });
     });
     tbody.querySelectorAll('[data-orcstatus]').forEach(b=>{
-      b.addEventListener('click', ()=> mudarStatusOrcRapido(b.dataset.orcstatus) );
+      b.addEventListener('click', ()=>{
+        const o = orcamentos.find(x=>x.id===b.dataset.orcstatus);
+        if(o && o.rascunho){
+          orcamentoEmEdicao = o;
+          currentTab = 'novo';
+          renderTabs();
+          renderView();
+        } else {
+          mudarStatusOrcRapido(b.dataset.orcstatus);
+        }
+      });
     });
     tbody.querySelectorAll('[data-orcwa]').forEach(b=>{
       b.addEventListener('click', ()=> enviarWhatsAppOrcId(b.dataset.orcwa) );
@@ -964,6 +1015,7 @@ async function mudarStatusOrcRapido(orcId){
   document.getElementById('btnCancelarStatusRapido').addEventListener('click', closeModal);
   document.getElementById('btnSalvarStatusRapido').addEventListener('click', async ()=>{
     o.status = document.getElementById('novoStatusSelRapido').value;
+    o.rascunho = false;
     const ok = await orcamentoSalvar(o);
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
@@ -1035,6 +1087,7 @@ function abrirDetalheOrcamento(o){
 
   document.getElementById('btnSalvarStatusOrc').addEventListener('click', async ()=>{
     o.status = document.getElementById('orcStatusSel').value;
+    o.rascunho = false;
     const ok = await orcamentoSalvar(o);
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
