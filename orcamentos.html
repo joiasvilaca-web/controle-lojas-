@@ -324,11 +324,11 @@ function estaVencido(o){
 /* Prazos do acompanhamento automático (dias desde a criação do orçamento) — editáveis em
  * Configurações de mensagens de orçamento. Guardado em gestao_config, chave própria
  * (não mexe nas chaves usadas por outros módulos). */
-const PRAZOS_AUTO_MSG_PADRAO = { t1:3, t2:6, t3:9, tFinal:15 };
+const PRAZOS_AUTO_MSG_PADRAO = { t1:3, t2:6, t3:9, tFinal:15, diasValidade:15 };
 function prazosAutoMsg(){
   const p = config && config.orcamentoAutoMsgConfig;
   if(!p || p.t1==null || p.t2==null || p.t3==null || p.tFinal==null) return PRAZOS_AUTO_MSG_PADRAO;
-  return p;
+  return { diasValidade: PRAZOS_AUTO_MSG_PADRAO.diasValidade, ...p };
 }
 async function salvarPrazosAutoMsg(prazos){
   if(!config) config = {};
@@ -754,7 +754,8 @@ function produtoOptionsHtml(selected){
 }
 function renderNovo(main, orcamentoEditando){
   const editando = !!orcamentoEditando;
-  const validadePadrao = new Date(); validadePadrao.setDate(validadePadrao.getDate()+15);
+  const dataOrc = editando ? (orcamentoEditando.data || todayStr()) : todayStr();
+  const validadePadrao = new Date(dataOrc+'T00:00:00'); validadePadrao.setDate(validadePadrao.getDate()+prazosAutoMsg().diasValidade);
   main.innerHTML = `
     <div class="page-head">
       <button type="button" class="btn btn-ghost btn-sm" id="btnVoltarOrcLista" style="margin-bottom:12px;">← Voltar</button>
@@ -762,7 +763,8 @@ function renderNovo(main, orcamentoEditando){
       <p class="page-sub">${editando ? 'Altere os dados do orçamento e salve as alterações.' : 'Como uma pré-venda: fica pendente até você aprovar (e virar venda/O.S. de verdade) ou recusar.'}</p>
     </div>
     <div class="card">
-      <div class="grid-3">
+      <div class="grid-3" style="grid-template-columns:repeat(4,1fr);">
+        <div class="field"><label>Data do orçamento</label><input type="date" id="o_data" value="${dataOrc}"></div>
         <div class="field"><label>Loja</label><select id="o_loja"><option value="">Selecione</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${editando ? (orcamentoEditando.lojaId===l.id?'selected':'') : (window.__lojaAtual&&window.__lojaAtual.id===l.id?'selected':'')}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
         <div class="field"><label>Vendedora</label><select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>`<option value="${escapeHtml(nomeExibicaoFuncionario(f))}" ${editando && orcamentoEditando.vendedora===nomeExibicaoFuncionario(f)?'selected':''}>${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select></div>
         <div class="field"><label>Validade</label><input type="date" id="o_validade" value="${editando ? (orcamentoEditando.validade||'') : validadePadrao.toISOString().slice(0,10)}"></div>
@@ -811,7 +813,7 @@ function renderNovo(main, orcamentoEditando){
     const valorTotal = itensValidos.reduce((acc,it)=> acc + (Number(it.quantidade)||0)*(Number(it.valorUnitario)||0), 0);
     const orcamento = {
       id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
-      data: todayStr(), cliente: cliente || '(rascunho sem nome)', telefone, email,
+      data: document.getElementById('o_data').value || todayStr(), cliente: cliente || '(rascunho sem nome)', telefone, email,
       itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
       status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
@@ -894,6 +896,7 @@ function renderNovo(main, orcamentoEditando){
   if(editando) atualizarResumoClienteOrc();
 
   document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
+    const dataOrcamento = document.getElementById('o_data').value || todayStr();
     const lojaId = document.getElementById('o_loja').value;
     const vendedora = document.getElementById('o_vendedora').value;
     const validade = document.getElementById('o_validade').value;
@@ -908,7 +911,7 @@ function renderNovo(main, orcamentoEditando){
     const valorTotal = itensValidos.reduce((acc,it)=> acc + (Number(it.quantidade)||0)*(Number(it.valorUnitario)||0), 0);
     const orcamento = editando ? {
       ...orcamentoEditando,
-      loja: loja?loja.nome:'', lojaId, vendedora, validade,
+      data: dataOrcamento, loja: loja?loja.nome:'', lojaId, vendedora, validade,
       cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
       rascunho: false,
@@ -918,7 +921,7 @@ function renderNovo(main, orcamentoEditando){
       editadoManualmente: orcamentoEditando.rascunho ? (orcamentoEditando.editadoManualmente||false) : true,
     } : {
       id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
-      data: todayStr(), cliente, telefone, email, itens: itensValidos, valorTotal,
+      data: dataOrcamento, cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
       status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
       rascunho: false,
@@ -980,7 +983,7 @@ function renderLista(main){
     </div>
     <div class="card" style="padding:14px 18px; overflow-x:auto;">
       <table id="tabelaOrc">
-        <thead><tr><th>Cliente</th><th>Loja</th><th>Vendedora</th><th>Validade</th><th>Valor</th><th>Status</th><th style="text-align:right;">Ações</th></tr></thead>
+        <thead><tr><th>Cliente</th><th>Loja</th><th>Vendedora</th><th>Data</th><th>Validade</th><th>Valor</th><th>Status</th><th style="text-align:right;">Ações</th></tr></thead>
         <tbody id="tbodyOrc"></tbody>
       </table>
     </div>
@@ -1012,7 +1015,7 @@ function renderLista(main){
       return true;
     }).slice().reverse();
     const tbody = document.getElementById('tbodyOrc');
-    if(lista.length===0){ tbody.innerHTML = `<tr><td colspan="7" class="empty">Nenhum orçamento encontrado.</td></tr>`; return; }
+    if(lista.length===0){ tbody.innerHTML = `<tr><td colspan="8" class="empty">Nenhum orçamento encontrado.</td></tr>`; return; }
     // Aplica o encerramento automático (prazo final) antes de desenhar, se algum já bateu o prazo.
     lista.forEach(o=> aplicarPrazoFinalAutoSeNecessario(o));
     tbody.innerHTML = lista.map(o=>{
@@ -1036,6 +1039,7 @@ function renderLista(main){
         <td>${escapeHtml(o.cliente)}</td>
         <td><span class="badge badge-loja">${escapeHtml(o.loja||'—')}</span></td>
         <td>${escapeHtml(o.vendedora)}</td>
+        <td>${fmtDate(o.data)}</td>
         <td>${fmtDate(o.validade)}</td>
         <td>${fmtMoeda(o.valorTotal)}</td>
         <td>
@@ -1194,8 +1198,13 @@ function abrirConfigMsgAuto(){
   const p = prazosAutoMsg();
   openModal(`
     <h3 style="margin:0 0 6px;">Configurações de mensagens de orçamento</h3>
-    <p class="muted" style="margin-top:0;">Prazos (em dias, contados a partir da criação do orçamento) pra cada aviso automático de acompanhamento.</p>
-    <div class="grid-2" style="margin-top:14px;">
+    <div class="field" style="margin-top:14px;">
+      <label>Validade padrão dos orçamentos (dias)</label>
+      <input type="number" min="1" id="cfgDiasValidade" value="${p.diasValidade}">
+    </div>
+    <p class="muted" style="margin-top:4px; font-size:12.5px;">Ao abrir "Novo orçamento", o campo Validade já vem preenchido com a data do orçamento + esses dias.</p>
+    <p class="muted" style="margin-top:14px;">Prazos (em dias, contados a partir da criação do orçamento) pra cada aviso automático de acompanhamento.</p>
+    <div class="grid-2" style="margin-top:10px;">
       <div class="field"><label>1ª mensagem — "Aberto" → "Ação de fixação"</label><input type="number" min="1" id="cfgT1" value="${p.t1}"></div>
       <div class="field"><label>2ª mensagem — "Ação de fixação" → "Prorrogado à ação"</label><input type="number" min="1" id="cfgT2" value="${p.t2}"></div>
       <div class="field"><label>3ª mensagem — fecha o ciclo de avisos</label><input type="number" min="1" id="cfgT3" value="${p.t3}"></div>
@@ -1209,13 +1218,14 @@ function abrirConfigMsgAuto(){
   `);
   document.getElementById('btnCancelarCfgMsgAuto').addEventListener('click', closeModal);
   document.getElementById('btnSalvarCfgMsgAuto').addEventListener('click', async ()=>{
+    const diasValidade = Number(document.getElementById('cfgDiasValidade').value)||PRAZOS_AUTO_MSG_PADRAO.diasValidade;
     const t1 = Number(document.getElementById('cfgT1').value)||PRAZOS_AUTO_MSG_PADRAO.t1;
     const t2 = Number(document.getElementById('cfgT2').value)||PRAZOS_AUTO_MSG_PADRAO.t2;
     const t3 = Number(document.getElementById('cfgT3').value)||PRAZOS_AUTO_MSG_PADRAO.t3;
     const tFinal = Number(document.getElementById('cfgTFinal').value)||PRAZOS_AUTO_MSG_PADRAO.tFinal;
     if(!(t1<t2 && t2<t3 && t3<=tFinal)){ showToast('Os prazos precisam estar em ordem crescente (1ª < 2ª < 3ª ≤ final).'); return; }
-    const ok = await salvarPrazosAutoMsg({ t1, t2, t3, tFinal });
-    if(ok){ closeModal(); renderView(); showToast('Prazos salvos.'); }
+    const ok = await salvarPrazosAutoMsg({ t1, t2, t3, tFinal, diasValidade });
+    if(ok){ closeModal(); renderView(); showToast('Configurações salvas.'); }
   });
 }
 
