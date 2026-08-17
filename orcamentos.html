@@ -89,6 +89,8 @@ input[type=text], input[type=number], input[type=password], input[type=date], se
 .badge-rascunho{background:#EDEDED; color:#666; border:1px dashed #b3b3b3;}
 .chip-vendedora{display:inline-flex; align-items:center; gap:6px; background:#fff; color:var(--danger); border:1.5px solid var(--danger); border-radius:999px; padding:7px 14px; font-size:12.5px; font-weight:800; cursor:pointer; transition:background .15s,color .15s;}
 .chip-vendedora:hover{background:var(--danger); color:#fff;}
+.link-msg-auto{background:none; border:none; color:var(--danger); font-size:12px; font-weight:700; cursor:pointer; padding:4px 2px; text-decoration:underline; text-underline-offset:2px;}
+.msg-enviada-tag{color:var(--ok); font-size:11.5px; font-weight:600;}
 .filters{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
 .filters select, .filters input{padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); font-size:13px;}
 table{width:100%; border-collapse:collapse; font-size:13.5px;}
@@ -319,6 +321,22 @@ function estaVencido(o){
   if(info && info.encerra) return false;
   return !!(o.validade && o.validade < todayStr());
 }
+/* Prazos do acompanhamento automático (dias desde a criação do orçamento) — editáveis em
+ * Configurações de mensagens de orçamento. Guardado em gestao_config, chave própria
+ * (não mexe nas chaves usadas por outros módulos). */
+const PRAZOS_AUTO_MSG_PADRAO = { t1:3, t2:6, t3:9, tFinal:15 };
+function prazosAutoMsg(){
+  const p = config && config.orcamentoAutoMsgConfig;
+  if(!p || p.t1==null || p.t2==null || p.t3==null || p.tFinal==null) return PRAZOS_AUTO_MSG_PADRAO;
+  return p;
+}
+async function salvarPrazosAutoMsg(prazos){
+  if(!config) config = {};
+  config.orcamentoAutoMsgConfig = prazos;
+  const r = await gatewayCall({ op:'mergeConfigKey', params:{ key:'orcamentoAutoMsgConfig', value: prazos } });
+  if(r && r.error){ showToast('Não foi possível salvar os prazos: '+r.error); return false; }
+  return true;
+}
 function diasDesdeCriacao(o){
   const base = o.data || (o.criadoEm ? new Date(o.criadoEm).toISOString().slice(0,10) : null);
   if(!base) return 0;
@@ -326,19 +344,43 @@ function diasDesdeCriacao(o){
   const d0 = new Date(base+'T00:00:00');
   return Math.max(0, Math.floor((hoje - d0) / 86400000));
 }
-/* Acompanhamento automático (local a este módulo): a cada X dias sem decisão, o rótulo do
- * status avança sozinho e libera um lembrete de "Enviar mensagem". Só some quando o
- * orçamento é aprovado ou recusado de verdade (status que "encerra" o fluxo) — aí a
- * progressão automática para. */
+/* Acompanhamento automático (local a este módulo — não escreve nos status configuráveis
+ * de Cadastro, só sobrepõe o rótulo/cor enquanto o orçamento está em aberto):
+ *  - Aberto → no prazo 1 (padrão 3 dias) fica vermelho, precisa mandar mensagem.
+ *  - Ao enviar, vira "Ação de fixação" (verde) até o prazo 2 (padrão 6 dias), aí fica vermelho de novo.
+ *  - Ao enviar, vira "Prorrogado à ação" (verde) até o prazo 3 (padrão 9 dias), vermelho de novo.
+ *  - Ao enviar essa 3ª mensagem, fica verde e para por aí — não pede mais mensagem.
+ * O contador (quantas mensagens automáticas já foram enviadas) fica em o.autoMensagensEnviadas. */
 function estagioAutoOrcamento(o){
   if(o.rascunho) return null;
   const info = statusInfoDe(o.status);
-  if(info && info.encerra) return null; // aprovado/recusado manual: desativa o automático
+  if(info && info.encerra) return null; // aprovado/recusado (manual ou automático): desativa
+  const prazos = prazosAutoMsg();
   const dias = diasDesdeCriacao(o);
-  if(dias >= 15) return { nome:'Recusado', cor:'vermelho', flagMsg:'mensagemEnviadaAuto15', msgPadrao:'Olá {cliente}, seu orçamento na Vilaça Joias (valor {valor}) ficou muito tempo sem retorno e foi encerrado automaticamente. Se ainda tiver interesse, é só chamar 💛' };
-  if(dias >= 7) return { nome:'Prorrogado à ação', cor:'neutro', flagMsg:'mensagemEnviadaAuto7', msgPadrao:'Olá {cliente}! Seu orçamento na Vilaça Joias, no valor de {valor}, já está em aberto há uma semana. Podemos fechar?' };
-  if(dias >= 3) return { nome:'Ação de fixação', cor:'neutro', flagMsg:'mensagemEnviadaAuto3', msgPadrao:'Olá {cliente}! Passando pra saber se ficou alguma dúvida sobre o seu orçamento na Vilaça Joias, no valor de {valor}. Posso ajudar a fechar?' };
-  return { nome:'Aberto', cor:'neutro', flagMsg:null };
+  const N = o.autoMensagensEnviadas || 0;
+  const limites = [prazos.t1, prazos.t2, prazos.t3];
+  const nomes = ['Aberto', 'Ação de fixação', 'Prorrogado à ação'];
+  const nome = nomes[Math.min(N,2)];
+  const limiteAtual = N<3 ? limites[N] : null;
+  const precisaEnviar = limiteAtual!=null && dias>=limiteAtual;
+  const enviadoRecente = N>0 && !precisaEnviar;
+  const cor = precisaEnviar ? 'vermelho' : (enviadoRecente ? 'verde' : 'neutro');
+  return { nome, dias, N, limiteAtual, precisaEnviar, enviadoRecente, cor, prazoFinal: prazos.tFinal };
+}
+/* Se passou do prazo final (padrão 15 dias) sem edição/aprovação manual, encerra sozinho
+ * como Recusado — esse é um status real (já existe na configuração), então grava de verdade. */
+function aplicarPrazoFinalAutoSeNecessario(o){
+  if(o.rascunho) return false;
+  const info = statusInfoDe(o.status);
+  if(info && info.encerra) return false;
+  if(o.editadoManualmente) return false;
+  const prazos = prazosAutoMsg();
+  if(diasDesdeCriacao(o) >= prazos.tFinal){
+    o.status = 'recusado';
+    orcamentoSalvar(o).catch(()=>{});
+    return true;
+  }
+  return false;
 }
 function diasParaVencer(o){
   if(!o.validade) return null;
@@ -861,6 +903,10 @@ function renderNovo(main, orcamentoEditando){
       cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: document.getElementById('o_obs').value.trim(),
       rascunho: false,
+      // Editar um orçamento que já era "de verdade" (não um rascunho sendo concluído agora)
+      // pausa o encerramento automático do prazo final (15 dias) — sinal de que alguém
+      // está cuidando dele. Concluir um rascunho conta como criação, não como edição.
+      editadoManualmente: orcamentoEditando.rascunho ? (orcamentoEditando.editadoManualmente||false) : true,
     } : {
       id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
       data: todayStr(), cliente, telefone, email, itens: itensValidos, valorTotal,
@@ -896,7 +942,10 @@ function renderLista(main){
       <h1 class="page-title">Orçamentos</h1>
       <p class="page-sub">Acompanhe o status de cada orçamento (configurável em Configurações → Status de Orçamento).</p>
     </div>
-    ${podeCriarOrcamento() ? `<button type="button" class="btn btn-accent" id="btnNovoOrcamento" style="margin-bottom:18px;">📝 Novo orçamento</button>` : ''}
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:18px;">
+      ${podeCriarOrcamento() ? `<button type="button" class="btn btn-accent" id="btnNovoOrcamento">📝 Novo orçamento</button>` : ''}
+      <button type="button" class="btn btn-ghost" id="btnConfigMsgAuto">⚙️ Configurações de mensagens de orçamento</button>
+    </div>
     ${avisos.length>0 ? `<div class="alerta-vencimento">⚠️ ${avisos.length} orçamento(s) vencendo em até 3 dias ou já vencido(s) sem decisão. Dá uma olhada na lista abaixo.</div>` : ''}
     ${abertos5dias.length>0 ? `
       <div class="card" style="border:1px solid var(--danger); background:var(--danger-soft);">
@@ -931,6 +980,7 @@ function renderLista(main){
   if(btnNovo){
     btnNovo.addEventListener('click', ()=>{ orcamentoEmEdicao = null; currentTab = 'novo'; renderTabs(); renderView(); });
   }
+  document.getElementById('btnConfigMsgAuto').addEventListener('click', abrirConfigMsgAuto);
   document.querySelectorAll('[data-filtrovend]').forEach(b=>{
     b.addEventListener('click', ()=>{
       document.getElementById('fVendedora').value = b.dataset.filtrovend;
@@ -954,16 +1004,25 @@ function renderLista(main){
     }).slice().reverse();
     const tbody = document.getElementById('tbodyOrc');
     if(lista.length===0){ tbody.innerHTML = `<tr><td colspan="7" class="empty">Nenhum orçamento encontrado.</td></tr>`; return; }
+    // Aplica o encerramento automático (prazo final) antes de desenhar, se algum já bateu o prazo.
+    lista.forEach(o=> aplicarPrazoFinalAutoSeNecessario(o));
     tbody.innerHTML = lista.map(o=>{
       const info = statusInfoDe(o.status);
-      const vencido = estaVencido(o);
       const auto = estagioAutoOrcamento(o);
       let classeBadge, rotuloStatus;
       if(o.rascunho){ classeBadge = 'badge-rascunho'; rotuloStatus = 'Rascunho'; }
-      else if(auto){ classeBadge = auto.cor==='vermelho' ? 'badge-vencido' : 'badge-pendente'; rotuloStatus = auto.nome; }
+      else if(auto){ classeBadge = auto.cor==='vermelho' ? 'badge-vencido' : (auto.cor==='verde' ? 'badge-aprovado' : 'badge-pendente'); rotuloStatus = auto.nome; }
       else if(info && info.encerra){ classeBadge = (o.status==='recusado') ? 'badge-vencido' : 'badge-aprovado'; rotuloStatus = info.nome; }
       else { classeBadge = 'badge-pendente'; rotuloStatus = info ? info.nome : o.status; }
-      const precisaMsg = auto && auto.flagMsg && !o[auto.flagMsg] && o.telefone;
+      // No lugar dos ícones de WhatsApp/e-mail: aviso discreto de mensagem pendente/enviada.
+      let acaoMsgHtml;
+      if(auto && auto.precisaEnviar){
+        acaoMsgHtml = `<button class="link-msg-auto" data-enviarmsgauto="${o.id}" title="Enviar mensagem de acompanhamento">✉️ Enviar mensagem</button>`;
+      } else if(auto && auto.enviadoRecente){
+        acaoMsgHtml = `<span class="msg-enviada-tag" title="Mensagem já enviada nesta etapa">✓ Mensagem enviada</span>`;
+      } else {
+        acaoMsgHtml = `${o.telefone ? `<button class="icon-btn icon-btn-wa" data-orcwa="${o.id}" title="WhatsApp">${waIconSvg()}</button>` : ''}${o.email ? `<button class="icon-btn" data-orcmail="${o.id}" title="E-mail">✉️</button>` : ''}`;
+      }
       return `<tr>
         <td>${escapeHtml(o.cliente)}</td>
         <td><span class="badge badge-loja">${escapeHtml(o.loja||'—')}</span></td>
@@ -972,11 +1031,9 @@ function renderLista(main){
         <td>${fmtMoeda(o.valorTotal)}</td>
         <td>
           <span class="badge ${classeBadge}" data-orcstatus="${o.id}" title="${o.rascunho ? 'Clique para continuar preenchendo' : 'Clique para mudar o status'}" style="cursor:pointer;">${escapeHtml(rotuloStatus)}</span>
-          ${precisaMsg ? `<button class="btn btn-sm" data-enviarmsgauto="${o.id}" style="margin-left:6px; background:var(--danger); color:#fff; border:none;">✉️ Enviar mensagem</button>` : ''}
         </td>
         <td style="white-space:nowrap;">
-          ${o.telefone ? `<button class="icon-btn icon-btn-wa" data-orcwa="${o.id}" title="WhatsApp">${waIconSvg()}</button>` : ''}
-          ${o.email ? `<button class="icon-btn" data-orcmail="${o.id}" title="E-mail">✉️</button>` : ''}
+          ${acaoMsgHtml}
           <button class="icon-btn" data-editar="${o.id}" title="Editar">✎</button>
           <button class="icon-btn" data-ver="${o.id}" title="Ver / editar">👁️</button>
           <button class="icon-btn" data-excluir="${o.id}" title="Excluir" style="color:var(--danger);">🗑️</button>
@@ -987,7 +1044,7 @@ function renderLista(main){
       b.addEventListener('click', ()=> abrirDetalheOrcamento(orcamentos.find(o=>o.id===b.dataset.ver)) );
     });
     tbody.querySelectorAll('[data-enviarmsgauto]').forEach(b=>{
-      b.addEventListener('click', ()=> enviarMensagemAutoOrc(b.dataset.enviarmsgauto) );
+      b.addEventListener('click', ()=> abrirPopupEnviarMensagemAuto(b.dataset.enviarmsgauto) );
     });
     tbody.querySelectorAll('[data-editar]').forEach(b=>{
       b.addEventListener('click', ()=>{
@@ -1056,21 +1113,98 @@ async function mudarStatusOrcRapido(orcId){
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
 }
-/** Lembrete automático de follow-up (3/7/15 dias sem decisão) — dispara o WhatsApp com a
- * mensagem do estágio atual e marca a flag pra o botão "Enviar mensagem" sumir depois. */
-async function enviarMensagemAutoOrc(orcId){
+/* Mensagens do acompanhamento automático — uma pra cada "envio" (a 1ª leva de Aberto pra
+ * Ação de fixação, a 2ª de Ação de fixação pra Prorrogado à ação, a 3ª fecha o ciclo). */
+const MENSAGENS_AUTO_PADRAO = [
+  'Olá {cliente}! Passando pra saber se ficou alguma dúvida sobre o seu orçamento na Vilaça Joias, no valor de {valor}. Posso ajudar a fechar?',
+  'Olá {cliente}! Seu orçamento na Vilaça Joias, no valor de {valor}, já está em aberto há um tempinho. Podemos fechar?',
+  'Olá {cliente}, seu orçamento na Vilaça Joias (valor {valor}) ainda está aberto — se ainda tiver interesse, é só chamar 💛',
+];
+/** Popup de escolha: WhatsApp ou e-mail. Desabilita o que o cliente não tiver cadastrado. */
+function abrirPopupEnviarMensagemAuto(orcId){
   const o = orcamentos.find(x=>x.id===orcId);
-  if(!o || !o.telefone) return;
+  if(!o) return;
   const auto = estagioAutoOrcamento(o);
-  if(!auto || !auto.flagMsg) return;
-  const msg = encodeURIComponent(montarMensagemStatus(o, auto.msgPadrao));
-  const url = `https://wa.me/55${onlyDigits(o.telefone)}?text=${msg}`;
-  const a = document.createElement('a');
-  a.href = url; a.target = '_blank'; a.rel = 'noopener';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  o[auto.flagMsg] = true;
+  if(!auto || !auto.precisaEnviar) return;
+  const temTel = !!o.telefone;
+  const temEmail = !!o.email;
+  openModal(`
+    <h3 style="margin:0 0 6px;">Enviar mensagem — ${escapeHtml(o.cliente||'—')}</h3>
+    <p class="muted" style="margin-top:0;">Lembrete de acompanhamento (${escapeHtml(auto.nome)}). Escolha por onde enviar:</p>
+    <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+      <button class="btn btn-wa" id="btnEnvioAutoWA" ${temTel?'':'disabled'} style="${temTel?'':'opacity:.45; cursor:not-allowed;'}">${waIconSvg(16)} WhatsApp</button>
+      <button class="btn btn-accent" id="btnEnvioAutoEmail" ${temEmail?'':'disabled'} style="${temEmail?'':'opacity:.45; cursor:not-allowed;'}">✉️ E-mail</button>
+    </div>
+    ${!temTel ? `<p style="color:var(--danger); font-size:13px; margin-top:10px;">Este cliente não tem WhatsApp cadastrado.</p>` : ''}
+    ${!temEmail ? `<p style="color:var(--danger); font-size:13px; margin-top:4px;">Este cliente não tem e-mail cadastrado.</p>` : ''}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btnCancelarEnvioAuto">Cancelar</button>
+    </div>
+  `);
+  document.getElementById('btnCancelarEnvioAuto').addEventListener('click', closeModal);
+  if(temTel){
+    document.getElementById('btnEnvioAutoWA').addEventListener('click', ()=>{
+      const template = MENSAGENS_AUTO_PADRAO[Math.min(auto.N,2)];
+      const msg = encodeURIComponent(montarMensagemStatus(o, template));
+      const url = `https://wa.me/55${onlyDigits(o.telefone)}?text=${msg}`;
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      avancarEstagioAutoAposEnvio(o);
+    });
+  }
+  if(temEmail){
+    document.getElementById('btnEnvioAutoEmail').addEventListener('click', async ()=>{
+      const template = MENSAGENS_AUTO_PADRAO[Math.min(auto.N,2)];
+      const corpo = montarMensagemStatus(o, template);
+      try{
+        const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+          body: JSON.stringify({ to:o.email, subject:MENSAGEM_EMAIL_ASSUNTO_PADRAO, body:corpo })
+        });
+        if(!r.ok) throw new Error('falha no envio');
+      }catch(e){ showToast('Falha ao enviar e-mail.'); return; }
+      avancarEstagioAutoAposEnvio(o);
+    });
+  }
+}
+async function avancarEstagioAutoAposEnvio(o){
+  o.autoMensagensEnviadas = (o.autoMensagensEnviadas || 0) + 1;
   await orcamentoSalvar(o);
+  closeModal();
   renderView();
+  showToast('Mensagem enviada.');
+}
+
+/** Tela de configuração dos prazos do acompanhamento automático (Diretoria/Gerente). */
+function abrirConfigMsgAuto(){
+  const p = prazosAutoMsg();
+  openModal(`
+    <h3 style="margin:0 0 6px;">Configurações de mensagens de orçamento</h3>
+    <p class="muted" style="margin-top:0;">Prazos (em dias, contados a partir da criação do orçamento) pra cada aviso automático de acompanhamento.</p>
+    <div class="grid-2" style="margin-top:14px;">
+      <div class="field"><label>1ª mensagem — "Aberto" → "Ação de fixação"</label><input type="number" min="1" id="cfgT1" value="${p.t1}"></div>
+      <div class="field"><label>2ª mensagem — "Ação de fixação" → "Prorrogado à ação"</label><input type="number" min="1" id="cfgT2" value="${p.t2}"></div>
+      <div class="field"><label>3ª mensagem — fecha o ciclo de avisos</label><input type="number" min="1" id="cfgT3" value="${p.t3}"></div>
+      <div class="field"><label>Prazo final — encerra sozinho como "Recusado"</label><input type="number" min="1" id="cfgTFinal" value="${p.tFinal}"></div>
+    </div>
+    <p class="muted" style="margin-top:10px; font-size:12.5px;">O prazo final só entra em ação se o orçamento não tiver sido editado nem aprovado manualmente até lá.</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btnCancelarCfgMsgAuto">Cancelar</button>
+      <button class="btn btn-accent" id="btnSalvarCfgMsgAuto">Salvar</button>
+    </div>
+  `);
+  document.getElementById('btnCancelarCfgMsgAuto').addEventListener('click', closeModal);
+  document.getElementById('btnSalvarCfgMsgAuto').addEventListener('click', async ()=>{
+    const t1 = Number(document.getElementById('cfgT1').value)||PRAZOS_AUTO_MSG_PADRAO.t1;
+    const t2 = Number(document.getElementById('cfgT2').value)||PRAZOS_AUTO_MSG_PADRAO.t2;
+    const t3 = Number(document.getElementById('cfgT3').value)||PRAZOS_AUTO_MSG_PADRAO.t3;
+    const tFinal = Number(document.getElementById('cfgTFinal').value)||PRAZOS_AUTO_MSG_PADRAO.tFinal;
+    if(!(t1<t2 && t2<t3 && t3<=tFinal)){ showToast('Os prazos precisam estar em ordem crescente (1ª < 2ª < 3ª ≤ final).'); return; }
+    const ok = await salvarPrazosAutoMsg({ t1, t2, t3, tFinal });
+    if(ok){ closeModal(); renderView(); showToast('Prazos salvos.'); }
+  });
 }
 
 function enviarWhatsAppOrcId(orcId){
