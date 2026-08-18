@@ -83,6 +83,7 @@ table{width:100%; border-collapse:collapse; font-size:13.5px;}
 th{text-align:left; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-faint); padding:8px 10px; border-bottom:2px solid var(--line);}
 td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
 .mini-tabs{display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;}
+.mini-tabs button.active{background:var(--accent,#7a1f3d); color:#fff; border-color:transparent;}
 .toast{position:fixed; left:50%; bottom:26px; transform:translate(-50%,20px); background:#2B0F1F; color:#fff; padding:11px 18px; border-radius:10px; font-size:13.5px; box-shadow:0 12px 30px rgba(0,0,0,0.3); opacity:0; pointer-events:none; transition:all .2s ease; z-index:50;}
 .toast.show{opacity:1; transform:translate(-50%,0);}
 .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
@@ -442,9 +443,106 @@ function openAcessoModal(usuario){
     showToast('Acesso salvo.');
   });
 }
-function renderAcessosDP(main){
+/**
+ * Aba dedicada pra convidar um funcionário a preencher o próprio cadastro completo
+ * (dados pessoais/profissionais/bancários + escolher a senha). Antes esse botão ficava
+ * dentro do perfil de cada funcionário — agora é uma ferramenta única, com escolha de
+ * canal (e-mail automático, ou WhatsApp — abre com a mensagem pronta pra confirmar o envio).
+ */
+function renderEnviarLinkDP(main){
   if(!podeEditarDP()){
-    main.innerHTML = `<div class="card"><p class="muted">Só diretoria e gerência podem ver os perfis de acesso.</p></div>`;
+    main.innerHTML = `<div class="card"><p class="muted">Só diretoria e gerência podem enviar link de cadastro.</p></div>`;
+    return;
+  }
+  let canal = 'email';
+  main.innerHTML = `
+    <div class="page-head">
+      <h1 class="page-title">Enviar Link de Cadastro</h1>
+      <p class="page-sub">O funcionário recebe um link (válido por 24h) pra preencher os próprios dados pessoais, profissionais e bancários, e escolher a senha — tudo numa página só.</p>
+    </div>
+    <div class="card" style="padding:14px 18px; max-width:480px;">
+      <div class="field"><label>Funcionário</label>
+        <select id="el_funcionario">${funcionariosOptionsHtmlDP()}</select>
+      </div>
+      <div class="field"><label>Enviar por</label>
+        <div class="mini-tabs">
+          <button type="button" class="btn btn-ghost btn-sm" id="el_btnEmail">📧 E-mail</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="el_btnWhats">📱 Celular (WhatsApp)</button>
+        </div>
+      </div>
+      <div id="el_campoContato"></div>
+      <button type="button" class="btn btn-accent btn-sm" id="el_btnEnviar" style="margin-top:8px;">Enviar</button>
+      <p class="muted" id="el_status" style="margin-top:10px;"></p>
+    </div>
+    ${currentUser.nivel==='diretoria' ? `
+    <div class="card" style="padding:14px 18px; max-width:480px; margin-top:14px;">
+      <div class="section-label" style="margin-top:0;">Senha padrão</div>
+      <p class="muted">Aplica a senha <b>123456</b> pra todo funcionário (vendedora, gerente, oficina — diretor fica de fora) que ainda não tem senha própria definida. Quem já escolheu a própria senha não é alterado.</p>
+      <button type="button" class="btn btn-ghost btn-sm" id="el_btnSenhaPadrao">🔑 Aplicar senha padrão (123456)</button>
+    </div>` : ''}
+  `;
+  function desenharCampoContato(){
+    const campo = document.getElementById('el_campoContato');
+    const f = funcionarios.find(x=>x.id===document.getElementById('el_funcionario').value);
+    if(canal==='email'){
+      campo.innerHTML = `<div class="field"><label>E-mail</label><input type="email" id="el_contato" value="${escapeHtml((f&&f.email)||'')}" placeholder="email@exemplo.com"></div>`;
+    } else {
+      campo.innerHTML = `<div class="field"><label>Celular (com DDD)</label><input id="el_contato" value="${escapeHtml((f&&f.celularParticular)||'')}" placeholder="(32) 90000-0000"></div>`;
+    }
+    document.getElementById('el_btnEmail').classList.toggle('active', canal==='email');
+    document.getElementById('el_btnWhats').classList.toggle('active', canal==='whatsapp');
+  }
+  document.getElementById('el_funcionario').addEventListener('change', desenharCampoContato);
+  document.getElementById('el_btnEmail').addEventListener('click', ()=>{ canal='email'; desenharCampoContato(); });
+  document.getElementById('el_btnWhats').addEventListener('click', ()=>{ canal='whatsapp'; desenharCampoContato(); });
+  desenharCampoContato();
+  document.getElementById('el_btnEnviar').addEventListener('click', async ()=>{
+    const funcionarioId = document.getElementById('el_funcionario').value;
+    const contato = document.getElementById('el_contato').value.trim();
+    const status = document.getElementById('el_status');
+    if(!funcionarioId){ showToast('Selecione o funcionário.'); return; }
+    if(!contato){ showToast(canal==='email' ? 'Informe o e-mail.' : 'Informe o celular.'); return; }
+    const btn = document.getElementById('el_btnEnviar');
+    btn.disabled = true; btn.textContent = 'Enviando...';
+    if(canal==='email'){
+      const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId, email: contato, canal:'email' });
+      btn.disabled = false; btn.textContent = 'Enviar';
+      if(r && r.ok){ status.textContent = 'Link de cadastro enviado por e-mail! Válido por 24 horas.'; showToast('Enviado!'); }
+      else { status.textContent = (r && r.error) || 'Não foi possível enviar.'; }
+    } else {
+      const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId, canal:'whatsapp' });
+      btn.disabled = false; btn.textContent = 'Enviar';
+      if(r && r.ok && r.link){
+        const f = funcionarios.find(x=>x.id===funcionarioId);
+        const msg = `Olá, ${f?f.nome:''}! Complete seu cadastro no sistema da Vilaça Joias e escolha sua senha (link válido por 24h): ${r.link}`;
+        window.open(`https://wa.me/55${onlyDigitsDp(contato)}?text=${encodeURIComponent(msg)}`, '_blank');
+        status.textContent = 'WhatsApp aberto com a mensagem pronta — confirme o envio por lá.';
+      } else {
+        status.textContent = (r && r.error) || 'Não foi possível gerar o link.';
+      }
+    }
+  });
+  const btnSenhaPadrao = document.getElementById('el_btnSenhaPadrao');
+  if(btnSenhaPadrao) btnSenhaPadrao.addEventListener('click', async ()=>{
+    if(!confirm('Aplicar a senha 123456 pra todo funcionário (vendedora/gerente/oficina) que ainda não tem senha própria? Quem já tem senha não é alterado.')) return;
+    btnSenhaPadrao.disabled = true; btnSenhaPadrao.textContent = 'Aplicando...';
+    const r = await chamarFuncionarioAcesso({ op:'aplicarSenhaPadrao', senha: __gatewaySenha });
+    btnSenhaPadrao.disabled = false; btnSenhaPadrao.textContent = '🔑 Aplicar senha padrão (123456)';
+    if(r && r.ok){
+      showToast(`Senha padrão aplicada em ${r.aplicados} funcionário(s).`);
+      const configAtualizada = await configGetUnificada();
+      if(configAtualizada) config.users = configAtualizada.users || [];
+    } else {
+      showToast((r && r.error) || 'Não foi possível aplicar a senha padrão.');
+    }
+  });
+}
+function funcionariosOptionsHtmlDP(){
+  return funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('');
+}
+function renderAcessosDP(main){
+  if(currentUser.nivel!=='diretoria'){
+    main.innerHTML = `<div class="card"><p class="muted">Só a diretoria pode ver os perfis de acesso.</p></div>`;
     return;
   }
   main.innerHTML = `
@@ -528,8 +626,12 @@ function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.l
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='gerente'?'Gerente':n==='oficina'?'Oficina':n==='vendedora'?'Vendedora':'Personalizado'; }
-/** Só diretoria/gerente podem criar, editar ou excluir no DP — vendedora/oficina só visualizam a própria ficha. */
+/** Diretoria/gerente podem editar QUALQUER funcionário. Vendedora/oficina só podem editar o PRÓPRIO perfil (podem ver todos os outros, só leitura). */
 function podeEditarDP(){ return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente'); }
+function podeEditarFuncionario(funcionario){
+  if(podeEditarDP()) return true;
+  return !!(currentUser && currentUser.funcionarioId && funcionario && funcionario.id===currentUser.funcionarioId);
+}
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -754,15 +856,16 @@ function enterApp(){
 
 const TABS = [
   { id:'funcionarios', label:'Funcionários', icon:'👤' },
-  { id:'vendas', label:'Vendas', icon:'🛍️' },
-  { id:'pagamentos', label:'Pagamentos', icon:'💰' },
+  { id:'vendas', label:'Vendas', icon:'🛍️', soDiretoria:true },
+  { id:'pagamentos', label:'Pagamentos', icon:'💰', soDiretoria:true },
   { id:'ferias', label:'Férias', icon:'🌴' },
   { id:'avisos', label:'Advertência', icon:'⚠️' },
   { id:'atestados', label:'Atestados', icon:'🩺' },
-  { id:'acessos', label:'Perfis de Acesso', icon:'🔑', restrito:true },
+  { id:'enviarLink', label:'Enviar Link de Cadastro', icon:'📩', restrito:true },
+  { id:'acessos', label:'Perfis de Acesso', icon:'🔑', soDiretoria:true },
 ];
 function buildTabs(){
-  const abasVisiveis = TABS.filter(t=> !t.restrito || podeEditarDP());
+  const abasVisiveis = TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : (!t.restrito || podeEditarDP()));
   const nav = document.getElementById('tabs');
   nav.innerHTML = '';
   abasVisiveis.forEach(t=>{
@@ -797,6 +900,7 @@ function renderView(){
   else if(currentTab==='avisos') renderRegistros(main, 'aviso');
   else if(currentTab==='atestados') renderRegistros(main, 'atestado');
   else if(currentTab==='acessos') renderAcessosDP(main);
+  else if(currentTab==='enviarLink') renderEnviarLinkDP(main);
 }
 
 function nomeFuncionario(id){ const f = funcionarios.find(x=>x.funcionarioId===id || x.id===id); return f ? nomeExibicaoFuncionario(f) : '—'; }
@@ -924,7 +1028,7 @@ function renderFuncionarios(main){
         <td>${fmtDate(f.dataAdmissao)}</td>
         <td><span class="badge ${f.status==='desligado'?'badge-erro':'badge-ok'}">${f.status==='desligado'?'Desligado':'Ativo'}</span></td>
         <td>
-          <button class="icon-btn" data-verfunc="${f.id}" title="${podeEditar?'Ver/editar':'Ver'}">${podeEditar?'✎':'👁'}</button>
+          <button class="icon-btn" data-verfunc="${f.id}" title="${podeEditarFuncionario(f)?'Ver/editar':'Ver'}">${podeEditarFuncionario(f)?'✎':'👁'}</button>
         </td>
       </tr>
     `).join('');
@@ -992,10 +1096,10 @@ function escolaridadeOpcoes(){
   return config.escolaridadeOpcoes;
 }
 async function abrirFuncionarioCompletoModal(funcionario){
-  const podeEditar = podeEditarDP();
+  const podeEditar = podeEditarFuncionario(funcionario);
   const todosPerfis = await funcionariosGet(); // sempre busca fresco (funcionariosGet não usa cache)
   let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
-  const abasVisiveis = currentUser.nivel==='diretoria' ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
+  const abasVisiveis = podeEditarDP() ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
   const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
   const d = {
     nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
@@ -1050,11 +1154,12 @@ async function abrirFuncionarioCompletoModal(funcionario){
         </div>
         <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função (usada nos módulos de venda, O.S., Venda PG...)</div>
         <div class="cargo-checks">
-          <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''}> Vendedora</label>
-          <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''}> Oficina</label>
-          <label><input type="checkbox" value="gerente" class="fc_cargo" ${d.cargos.includes('gerente')?'checked':''}> Gerente</label>
-          <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''}> Diretor(a)</label>
+          <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''} ${podeEditarDP()?'':'disabled'}> Vendedora</label>
+          <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''} ${podeEditarDP()?'':'disabled'}> Oficina</label>
+          <label><input type="checkbox" value="gerente" class="fc_cargo" ${d.cargos.includes('gerente')?'checked':''} ${podeEditarDP()?'':'disabled'}> Gerente</label>
+          <label><input type="checkbox" value="diretor" class="fc_cargo" ${d.cargos.includes('diretor')?'checked':''} ${podeEditarDP()?'':'disabled'}> Diretor(a)</label>
         </div>
+        ${!podeEditarDP() && podeEditar ? `<p class="muted" style="margin-top:4px;">Só a diretoria/gerência pode alterar sua função.</p>` : ''}
         <div id="fc_fotoArea"></div>
       `;
       montarFotoFuncionario();
@@ -1282,27 +1387,26 @@ async function abrirFuncionarioCompletoModal(funcionario){
         </div>
       `;
       ligarCampos(body);
-    } else if(abaAtiva==='Acesso' && currentUser.nivel==='diretoria'){
+    } else if(abaAtiva==='Acesso' && podeEditarDP()){
       const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
       const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
-      const statusLabel = status==='ativo' ? 'Ativo — já definiu a senha' : status==='pendente' ? 'Convite enviado, aguardando ele definir a senha' : 'Sem acesso ainda';
+      const statusLabel = status==='ativo' ? 'Ativo — já tem senha' : status==='pendente' ? 'Convite enviado, aguardando preencher o cadastro' : 'Sem acesso ainda';
       const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
       const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
+      const souDiretoria = currentUser.nivel==='diretoria';
       body.innerHTML = `
         <div class="field"><label>Nível de acesso</label>
-          <select id="fc_nivelAcesso">${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
+          <select id="fc_nivelAcesso" ${souDiretoria?'':'disabled'}>${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
         </div>
         <div class="field"><label>Lojas liberadas</label>
-          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
+          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''} ${souDiretoria?'':'disabled'}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
         </div>
-        <button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>
+        ${souDiretoria ? `<button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>` : `<p class="muted">Só a diretoria pode alterar nível e lojas.</p>`}
         <hr style="margin:16px 0; border-color:var(--surface-2);">
-        <div class="field"><label>E-mail (recebe o link pra definir a senha)</label><input type="email" id="fc_emailAcesso" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
         <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
-        ${status==='ativo' ? `<p class="muted">Senha atual (visível só pra diretoria): <b style="color:var(--ink); letter-spacing:1px;">${escapeHtml(usuarioLigado.senha||'')}</b></p>` : ''}
-        <button type="button" class="btn btn-accent btn-sm" id="btnEnviarConvite">${status==='sem_acesso' ? '📧 Enviar convite de acesso' : '📧 Reenviar convite (gera nova senha)'}</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnEnviarConviteCadastro" style="margin-left:6px;">📋 Enviar link de cadastro completo (1 dia)</button>
-        <p class="muted" style="margin-top:10px;">Salve o nível e as lojas antes de enviar o convite. O funcionário recebe um e-mail com um link pra escolher a própria senha — o nível e as lojas não mudam com o convite. O link de "cadastro completo" deixa o próprio funcionário preencher os dados pessoais/profissionais/bancários dele e já escolher a senha, tudo numa página só, válida por 24h.</p>
+        <div class="field"><label>Senha</label><input type="text" id="fc_senhaAcesso" value="${escapeHtml(usuarioLigado&&usuarioLigado.senha?usuarioLigado.senha:'')}" placeholder="Digite a nova senha"></div>
+        <button type="button" class="btn btn-accent btn-sm" id="btnSalvarSenha">💾 Salvar senha</button>
+        <p class="muted" style="margin-top:10px;">Pra convidar um funcionário novo a preencher o próprio cadastro (dados pessoais/profissionais/bancários + escolher a senha), use a aba "Enviar Link de Cadastro".</p>
       `;
       document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
       document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
@@ -1310,11 +1414,11 @@ async function abrirFuncionarioCompletoModal(funcionario){
           d.lojasAcesso = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
         });
       });
-      document.getElementById('btnSalvarAcesso').addEventListener('click', async ()=>{
-        const btn = document.getElementById('btnSalvarAcesso');
-        btn.disabled = true; btn.textContent = 'Salvando...';
+      const btnSalvarAcesso = document.getElementById('btnSalvarAcesso');
+      if(btnSalvarAcesso) btnSalvarAcesso.addEventListener('click', async ()=>{
+        btnSalvarAcesso.disabled = true; btnSalvarAcesso.textContent = 'Salvando...';
         const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: d.nivelAcesso, lojas: d.lojasAcesso });
-        btn.disabled = false; btn.textContent = '💾 Salvar nível e lojas';
+        btnSalvarAcesso.disabled = false; btnSalvarAcesso.textContent = '💾 Salvar nível e lojas';
         if(r && r.ok){
           showToast('Acesso atualizado.');
           const configAtualizada = await configGetUnificada();
@@ -1323,38 +1427,20 @@ async function abrirFuncionarioCompletoModal(funcionario){
           showToast((r && r.error) || 'Não foi possível salvar o acesso.');
         }
       });
-      document.getElementById('fc_emailAcesso').addEventListener('input', e=>{ d.emailAcesso = e.target.value; });
-      document.getElementById('btnEnviarConvite').addEventListener('click', async ()=>{
-        const email = document.getElementById('fc_emailAcesso').value.trim();
-        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
-        const btn = document.getElementById('btnEnviarConvite');
-        btn.disabled = true; btn.textContent = 'Enviando...';
-        const r = await chamarFuncionarioAcesso({ op:'enviarConvite', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
-        btn.disabled = false;
+      document.getElementById('btnSalvarSenha').addEventListener('click', async ()=>{
+        const novaSenha = document.getElementById('fc_senhaAcesso').value.trim();
+        if(!novaSenha || novaSenha.length<4){ showToast('A senha precisa ter pelo menos 4 caracteres.'); return; }
+        const btn = document.getElementById('btnSalvarSenha');
+        btn.disabled = true; btn.textContent = 'Salvando...';
+        const r = await chamarFuncionarioAcesso({ op:'definirSenhaManual', senha: __gatewaySenha, funcionarioId: funcionario.id, novaSenha });
+        btn.disabled = false; btn.textContent = '💾 Salvar senha';
         if(r && r.ok){
-          showToast('Convite enviado! O funcionário vai receber um e-mail pra definir a senha.');
+          showToast('Senha atualizada.');
           const configAtualizada = await configGetUnificada();
           if(configAtualizada) config.users = configAtualizada.users || [];
           renderCorpo();
         } else {
-          showToast((r && r.error) || 'Não foi possível enviar o convite.');
-          renderCorpo();
-        }
-      });
-      document.getElementById('btnEnviarConviteCadastro').addEventListener('click', async ()=>{
-        const email = document.getElementById('fc_emailAcesso').value.trim();
-        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
-        const btn = document.getElementById('btnEnviarConviteCadastro');
-        btn.disabled = true; btn.textContent = 'Enviando...';
-        const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
-        btn.disabled = false; btn.textContent = '📋 Enviar link de cadastro completo (1 dia)';
-        if(r && r.ok){
-          showToast('Link de cadastro completo enviado! Válido por 24 horas.');
-          const configAtualizada = await configGetUnificada();
-          if(configAtualizada) config.users = configAtualizada.users || [];
-          renderCorpo();
-        } else {
-          showToast((r && r.error) || 'Não foi possível enviar o link de cadastro.');
+          showToast((r && r.error) || 'Não foi possível salvar a senha.');
         }
       });
     }
