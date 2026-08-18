@@ -449,6 +449,12 @@ function openAcessoModal(usuario){
  * dentro do perfil de cada funcionário — agora é uma ferramenta única, com escolha de
  * canal (e-mail automático, ou WhatsApp — abre com a mensagem pronta pra confirmar o envio).
  */
+/**
+ * Aba dedicada pra dar acesso a um funcionário NOVO (que ainda não existe no sistema):
+ * preenche nome + função + loja aqui mesmo, escolhe o canal (e-mail automático, ou
+ * WhatsApp — abre com a mensagem pronta pra confirmar o envio), e o link já cria o
+ * cadastro e manda o convite pro funcionário preencher o resto dos dados dele.
+ */
 function renderEnviarLinkDP(main){
   if(!podeEditarDP()){
     main.innerHTML = `<div class="card"><p class="muted">Só diretoria e gerência podem enviar link de cadastro.</p></div>`;
@@ -458,11 +464,20 @@ function renderEnviarLinkDP(main){
   main.innerHTML = `
     <div class="page-head">
       <h1 class="page-title">Enviar Link de Cadastro</h1>
-      <p class="page-sub">O funcionário recebe um link (válido por 24h) pra preencher os próprios dados pessoais, profissionais e bancários, e escolher a senha — tudo numa página só.</p>
+      <p class="page-sub">Pra funcionário novo, que ainda não está no sistema. Preencha os dados básicos abaixo — o link (válido por 24h) leva direto pra ele preencher o resto (dados pessoais, profissionais, bancários) e escolher a senha.</p>
     </div>
     <div class="card" style="padding:14px 18px; max-width:480px;">
-      <div class="field"><label>Funcionário</label>
-        <select id="el_funcionario">${funcionariosOptionsHtmlDP()}</select>
+      <div class="field"><label>Nome completo</label><input id="el_nome" placeholder="Nome do funcionário"></div>
+      <div class="field"><label>Apelido <span style="text-transform:none; font-weight:500;">(opcional)</span></label><input id="el_apelido" placeholder="Como aparece nas listas dos módulos"></div>
+      <div class="section-label" style="margin-top:6px; border:none; padding:0;">Função</div>
+      <div class="cargo-checks" style="margin-bottom:14px;">
+        <label><input type="checkbox" value="vendedora" class="el_cargo"> Vendedora</label>
+        <label><input type="checkbox" value="oficina" class="el_cargo"> Oficina</label>
+        <label><input type="checkbox" value="gerente" class="el_cargo"> Gerente</label>
+        <label><input type="checkbox" value="diretor" class="el_cargo"> Diretor(a)</label>
+      </div>
+      <div class="field"><label>Loja de acesso</label>
+        <select id="el_loja"><option value="">Selecione...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
       </div>
       <div class="field"><label>Enviar por</label>
         <div class="mini-tabs">
@@ -471,7 +486,7 @@ function renderEnviarLinkDP(main){
         </div>
       </div>
       <div id="el_campoContato"></div>
-      <button type="button" class="btn btn-accent btn-sm" id="el_btnEnviar" style="margin-top:8px;">Enviar</button>
+      <button type="button" class="btn btn-accent btn-sm" id="el_btnEnviar" style="margin-top:8px;">Criar e enviar</button>
       <p class="muted" id="el_status" style="margin-top:10px;"></p>
     </div>
     ${currentUser.nivel==='diretoria' ? `
@@ -483,45 +498,65 @@ function renderEnviarLinkDP(main){
   `;
   function desenharCampoContato(){
     const campo = document.getElementById('el_campoContato');
-    const f = funcionarios.find(x=>x.id===document.getElementById('el_funcionario').value);
     if(canal==='email'){
-      campo.innerHTML = `<div class="field"><label>E-mail</label><input type="email" id="el_contato" value="${escapeHtml((f&&f.email)||'')}" placeholder="email@exemplo.com"></div>`;
+      campo.innerHTML = `<div class="field"><label>E-mail</label><input type="email" id="el_contato" placeholder="email@exemplo.com"></div>`;
     } else {
-      campo.innerHTML = `<div class="field"><label>Celular (com DDD)</label><input id="el_contato" value="${escapeHtml((f&&f.celularParticular)||'')}" placeholder="(32) 90000-0000"></div>`;
+      campo.innerHTML = `<div class="field"><label>Celular (com DDD)</label><input id="el_contato" placeholder="(32) 90000-0000"></div>`;
     }
     document.getElementById('el_btnEmail').classList.toggle('active', canal==='email');
     document.getElementById('el_btnWhats').classList.toggle('active', canal==='whatsapp');
   }
-  document.getElementById('el_funcionario').addEventListener('change', desenharCampoContato);
   document.getElementById('el_btnEmail').addEventListener('click', ()=>{ canal='email'; desenharCampoContato(); });
   document.getElementById('el_btnWhats').addEventListener('click', ()=>{ canal='whatsapp'; desenharCampoContato(); });
   desenharCampoContato();
   document.getElementById('el_btnEnviar').addEventListener('click', async ()=>{
-    const funcionarioId = document.getElementById('el_funcionario').value;
+    const nome = document.getElementById('el_nome').value.trim();
+    const apelido = document.getElementById('el_apelido').value.trim();
+    const cargos = Array.from(document.querySelectorAll('.el_cargo:checked')).map(c=>c.value);
+    const lojaEscolhida = document.getElementById('el_loja').value;
     const contato = document.getElementById('el_contato').value.trim();
     const status = document.getElementById('el_status');
-    if(!funcionarioId){ showToast('Selecione o funcionário.'); return; }
+    if(!nome){ showToast('Informe o nome do funcionário.'); return; }
+    if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
+    if(!lojaEscolhida){ showToast('Selecione a loja de acesso.'); return; }
     if(!contato){ showToast(canal==='email' ? 'Informe o e-mail.' : 'Informe o celular.'); return; }
     const btn = document.getElementById('el_btnEnviar');
     btn.disabled = true; btn.textContent = 'Enviando...';
+
+    const novoId = uid('func');
+    config.funcionarios = Array.isArray(config.funcionarios) ? config.funcionarios : [];
+    config.funcionarios.push({ id: novoId, nome, apelido, cargos });
+    const okConfig = await configSave();
+    if(!okConfig){ btn.disabled = false; btn.textContent = 'Criar e enviar'; status.textContent = 'Não foi possível salvar o cadastro. Tente de novo.'; return; }
+    await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
+
     if(canal==='email'){
-      const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId, email: contato, canal:'email' });
-      btn.disabled = false; btn.textContent = 'Enviar';
-      if(r && r.ok){ status.textContent = 'Link de cadastro enviado por e-mail! Válido por 24 horas.'; showToast('Enviado!'); }
-      else { status.textContent = (r && r.error) || 'Não foi possível enviar.'; }
+      const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email: contato, canal:'email' });
+      btn.disabled = false; btn.textContent = 'Criar e enviar';
+      if(r && r.ok){ status.textContent = `Funcionário criado! Link de cadastro enviado por e-mail pra ${nome} — válido por 24 horas.`; showToast('Enviado!'); limparFormEnviarLink(); }
+      else { status.textContent = 'Funcionário criado, mas não foi possível enviar o e-mail: ' + ((r && r.error) || 'erro desconhecido'); }
     } else {
-      const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId, canal:'whatsapp' });
-      btn.disabled = false; btn.textContent = 'Enviar';
+      const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, canal:'whatsapp' });
+      btn.disabled = false; btn.textContent = 'Criar e enviar';
       if(r && r.ok && r.link){
-        const f = funcionarios.find(x=>x.id===funcionarioId);
-        const msg = `Olá, ${f?f.nome:''}! Complete seu cadastro no sistema da Vilaça Joias e escolha sua senha (link válido por 24h): ${r.link}`;
+        const msg = `Olá, ${nome}! Complete seu cadastro no sistema da Vilaça Joias e escolha sua senha (link válido por 24h): ${r.link}`;
         window.open(`https://wa.me/55${onlyDigitsDp(contato)}?text=${encodeURIComponent(msg)}`, '_blank');
-        status.textContent = 'WhatsApp aberto com a mensagem pronta — confirme o envio por lá.';
+        status.textContent = `Funcionário criado! WhatsApp aberto com a mensagem pronta pra ${nome} — confirme o envio por lá.`;
+        limparFormEnviarLink();
       } else {
-        status.textContent = (r && r.error) || 'Não foi possível gerar o link.';
+        status.textContent = 'Funcionário criado, mas não foi possível gerar o link: ' + ((r && r.error) || 'erro desconhecido');
       }
     }
+    funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
   });
+  function limparFormEnviarLink(){
+    document.getElementById('el_nome').value = '';
+    document.getElementById('el_apelido').value = '';
+    document.querySelectorAll('.el_cargo').forEach(c=> c.checked = false);
+    document.getElementById('el_loja').value = '';
+    const contatoEl = document.getElementById('el_contato');
+    if(contatoEl) contatoEl.value = '';
+  }
   const btnSenhaPadrao = document.getElementById('el_btnSenhaPadrao');
   if(btnSenhaPadrao) btnSenhaPadrao.addEventListener('click', async ()=>{
     if(!confirm('Aplicar a senha 123456 pra todo funcionário (vendedora/gerente/oficina) que ainda não tem senha própria? Quem já tem senha não é alterado.')) return;
@@ -536,9 +571,6 @@ function renderEnviarLinkDP(main){
       showToast((r && r.error) || 'Não foi possível aplicar a senha padrão.');
     }
   });
-}
-function funcionariosOptionsHtmlDP(){
-  return funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('');
 }
 function renderAcessosDP(main){
   if(currentUser.nivel!=='diretoria'){
