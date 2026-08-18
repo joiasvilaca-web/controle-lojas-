@@ -476,8 +476,8 @@ function renderEnviarLinkDP(main){
         <label><input type="checkbox" value="gerente" class="el_cargo"> Gerente</label>
         <label><input type="checkbox" value="diretor" class="el_cargo"> Diretor(a)</label>
       </div>
-      <div class="field"><label>Loja de acesso</label>
-        <select id="el_loja"><option value="">Selecione...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
+      <div class="field"><label>Lojas de acesso</label>
+        <div class="cargo-checks">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="el_loja"> ${escapeHtml(l.nome)}</label>`).join('')}</div>
       </div>
       <div class="field"><label>Enviar por</label>
         <div class="mini-tabs">
@@ -489,12 +489,6 @@ function renderEnviarLinkDP(main){
       <button type="button" class="btn btn-accent btn-sm" id="el_btnEnviar" style="margin-top:8px;">Criar e enviar</button>
       <p class="muted" id="el_status" style="margin-top:10px;"></p>
     </div>
-    ${currentUser.nivel==='diretoria' ? `
-    <div class="card" style="padding:14px 18px; max-width:480px; margin-top:14px;">
-      <div class="section-label" style="margin-top:0;">Senha padrão</div>
-      <p class="muted">Aplica a senha <b>123456</b> pra todo funcionário (vendedora, gerente, oficina — diretor fica de fora) que ainda não tem senha própria definida. Quem já escolheu a própria senha não é alterado.</p>
-      <button type="button" class="btn btn-ghost btn-sm" id="el_btnSenhaPadrao">🔑 Aplicar senha padrão (123456)</button>
-    </div>` : ''}
   `;
   function desenharCampoContato(){
     const campo = document.getElementById('el_campoContato');
@@ -513,12 +507,12 @@ function renderEnviarLinkDP(main){
     const nome = document.getElementById('el_nome').value.trim();
     const apelido = document.getElementById('el_apelido').value.trim();
     const cargos = Array.from(document.querySelectorAll('.el_cargo:checked')).map(c=>c.value);
-    const lojaEscolhida = document.getElementById('el_loja').value;
+    const lojasEscolhidas = Array.from(document.querySelectorAll('.el_loja:checked')).map(c=>c.value);
     const contato = document.getElementById('el_contato').value.trim();
     const status = document.getElementById('el_status');
     if(!nome){ showToast('Informe o nome do funcionário.'); return; }
     if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-    if(!lojaEscolhida){ showToast('Selecione a loja de acesso.'); return; }
+    if(lojasEscolhidas.length===0){ showToast('Selecione ao menos uma loja de acesso.'); return; }
     if(!contato){ showToast(canal==='email' ? 'Informe o e-mail.' : 'Informe o celular.'); return; }
     const btn = document.getElementById('el_btnEnviar');
     btn.disabled = true; btn.textContent = 'Enviando...';
@@ -528,7 +522,7 @@ function renderEnviarLinkDP(main){
     config.funcionarios.push({ id: novoId, nome, apelido, cargos });
     const okConfig = await configSave();
     if(!okConfig){ btn.disabled = false; btn.textContent = 'Criar e enviar'; status.textContent = 'Não foi possível salvar o cadastro. Tente de novo.'; return; }
-    await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
+    await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, lojas: lojasEscolhidas });
 
     if(canal==='email'){
       const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email: contato, canal:'email' });
@@ -553,24 +547,10 @@ function renderEnviarLinkDP(main){
     document.getElementById('el_nome').value = '';
     document.getElementById('el_apelido').value = '';
     document.querySelectorAll('.el_cargo').forEach(c=> c.checked = false);
-    document.getElementById('el_loja').value = '';
+    document.querySelectorAll('.el_loja').forEach(c=> c.checked = false);
     const contatoEl = document.getElementById('el_contato');
     if(contatoEl) contatoEl.value = '';
   }
-  const btnSenhaPadrao = document.getElementById('el_btnSenhaPadrao');
-  if(btnSenhaPadrao) btnSenhaPadrao.addEventListener('click', async ()=>{
-    if(!confirm('Aplicar a senha 123456 pra todo funcionário (vendedora/gerente/oficina) que ainda não tem senha própria? Quem já tem senha não é alterado.')) return;
-    btnSenhaPadrao.disabled = true; btnSenhaPadrao.textContent = 'Aplicando...';
-    const r = await chamarFuncionarioAcesso({ op:'aplicarSenhaPadrao', senha: __gatewaySenha });
-    btnSenhaPadrao.disabled = false; btnSenhaPadrao.textContent = '🔑 Aplicar senha padrão (123456)';
-    if(r && r.ok){
-      showToast(`Senha padrão aplicada em ${r.aplicados} funcionário(s).`);
-      const configAtualizada = await configGetUnificada();
-      if(configAtualizada) config.users = configAtualizada.users || [];
-    } else {
-      showToast((r && r.error) || 'Não foi possível aplicar a senha padrão.');
-    }
-  });
 }
 function renderAcessosDP(main){
   if(currentUser.nivel!=='diretoria'){
