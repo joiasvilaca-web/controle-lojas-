@@ -295,6 +295,22 @@
   .btn-x{flex:0 0 auto;border:none;background:var(--erro-bg);color:var(--erro-ink);width:26px;height:26px;border-radius:50%;font-weight:800;font-size:14px;line-height:1;}
   .btn-add-item{font-size:12px;font-weight:700;color:var(--accent-ink);background:none;border:1px dashed var(--accent);padding:6px 10px;border-radius:8px;margin-top:2px;}
 
+  .foto-item-cell{flex:0 0 auto;}
+  .foto-item-input{display:none;}
+  .foto-item-btn{
+    display:flex; align-items:center; justify-content:center; gap:4px; cursor:pointer;
+    font-size:11.5px; font-weight:700; color:var(--accent-ink); background:var(--accent-soft);
+    border:1px dashed var(--accent); border-radius:8px; padding:7px 10px; white-space:nowrap;
+  }
+  .foto-item-loading{font-size:18px; padding:0 6px;}
+  .foto-item-preview{position:relative; display:inline-flex;}
+  .foto-item-preview img{width:38px; height:38px; object-fit:cover; border-radius:8px; border:1px solid var(--line); display:block;}
+  .foto-item-remove{
+    position:absolute; top:-6px; right:-6px; width:18px; height:18px; border-radius:50%;
+    background:var(--erro-bg); color:var(--erro-ink); border:1.5px solid var(--surface);
+    font-size:11px; font-weight:800; line-height:1; padding:0; cursor:pointer;
+  }
+
   .type-picker{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;}
   .type-opt{
     flex:1 1 160px;border:2.5px solid transparent;border-radius:14px;padding:16px 14px;
@@ -609,6 +625,12 @@
       {f:"quantidade", type:"number", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
     ],
+    retornoItens: [
+      {f:"produto", type:"select", opts:PRODUCTS},
+      {f:"metal", type:"select", opts:METALS},
+      {f:"quantidade", type:"number", ph:"Qtd"},
+      {f:"fator", type:"text", ph:"Fator"},
+    ],
     pedidoItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
@@ -622,7 +644,8 @@
     ],
   };
   const ITEM_FACTORIES = {
-    transferItens: ()=>({produto:"",produtoEstoqueId:"",metal:"",quantidade:"",fator:""}),
+    transferItens: ()=>({produto:"",produtoEstoqueId:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
+    retornoItens: ()=>({produto:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
     pedidoItens: ()=>({produto:"",metal:"",quantidade:""}),
     disponibilizadoItens: ()=>({produto:"",metal:"",quantidade:"",fator:""}),
   };
@@ -634,6 +657,7 @@
       id: uid(), kind:"transfer", rascunho:false, numero:"",
       data: hoje, solicitante:"", lojaSolicitante:"",
       transferItens: [ITEM_FACTORIES.transferItens()],
+      retornoItens: [ITEM_FACTORIES.retornoItens()],
       lojaOrigem:"", lojaDestino:"", tipoTransf:"",
       osSaida:"", vistoSaida:false, nomeSaida:"", dataSaida:hoje,
       vistoBaixaEstoque:false, nomeBaixaEstoque:"", dataBaixaEstoque:hoje,
@@ -783,7 +807,9 @@
       r.dataDiretoria = r.dataSupervisora || "";
     }
     if(!Array.isArray(r.transferItens)) r.transferItens = [];
-    r.transferItens.forEach(it=>{ if(it && it.metal === undefined) it.metal = ""; });
+    r.transferItens.forEach(it=>{ if(it && it.metal === undefined) it.metal = ""; if(it && it.fotoUrl === undefined) it.fotoUrl = ""; if(it && it.fotoFileId === undefined) it.fotoFileId = ""; });
+    if(!Array.isArray(r.retornoItens)) r.retornoItens = [];
+    r.retornoItens.forEach(it=>{ if(it && it.fotoUrl === undefined) it.fotoUrl = ""; if(it && it.fotoFileId === undefined) it.fotoFileId = ""; });
     if(r.lojaOrigem === undefined) r.lojaOrigem = "";
     if(r.lojaDestino === undefined) r.lojaDestino = "";
     if(r.tipoTransf === undefined) r.tipoTransf = "";
@@ -815,6 +841,7 @@
   const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
   const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+  const UPLOAD_FOTO_URL = SUPABASE_URL + "/functions/v1/upload-foto-drive";
 
   // A partir daqui o app não fala mais direto com o banco: tudo passa pela Edge
   // Function "db-gateway", que exige a senha de um acesso válido (recebida do
@@ -832,6 +859,48 @@
       return { error: "Não foi possível conectar. Verifique sua internet." };
     }
   }
+
+  // Lê um arquivo de imagem escolhido pelo usuário e devolve como data URL (base64).
+  function lerArquivoComoDataUrl(file){
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=> resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Envia a foto de um item (de transferItens ou retornoItens) pro Google Drive,
+  // numa pasta "TRANSFERÊNCIAS - Fotos" dedicada, via a Edge Function upload-foto-drive
+  // (mesma infraestrutura já usada pras fotos de produto/funcionário/O.S.).
+  async function uploadFotoItem(r, arrKey, idx, file){
+    const item = r[arrKey][idx];
+    if(!item) return;
+    item.fotoUploading = true;
+    rebuildBody(r);
+    try{
+      const dataUrl = await lerArquivoComoDataUrl(file);
+      const nomeArquivo = `transferencia_${r.numero || r.id}_${arrKey}_${idx}_${Date.now()}.jpg`;
+      const res = await fetch(UPLOAD_FOTO_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ dataUrl, filename: nomeArquivo, pasta: "transferencias", tratar: false }),
+      });
+      const data = await res.json();
+      if(!data || !data.url){
+        throw new Error(data && data.error ? data.error : "resposta inesperada do servidor");
+      }
+      item.fotoUrl = data.url;
+      item.fotoFileId = data.fileId || "";
+    }catch(e){
+      console.error("Erro ao enviar foto pro Drive:", e);
+      showToast("⚠ Não deu pra enviar a foto agora — verifique sua internet e tente de novo.");
+    }finally{
+      item.fotoUploading = false;
+      rebuildBody(r);
+    }
+  }
+
   const supabaseClient = {
     from(table){
       return {
@@ -1751,7 +1820,7 @@
   }
 
   /* ================= item array rendering ================= */
-  function renderItemArray(r, arrKey, addLabel){
+  function renderItemArray(r, arrKey, addLabel, withPhoto){
     const items = r[arrKey];
     const fields = ITEM_FIELDS[arrKey];
     let rows = items.map((it, idx)=>{
@@ -1765,9 +1834,31 @@
         const inputType = fc.type === "number" ? "number" : "text";
         return `<input type="${inputType}" ${inputType==="number" ? 'min="0"' : ""} placeholder="${fc.ph||""}" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" value="${escapeHtml(it[fc.f])}">`;
       }).join("");
-      return `<div class="item-row-multi">${cells}<button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>`;
+      const fotoCell = withPhoto ? fotoItemCellHtml(it, arrKey, idx) : "";
+      return `<div class="item-row-multi">${cells}${fotoCell}<button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>`;
     }).join("");
     return `${rows}<button class="btn-add-item" type="button" data-action="add-item" data-arr="${arrKey}">${addLabel}</button>`;
+  }
+
+  function fotoItemCellHtml(it, arrKey, idx){
+    const inputId = `foto_${arrKey}_${idx}_${Math.random().toString(36).slice(2,7)}`;
+    if(it.fotoUploading){
+      return `<div class="foto-item-cell foto-item-loading">⏳</div>`;
+    }
+    if(it.fotoUrl){
+      return `
+        <div class="foto-item-cell foto-item-preview">
+          <a href="${escapeHtml(it.fotoUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(it.fotoUrl)}" alt="Foto do item"></a>
+          <button type="button" class="foto-item-remove" data-action="remover-foto-item" data-arr="${arrKey}" data-item-idx="${idx}" title="Remover foto">×</button>
+        </div>
+      `;
+    }
+    return `
+      <div class="foto-item-cell">
+        <label class="foto-item-btn" for="${inputId}">📷 Foto</label>
+        <input type="file" accept="image/*" capture="environment" id="${inputId}" class="foto-item-input" data-action="upload-foto-item" data-arr="${arrKey}" data-item-idx="${idx}">
+      </div>
+    `;
   }
 
   /** Cargos de um funcionário, sempre como array. */
@@ -2042,7 +2133,8 @@
       steps.push({
         title: `Saída (retorno)${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
         done: stepDone(r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida),
-        html: `<div class="group-hint">A loja que recebeu o produto agora está enviando de volta.</div>` +
+        html: `<div class="group-hint">A loja que recebeu o produto agora está enviando de volta — indique o(s) item(ns) que está(ão) retornando (pode ser diferente do item original, desde que mesmo fator) e anexe uma foto.</div>` +
+              renderItemArray(r, "retornoItens", "+ Adicionar item de retorno", true) +
               vistoRowHtml(r, "vistoRetornoSaida", "nomeRetornoSaida", "dataRetornoSaida", "Visto de saída (retorno)", "vrs", "vendedora")
       });
       steps.push({
@@ -2108,7 +2200,7 @@
       <div class="group">
         <div class="group-title">Itens da movimentação</div>
         <div class="group-hint">Adicione quantos produtos forem necessários (produto, quantidade e fator).</div>
-        ${renderItemArray(r, "transferItens", "+ Adicionar item")}
+        ${renderItemArray(r, "transferItens", "+ Adicionar item", true)}
       </div>
 
       <div class="divider"></div>
@@ -2255,8 +2347,12 @@
 
   function applyReadonly(body, readonly){
     body.querySelectorAll("input, select").forEach(el=>{ el.disabled = readonly; });
-    body.querySelectorAll('[data-action="add-item"],[data-action="remove-item"]').forEach(el=>{
+    body.querySelectorAll('[data-action="add-item"],[data-action="remove-item"],[data-action="remover-foto-item"]').forEach(el=>{
       el.style.display = readonly ? "none" : "";
+    });
+    body.querySelectorAll(".foto-item-btn").forEach(el=>{
+      el.style.opacity = readonly ? "0.4" : "";
+      el.style.pointerEvents = readonly ? "none" : "";
     });
     const editBtn = body.querySelector('[data-action="toggle-edit"]');
     if(editBtn) editBtn.textContent = readonly ? "✎ Editar" : "✓ Concluir edição";
@@ -2359,6 +2455,27 @@
         const arr = btn.dataset.arr, idx = Number(btn.dataset.itemIdx);
         r[arr].splice(idx,1);
         rebuildBody(r);
+      });
+    });
+
+    body.querySelectorAll('[data-action="upload-foto-item"]').forEach(el=>{
+      el.addEventListener("change", ()=>{
+        if(!state.editIds.has(r.id)) return;
+        const arr = el.dataset.arr, idx = Number(el.dataset.itemIdx);
+        const file = el.files && el.files[0];
+        if(file) uploadFotoItem(r, arr, idx, file);
+      });
+    });
+
+    body.querySelectorAll('[data-action="remover-foto-item"]').forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        if(!state.editIds.has(r.id)) return;
+        const arr = btn.dataset.arr, idx = Number(btn.dataset.itemIdx);
+        if(r[arr][idx]){
+          r[arr][idx].fotoUrl = "";
+          r[arr][idx].fotoFileId = "";
+          rebuildBody(r);
+        }
       });
     });
 
