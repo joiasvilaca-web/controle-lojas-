@@ -1414,7 +1414,16 @@ async function abrirFuncionarioCompletoModal(funcionario){
         <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
         <div class="field"><label>Senha</label><input type="text" id="fc_senhaAcesso" value="${escapeHtml(usuarioLigado&&usuarioLigado.senha?usuarioLigado.senha:'')}" placeholder="Digite a nova senha"></div>
         <button type="button" class="btn btn-accent btn-sm" id="btnSalvarSenha">💾 Salvar senha</button>
+        ${souDiretoria ? `
+        <hr style="margin:16px 0; border-color:var(--surface-2);">
+        <div class="field"><label>E-mail (recebe o link pra trocar a senha)</label><input type="email" id="fc_emailTrocaSenha" value="${escapeHtml(usuarioLigado?usuarioLigado.email||'':'')}"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnEnviarConvite">📧 Enviar e-mail para troca de senha</button>` : ''}
         <p class="muted" style="margin-top:10px;">Pra convidar um funcionário novo a preencher o próprio cadastro (dados pessoais/profissionais/bancários + escolher a senha), use a aba "Enviar Link de Cadastro".</p>
+        ${souDiretoria ? `
+        <hr style="margin:16px 0; border-color:var(--surface-2);">
+        <div class="section-label" style="margin-top:0; color:var(--danger);">Zona de risco</div>
+        <p class="muted">Exclui o cadastro por completo: registro, acesso/login e ficha de RH (dados pessoais/profissionais/bancários). Não é a mesma coisa que "Desligado" — isso apaga tudo, sem volta. Se for só encerrar o vínculo mantendo o histórico, use o campo Status na aba Profissionais.</p>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnExcluirFuncionario" style="color:var(--danger);">🗑️ Excluir cadastro</button>` : ''}
       `;
       document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
       document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
@@ -1449,6 +1458,40 @@ async function abrirFuncionarioCompletoModal(funcionario){
           renderCorpo();
         } else {
           showToast((r && r.error) || 'Não foi possível salvar a senha.');
+        }
+      });
+      const btnEnviarConvite = document.getElementById('btnEnviarConvite');
+      if(btnEnviarConvite) btnEnviarConvite.addEventListener('click', async ()=>{
+        const email = document.getElementById('fc_emailTrocaSenha').value.trim();
+        if(!email){ showToast('Informe o e-mail do funcionário.'); return; }
+        btnEnviarConvite.disabled = true; btnEnviarConvite.textContent = 'Enviando...';
+        const r = await chamarFuncionarioAcesso({ op:'enviarConvite', senha: __gatewaySenha, funcionarioId: funcionario.id, email });
+        btnEnviarConvite.disabled = false; btnEnviarConvite.textContent = '📧 Enviar e-mail para troca de senha';
+        if(r && r.ok){
+          showToast('E-mail enviado! O funcionário vai receber um link pra trocar a senha (válido por 48h).');
+          const configAtualizada = await configGetUnificada();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível enviar o e-mail.');
+        }
+      });
+      const btnExcluirFuncionario = document.getElementById('btnExcluirFuncionario');
+      if(btnExcluirFuncionario) btnExcluirFuncionario.addEventListener('click', async ()=>{
+        if(!confirm(`Excluir o cadastro de "${funcionario.nome}" por completo? Isso remove o registro, o acesso/login e a ficha de RH — não tem como desfazer.`)) return;
+        if(!confirm('Tem certeza mesmo? Essa ação é permanente.')) return;
+        btnExcluirFuncionario.disabled = true; btnExcluirFuncionario.textContent = 'Excluindo...';
+        const r = await chamarFuncionarioAcesso({ op:'excluirFuncionario', senha: __gatewaySenha, funcionarioId: funcionario.id });
+        if(r && r.ok){
+          showToast('Cadastro excluído.');
+          closeModal();
+          funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+          const configAtualizada = await configGetUnificada();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          if(window.__redrawFuncionarios) window.__redrawFuncionarios();
+        } else {
+          btnExcluirFuncionario.disabled = false; btnExcluirFuncionario.textContent = '🗑️ Excluir cadastro';
+          showToast((r && r.error) || 'Não foi possível excluir o cadastro.');
         }
       });
     }
