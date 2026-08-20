@@ -440,6 +440,19 @@
     <button type="button" id="btnEtapaFaltandoOk" class="gerente-alert-btn">Entendi</button>
   </div>
 </div>
+<div id="escolhaFotoOverlay" class="gerente-alert-overlay" style="display:none;">
+  <div class="gerente-alert-box">
+    <div class="gerente-alert-title">📷 Adicionar foto</div>
+    <div class="gerente-alert-msg">Como você quer adicionar a foto do item?</div>
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:4px;">
+      <button type="button" id="btnEscolhaFotoTirar" class="gerente-alert-btn">📷 Tirar foto</button>
+      <button type="button" id="btnEscolhaFotoGaleria" class="gerente-alert-btn">🖼️ Anexar da galeria</button>
+      <button type="button" id="btnEscolhaFotoCancelar" class="gerente-alert-btn" style="background:transparent; border:1.5px solid #fff; color:#fff;">Cancelar</button>
+    </div>
+  </div>
+</div>
+<input type="file" id="fotoInputCamera" accept="image/*" capture="environment" style="display:none;">
+<input type="file" id="fotoInputGaleria" accept="image/*" style="display:none;">
 <div id="fullscreenWrap"></div>
 <div class="shell">
 
@@ -900,6 +913,51 @@
       rebuildBody(r);
     }
   }
+
+  // Popup "Tirar foto" x "Anexar da galeria" — compartilhado por todos os campos de foto
+  // do formulário. Guarda qual item (registro/array/índice) está pendente de foto.
+  let fotoPendingTarget = null;
+  function abrirEscolhaFoto(r, arrKey, idx){
+    fotoPendingTarget = { r, arrKey, idx };
+    document.getElementById("escolhaFotoOverlay").style.display = "flex";
+  }
+  const btnEscolhaFotoCancelar = document.getElementById("btnEscolhaFotoCancelar");
+  if(btnEscolhaFotoCancelar){
+    btnEscolhaFotoCancelar.addEventListener("click", ()=>{
+      fotoPendingTarget = null;
+      document.getElementById("escolhaFotoOverlay").style.display = "none";
+    });
+  }
+  const btnEscolhaFotoTirar = document.getElementById("btnEscolhaFotoTirar");
+  if(btnEscolhaFotoTirar){
+    btnEscolhaFotoTirar.addEventListener("click", ()=>{
+      document.getElementById("escolhaFotoOverlay").style.display = "none";
+      const input = document.getElementById("fotoInputCamera");
+      if(input) input.click();
+    });
+  }
+  const btnEscolhaFotoGaleria = document.getElementById("btnEscolhaFotoGaleria");
+  if(btnEscolhaFotoGaleria){
+    btnEscolhaFotoGaleria.addEventListener("click", ()=>{
+      document.getElementById("escolhaFotoOverlay").style.display = "none";
+      const input = document.getElementById("fotoInputGaleria");
+      if(input) input.click();
+    });
+  }
+  function wireFotoInputGlobal(inputId){
+    const input = document.getElementById(inputId);
+    if(!input) return;
+    input.addEventListener("change", ()=>{
+      const file = input.files && input.files[0];
+      const alvo = fotoPendingTarget;
+      input.value = ""; // permite escolher o mesmo arquivo de novo depois, se precisar
+      fotoPendingTarget = null;
+      if(file && alvo) uploadFotoItem(alvo.r, alvo.arrKey, alvo.idx, file);
+    });
+  }
+  wireFotoInputGlobal("fotoInputCamera");
+  wireFotoInputGlobal("fotoInputGaleria");
+
 
   const supabaseClient = {
     from(table){
@@ -1841,7 +1899,6 @@
   }
 
   function fotoItemCellHtml(it, arrKey, idx){
-    const inputId = `foto_${arrKey}_${idx}_${Math.random().toString(36).slice(2,7)}`;
     if(it.fotoUploading){
       return `<div class="foto-item-cell foto-item-loading">⏳</div>`;
     }
@@ -1855,8 +1912,7 @@
     }
     return `
       <div class="foto-item-cell">
-        <label class="foto-item-btn" for="${inputId}">📷 Foto</label>
-        <input type="file" accept="image/*" capture="environment" id="${inputId}" class="foto-item-input" data-action="upload-foto-item" data-arr="${arrKey}" data-item-idx="${idx}">
+        <button type="button" class="foto-item-btn" data-action="abrir-escolha-foto" data-arr="${arrKey}" data-item-idx="${idx}">📷 Foto</button>
       </div>
     `;
   }
@@ -2458,12 +2514,11 @@
       });
     });
 
-    body.querySelectorAll('[data-action="upload-foto-item"]').forEach(el=>{
-      el.addEventListener("change", ()=>{
+    body.querySelectorAll('[data-action="abrir-escolha-foto"]').forEach(el=>{
+      el.addEventListener("click", ()=>{
         if(!state.editIds.has(r.id)) return;
         const arr = el.dataset.arr, idx = Number(el.dataset.itemIdx);
-        const file = el.files && el.files[0];
-        if(file) uploadFotoItem(r, arr, idx, file);
+        abrirEscolhaFoto(r, arr, idx);
       });
     });
 
