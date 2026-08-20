@@ -349,13 +349,22 @@
   .step-line.step-done{background:var(--ok-line);}
   .step-item:last-child .step-line{display:none;}
   .step-content{flex:1;min-width:0;padding-bottom:20px;}
-  .step-title-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .step-title-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;}
   .step-title{font-size:12px;font-weight:800;letter-spacing:0.03em;text-transform:uppercase;color:var(--accent-ink);}
   .step-title-tag{font-size:10.5px;font-weight:800;letter-spacing:0.02em;padding:2px 8px;border-radius:999px;text-transform:none;}
   .step-title-tag.step-done{background:var(--ok-bg);color:var(--ok-ink);}
   .step-title-tag.step-current{background:var(--just-bg);color:var(--just-ink);}
   .step-item.step-pending .step-content{opacity:0.72;}
   .step-circle.small{width:22px;height:22px;font-size:11px;flex:0 0 22px;}
+  .step-toggle-caret{margin-left:auto;font-size:11px;color:var(--muted);flex:0 0 auto;}
+  .step-summary{font-size:12.5px;padding:8px 10px;border-radius:8px;}
+  .step-summary-done{background:var(--ok-bg);color:var(--ok-ink);font-weight:700;}
+  .step-summary-pending{background:var(--surface-2);color:var(--muted);font-style:italic;}
+  .btn-concluir-etapa{
+    margin-top:10px; border:none; border-radius:9px; background:var(--ok-line); color:#fff;
+    font-size:12.5px; font-weight:800; padding:9px 16px; cursor:pointer; display:block;
+  }
+  .btn-concluir-etapa:hover{filter:brightness(1.05);}
   .required-mark{color:var(--erro-ink);}
   .row-actions{display:flex;justify-content:flex-end;margin-top:14px;}
   .btn-del{border:none;background:none;color:var(--erro-ink);font-size:12px;font-weight:700;padding:6px 8px;border-radius:6px;}
@@ -529,6 +538,7 @@
     screen: "home", // "home" | "finalizados"
     screenStack: [],
     autoStoreFilter: null, // preenchido para vendedora (filtro automático de loja na Home)
+    expandedStepOverride: new Map(), // id do registro -> key da etapa que o usuário abriu manualmente
   };
 
   function uid(){ return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -771,6 +781,100 @@
     btnEtapaFaltandoOk.addEventListener("click", ()=>{
       document.getElementById("etapaFaltandoOverlay").style.display = "none";
     });
+  }
+
+  /* ================= ETAPAS SUPRIMIDAS (accordion) =================
+   * Só a etapa atual (a primeira não concluída) fica aberta pra preencher; as demais
+   * ficam resumidas/escondidas. Um clique no título de qualquer etapa reabre ela pra
+   * revisão/edição. O botão "Concluir etapa" confirma o visto (com nome/data já
+   * preenchidos) e já fecha essa etapa, abrindo a próxima automaticamente.
+   */
+  function getEtapaExpandidaIdx(recordId, steps){
+    const overrideKey = state.expandedStepOverride.get(recordId);
+    if(overrideKey !== undefined){
+      const idx = steps.findIndex(s=>s.key===overrideKey);
+      if(idx !== -1) return idx;
+    }
+    const firstPending = steps.findIndex(s=>!s.done);
+    return firstPending === -1 ? steps.length - 1 : firstPending;
+  }
+
+  function renderEtapaBlocoHtml(steps, stepKey, r){
+    const idx = steps.findIndex(s=>s.key===stepKey);
+    if(idx === -1) return "";
+    const step = steps[idx];
+    const firstPendingIdx = steps.findIndex(s=>!s.done);
+    const isDone = step.done;
+    const isCurrent = !isDone && idx === firstPendingIdx;
+    const expandedIdx = getEtapaExpandidaIdx(r.id, steps);
+    const isExpanded = idx === expandedIdx;
+    const stateClass = isDone ? "step-done" : (isCurrent ? "step-current" : "step-pending");
+
+    const nomeField = "nome" + step.field.slice(5);
+    const dataField = "data" + step.field.slice(5);
+    const nomeVal = r[nomeField] || "";
+    const dataVal = r[dataField] || "";
+
+    let corpo;
+    if(isExpanded){
+      const btnConcluir = !isDone ? `<button type="button" class="btn-concluir-etapa" data-action="concluir-etapa" data-step-field="${step.field}">✓ Concluir etapa</button>` : "";
+      corpo = `${step.html}${btnConcluir}`;
+    }else if(isDone){
+      const resumo = [nomeVal, dataVal].filter(Boolean).join(" · ");
+      corpo = `<div class="step-summary step-summary-done">${resumo ? escapeHtml(resumo) : "Concluído"}</div>`;
+    }else{
+      corpo = `<div class="step-summary step-summary-pending">Aguardando a etapa anterior ser concluída.</div>`;
+    }
+
+    return `
+      <div class="step-item ${stateClass}">
+        <div class="step-marker-col">
+          <div class="step-circle ${stateClass}">${isDone ? "✓" : (idx+1)}</div>
+          <div class="step-line ${isDone ? "step-done" : ""}"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-title-row" data-action="toggle-etapa" data-step-key="${escapeHtml(step.key)}">
+            <div class="step-title">${step.title}</div>
+            ${isDone ? `<div class="step-title-tag step-done">concluído</div>` : (isCurrent ? `<div class="step-title-tag step-current">próxima etapa</div>` : "")}
+            <div class="step-toggle-caret">${isExpanded ? "▾" : "▸"}</div>
+          </div>
+          ${corpo}
+        </div>
+      </div>
+    `;
+  }
+
+  function tentarConcluirEtapa(r, tab, vistoField){
+    const steps = tab === "transferencias" ? getTransferStepsMeta(r) : getReposicaoStepsMeta(r);
+    const step = steps.find(s=>s.field===vistoField);
+    if(!step) return;
+    const nomeField = "nome" + vistoField.slice(5);
+    const dataField = "data" + vistoField.slice(5);
+    if(!r[nomeField] || String(r[nomeField]).trim() === ""){
+      alert("Selecione o nome de quem está dando o visto antes de concluir esta etapa.");
+      return;
+    }
+    if(!r[dataField] || String(r[dataField]).trim() === ""){
+      alert("Preencha a data antes de concluir esta etapa.");
+      return;
+    }
+    const faltante = etapaFaltantePara(tab, r, vistoField);
+    if(faltante){
+      mostrarPopupEtapaFaltando(faltante.title);
+      return;
+    }
+    const confirmar = ()=>{
+      r[vistoField] = true;
+      state.expandedStepOverride.delete(r.id);
+      rebuildBody(r);
+    };
+    if(DIRETORIA_FIELDS.has(vistoField)){
+      requestPassword("Visto da diretoria — digite a senha para confirmar este visto:").then(ok=>{
+        if(ok) confirmar();
+      });
+      return;
+    }
+    confirmar();
   }
 
   function computeStatusTransfer(r){
@@ -1348,6 +1452,7 @@
       }
     }
     state.openIds.delete(id);
+    state.expandedStepOverride.delete(id);
     render();
   }
 
@@ -2154,10 +2259,11 @@
 
   function transferBodyHtml(r){
     // Monta a lista de etapas na MESMA ordem e com as MESMAS condições de antes —
-    // só muda a apresentação (vira uma timeline numerada com progresso).
+    // key/field batem com getTransferStepsMeta (usado pra checar pré-requisitos etc.)
     const steps = [];
 
     steps.push({
+      key:"saida", field:"vistoSaida",
       title: `Saída${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
       done: stepDone(r.vistoSaida, r.nomeSaida, r.dataSaida),
       html: vistoRowHtml(r, "vistoSaida", "nomeSaida", "dataSaida", "Visto de saída", "vs", "vendedora")
@@ -2165,6 +2271,7 @@
 
     if(r.tipoTransf === "SAÍDA"){
       steps.push({
+        key:"baixaEstoque", field:"vistoBaixaEstoque",
         title: `Baixa no estoque${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
         done: stepDone(r.vistoBaixaEstoque, r.nomeBaixaEstoque, r.dataBaixaEstoque),
         html: vistoRowHtml(r, "vistoBaixaEstoque", "nomeBaixaEstoque", "dataBaixaEstoque", "Visto de baixa no estoque", "vbx", "vendedora")
@@ -2172,6 +2279,7 @@
     }
 
     steps.push({
+      key:"entrada", field:"vistoEntrada",
       title: `Entrada${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
       done: stepDone(r.vistoEntrada, r.nomeEntrada, r.dataEntrada),
       html: vistoRowHtml(r, "vistoEntrada", "nomeEntrada", "dataEntrada", "Visto de entrada", "ve", "vendedora")
@@ -2179,6 +2287,7 @@
 
     if(r.tipoTransf === "SAÍDA"){
       steps.push({
+        key:"entradaEstoque", field:"vistoEntradaEstoque",
         title: `Entrada no estoque${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
         done: stepDone(r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque),
         html: vistoRowHtml(r, "vistoEntradaEstoque", "nomeEntradaEstoque", "dataEntradaEstoque", "Visto de entrada no estoque", "vee", "vendedora")
@@ -2187,6 +2296,7 @@
 
     if(r.tipoTransf === "TROCA"){
       steps.push({
+        key:"retornoSaida", field:"vistoRetornoSaida",
         title: `Saída (retorno)${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
         done: stepDone(r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida),
         html: `<div class="group-hint">A loja que recebeu o produto agora está enviando de volta — indique o(s) item(ns) que está(ão) retornando (pode ser diferente do item original, desde que mesmo fator) e anexe uma foto.</div>` +
@@ -2194,6 +2304,7 @@
               vistoRowHtml(r, "vistoRetornoSaida", "nomeRetornoSaida", "dataRetornoSaida", "Visto de saída (retorno)", "vrs", "vendedora")
       });
       steps.push({
+        key:"retornoEntrada", field:"vistoRetornoEntrada",
         title: `Entrada (retorno)${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
         done: stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada),
         html: `<div class="group-hint">A loja que enviou o produto no início agora está recebendo de volta.</div>` +
@@ -2202,6 +2313,7 @@
     }
 
     steps.push({
+      key:"diretoria", field:"vistoDiretoria",
       title: "Fechamento — visto da diretoria",
       done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria),
       html: vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdit", "diretor")
@@ -2209,29 +2321,9 @@
 
     const totalSteps = steps.length;
     const doneSteps = steps.filter(s=>s.done).length;
-    const firstPendingIdx = steps.findIndex(s=>!s.done);
     const pct = totalSteps ? Math.round((doneSteps/totalSteps)*100) : 0;
 
-    const stepsHtml = steps.map((s, i)=>{
-      const isDone = s.done;
-      const isCurrent = !isDone && i === firstPendingIdx;
-      const stateClass = isDone ? "step-done" : (isCurrent ? "step-current" : "step-pending");
-      return `
-        <div class="step-item ${stateClass}">
-          <div class="step-marker-col">
-            <div class="step-circle ${stateClass}">${isDone ? "✓" : (i+1)}</div>
-            <div class="step-line ${isDone ? "step-done" : ""}"></div>
-          </div>
-          <div class="step-content">
-            <div class="step-title-row">
-              <div class="step-title">${s.title}</div>
-              ${isDone ? `<div class="step-title-tag step-done">concluído</div>` : (isCurrent ? `<div class="step-title-tag step-current">próxima etapa</div>` : "")}
-            </div>
-            ${s.html}
-          </div>
-        </div>
-      `;
-    }).join("");
+    const stepsHtml = steps.map(s=>renderEtapaBlocoHtml(steps, s.key, r)).join("");
 
     const vistosHtml = `
       <div class="progress-wrap">
@@ -2275,22 +2367,13 @@
   /* ================= REPOSIÇÃO body ================= */
   function reposicaoBodyHtml(r){
     const repSteps = getReposicaoStepsMeta(r);
+    repSteps.find(s=>s.key==="vistoDiretoria").html = vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdi", "diretor") + obsFieldHtml(r, "obsDiretoria");
+    repSteps.find(s=>s.key==="vistoAdministrativo").html = vistoRowHtml(r, "vistoAdministrativo", "nomeAdministrativo", "dataAdministrativo", "Visto do administrativo", "vad", "todos") + obsFieldHtml(r, "obsAdministrativo");
+    repSteps.find(s=>s.key==="vistoRecebimentoLoja").html = vistoRowHtml(r, "vistoRecebimentoLoja", "nomeRecebimentoLoja", "dataRecebimentoLoja", "Visto de recebimento na loja", "vrl", "vendedora") + obsFieldHtml(r, "obsRecebimentoLoja");
+    repSteps.find(s=>s.key==="vistoSistema").html = vistoRowHtml(r, "vistoSistema", "nomeSistema", "dataSistema", "Visto da gerente (Inclusão no sistema)", "vsi", "gerente") + obsFieldHtml(r, "obsSistema");
     const repDone = repSteps.filter(s=>s.done).length;
     const repTotal = repSteps.length;
     const repPct = repTotal ? Math.round((repDone/repTotal)*100) : 0;
-    const repFirstPendingIdx = repSteps.findIndex(s=>!s.done);
-    function stepBadge(key){
-      const idx = repSteps.findIndex(s=>s.key===key);
-      const s = repSteps[idx];
-      const stateClass = s.done ? "step-done" : (idx===repFirstPendingIdx ? "step-current" : "step-pending");
-      return `
-        <div class="step-title-row">
-          <div class="step-circle small ${stateClass}">${s.done ? "✓" : (idx+1)}</div>
-          <div class="step-title">${s.title}</div>
-          ${s.done ? `<div class="step-title-tag step-done">concluído</div>` : (idx===repFirstPendingIdx ? `<div class="step-title-tag step-current">próxima etapa</div>` : "")}
-        </div>
-      `;
-    }
     return `
       <div class="progress-wrap" style="margin:2px 14px 14px;">
         <div class="progress-label"><span>Etapas do fluxo</span><b>${repDone} de ${repTotal} concluídas</b></div>
@@ -2317,26 +2400,20 @@
         <div class="group-hint">O que foi separado/enviado para a loja.</div>
         ${renderItemArray(r, "disponibilizadoItens", "+ Adicionar peça", true)}
         <div class="divider"></div>
-        ${stepBadge("vistoDiretoria")}
-        ${vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdi", "diretor")}
-        ${obsFieldHtml(r, "obsDiretoria")}
-        <div class="divider divider-thick"></div>
-        ${stepBadge("vistoAdministrativo")}
-        ${vistoRowHtml(r, "vistoAdministrativo", "nomeAdministrativo", "dataAdministrativo", "Visto do administrativo", "vad", "todos")}
-        ${obsFieldHtml(r, "obsAdministrativo")}
+        <div class="steps-timeline">
+          ${renderEtapaBlocoHtml(repSteps, "vistoDiretoria", r)}
+          ${renderEtapaBlocoHtml(repSteps, "vistoAdministrativo", r)}
+        </div>
       </div>
 
       <div class="divider divider-thick"></div>
 
       <div class="group">
         <div class="group-title">Recebimento</div>
-        ${stepBadge("vistoRecebimentoLoja")}
-        ${vistoRowHtml(r, "vistoRecebimentoLoja", "nomeRecebimentoLoja", "dataRecebimentoLoja", "Visto de recebimento na loja", "vrl", "vendedora")}
-        ${obsFieldHtml(r, "obsRecebimentoLoja")}
-        <div class="divider divider-thick"></div>
-        ${stepBadge("vistoSistema")}
-        ${vistoRowHtml(r, "vistoSistema", "nomeSistema", "dataSistema", "Visto da gerente (Inclusão no sistema)", "vsi", "gerente")}
-        ${obsFieldHtml(r, "obsSistema")}
+        <div class="steps-timeline">
+          ${renderEtapaBlocoHtml(repSteps, "vistoRecebimentoLoja", r)}
+          ${renderEtapaBlocoHtml(repSteps, "vistoSistema", r)}
+        </div>
       </div>
 
       <div class="row-actions"><button class="btn-cancel" type="button" data-action="print-registro">🖨️ Imprimir</button><button class="btn-cancel" type="button" data-action="cancel-edit">↩ Sair</button><button class="btn-edit" type="button" data-action="toggle-edit">✎ Editar</button></div>
@@ -2535,6 +2612,22 @@
           r[arr][idx].fotoFileId = "";
           rebuildBody(r);
         }
+      });
+    });
+
+    body.querySelectorAll('[data-action="toggle-etapa"]').forEach(el=>{
+      el.addEventListener("click", ()=>{
+        const key = el.dataset.stepKey;
+        const atual = state.expandedStepOverride.get(r.id);
+        state.expandedStepOverride.set(r.id, atual === key ? "__nenhuma__" : key);
+        rebuildBody(r);
+      });
+    });
+
+    body.querySelectorAll('[data-action="concluir-etapa"]').forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        if(!state.editIds.has(r.id)) return;
+        tentarConcluirEtapa(r, state.tab, btn.dataset.stepField);
       });
     });
 
