@@ -351,15 +351,19 @@
   .step-line.step-done{background:var(--ok-line);}
   .step-item:last-child .step-line{display:none;}
   .step-content{flex:1;min-width:0;padding-bottom:0;}
-  .step-title-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;flex-wrap:wrap;}
+  .step-title-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
+  .step-title-clickable{display:flex;align-items:center;gap:8px;cursor:pointer;flex-wrap:wrap;flex:1 1 auto;}
   .step-title{font-size:12px;font-weight:800;letter-spacing:0.03em;text-transform:uppercase;color:var(--accent-ink);}
   .step-loja-badge{font-size:10px;font-weight:800;letter-spacing:0.03em;background:var(--accent-ink);color:#fff;padding:2px 7px;border-radius:999px;}
+  .step-loja-resp{font-size:11.5px;font-weight:700;border:1.5px dashed var(--line);border-radius:8px;padding:6px 10px;margin-bottom:8px;}
+  .step-info-btn{border:none;background:none;font-size:14px;cursor:pointer;padding:2px 4px;line-height:1;flex:0 0 auto;}
+  .step-info-btn:hover{transform:scale(1.15);}
   .step-title-tag{font-size:10.5px;font-weight:800;letter-spacing:0.02em;padding:2px 8px;border-radius:999px;text-transform:none;}
   .step-title-tag.step-done{background:var(--ok-bg);color:var(--ok-ink);}
   .step-title-tag.step-current{background:var(--just-bg);color:var(--just-ink);}
   .step-item.step-pending .step-content{opacity:0.72;}
   .step-circle.small{width:22px;height:22px;font-size:11px;flex:0 0 22px;}
-  .step-toggle-caret{margin-left:auto;font-size:11px;color:var(--muted);flex:0 0 auto;}
+  .step-toggle-caret{margin-left:auto;font-size:11px;color:var(--muted);flex:0 0 auto;cursor:pointer;}
   .step-summary{font-size:12.5px;padding:8px 10px;border-radius:8px;}
   .step-summary-done{background:var(--ok-bg);color:var(--ok-ink);font-weight:700;}
   .step-summary-pending{background:var(--surface-2);color:var(--muted);font-style:italic;}
@@ -469,6 +473,13 @@
       <button type="button" id="btnFinalizarTransacaoVoltar" class="gerente-alert-btn" style="background:transparent; border:1.5px solid #fff; color:#fff;">Voltar</button>
       <button type="button" id="btnFinalizarTransacaoConcluir" class="gerente-alert-btn">Concluir</button>
     </div>
+  </div>
+</div>
+<div id="infoEtapaOverlay" class="gerente-alert-overlay" style="display:none;">
+  <div class="gerente-alert-box">
+    <div class="gerente-alert-title">ℹ️ Sobre esta etapa</div>
+    <div class="gerente-alert-msg" id="infoEtapaMsg"></div>
+    <button type="button" id="btnInfoEtapaOk" class="gerente-alert-btn">Entendi</button>
   </div>
 </div>
 <div id="escolhaFotoOverlay" class="gerente-alert-overlay" style="display:none;">
@@ -845,7 +856,44 @@
     return firstPending === -1 ? steps.length - 1 : firstPending;
   }
 
-  function renderEtapaBlocoHtml(steps, stepKey, r){
+  // Cores por loja — só pra identificação visual (selo + borda), reaproveitando os
+  // mesmos tons já usados na "Escolha a loja" do menu principal.
+  const LOJA_CORES = { MC:"#1D5FBF", JV:"#C1440E", JN:"#1E8449", EC:"#7B4CB0", RJ:"#B93A33" };
+  function corDaLoja(loja){ return LOJA_CORES[loja] || "var(--accent-ink)"; }
+
+  // Texto do balão explicativo (ℹ️) de cada etapa — explica a lógica de liberação
+  // e lembra que, na TROCA, as duas Saídas podem acontecer ao mesmo tempo.
+  function infoEtapaTexto(tab, r, stepKey){
+    if(tab === "transferencias" && r.tipoTransf === "TROCA"){
+      const textos = {
+        saida: `Etapa da loja ${r.lojaOrigem||"de origem"}: registra a saída do produto original. Pode ser preenchida a qualquer momento — não precisa esperar a loja ${r.lojaDestino||"de destino"} fazer a saída dela, já que as duas saídas de uma troca podem acontecer ao mesmo tempo.`,
+        entrada: `Etapa da loja ${r.lojaDestino||"de destino"}: confirma o recebimento do produto enviado pela loja ${r.lojaOrigem||"de origem"}. Libera assim que a Saída dessa loja for concluída.`,
+        retornoSaida: `Etapa da loja ${r.lojaDestino||"de destino"}: registra a saída do produto de retorno (pode ser um item diferente, desde que do mesmo fator). Pode ser preenchida a qualquer momento — não precisa esperar a loja ${r.lojaOrigem||"de origem"}, já que as duas saídas podem acontecer ao mesmo tempo.`,
+        retornoEntrada: `Etapa da loja ${r.lojaOrigem||"de origem"}: confirma o recebimento do produto de retorno enviado pela loja ${r.lojaDestino||"de destino"}. Libera assim que a Saída (retorno) dessa loja for concluída.`,
+        diretoria: `Fechamento da troca, feito pela gerência. Só libera depois que TODAS as etapas dos Ciclos 1 e 2 (as duas lojas) estiverem concluídas.`,
+      };
+      return textos[stepKey] || "";
+    }
+    if(tab === "transferencias"){
+      const textos = {
+        saida: `Etapa da loja ${r.lojaOrigem||"de origem"}: registra a saída do produto.`,
+        baixaEstoque: `Etapa da loja ${r.lojaOrigem||"de origem"}: dá baixa no estoque. Libera depois da Saída.`,
+        entrada: `Etapa da loja ${r.lojaDestino||"de destino"}: confirma o recebimento. Libera depois da Baixa no estoque.`,
+        entradaEstoque: `Etapa da loja ${r.lojaDestino||"de destino"}: lança entrada no estoque. Libera depois da Entrada.`,
+        diretoria: `Fechamento, feito pela diretoria. Libera depois de todas as etapas anteriores concluídas.`,
+      };
+      return textos[stepKey] || "";
+    }
+    const textos = {
+      vistoDiretoria: "Visto da diretoria — primeira etapa da reposição, libera desde o início.",
+      vistoAdministrativo: "Visto do administrativo — libera depois do visto da diretoria.",
+      vistoRecebimentoLoja: "Visto de recebimento na loja — libera depois do visto do administrativo.",
+      vistoSistema: "Visto da gerente (inclusão no sistema) — última etapa, libera depois do recebimento na loja.",
+    };
+    return textos[stepKey] || "";
+  }
+
+  function renderEtapaBlocoHtml(steps, stepKey, r, tab){
     const idx = steps.findIndex(s=>s.key===stepKey);
     if(idx === -1) return "";
     const step = steps[idx];
@@ -855,6 +903,7 @@
     const expandedIdx = getEtapaExpandidaIdx(r.id, steps);
     const isExpanded = idx === expandedIdx;
     const stateClass = isDone ? "step-done" : (isCurrent ? "step-current" : "step-pending");
+    const cor = step.loja ? corDaLoja(step.loja) : null;
 
     const nomeField = "nome" + step.field.slice(5);
     const dataField = "data" + step.field.slice(5);
@@ -864,7 +913,8 @@
     let corpo;
     if(isExpanded){
       const btnConcluir = !isDone ? `<button type="button" class="btn-concluir-etapa" data-action="concluir-etapa" data-step-field="${step.field}">✓ Concluir etapa</button>` : "";
-      corpo = `${step.html}${btnConcluir}`;
+      const lojaResponsavel = step.loja ? `<div class="step-loja-resp" style="color:${cor};border-color:${cor};">🏬 Loja responsável por este visto: <b>${escapeHtml(step.loja)}</b></div>` : "";
+      corpo = `${lojaResponsavel}${step.html}${btnConcluir}`;
     }else if(isDone){
       const resumo = [nomeVal, dataVal].filter(Boolean).join(" · ");
       corpo = `<div class="step-summary step-summary-done">${resumo ? escapeHtml(resumo) : "Concluído"}</div>`;
@@ -872,18 +922,23 @@
       corpo = `<div class="step-summary step-summary-pending">Aguardando a etapa anterior ser concluída.</div>`;
     }
 
+    const infoTexto = infoEtapaTexto(tab, r, step.key);
+
     return `
-      <div class="step-item ${stateClass}">
+      <div class="step-item ${stateClass}" ${cor ? `style="--loja-cor:${cor};"` : ""}>
         <div class="step-marker-col">
-          <div class="step-circle ${stateClass}">${isDone ? "✓" : ""}</div>
+          <div class="step-circle ${stateClass}" ${cor && !isDone ? `style="border-color:${cor};"` : ""}>${isDone ? "✓" : ""}</div>
           <div class="step-line ${isDone ? "step-done" : ""}"></div>
         </div>
         <div class="step-content">
-          <div class="step-title-row" data-action="toggle-etapa" data-step-key="${escapeHtml(step.key)}">
-            <div class="step-title">${step.title}</div>
-            ${step.loja ? `<div class="step-loja-badge">${escapeHtml(step.loja)}</div>` : ""}
-            ${isDone ? `<div class="step-title-tag step-done">concluído</div>` : (isCurrent ? `<div class="step-title-tag step-current">próxima etapa</div>` : "")}
-            <div class="step-toggle-caret">${isExpanded ? "▾" : "▸"}</div>
+          <div class="step-title-row">
+            <div class="step-title-clickable" data-action="toggle-etapa" data-step-key="${escapeHtml(step.key)}">
+              <div class="step-title">${step.title}</div>
+              ${step.loja ? `<div class="step-loja-badge" style="background:${cor};">${escapeHtml(step.loja)}</div>` : ""}
+              ${isDone ? `<div class="step-title-tag step-done">concluído</div>` : (isCurrent ? `<div class="step-title-tag step-current">próxima etapa</div>` : "")}
+            </div>
+            ${infoTexto ? `<button type="button" class="step-info-btn" data-action="mostrar-info-etapa" data-step-info="${escapeHtml(infoTexto)}" title="O que é esta etapa?">ℹ️</button>` : ""}
+            <div class="step-toggle-caret" data-action="toggle-etapa" data-step-key="${escapeHtml(step.key)}">${isExpanded ? "▾" : "▸"}</div>
           </div>
           ${corpo}
         </div>
@@ -896,12 +951,12 @@
   // já que a etapa 1+4 acontecem na loja de origem e a 2+3 na loja de destino.
   // Cada coluna ganha um rótulo "CICLO N" no topo (em vez de numerar cada etapa
   // individualmente, que ficava confuso com etapas empilhadas na mesma coluna).
-  function renderStepsColumnsHtml(steps, r, columnGroups){
+  function renderStepsColumnsHtml(steps, r, columnGroups, tab){
     const grupos = columnGroups || steps.map(s=>[s.key]);
     return grupos.map((keys, i)=>`
       <div class="steps-column">
         <div class="steps-column-title">CICLO ${i+1}</div>
-        ${keys.map(k=>renderEtapaBlocoHtml(steps, k, r)).join("")}
+        ${keys.map(k=>renderEtapaBlocoHtml(steps, k, r, tab)).join("")}
       </div>
     `).join("");
   }
@@ -968,6 +1023,12 @@
       finalizarTransacaoPendingConfirm = null;
       document.getElementById("finalizarTransacaoOverlay").style.display = "none";
       if(cb) cb();
+    });
+  }
+  const btnInfoEtapaOk = document.getElementById("btnInfoEtapaOk");
+  if(btnInfoEtapaOk){
+    btnInfoEtapaOk.addEventListener("click", ()=>{
+      document.getElementById("infoEtapaOverlay").style.display = "none";
     });
   }
 
@@ -2426,7 +2487,7 @@
     const columnGroups = r.tipoTransf === "TROCA"
       ? [["saida","retornoEntrada"], ["retornoSaida","entrada"], ["diretoria"]]
       : null;
-    const stepsHtml = renderStepsColumnsHtml(steps, r, columnGroups);
+    const stepsHtml = renderStepsColumnsHtml(steps, r, columnGroups, "transferencias");
 
     const vistosHtml = `
       <div class="progress-wrap">
@@ -2504,7 +2565,7 @@
         ${renderItemArray(r, "disponibilizadoItens", "+ Adicionar peça", true)}
         <div class="divider"></div>
         <div class="steps-timeline">
-          ${renderStepsColumnsHtml(repSteps, r, [["vistoDiretoria"],["vistoAdministrativo"]])}
+          ${renderStepsColumnsHtml(repSteps, r, [["vistoDiretoria"],["vistoAdministrativo"]], "reposicao")}
         </div>
       </div>
 
@@ -2513,7 +2574,7 @@
       <div class="group">
         <div class="group-title">Recebimento</div>
         <div class="steps-timeline">
-          ${renderStepsColumnsHtml(repSteps, r, [["vistoRecebimentoLoja"],["vistoSistema"]])}
+          ${renderStepsColumnsHtml(repSteps, r, [["vistoRecebimentoLoja"],["vistoSistema"]], "reposicao")}
         </div>
       </div>
 
@@ -2722,6 +2783,14 @@
         const atual = state.expandedStepOverride.get(r.id);
         state.expandedStepOverride.set(r.id, atual === key ? "__nenhuma__" : key);
         rebuildBody(r);
+      });
+    });
+
+    body.querySelectorAll('[data-action="mostrar-info-etapa"]').forEach(btn=>{
+      btn.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        document.getElementById("infoEtapaMsg").textContent = btn.dataset.stepInfo || "";
+        document.getElementById("infoEtapaOverlay").style.display = "flex";
       });
     });
 
