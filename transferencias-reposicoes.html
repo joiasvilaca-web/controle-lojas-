@@ -789,12 +789,29 @@
   // Retorna a etapa anterior faltante (com título), ou null se pode marcar normalmente.
   function etapaFaltantePara(tab, r, field){
     const steps = tab === "transferencias" ? getTransferStepsMeta(r) : getReposicaoStepsMeta(r);
-    // Na TROCA, a Saída (retorno) pode acontecer ao mesmo tempo que a Entrada — a loja
-    // de destino já pode mandar o produto de volta assim que a Saída inicial for
-    // concluída, sem precisar esperar a Entrada ser confirmada no sistema.
-    if(tab === "transferencias" && field === "vistoRetornoSaida"){
-      const saida = steps.find(s => s.field === "vistoSaida");
-      return (saida && !saida.done) ? saida : null;
+    // TROCA: as duas lojas mandam produto ao mesmo tempo (é uma troca), então as regras
+    // não são mais uma fila única — viram duas filas cruzadas, uma por loja:
+    //  · Ciclo 1 (loja origem): Saída → libera → Entrada (retorno)
+    //  · Ciclo 2 (loja destino): Saída (retorno) → libera → Entrada
+    // As duas Saídas ficam liberadas desde o início (podem ser preenchidas ao mesmo
+    // tempo). O Ciclo 3 (fechamento) só libera com os Ciclos 1 e 2 inteiros concluídos.
+    if(tab === "transferencias" && r.tipoTransf === "TROCA"){
+      const porField = key => steps.find(s => s.field === key);
+      if(field === "vistoSaida" || field === "vistoRetornoSaida"){
+        return null;
+      }
+      if(field === "vistoEntrada"){
+        const saida = porField("vistoSaida");
+        return (saida && !saida.done) ? saida : null;
+      }
+      if(field === "vistoRetornoEntrada"){
+        const retornoSaida = porField("vistoRetornoSaida");
+        return (retornoSaida && !retornoSaida.done) ? retornoSaida : null;
+      }
+      if(field === "vistoDiretoria"){
+        return steps.find(s => s.field !== "vistoDiretoria" && !s.done) || null;
+      }
+      return null;
     }
     const idx = steps.findIndex(s => s.field === field);
     if(idx <= 0) return null; // primeira etapa (ou campo não faz parte da sequência): sem pré-requisito
@@ -2407,7 +2424,7 @@
     // retorno) são ambas na loja de destino, empilham juntas também; a etapa 5
     // (Fechamento) fica sozinha na última coluna.
     const columnGroups = r.tipoTransf === "TROCA"
-      ? [["saida","retornoEntrada"], ["entrada","retornoSaida"], ["diretoria"]]
+      ? [["saida","retornoEntrada"], ["retornoSaida","entrada"], ["diretoria"]]
       : null;
     const stepsHtml = renderStepsColumnsHtml(steps, r, columnGroups);
 
