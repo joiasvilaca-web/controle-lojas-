@@ -856,6 +856,20 @@
     return firstPending === -1 ? steps.length - 1 : firstPending;
   }
 
+  // Na TROCA, os Ciclos 1 e 2 não seguem mais o modelo "uma etapa por vez": qualquer
+  // etapa que já esteja liberada (sem pré-requisito pendente) fica expandida
+  // automaticamente, podendo preencher várias ao mesmo tempo. Só o Ciclo 3 (fechamento)
+  // continua fechado até tudo dos Ciclos 1 e 2 estar concluído.
+  function etapaEstaExpandida(tab, r, steps, step, idx){
+    if(tab === "transferencias" && r.tipoTransf === "TROCA" && step.key !== "diretoria" && !step.done){
+      const bloqueada = etapaFaltantePara(tab, r, step.field);
+      if(!bloqueada) return true;
+    }
+    const override = state.expandedStepOverride.get(r.id);
+    if(override !== undefined && override !== "__nenhuma__") return override === step.key;
+    return idx === getEtapaExpandidaIdx(r.id, steps);
+  }
+
   // Cores por loja — só pra identificação visual (selo + borda), reaproveitando os
   // mesmos tons já usados na "Escolha a loja" do menu principal.
   const LOJA_CORES = { MC:"#1D5FBF", JV:"#C1440E", JN:"#1E8449", EC:"#7B4CB0", RJ:"#B93A33" };
@@ -900,8 +914,7 @@
     const firstPendingIdx = steps.findIndex(s=>!s.done);
     const isDone = step.done;
     const isCurrent = !isDone && idx === firstPendingIdx;
-    const expandedIdx = getEtapaExpandidaIdx(r.id, steps);
-    const isExpanded = idx === expandedIdx;
+    const isExpanded = etapaEstaExpandida(tab, r, steps, step, idx);
     const stateClass = isDone ? "step-done" : (isCurrent ? "step-current" : "step-pending");
     const cor = step.loja ? corDaLoja(step.loja) : null;
 
@@ -1114,6 +1127,7 @@
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
   const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
   const UPLOAD_FOTO_URL = SUPABASE_URL + "/functions/v1/upload-foto-drive";
+  const FUNCIONARIO_ACESSO_URL = SUPABASE_URL + "/functions/v1/funcionario-acesso";
 
   // A partir daqui o app não fala mais direto com o banco: tudo passa pela Edge
   // Function "db-gateway", que exige a senha de um acesso válido (recebida do
@@ -2585,7 +2599,9 @@
   /* ================= wiring ================= */
   const REBUILD_ON_CHANGE = new Set(["lojaOrigem","lojaDestino"]);
   const DIRETORIA_FIELDS = new Set(["vistoDiretoria"]);
-  const SENHA_DIRETORIA = "097740";
+  // (a validação de senha do visto de fechamento agora é feita no servidor,
+  // conferindo se é senha de qualquer diretor(a) ou gerente cadastrado — ver
+  // requestPassword() e a Edge Function funcionario-acesso, op validarSenhaGerencial)
 
   const pwdOverlay = document.getElementById("pwdModalOverlay");
   const pwdInput = document.getElementById("pwdModalInput");
@@ -2608,15 +2624,32 @@
         pwdCancelBtn.removeEventListener("click", onCancel);
         pwdInput.removeEventListener("keydown", onKeydown);
       }
-      function onConfirm(){
-        if(pwdInput.value === SENHA_DIRETORIA){
-          cleanup();
-          resolve(true);
-        }else{
-          pwdError.classList.add("show");
-          pwdInput.value = "";
-          try{ pwdInput.focus(); }catch(e){}
+      // Valida contra QUALQUER funcionário cadastrado como diretoria ou gerente
+      // (não é mais uma senha única fixa) — a checagem acontece no servidor, pra não
+      // expor a lista de senhas no navegador.
+      async function onConfirm(){
+        const senhaDigitada = pwdInput.value;
+        pwdConfirmBtn.disabled = true;
+        try{
+          const res = await fetch(FUNCIONARIO_ACESSO_URL, {
+            method: "POST",
+            headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+            body: JSON.stringify({ op: "validarSenhaGerencial", senha: senhaDigitada }),
+          });
+          const data = await res.json();
+          pwdConfirmBtn.disabled = false;
+          if(data && data.ok){
+            cleanup();
+            resolve(true);
+            return;
+          }
+        }catch(e){
+          console.error("Erro ao validar senha:", e);
+          pwdConfirmBtn.disabled = false;
         }
+        pwdError.classList.add("show");
+        pwdInput.value = "";
+        try{ pwdInput.focus(); }catch(e){}
       }
       function onCancel(){
         cleanup();
