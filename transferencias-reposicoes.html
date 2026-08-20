@@ -449,6 +449,16 @@
     <button type="button" id="btnEtapaFaltandoOk" class="gerente-alert-btn">Entendi</button>
   </div>
 </div>
+<div id="finalizarTransacaoOverlay" class="gerente-alert-overlay" style="display:none;">
+  <div class="gerente-alert-box">
+    <div class="gerente-alert-title">⚠ Finalizando transação</div>
+    <div class="gerente-alert-msg">VOCÊ ESTÁ FINALIZANDO UMA TRANSAÇÃO, CONFIRME SE FORAM FEITAS AS SAÍDAS E ENTRADAS DOS PRODUTOS NO SISTEMA FISCAL.</div>
+    <div style="display:flex; gap:10px; justify-content:center; margin-top:4px;">
+      <button type="button" id="btnFinalizarTransacaoVoltar" class="gerente-alert-btn" style="background:transparent; border:1.5px solid #fff; color:#fff;">Voltar</button>
+      <button type="button" id="btnFinalizarTransacaoConcluir" class="gerente-alert-btn">Concluir</button>
+    </div>
+  </div>
+</div>
 <div id="escolhaFotoOverlay" class="gerente-alert-overlay" style="display:none;">
   <div class="gerente-alert-box">
     <div class="gerente-alert-title">📷 Adicionar foto</div>
@@ -749,7 +759,7 @@
       steps.push({key:"retornoSaida", field:"vistoRetornoSaida", title:`Saída (retorno)${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida)});
       steps.push({key:"retornoEntrada", field:"vistoRetornoEntrada", title:`Entrada (retorno)${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada)});
     }
-    steps.push({key:"diretoria", field:"vistoDiretoria", title:"Fechamento — visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)});
+    steps.push({key:"diretoria", field:"vistoDiretoria", title: r.tipoTransf === "TROCA" ? "Fechamento — visto da gerente" : "Fechamento — visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)});
     return steps;
   }
 
@@ -767,6 +777,13 @@
   // Retorna a etapa anterior faltante (com título), ou null se pode marcar normalmente.
   function etapaFaltantePara(tab, r, field){
     const steps = tab === "transferencias" ? getTransferStepsMeta(r) : getReposicaoStepsMeta(r);
+    // Na TROCA, a Saída (retorno) pode acontecer ao mesmo tempo que a Entrada — a loja
+    // de destino já pode mandar o produto de volta assim que a Saída inicial for
+    // concluída, sem precisar esperar a Entrada ser confirmada no sistema.
+    if(tab === "transferencias" && field === "vistoRetornoSaida"){
+      const saida = steps.find(s => s.field === "vistoSaida");
+      return (saida && !saida.done) ? saida : null;
+    }
     const idx = steps.findIndex(s => s.field === field);
     if(idx <= 0) return null; // primeira etapa (ou campo não faz parte da sequência): sem pré-requisito
     return steps.slice(0, idx).find(s => !s.done) || null;
@@ -864,17 +881,49 @@
       return;
     }
     const confirmar = ()=>{
-      r[vistoField] = true;
-      state.expandedStepOverride.delete(r.id);
-      rebuildBody(r);
+      const seguir = ()=>{
+        r[vistoField] = true;
+        state.expandedStepOverride.delete(r.id);
+        rebuildBody(r);
+      };
+      if(DIRETORIA_FIELDS.has(vistoField)){
+        requestPassword("Visto da diretoria/gerência — digite a senha para confirmar este visto:").then(ok=>{
+          if(ok) seguir();
+        });
+        return;
+      }
+      seguir();
     };
-    if(DIRETORIA_FIELDS.has(vistoField)){
-      requestPassword("Visto da diretoria — digite a senha para confirmar este visto:").then(ok=>{
-        if(ok) confirmar();
-      });
+    // Fechamento de uma TROCA: antes de concluir, confirma se as saídas/entradas
+    // já foram lançadas no sistema fiscal.
+    const isFechamentoTroca = tab === "transferencias" && vistoField === "vistoDiretoria" && r.tipoTransf === "TROCA";
+    if(isFechamentoTroca){
+      mostrarPopupFinalizarTransacao(confirmar);
       return;
     }
     confirmar();
+  }
+
+  let finalizarTransacaoPendingConfirm = null;
+  function mostrarPopupFinalizarTransacao(onConcluir){
+    finalizarTransacaoPendingConfirm = onConcluir;
+    document.getElementById("finalizarTransacaoOverlay").style.display = "flex";
+  }
+  const btnFinalizarTransacaoVoltar = document.getElementById("btnFinalizarTransacaoVoltar");
+  if(btnFinalizarTransacaoVoltar){
+    btnFinalizarTransacaoVoltar.addEventListener("click", ()=>{
+      finalizarTransacaoPendingConfirm = null;
+      document.getElementById("finalizarTransacaoOverlay").style.display = "none";
+    });
+  }
+  const btnFinalizarTransacaoConcluir = document.getElementById("btnFinalizarTransacaoConcluir");
+  if(btnFinalizarTransacaoConcluir){
+    btnFinalizarTransacaoConcluir.addEventListener("click", ()=>{
+      const cb = finalizarTransacaoPendingConfirm;
+      finalizarTransacaoPendingConfirm = null;
+      document.getElementById("finalizarTransacaoOverlay").style.display = "none";
+      if(cb) cb();
+    });
   }
 
   function computeStatusTransfer(r){
@@ -1865,7 +1914,7 @@
         ${r.tipoTransf === "SAÍDA" ? vistoPrintLine("Entrada no estoque — " + (r.lojaDestino||"?"), r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque) : ""}
         ${r.tipoTransf === "TROCA" ? vistoPrintLine("Saída (retorno) — " + (r.lojaDestino||"?"), r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida) : ""}
         ${r.tipoTransf === "TROCA" ? vistoPrintLine("Entrada (retorno) — " + (r.lojaOrigem||"?"), r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada) : ""}
-        ${vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)}
+        ${r.tipoTransf === "TROCA" ? vistoPrintLine("Gerente", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria) : vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)}
       `;
     } else {
       bodyHtml += `
@@ -2314,9 +2363,11 @@
 
     steps.push({
       key:"diretoria", field:"vistoDiretoria",
-      title: "Fechamento — visto da diretoria",
+      title: r.tipoTransf === "TROCA" ? "Fechamento — visto da gerente" : "Fechamento — visto da diretoria",
       done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria),
-      html: vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdit", "diretor")
+      html: r.tipoTransf === "TROCA"
+        ? vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da gerente", "vdit", "gerente")
+        : vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdit", "diretor")
     });
 
     const totalSteps = steps.length;
