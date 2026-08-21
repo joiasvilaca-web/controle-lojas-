@@ -345,6 +345,11 @@
     border:1.5px solid var(--line);border-radius:14px;padding:14px;background:var(--surface);box-shadow:var(--shadow);
   }
   .steps-column-title{font-size:11px;font-weight:900;letter-spacing:0.06em;text-transform:uppercase;color:var(--accent-ink);background:var(--accent-soft);padding:4px 10px;border-radius:999px;align-self:flex-start;}
+  .steps-column-loja{opacity:0.8;}
+  .header-frame{
+    border:1.5px solid var(--line);border-radius:14px;padding:14px;
+    background:var(--surface);box-shadow:var(--shadow);
+  }
   .step-item{display:flex;flex-direction:column;gap:8px;width:100%;}
   .step-marker-col{flex:0 0 auto;display:flex;flex-direction:row;align-items:center;width:100%;}
   .step-circle{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:800;border:2px solid var(--line);background:var(--surface);color:var(--muted);flex:0 0 auto;transition:all .15s ease;}
@@ -389,6 +394,7 @@
   .btn-del{border:none;background:none;color:var(--erro-ink);font-size:12px;font-weight:700;padding:6px 8px;border-radius:6px;}
   .btn-del:hover{background:var(--erro-bg);}
   .btn-edit{border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:12px;font-weight:700;padding:6px 12px;border-radius:6px;margin-right:8px;}
+  .btn-edit-concluir{border:none;background:var(--ok-line);color:#fff;}
   .btn-cancel{border:1px solid var(--line);background:none;color:var(--muted);font-size:12px;font-weight:700;padding:6px 12px;border-radius:6px;margin-right:8px;}
   .btn-cancel:hover{background:var(--surface-2);}
   .btn-edit:hover{background:var(--accent-soft);}
@@ -725,6 +731,8 @@
       osRetornoSaida:"", vistoRetornoSaida:false, nomeRetornoSaida:"", dataRetornoSaida:hoje,
       osRetornoEntrada:"", vistoRetornoEntrada:false, nomeRetornoEntrada:"", dataRetornoEntrada:hoje,
       vistoDiretoria:false, nomeDiretoria:"", dataDiretoria:hoje,
+      vistoGerenteC1:false, nomeGerenteC1:"", dataGerenteC1:hoje,
+      vistoGerenteC2:false, nomeGerenteC2:"", dataGerenteC2:hoje,
     };
   }
 
@@ -789,7 +797,12 @@
         title: `Recebido de ${r.lojaDestino||"?"}`,
         done: stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada)});
     }
-    steps.push({key:"diretoria", field:"vistoDiretoria", title: r.tipoTransf === "TROCA" ? "Fechamento — visto da gerente" : "Fechamento — visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)});
+    if(r.tipoTransf === "TROCA"){
+      steps.push({key:"gerenteC1", field:"vistoGerenteC1", loja:r.lojaOrigem||"", title:`Visto da gerente${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1)});
+      steps.push({key:"gerenteC2", field:"vistoGerenteC2", loja:r.lojaDestino||"", title:`Visto da gerente${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2)});
+    }else{
+      steps.push({key:"diretoria", field:"vistoDiretoria", title:"Fechamento — visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)});
+    }
     return steps;
   }
 
@@ -809,10 +822,13 @@
     const steps = tab === "transferencias" ? getTransferStepsMeta(r) : getReposicaoStepsMeta(r);
     // TROCA: as duas lojas mandam produto ao mesmo tempo (é uma troca), então as regras
     // não são mais uma fila única — viram duas filas cruzadas, uma por loja:
-    //  · Ciclo 1 (loja origem): Saída → libera → Recebido de volta
-    //  · Ciclo 2 (loja destino): Saída (retorno) → libera → Entrada
+    //  · Ciclo 1 (loja origem): Saída → libera → Recebido de volta ; visto da gerente
+    //    do Ciclo 1 libera quando as outras 2 etapas do Ciclo 1 estiverem concluídas.
+    //  · Ciclo 2 (loja destino): Saída → libera → Recebido ; visto da gerente do
+    //    Ciclo 2 libera quando as outras 2 etapas do Ciclo 2 estiverem concluídas.
     // As duas Saídas ficam liberadas desde o início (podem ser preenchidas ao mesmo
-    // tempo). O Ciclo 3 (fechamento) só libera com os Ciclos 1 e 2 inteiros concluídos.
+    // tempo). Não existe mais um "fechamento" único — cada ciclo se fecha sozinho, e
+    // a transferência fica finalizada quando os dois ciclos estiverem completos.
     if(tab === "transferencias" && r.tipoTransf === "TROCA"){
       const porField = key => steps.find(s => s.field === key);
       if(field === "vistoSaida" || field === "vistoRetornoSaida"){
@@ -826,8 +842,11 @@
         const retornoSaida = porField("vistoRetornoSaida");
         return (retornoSaida && !retornoSaida.done) ? retornoSaida : null;
       }
-      if(field === "vistoDiretoria"){
-        return steps.find(s => s.field !== "vistoDiretoria" && !s.done) || null;
+      if(field === "vistoGerenteC1"){
+        return steps.find(s => (s.field === "vistoSaida" || s.field === "vistoRetornoEntrada") && !s.done) || null;
+      }
+      if(field === "vistoGerenteC2"){
+        return steps.find(s => (s.field === "vistoRetornoSaida" || s.field === "vistoEntrada") && !s.done) || null;
       }
       return null;
     }
@@ -975,12 +994,16 @@
   // individualmente, que ficava confuso com etapas empilhadas na mesma coluna).
   function renderStepsColumnsHtml(steps, r, columnGroups, tab){
     const grupos = columnGroups || steps.map(s=>[s.key]);
-    return grupos.map((keys, i)=>`
+    return grupos.map((keys, i)=>{
+      const stepComLoja = keys.map(k=>steps.find(s=>s.key===k)).find(s=>s && s.loja);
+      const lojaCiclo = stepComLoja ? stepComLoja.loja : "";
+      return `
       <div class="steps-column">
-        <div class="steps-column-title">CICLO ${i+1}</div>
+        <div class="steps-column-title">CICLO ${i+1}${lojaCiclo ? `<span class="steps-column-loja"> · ${escapeHtml(lojaCiclo)}</span>` : ""}</div>
         ${keys.map(k=>renderEtapaBlocoHtml(steps, k, r, tab)).join("")}
       </div>
-    `).join("");
+    `;
+    }).join("");
   }
 
   function tentarConcluirEtapa(r, tab, vistoField){
@@ -1100,6 +1123,8 @@
       r.nomeDiretoria = r.nomeDiretoria || "";
       r.dataDiretoria = r.dataSupervisora || "";
     }
+    if(r.vistoGerenteC1 === undefined){ r.vistoGerenteC1 = false; r.nomeGerenteC1 = ""; r.dataGerenteC1 = ""; }
+    if(r.vistoGerenteC2 === undefined){ r.vistoGerenteC2 = false; r.nomeGerenteC2 = ""; r.dataGerenteC2 = ""; }
     if(!Array.isArray(r.transferItens)) r.transferItens = [];
     r.transferItens.forEach(it=>{ if(it && it.metal === undefined) it.metal = ""; if(it && it.fotoUrl === undefined) it.fotoUrl = ""; if(it && it.fotoFileId === undefined) it.fotoFileId = ""; });
     if(!Array.isArray(r.retornoItens)) r.retornoItens = [];
@@ -2442,7 +2467,9 @@
       key:"saida", field:"vistoSaida", loja: r.lojaOrigem || "",
       title: `Saída${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
       done: stepDone(r.vistoSaida, r.nomeSaida, r.dataSaida),
-      html: vistoRowHtml(r, "vistoSaida", "nomeSaida", "dataSaida", "Visto de saída", "vs", "vendedora")
+      html: `<div class="group-hint">Indique o(s) item(ns) que está(ão) saindo e anexe uma foto.</div>` +
+            renderItemArray(r, "transferItens", "+ Adicionar item", true) +
+            vistoRowHtml(r, "vistoSaida", "nomeSaida", "dataSaida", "Visto de saída", "vs", "vendedora")
     });
 
     if(r.tipoTransf === "SAÍDA"){
@@ -2488,21 +2515,34 @@
       });
     }
 
-    steps.push({
-      key:"diretoria", field:"vistoDiretoria",
-      title: r.tipoTransf === "TROCA" ? "Fechamento — visto da gerente" : "Fechamento — visto da diretoria",
-      done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria),
-      html: r.tipoTransf === "TROCA"
-        ? vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da gerente", "vdit", "gerente")
-        : vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdit", "diretor")
-    });
+    if(r.tipoTransf === "TROCA"){
+      steps.push({
+        key:"gerenteC1", field:"vistoGerenteC1", loja: r.lojaOrigem || "",
+        title: `Visto da gerente${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
+        done: stepDone(r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1),
+        html: vistoRowHtml(r, "vistoGerenteC1", "nomeGerenteC1", "dataGerenteC1", "Visto da gerente", "vg1", "gerente")
+      });
+      steps.push({
+        key:"gerenteC2", field:"vistoGerenteC2", loja: r.lojaDestino || "",
+        title: `Visto da gerente${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
+        done: stepDone(r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2),
+        html: vistoRowHtml(r, "vistoGerenteC2", "nomeGerenteC2", "dataGerenteC2", "Visto da gerente", "vg2", "gerente")
+      });
+    }else{
+      steps.push({
+        key:"diretoria", field:"vistoDiretoria",
+        title: "Fechamento — visto da diretoria",
+        done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria),
+        html: vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdit", "diretor")
+      });
+    }
 
-    // Na TROCA: etapa 1 (Saída) + etapa 4 (Entrada retorno) são ambas na loja de
-    // origem, então empilham na mesma coluna; etapa 2 (Entrada) + etapa 3 (Saída
-    // retorno) são ambas na loja de destino, empilham juntas também; a etapa 5
-    // (Fechamento) fica sozinha na última coluna.
+    // Na TROCA: cada loja (ciclo) precisa concluir 3 etapas — Saída, Recebido de
+    // volta e o visto da própria gerente. Não existe mais um "Ciclo 3" de
+    // fechamento único: a transferência fica finalizada quando os dois ciclos
+    // (as duas lojas) estiverem com as 3 etapas concluídas cada.
     const columnGroups = r.tipoTransf === "TROCA"
-      ? [["saida","retornoEntrada"], ["retornoSaida","entrada"], ["diretoria"]]
+      ? [["saida","retornoEntrada","gerenteC1"], ["retornoSaida","entrada","gerenteC2"]]
       : null;
     const stepsHtml = renderStepsColumnsHtml(steps, r, columnGroups, "transferencias");
 
@@ -2511,7 +2551,7 @@
     `;
 
     return `
-      <div class="group">
+      <div class="header-frame">
         <div class="group-title">Data e solicitante</div>
         <div class="grid">
           <div class="field"><label>Data</label><input type="date" data-f="data" value="${escapeHtml(r.data)}"></div>
@@ -2519,14 +2559,6 @@
           <div class="field"><label>Onde tem o produto</label><select data-f="lojaOrigem">${fieldOptionsHtml(STORES, r.lojaOrigem)}</select></div>
           <div class="field"><label>Loja que solicitou</label><select data-f="lojaSolicitante">${fieldOptionsHtml(STORES, r.lojaSolicitante)}</select></div>
         </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="group">
-        <div class="group-title">Itens da movimentação</div>
-        <div class="group-hint">Adicione quantos produtos forem necessários (produto, quantidade e fator).</div>
-        ${renderItemArray(r, "transferItens", "+ Adicionar item", true)}
       </div>
 
       <div class="divider"></div>
@@ -2589,7 +2621,7 @@
 
   /* ================= wiring ================= */
   const REBUILD_ON_CHANGE = new Set(["lojaOrigem","lojaDestino"]);
-  const DIRETORIA_FIELDS = new Set(["vistoDiretoria"]);
+  const DIRETORIA_FIELDS = new Set(["vistoDiretoria", "vistoGerenteC1", "vistoGerenteC2"]);
   // (a validação de senha do visto de fechamento agora é feita no servidor,
   // conferindo se é senha de qualquer diretor(a) ou gerente cadastrado — ver
   // requestPassword() e a Edge Function funcionario-acesso, op validarSenhaGerencial)
@@ -2666,7 +2698,10 @@
       el.style.pointerEvents = readonly ? "none" : "";
     });
     const editBtn = body.querySelector('[data-action="toggle-edit"]');
-    if(editBtn) editBtn.textContent = readonly ? "✎ Editar" : "✓ Concluir edição";
+    if(editBtn){
+      editBtn.textContent = readonly ? "✎ Editar" : "✓ Concluir edição";
+      editBtn.classList.toggle("btn-edit-concluir", !readonly);
+    }
     const cancelBtn = body.querySelector('[data-action="cancel-edit"]');
     if(cancelBtn) cancelBtn.style.display = readonly ? "none" : "";
   }
