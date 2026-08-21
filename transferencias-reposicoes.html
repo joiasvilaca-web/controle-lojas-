@@ -808,12 +808,10 @@
         title: `Recebido de ${r.lojaDestino||"?"}`,
         done: stepDone(r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada)});
     }
-    if(r.tipoTransf === "TROCA"){
-      steps.push({key:"gerenteC1", field:"vistoGerenteC1", loja:r.lojaOrigem||"", title:`Visto da gerente${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1)});
-      steps.push({key:"gerenteC2", field:"vistoGerenteC2", loja:r.lojaDestino||"", title:`Visto da gerente${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2)});
-    }else{
-      steps.push({key:"diretoria", field:"vistoDiretoria", title:"Fechamento — visto da diretoria", done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)});
-    }
+    // Vale tanto pra TROCA quanto pra SAÍDA: cada loja (ciclo) fecha com seu próprio
+    // visto da gerente — não existe mais um "fechamento" único e separado.
+    steps.push({key:"gerenteC1", field:"vistoGerenteC1", loja:r.lojaOrigem||"", title:`Visto da gerente${r.lojaOrigem ? " — " + r.lojaOrigem : ""}`, done: stepDone(r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1)});
+    steps.push({key:"gerenteC2", field:"vistoGerenteC2", loja:r.lojaDestino||"", title:`Visto da gerente${r.lojaDestino ? " — " + r.lojaDestino : ""}`, done: stepDone(r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2)});
     return steps;
   }
 
@@ -861,6 +859,36 @@
       }
       return null;
     }
+    // SAÍDA: agora também é dividida em dois ciclos (loja de origem / loja de
+    // destino), cada um fechando com seu próprio visto da gerente. Mas, diferente da
+    // TROCA, aqui é um envio só (não simultâneo) — a ordem física continua sequencial:
+    // Saída → Baixa no estoque → Entrada → Entrada no estoque. Cada visto de gerente
+    // só depende das 2 etapas do PRÓPRIO ciclo dele, não do ciclo inteiro do outro lado.
+    if(tab === "transferencias" && r.tipoTransf === "SAÍDA"){
+      const porField = key => steps.find(s => s.field === key);
+      if(field === "vistoSaida"){
+        return null;
+      }
+      if(field === "vistoBaixaEstoque"){
+        const saida = porField("vistoSaida");
+        return (saida && !saida.done) ? saida : null;
+      }
+      if(field === "vistoEntrada"){
+        const baixa = porField("vistoBaixaEstoque");
+        return (baixa && !baixa.done) ? baixa : null;
+      }
+      if(field === "vistoEntradaEstoque"){
+        const entrada = porField("vistoEntrada");
+        return (entrada && !entrada.done) ? entrada : null;
+      }
+      if(field === "vistoGerenteC1"){
+        return steps.find(s => (s.field === "vistoSaida" || s.field === "vistoBaixaEstoque") && !s.done) || null;
+      }
+      if(field === "vistoGerenteC2"){
+        return steps.find(s => (s.field === "vistoEntrada" || s.field === "vistoEntradaEstoque") && !s.done) || null;
+      }
+      return null;
+    }
     const idx = steps.findIndex(s => s.field === field);
     if(idx <= 0) return null; // primeira etapa (ou campo não faz parte da sequência): sem pré-requisito
     return steps.slice(0, idx).find(s => !s.done) || null;
@@ -901,7 +929,7 @@
   // preenchimento (não é mais "uma por vez" nem "só depois de liberada") — só o
   // Ciclo 3 (fechamento) continua fechado até tudo dos Ciclos 1 e 2 estar concluído.
   function etapaEstaExpandida(tab, r, steps, step, idx){
-    if(tab === "transferencias" && r.tipoTransf === "TROCA" && step.key !== "diretoria"){
+    if(tab === "transferencias" && (r.tipoTransf === "TROCA" || r.tipoTransf === "SAÍDA")){
       return true;
     }
     const override = state.expandedStepOverride.get(r.id);
@@ -2101,7 +2129,8 @@
         ${r.tipoTransf === "SAÍDA" ? vistoPrintLine("Entrada no estoque — " + (r.lojaDestino||"?"), r.vistoEntradaEstoque, r.nomeEntradaEstoque, r.dataEntradaEstoque) : ""}
         ${r.tipoTransf === "TROCA" ? vistoPrintLine("Saída — " + (r.lojaDestino||"?"), r.vistoRetornoSaida, r.nomeRetornoSaida, r.dataRetornoSaida) : ""}
         ${r.tipoTransf === "TROCA" ? vistoPrintLine("Recebido de " + (r.lojaDestino||"?"), r.vistoRetornoEntrada, r.nomeRetornoEntrada, r.dataRetornoEntrada) : ""}
-        ${r.tipoTransf === "TROCA" ? vistoPrintLine("Gerente", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria) : vistoPrintLine("Diretoria", r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria)}
+        ${vistoPrintLine("Gerente — " + (r.lojaOrigem||"?"), r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1)}
+        ${vistoPrintLine("Gerente — " + (r.lojaDestino||"?"), r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2)}
       `;
     } else {
       bodyHtml += `
@@ -2561,34 +2590,32 @@
       });
     }
 
-    if(r.tipoTransf === "TROCA"){
-      steps.push({
-        key:"gerenteC1", field:"vistoGerenteC1", loja: r.lojaOrigem || "",
-        title: `Visto da gerente${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
-        done: stepDone(r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1),
-        html: vistoRowHtml(r, "vistoGerenteC1", "nomeGerenteC1", "dataGerenteC1", "Visto da gerente", "vg1", "gerente")
-      });
-      steps.push({
-        key:"gerenteC2", field:"vistoGerenteC2", loja: r.lojaDestino || "",
-        title: `Visto da gerente${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
-        done: stepDone(r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2),
-        html: vistoRowHtml(r, "vistoGerenteC2", "nomeGerenteC2", "dataGerenteC2", "Visto da gerente", "vg2", "gerente")
-      });
-    }else{
-      steps.push({
-        key:"diretoria", field:"vistoDiretoria",
-        title: "Fechamento — visto da diretoria",
-        done: stepDone(r.vistoDiretoria, r.nomeDiretoria, r.dataDiretoria),
-        html: vistoRowHtml(r, "vistoDiretoria", "nomeDiretoria", "dataDiretoria", "Visto da diretoria", "vdit", "diretor")
-      });
-    }
+    // Vale tanto pra TROCA quanto pra SAÍDA: cada ciclo (loja) fecha com seu próprio
+    // visto de gerente — não existe mais um "fechamento" único e separado.
+    steps.push({
+      key:"gerenteC1", field:"vistoGerenteC1", loja: r.lojaOrigem || "",
+      title: `Visto da gerente${r.lojaOrigem ? " — " + escapeHtml(r.lojaOrigem) : ""}`,
+      done: stepDone(r.vistoGerenteC1, r.nomeGerenteC1, r.dataGerenteC1),
+      html: vistoRowHtml(r, "vistoGerenteC1", "nomeGerenteC1", "dataGerenteC1", "Visto da gerente", "vg1", "gerente")
+    });
+    steps.push({
+      key:"gerenteC2", field:"vistoGerenteC2", loja: r.lojaDestino || "",
+      title: `Visto da gerente${r.lojaDestino ? " — " + escapeHtml(r.lojaDestino) : ""}`,
+      done: stepDone(r.vistoGerenteC2, r.nomeGerenteC2, r.dataGerenteC2),
+      html: vistoRowHtml(r, "vistoGerenteC2", "nomeGerenteC2", "dataGerenteC2", "Visto da gerente", "vg2", "gerente")
+    });
 
-    // Na TROCA: cada loja (ciclo) precisa concluir 3 etapas — Saída, Recebido de
-    // volta e o visto da própria gerente. Não existe mais um "Ciclo 3" de
-    // fechamento único: a transferência fica finalizada quando os dois ciclos
-    // (as duas lojas) estiverem com as 3 etapas concluídas cada.
+    // Cada loja (ciclo) tem suas etapas + o visto de gerente empilhados na mesma
+    // coluna: na TROCA, Ciclo 1 = Saída+Recebido de volta+Gerente (loja de origem) e
+    // Ciclo 2 = Saída+Recebido+Gerente (loja de destino). Na SAÍDA, Ciclo 1 =
+    // Saída+Baixa no estoque+Gerente (origem) e Ciclo 2 = Entrada+Entrada no
+    // estoque+Gerente (destino). Não existe mais um "Ciclo 3"/"Ciclo 4" de
+    // fechamento único — a transferência fica finalizada quando os dois ciclos
+    // estiverem com todas as etapas concluídas.
     const columnGroups = r.tipoTransf === "TROCA"
       ? [["saida","retornoEntrada","gerenteC1"], ["retornoSaida","entrada","gerenteC2"]]
+      : r.tipoTransf === "SAÍDA"
+      ? [["saida","baixaEstoque","gerenteC1"], ["entrada","entradaEstoque","gerenteC2"]]
       : null;
     const stepsHtml = renderStepsColumnsHtml(steps, r, columnGroups, "transferencias");
 
