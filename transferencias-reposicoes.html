@@ -661,7 +661,7 @@
     screenStack: [],
     autoStoreFilter: null, // preenchido para vendedora (filtro automático de loja na Home)
     expandedStepOverride: new Map(), // id do registro -> key da etapa que o usuário abriu manualmente
-    filtros: { texto: "", aba: "todas", loja: "todas", status: "todos" }, // barra de busca da Home
+    filtros: { texto: "", aba: "todas", loja: "todas", status: "todos", solicitante: "todos" }, // barra de busca da Home
   };
 
   function uid(){ return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -2212,12 +2212,21 @@
       if(f.status === "pendente" && !(r.rascunho || status === "ERRO")) return false;
       if(f.status === "concluido" && status !== "OK") return false;
     }
+    if(f.solicitante !== "todos" && (r.solicitante || "") !== f.solicitante) return false;
     if(f.texto){
       const q = f.texto.toLowerCase();
       const campos = [r.solicitante, r.numero, r.cliente, r.observacao].filter(Boolean).join(" ").toLowerCase();
       if(!campos.includes(q)) return false;
     }
     return true;
+  }
+  // Lista de solicitantes distintos já usados em algum registro (transferência ou
+  // reposição — o Envio Diretoria não tem campo solicitante), pra popular o filtro.
+  function listaSolicitantesDistintos(){
+    const nomes = new Set();
+    state.transferencias.forEach(r=>{ if(r.solicitante) nomes.add(r.solicitante); });
+    state.reposicao.forEach(r=>{ if(r.solicitante) nomes.add(r.solicitante); });
+    return [...nomes].sort((a,b)=>a.localeCompare(b, "pt-BR"));
   }
   function renderFiltroBarHtml(){
     const f = state.filtros;
@@ -2229,9 +2238,11 @@
       ["reposicao","REPOSIÇÃO"],
       ["envio","DIRETORIA"],
     ];
+    const solicitantes = listaSolicitantesDistintos();
     return `
       <div class="filtro-bar">
         <input type="text" class="filtro-texto" id="filtroTexto" placeholder="Buscar por solicitante, número ou cliente…" value="${escapeHtml(f.texto)}">
+        <select id="filtroSolicitante"><option value="todos" ${f.solicitante==="todos"?"selected":""}>Todos os solicitantes</option>${solicitantes.map(s=>`<option value="${escapeHtml(s)}" ${f.solicitante===s?"selected":""}>${escapeHtml(s)}</option>`).join("")}</select>
         <select id="filtroAba">${abasOptions.map(([v,l])=>`<option value="${v}" ${f.aba===v?"selected":""}>${escapeHtml(l)}</option>`).join("")}</select>
         <select id="filtroLoja"><option value="todas" ${f.loja==="todas"?"selected":""}>Todas as lojas</option>${STORES.map(s=>`<option value="${escapeHtml(s)}" ${f.loja===s?"selected":""}>${escapeHtml(s)}</option>`).join("")}</select>
         <select id="filtroStatus">
@@ -2245,10 +2256,11 @@
   }
   function filtroEstaAtivo(){
     const f = state.filtros;
-    return !!f.texto || f.aba !== "todas" || f.loja !== "todas" || f.status !== "todos";
+    return !!f.texto || f.aba !== "todas" || f.loja !== "todas" || f.status !== "todos" || f.solicitante !== "todos";
   }
   function wireFiltroBar(container, onChange){
     const texto = container.querySelector("#filtroTexto");
+    const solicitante = container.querySelector("#filtroSolicitante");
     const aba = container.querySelector("#filtroAba");
     const loja = container.querySelector("#filtroLoja");
     const status = container.querySelector("#filtroStatus");
@@ -2258,11 +2270,12 @@
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(()=>{ state.filtros.texto = texto.value.trim(); onChange(); }, 250);
     });
+    solicitante.addEventListener("change", ()=>{ state.filtros.solicitante = solicitante.value; onChange(); });
     aba.addEventListener("change", ()=>{ state.filtros.aba = aba.value; onChange(); });
     loja.addEventListener("change", ()=>{ state.filtros.loja = loja.value; onChange(); });
     status.addEventListener("change", ()=>{ state.filtros.status = status.value; onChange(); });
     limpar.addEventListener("click", ()=>{
-      state.filtros = { texto: "", aba: "todas", loja: "todas", status: "todos" };
+      state.filtros = { texto: "", aba: "todas", loja: "todas", status: "todos", solicitante: "todos" };
       onChange();
     });
   }
