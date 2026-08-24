@@ -1135,7 +1135,7 @@
       return `
       <div class="steps-column" ${fundo ? `style="background:${fundo};"` : ""}>
         <div class="steps-column-title-row">
-          <div class="steps-column-title">CICLO ${i+1}${lojaCiclo ? `<span class="steps-column-loja"> · ${escapeHtml(lojaCiclo)}</span>` : ""}</div>
+          ${tab === "transferencias" ? `<div class="steps-column-title">CICLO ${i+1}${lojaCiclo ? `<span class="steps-column-loja"> · ${escapeHtml(lojaCiclo)}</span>` : ""}</div>` : "<div></div>"}
           ${r.numero ? `<div class="numero-via-badge numero-via-badge-ciclo">Nº ${escapeHtml(r.numero)}</div>` : ""}
         </div>
         ${campoObs}
@@ -2813,9 +2813,13 @@
     const nomeInputHtml = cargo
       ? `<select data-f="${nomeField}">${funcionarioOptionsHtml(cargo, r[nomeField])}</select>`
       : `<input type="text" data-f="${nomeField}" value="${escapeHtml(r[nomeField])}" placeholder="Nome">`;
+    // Vistos protegidos por senha (DIRETORIA_FIELDS) não podem ser marcados clicando
+    // direto no check — só o botão "✓ Concluir etapa" pode confirmar (e é ali que a
+    // senha é pedida), pra não ter como marcar sem senha e nunca clicar em Concluir.
+    const travado = DIRETORIA_FIELDS.has(vistoField);
     return `
       <div class="visto-row">
-        <div class="checkfield"><input type="checkbox" id="${idBase}_${r.id}" data-f="${vistoField}" ${r[vistoField]?"checked":""}><label for="${idBase}_${r.id}">${escapeHtml(label)}</label></div>
+        <div class="checkfield"><input type="checkbox" id="${idBase}_${r.id}" data-f="${vistoField}" ${r[vistoField]?"checked":""} ${travado ? `disabled title="Marque clicando em &quot;Concluir etapa&quot; — a senha é pedida ali."` : ""}><label for="${idBase}_${r.id}">${escapeHtml(label)}${travado ? ' <span class="visto-lock" title="Confirmação por senha ao concluir">🔒</span>' : ""}</label></div>
         ${nomeField ? `<div class="field name-field"><label>Nome</label>${nomeInputHtml}</div>` : ""}
         <div class="field date-field"><label>Data</label><input type="date" data-f="${dataField}" value="${escapeHtml(r[dataField])}"></div>
       </div>
@@ -3150,6 +3154,12 @@
 
   function applyReadonly(body, readonly){
     body.querySelectorAll("input, select").forEach(el=>{ el.disabled = readonly; });
+    // Os checkboxes de vistos protegidos por senha (DIRETORIA_FIELDS) ficam SEMPRE
+    // desabilitados pro clique direto, mesmo em modo de edição — só o botão "Concluir
+    // etapa" pode marcá-los (e é ali que a senha é pedida).
+    body.querySelectorAll("input[type=checkbox][data-f]").forEach(el=>{
+      if(DIRETORIA_FIELDS.has(el.dataset.f)) el.disabled = true;
+    });
     body.querySelectorAll('[data-action="add-item"],[data-action="remove-item"],[data-action="remover-foto-item"]').forEach(el=>{
       el.style.display = readonly ? "none" : "";
     });
@@ -3173,28 +3183,6 @@
     body.querySelectorAll("[data-f]").forEach(el=>{
       const field = el.dataset.f;
       const isCheck = el.type === "checkbox";
-
-      if(isCheck && DIRETORIA_FIELDS.has(field)){
-        el.addEventListener("change", ()=>{
-          const novoValor = el.checked;
-          el.checked = !novoValor; // reverte visualmente ate a senha ser confirmada
-          if(novoValor){
-            const faltante = etapaFaltantePara(state.tab, r, field);
-            if(faltante){
-              mostrarPopupEtapaFaltando(faltante.title);
-              return;
-            }
-          }
-          const acao = novoValor ? "confirmar" : "desmarcar";
-          requestPassword(`Visto da diretoria — digite a senha para ${acao} este visto:`).then(ok=>{
-            if(!ok) return;
-            el.checked = novoValor;
-            r[field] = novoValor;
-            rebuildBody(r);
-          });
-        });
-        return;
-      }
 
       // Ecommerce, Reforma Joias e Oficina nunca são loja de ORIGEM numa transferência
       // (só recebem — de JV, MC ou JN). Se escolherem uma delas aqui, avisa e
