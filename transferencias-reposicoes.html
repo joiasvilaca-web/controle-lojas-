@@ -460,8 +460,8 @@
   .step-summary-done{background:var(--ok-bg);color:var(--ok-ink);font-weight:700;}
   .step-summary-pending{background:var(--surface-2);color:var(--muted);font-style:italic;}
   .btn-concluir-etapa{
-    margin-top:10px; border:none; border-radius:9px; background:var(--ok-line); color:#fff;
-    font-size:12.5px; font-weight:800; padding:9px 16px; cursor:pointer; display:block;
+    margin-top:0; border:none; border-radius:9px; background:var(--ok-line); color:#fff;
+    font-size:12.5px; font-weight:800; padding:9px 16px; cursor:pointer; flex:0 0 auto;
   }
   .btn-concluir-etapa:hover{filter:brightness(1.05);}
   .btn-mercadoria-baixada{
@@ -789,30 +789,30 @@
     transferItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
-      {f:"quantidade", type:"number", ph:"Qtd"},
+      {f:"quantidade", type:"text", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
     ],
     retornoItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
-      {f:"quantidade", type:"number", ph:"Qtd"},
+      {f:"quantidade", type:"text", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
     ],
     pedidoItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
-      {f:"quantidade", type:"number", ph:"Qtd"},
+      {f:"quantidade", type:"text", ph:"Qtd"},
     ],
     disponibilizadoItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
-      {f:"quantidade", type:"number", ph:"Qtd"},
+      {f:"quantidade", type:"text", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
     ],
     itensEnvio: [
       {f:"produto", type:"select", opts:PRODUCTS},
       {f:"metal", type:"select", opts:METALS},
-      {f:"quantidade", type:"number", ph:"Qtd"},
+      {f:"quantidade", type:"text", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
     ],
   };
@@ -1118,9 +1118,8 @@
 
     let corpo;
     if(isExpanded){
-      const btnConcluir = !isDone ? `<button type="button" class="btn-concluir-etapa" data-action="concluir-etapa" data-step-field="${step.field}">✓ Concluir etapa</button>` : "";
       const lojaResponsavel = step.loja ? `<div class="step-loja-resp" style="background:${cor};">🏬 Loja responsável por este visto: <b>${escapeHtml(step.loja)}</b></div>` : "";
-      corpo = `${lojaResponsavel}${step.html}${btnConcluir}`;
+      corpo = `${lojaResponsavel}${step.html}`;
     }else if(isDone){
       const resumo = [nomeVal, dataVal].filter(Boolean).join(" · ");
       corpo = `<div class="step-summary step-summary-done">${resumo ? escapeHtml(resumo) : "Concluído"}</div>`;
@@ -3029,11 +3028,17 @@
     // direto no check — só o botão "✓ Concluir etapa" pode confirmar (e é ali que a
     // senha é pedida), pra não ter como marcar sem senha e nunca clicar em Concluir.
     const travado = DIRETORIA_FIELDS.has(vistoField);
+    // O botão "Concluir etapa" fica na MESMA linha dos dados do visto (checkbox, nome,
+    // data) — não solto embaixo — em todas as abas, já que é aqui dentro que a linha é
+    // montada de fato. Só aparece enquanto o visto ainda não está concluído.
+    const jaConcluido = stepDone(r[vistoField], r[nomeField], r[dataField]);
+    const btnConcluirHtml = jaConcluido ? "" : `<button type="button" class="btn-concluir-etapa" data-action="concluir-etapa" data-step-field="${vistoField}">✓ Concluir etapa</button>`;
     return `
       <div class="visto-row">
         <div class="checkfield"><input type="checkbox" id="${idBase}_${r.id}" data-f="${vistoField}" ${r[vistoField]?"checked":""} ${travado ? `disabled title="Marque clicando em &quot;Concluir etapa&quot; — a senha é pedida ali."` : ""}><label for="${idBase}_${r.id}">${escapeHtml(label)}${travado ? ' <span class="visto-lock" title="Confirmação por senha ao concluir">🔒</span>' : ""}</label></div>
         ${nomeField ? `<div class="field name-field"><label>Nome</label>${nomeInputHtml}</div>` : ""}
         <div class="field date-field"><label>Data</label><input type="date" data-f="${dataField}" value="${escapeHtml(r[dataField])}"></div>
+        ${btnConcluirHtml}
       </div>
     `;
   }
@@ -3475,7 +3480,15 @@
       btn.addEventListener("click", ()=>{
         if(!state.editIds.has(r.id)) return;
         const arr = btn.dataset.arr;
-        r[arr].push(ITEM_FACTORIES[arr]());
+        const itens = r[arr];
+        const ultimo = itens[itens.length - 1];
+        // Valida o item atual (produto + quantidade preenchidos) antes de liberar um
+        // novo — assim o usuário sempre completa uma linha antes de abrir a próxima.
+        if(ultimo && (!ultimo.produto || String(ultimo.quantidade || "").trim() === "")){
+          alert("Preencha o produto e a quantidade do item atual antes de adicionar um novo.");
+          return;
+        }
+        itens.push(ITEM_FACTORIES[arr]());
         rebuildBody(r);
       });
     });
