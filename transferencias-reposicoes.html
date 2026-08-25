@@ -242,7 +242,13 @@
   @media (max-width:460px){ .pend-columns-5{grid-template-columns:1fr;} }
   @media (max-width:640px){ .pend-columns{grid-template-columns:1fr;} }
   .pend-col{min-width:0;}
-  .pend-col-title{font-size:12px; font-weight:800; letter-spacing:0.03em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:10px;}
+  .pend-col-title{font-size:12px; font-weight:800; letter-spacing:0.03em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:6px;}
+  .btn-ordem-col{
+    flex:0 0 auto; border:1.5px solid var(--line); background:var(--surface); color:var(--muted);
+    font-size:11px; font-weight:800; width:24px; height:24px; border-radius:6px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; text-transform:none; letter-spacing:0;
+  }
+  .btn-ordem-col:hover{border-color:var(--accent); color:var(--accent-ink);}
   .pend-col-title-troca{color:#1D5FBF;}
   .pend-col-title-saida{color:#C1440E;}
   .pend-col-title-troca-diferente{color:#0E7C6B;}
@@ -251,7 +257,8 @@
   .compact-row{
     display:flex; flex-direction:column; gap:8px; background:var(--surface); border-radius:10px;
     padding:9px 11px; box-shadow:var(--shadow); border-left:5px solid var(--pend-line); cursor:pointer;
-    transition:transform .1s ease, box-shadow .1s ease; width:100%; min-width:0; min-height:172px;
+    transition:transform .1s ease, box-shadow .1s ease; width:100%; min-width:0;
+    height:172px; overflow:hidden;
   }
   .compact-row:hover{transform:translateY(-1px); box-shadow:0 4px 14px rgba(0,0,0,0.12);}
   .compact-row.st-ok{border-left-color:var(--ok-line); border-left-width:6px; background:linear-gradient(135deg, var(--ok-bg), var(--surface) 55%);}
@@ -662,6 +669,7 @@
     autoStoreFilter: null, // preenchido para vendedora (filtro automático de loja na Home)
     expandedStepOverride: new Map(), // id do registro -> key da etapa que o usuário abriu manualmente
     filtros: { texto: "", aba: "todas", loja: "todas", status: "todos", solicitante: "todos" }, // barra de busca da Home
+    ordemColunas: { troca: "desc", trocaDiferente: "desc", saida: "desc", reposicao: "desc", envio: "desc" }, // por coluna, na Home e nas Finalizadas
   };
 
   function uid(){ return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
@@ -1564,6 +1572,29 @@
     return m ? parseInt(m[1], 10) : -1;
   }
   function sortPorNumeroDesc(a, b){ return numeroDoRegistro(b) - numeroDoRegistro(a); }
+  // Ordena uma lista de registros conforme a direção escolhida pra aquela coluna
+  // (state.ordemColunas[chaveCol]) — "desc" (padrão) ou "asc".
+  function ordenarColuna(lista, chaveCol){
+    const ordenada = lista.slice().sort(sortPorNumeroDesc);
+    if(state.ordemColunas[chaveCol] === "asc") ordenada.reverse();
+    return ordenada;
+  }
+  // Botão pequeno (▼/▲) que fica ao lado do título de cada coluna, pra alternar a
+  // ordem de exibição daquela coluna especificamente.
+  function botaoOrdemHtml(chaveCol){
+    const asc = state.ordemColunas[chaveCol] === "asc";
+    return `<button type="button" class="btn-ordem-col" data-ordem-col="${chaveCol}" title="${asc ? "Crescente — clique para decrescente" : "Decrescente — clique para crescente"}">${asc ? "▲" : "▼"}</button>`;
+  }
+  function wireBotoesOrdem(container, onChange){
+    container.querySelectorAll("[data-ordem-col]").forEach(btn=>{
+      btn.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        const chave = btn.dataset.ordemCol;
+        state.ordemColunas[chave] = state.ordemColunas[chave] === "asc" ? "desc" : "asc";
+        onChange();
+      });
+    });
+  }
   function proximoNumeroTransacao(tab, r){
     const prefixo = prefixoTransacao(tab, r);
     const arr = tab === "transferencias" ? state.transferencias : tab === "envio" ? state.envio : state.reposicao;
@@ -2329,7 +2360,6 @@
 
   /* ================= TELA: HOME ================= */
   function renderHomeScreen(){
-    const sortFn = sortPorNumeroDesc;
     let listaT = state.transferencias.filter(r=> r.rascunho || computeStatusTransfer(r).status === "ERRO");
     let listaR = state.reposicao.filter(r=> r.rascunho || computeStatusReposicao(r).status === "ERRO");
     let listaE = state.envio.filter(r=> r.rascunho || computeStatusEnvioDiretoria(r).status === "ERRO");
@@ -2338,11 +2368,11 @@
       listaR = listaR.filter(r=> r.loja === state.autoStoreFilter);
       listaE = listaE.filter(r=> r.loja === state.autoStoreFilter);
     }
-    let listaTroca = listaT.filter(r=> r.tipoTransf === "TROCA").sort(sortFn);
-    let listaTrocaDiferente = listaT.filter(r=> r.tipoTransf === "TROCA DIFERENTE").sort(sortFn);
-    let listaSaida = listaT.filter(r=> r.tipoTransf === "SAÍDA").sort(sortFn);
-    listaR = listaR.slice().sort(sortFn);
-    listaE = listaE.slice().sort(sortFn);
+    let listaTroca = ordenarColuna(listaT.filter(r=> r.tipoTransf === "TROCA"), "troca");
+    let listaTrocaDiferente = ordenarColuna(listaT.filter(r=> r.tipoTransf === "TROCA DIFERENTE"), "trocaDiferente");
+    let listaSaida = ordenarColuna(listaT.filter(r=> r.tipoTransf === "SAÍDA"), "saida");
+    listaR = ordenarColuna(listaR, "reposicao");
+    listaE = ordenarColuna(listaE, "envio");
 
     // Busca: quando algum filtro está ativo, olha em TODOS os registros (qualquer
     // status — pendente, rascunho ou já concluído), não só nas pendências que a Home
@@ -2365,23 +2395,23 @@
       : `
       <div class="pend-columns pend-columns-5">
         <div class="pend-col">
-          <div class="pend-col-title pend-col-title-troca">${TIPO_ICON["TROCA"]} ${labelTipoTransf("TROCA")} — pendências e rascunhos</div>
+          <div class="pend-col-title pend-col-title-troca">${TIPO_ICON["TROCA"]} ${labelTipoTransf("TROCA")} — pendências e rascunhos ${botaoOrdemHtml("troca")}</div>
           <div>${listaTroca.length ? listaTroca.map(r=>compactRowHtml(r,"transferencias",false)).join("") : '<div class="empty-state">Nenhuma pendência ou rascunho.</div>'}</div>
         </div>
         <div class="pend-col">
-          <div class="pend-col-title pend-col-title-troca-diferente">${TIPO_ICON["TROCA DIFERENTE"]} ${labelTipoTransf("TROCA DIFERENTE")} — pendências e rascunhos</div>
+          <div class="pend-col-title pend-col-title-troca-diferente">${TIPO_ICON["TROCA DIFERENTE"]} ${labelTipoTransf("TROCA DIFERENTE")} — pendências e rascunhos ${botaoOrdemHtml("trocaDiferente")}</div>
           <div>${listaTrocaDiferente.length ? listaTrocaDiferente.map(r=>compactRowHtml(r,"transferencias",false)).join("") : '<div class="empty-state">Nenhuma pendência ou rascunho.</div>'}</div>
         </div>
         <div class="pend-col">
-          <div class="pend-col-title pend-col-title-saida">${TIPO_ICON["SAÍDA"]} SAÍDA — pendências e rascunhos</div>
+          <div class="pend-col-title pend-col-title-saida">${TIPO_ICON["SAÍDA"]} SAÍDA — pendências e rascunhos ${botaoOrdemHtml("saida")}</div>
           <div>${listaSaida.length ? listaSaida.map(r=>compactRowHtml(r,"transferencias",false)).join("") : '<div class="empty-state">Nenhuma pendência ou rascunho.</div>'}</div>
         </div>
         <div class="pend-col">
-          <div class="pend-col-title">📦 REPOSIÇÃO — pendências e rascunhos</div>
+          <div class="pend-col-title">📦 REPOSIÇÃO — pendências e rascunhos ${botaoOrdemHtml("reposicao")}</div>
           <div>${listaR.length ? listaR.map(r=>compactRowHtml(r,"reposicao",false)).join("") : '<div class="empty-state">Nenhuma pendência ou rascunho.</div>'}</div>
         </div>
         <div class="pend-col">
-          <div class="pend-col-title">🏢 ENVIO DIRETORIA — pendências e rascunhos</div>
+          <div class="pend-col-title">🏢 ENVIO DIRETORIA — pendências e rascunhos ${botaoOrdemHtml("envio")}</div>
           <div>${listaE.length ? listaE.map(r=>compactRowHtml(r,"envio",false)).join("") : '<div class="empty-state">Nenhuma pendência ou rascunho.</div>'}</div>
         </div>
       </div>
@@ -2430,6 +2460,7 @@
       render();
     });
     wireFiltroBar(listWrap, renderHomeScreen);
+    wireBotoesOrdem(listWrap, renderHomeScreen);
     wireCompactRows(listWrap);
   }
 
