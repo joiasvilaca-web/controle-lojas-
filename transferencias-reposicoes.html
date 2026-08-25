@@ -353,8 +353,15 @@
   .item-row-multi select:focus,.item-row-multi input:focus{outline:none;border-color:var(--accent);background:#fff;}
   .btn-x{flex:0 0 auto;border:none;background:var(--erro-bg);color:var(--erro-ink);width:26px;height:26px;border-radius:50%;font-weight:800;font-size:14px;line-height:1;}
   .btn-add-item{font-size:12px;font-weight:700;color:var(--accent-ink);background:none;border:1px dashed var(--accent);padding:6px 10px;border-radius:8px;margin-top:2px;}
+  .item-array-wrap{display:flex;flex-direction:column;gap:6px;margin-bottom:8px;}
   .item-espelho-wrap{display:flex;flex-direction:column;gap:6px;margin-bottom:8px;}
   .item-espelho-row{display:flex;align-items:center;gap:8px;background:var(--surface-2);border-radius:8px;padding:7px 10px;font-size:12.5px;font-weight:600;color:var(--ink);}
+  .item-espelho-row-editavel span{flex:1;}
+  .item-espelho-btn{
+    flex:0 0 auto;border:none;background:none;color:var(--muted);opacity:0.6;cursor:pointer;
+    width:22px;height:22px;border-radius:5px;font-size:13px;display:flex;align-items:center;justify-content:center;
+  }
+  .item-espelho-btn:hover{opacity:1;background:var(--surface);color:var(--accent-ink);}
   .item-espelho-foto{width:30px;height:30px;object-fit:cover;border-radius:6px;flex:0 0 auto;}
   .item-espelho-vazio{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:8px;}
 
@@ -2741,20 +2748,35 @@
   }
 
   /* ================= item array rendering ================= */
+  // Controla, por item, se ele está sendo editado (mostra os campos de
+  // seleção/texto) ou já "fechado" numa linha limpa de resumo (igual à exibição do
+  // Visto da gerente) — é só um estado de tela, não é salvo no registro. Um item
+  // sem produto definido SEMPRE aparece editável (ainda não tem o que resumir).
+  const itemEditState = new Set();
+  function chaveItemEdit(r, arrKey, idx){ return r.id + "|" + arrKey + "|" + idx; }
+  function itemEstaEditando(r, arrKey, idx, it){
+    // Só considera "completo" (e por isso colapsável em linha de resumo) quando
+    // produto E quantidade estiverem preenchidos — os mesmos dois campos exigidos
+    // pra liberar o botão "+ Adicionar item".
+    if(!it.produto || String(it.quantidade || "").trim() === "") return true;
+    return itemEditState.has(chaveItemEdit(r, arrKey, idx));
+  }
+
   // Exibição somente-leitura dos itens — usada no Ciclo 2 da TROCA, que agora só
   // espelha os itens preenchidos no Ciclo 1 (não pode ser editado ali).
   function renderItemArrayEspelhado(items){
-    if(!Array.isArray(items) || items.length === 0){
+    const preenchidos = (Array.isArray(items) ? items : []).filter(it=>it && it.produto);
+    if(preenchidos.length === 0){
       return `<div class="item-espelho-vazio">Nenhum item adicionado ainda.</div>`;
     }
-    return items.map(it=>{
+    return preenchidos.map(it=>{
       const partes = [];
       if(it.produto) partes.push(escapeHtml(it.produto));
       if(it.metal) partes.push(escapeHtml(it.metal));
       if(it.quantidade !== "" && it.quantidade !== undefined && it.quantidade !== null) partes.push("Qtd: " + escapeHtml(String(it.quantidade)));
       if(it.fator) partes.push("Fator: " + escapeHtml(String(it.fator)));
       const foto = it.fotoUrl ? `<a href="${escapeHtml(it.fotoUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(it.fotoUrl)}" alt="Foto do item" class="item-espelho-foto"></a>` : "";
-      return `<div class="item-espelho-row">${foto}<span>${partes.join(" · ") || "Item sem produto definido"}</span></div>`;
+      return `<div class="item-espelho-row">${foto}<span>${partes.join(" · ")}</span></div>`;
     }).join("");
   }
 
@@ -2778,21 +2800,43 @@
   function renderItemArray(r, arrKey, addLabel, withPhoto){
     const items = r[arrKey];
     const fields = ITEM_FIELDS[arrKey];
+    let algumEditando = false;
     let rows = items.map((it, idx)=>{
-      const cells = fields.map(fc=>{
-        if(fc.type === "select"){
-          return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}">${fieldOptionsHtml(fc.opts, it[fc.f])}</select>`;
-        }
-        if(fc.type === "produtoEstoque"){
-          return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" title="Vincular a um produto do catálogo movimenta o estoque de verdade quando a baixa/entrada for confirmada">${produtoEstoqueOptionsHtml(it[fc.f])}</select>`;
-        }
-        const inputType = fc.type === "number" ? "number" : "text";
-        return `<input type="${inputType}" ${inputType==="number" ? 'min="0"' : ""} placeholder="${fc.ph||""}" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" value="${escapeHtml(it[fc.f])}">`;
-      }).join("");
-      const fotoCell = withPhoto ? fotoItemCellHtml(it, arrKey, idx) : "";
-      return `<div class="item-row-multi">${cells}${fotoCell}<button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>`;
+      const editando = itemEstaEditando(r, arrKey, idx, it);
+      if(editando){
+        algumEditando = true;
+        const cells = fields.map(fc=>{
+          if(fc.type === "select"){
+            return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}">${fieldOptionsHtml(fc.opts, it[fc.f])}</select>`;
+          }
+          if(fc.type === "produtoEstoque"){
+            return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" title="Vincular a um produto do catálogo movimenta o estoque de verdade quando a baixa/entrada for confirmada">${produtoEstoqueOptionsHtml(it[fc.f])}</select>`;
+          }
+          return `<input type="text" placeholder="${fc.ph||""}" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" value="${escapeHtml(it[fc.f])}">`;
+        }).join("");
+        const fotoCell = withPhoto ? fotoItemCellHtml(it, arrKey, idx) : "";
+        return `<div class="item-row-multi">${cells}${fotoCell}<button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>`;
+      }
+      // Item já preenchido: fecha numa linha limpa de resumo (mesmo formato usado no
+      // Visto da gerente), com botões discretos de editar/remover ao lado.
+      const partes = [];
+      if(it.produto) partes.push(escapeHtml(it.produto));
+      if(it.metal) partes.push(escapeHtml(it.metal));
+      if(it.quantidade !== "" && it.quantidade !== undefined && it.quantidade !== null) partes.push("Qtd: " + escapeHtml(String(it.quantidade)));
+      if(it.fator) partes.push("Fator: " + escapeHtml(String(it.fator)));
+      const foto = it.fotoUrl ? `<a href="${escapeHtml(it.fotoUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(it.fotoUrl)}" alt="Foto do item" class="item-espelho-foto"></a>` : "";
+      return `
+        <div class="item-espelho-row item-espelho-row-editavel">
+          ${foto}<span>${partes.join(" · ")}</span>
+          <button class="item-espelho-btn" type="button" data-action="editar-item" data-arr="${arrKey}" data-item-idx="${idx}" title="Editar item">✎</button>
+          <button class="item-espelho-btn" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}" title="Remover item">×</button>
+        </div>
+      `;
     }).join("");
-    return `${rows}<button class="btn-add-item" type="button" data-action="add-item" data-arr="${arrKey}">${addLabel}</button>`;
+    // Enquanto tiver algum item em edição (ainda sem produto, por exemplo), o botão de
+    // adicionar fica escondido — só reaparece depois que esse item for concluído.
+    const btnAdd = algumEditando ? "" : `<button class="btn-add-item" type="button" data-action="add-item" data-arr="${arrKey}">${addLabel}</button>`;
+    return `<div class="item-array-wrap">${rows}${btnAdd}</div>`;
   }
 
   function fotoItemCellHtml(it, arrKey, idx){
@@ -3484,6 +3528,8 @@
         const ultimo = itens[itens.length - 1];
         // Valida o item atual (produto + quantidade preenchidos) antes de liberar um
         // novo — assim o usuário sempre completa uma linha antes de abrir a próxima.
+        // (Na prática o botão já fica escondido enquanto há item em edição — isso aqui
+        // é só uma segunda trava de segurança.)
         if(ultimo && (!ultimo.produto || String(ultimo.quantidade || "").trim() === "")){
           alert("Preencha o produto e a quantidade do item atual antes de adicionar um novo.");
           return;
@@ -3493,11 +3539,24 @@
       });
     });
 
+    body.querySelectorAll('[data-action="editar-item"]').forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        if(!state.editIds.has(r.id)) return;
+        const chave = chaveItemEdit(r, btn.dataset.arr, btn.dataset.itemIdx);
+        if(itemEditState.has(chave)) itemEditState.delete(chave); else itemEditState.add(chave);
+        rebuildBody(r);
+      });
+    });
+
     body.querySelectorAll('[data-action="remove-item"]').forEach(btn=>{
       btn.addEventListener("click", ()=>{
         if(!state.editIds.has(r.id)) return;
         const arr = btn.dataset.arr, idx = Number(btn.dataset.itemIdx);
         r[arr].splice(idx,1);
+        // Os índices dos itens que vêm depois mudam ao remover um do meio — limpa o
+        // estado de "em edição" desse array pra não ficar associado ao item errado.
+        const prefixo = r.id + "|" + arr + "|";
+        [...itemEditState].forEach(chave=>{ if(chave.startsWith(prefixo)) itemEditState.delete(chave); });
         rebuildBody(r);
       });
     });
