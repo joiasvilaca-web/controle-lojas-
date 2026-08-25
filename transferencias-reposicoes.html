@@ -3127,10 +3127,9 @@
     const nomeInputHtml = cargo
       ? `<select data-f="${nomeField}">${funcionarioOptionsHtml(cargo, r[nomeField])}</select>`
       : `<input type="text" data-f="${nomeField}" value="${escapeHtml(r[nomeField])}" placeholder="Nome">`;
-    // Nenhum checkbox de visto pode ser marcado clicando direto nele — em NENHUMA
-    // aba — só o botão "✓ Concluir etapa" pode confirmar. Antes isso só valia pros
-    // vistos protegidos por senha; sem essa trava, um visto comum com nome/data já
-    // preenchidos virava "concluído" só de clicar no check, sumindo com o botão.
+    // O checkbox do visto é clicável direto — pra vistos protegidos por senha
+    // (DIRETORIA_FIELDS), o clique pede a senha antes de marcar. O botão "✓ Concluir
+    // etapa" continua funcionando do mesmo jeito, como uma segunda forma de concluir.
     const precisaSenha = DIRETORIA_FIELDS.has(vistoField);
     // O botão "Concluir etapa" fica na MESMA linha dos dados do visto (checkbox, nome,
     // data) — não solto embaixo — em todas as abas, já que é aqui dentro que a linha é
@@ -3139,7 +3138,7 @@
     const btnConcluirHtml = jaConcluido ? "" : `<button type="button" class="btn-concluir-etapa" data-action="concluir-etapa" data-step-field="${vistoField}">✓ Concluir etapa</button>`;
     return `
       <div class="visto-row">
-        <div class="checkfield"><input type="checkbox" id="${idBase}_${r.id}" data-f="${vistoField}" ${r[vistoField]?"checked":""} disabled title="Marque clicando em &quot;Concluir etapa&quot;${precisaSenha ? " — a senha é pedida ali." : "."}"><label for="${idBase}_${r.id}">${escapeHtml(label)}${precisaSenha ? ' <span class="visto-lock" title="Confirmação por senha ao concluir">🔒</span>' : ""}</label></div>
+        <div class="checkfield"><input type="checkbox" id="${idBase}_${r.id}" data-f="${vistoField}" ${r[vistoField]?"checked":""} ${precisaSenha ? `data-precisa-senha="1"` : ""}><label for="${idBase}_${r.id}">${escapeHtml(label)}${precisaSenha ? ' <span class="visto-lock" title="Confirmação por senha ao marcar">🔒</span>' : ""}</label></div>
         ${nomeField ? `<div class="field name-field"><label>Nome</label>${nomeInputHtml}</div>` : ""}
         <div class="field date-field"><label>Data</label><input type="date" data-f="${dataField}" value="${escapeHtml(r[dataField])}"></div>
         ${btnConcluirHtml}
@@ -3470,12 +3469,6 @@
 
   function applyReadonly(body, readonly){
     body.querySelectorAll("input, select").forEach(el=>{ el.disabled = readonly; });
-    // NENHUM checkbox de visto pode ficar clicável pro usuário marcar direto — mesmo
-    // em modo de edição — só o botão "Concluir etapa" pode marcá-los (e é ali que a
-    // senha é pedida, quando for o caso).
-    body.querySelectorAll("input[type=checkbox][data-f]").forEach(el=>{
-      el.disabled = true;
-    });
     body.querySelectorAll('[data-action="add-item"],[data-action="remove-item"],[data-action="remover-foto-item"]').forEach(el=>{
       el.style.display = readonly ? "none" : "";
     });
@@ -3499,6 +3492,25 @@
     body.querySelectorAll("[data-f]").forEach(el=>{
       const field = el.dataset.f;
       const isCheck = el.type === "checkbox";
+
+      // Checkbox de visto protegido por senha (DIRETORIA_FIELDS): pede a senha antes
+      // de marcar/desmarcar direto no clique. Os demais checkboxes de visto (não
+      // protegidos) marcam livre, sem senha — a validação de nome/data continua
+      // existindo à parte, no botão "Concluir etapa".
+      if(isCheck && el.dataset.precisaSenha){
+        el.addEventListener("change", ()=>{
+          const novoValor = el.checked;
+          el.checked = !novoValor; // reverte visualmente até a senha ser confirmada
+          const acao = novoValor ? "confirmar" : "desmarcar";
+          requestPassword(`Visto protegido — digite a senha de diretor(a)/gerente para ${acao} este visto:`).then(ok=>{
+            if(!ok) return;
+            el.checked = novoValor;
+            r[field] = novoValor;
+            rebuildBody(r);
+          });
+        });
+        return;
+      }
 
       // Ecommerce, Reforma Joias e Oficina nunca são loja de ORIGEM numa transferência
       // (só recebem — de JV, MC ou JN). Se escolherem uma delas aqui, avisa e
