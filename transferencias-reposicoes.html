@@ -353,6 +353,8 @@
   .item-row-multi select:focus,.item-row-multi input:focus{outline:none;border-color:var(--accent);background:#fff;}
   .btn-x{flex:0 0 auto;border:none;background:var(--erro-bg);color:var(--erro-ink);width:26px;height:26px;border-radius:50%;font-weight:800;font-size:14px;line-height:1;}
   .btn-add-item{font-size:12px;font-weight:700;color:var(--accent-ink);background:none;border:1px dashed var(--accent);padding:6px 10px;border-radius:8px;margin-top:2px;}
+  .btn-confirmar-item{border:none;background:var(--ok-line);color:#fff;font-weight:800;}
+  .btn-confirmar-item:hover{filter:brightness(1.05);}
   .item-array-wrap{display:flex;flex-direction:column;gap:6px;margin-bottom:8px;}
   .item-espelho-wrap{display:flex;flex-direction:column;gap:6px;margin-bottom:8px;}
   .item-espelho-row{display:flex;align-items:center;gap:8px;background:var(--surface-2);border-radius:8px;padding:7px 10px;font-size:12.5px;font-weight:600;color:var(--ink);}
@@ -2031,12 +2033,29 @@
     });
   }
 
+  // Ao abrir um registro (novo ou existente) pra visualizar/editar, os itens que já
+  // vieram completos (produto + quantidade preenchidos) começam FECHADOS (linha de
+  // resumo) — só os itens realmente novos, ainda sendo digitados nesta sessão, ficam
+  // abertos aguardando o clique em "✓ Adicionar".
+  function semearItensFechados(r){
+    ["transferItens","retornoItens","pedidoItens","disponibilizadoItens","itensEnvio"].forEach(arrKey=>{
+      const arr = r[arrKey];
+      if(!Array.isArray(arr)) return;
+      arr.forEach((it, idx)=>{
+        if(it && it.produto && String(it.quantidade || "").trim() !== ""){
+          itemFechadoState.add(chaveItemEdit(r, arrKey, idx));
+        }
+      });
+    });
+  }
+
   function abrirRegistroNovoEmTelaCheia(rec){
     state.openIds.clear();
     state.openIds.add(rec.id);
     state.editIds.add(rec.id);
     state.unsavedNew.add(rec.id);
     state.pristineSnapshots.set(rec.id, JSON.stringify(rec));
+    semearItensFechados(rec);
     render();
   }
 
@@ -2102,6 +2121,9 @@
     state.tab = tab;
     state.openIds.clear();
     state.openIds.add(id);
+    const arr = tab === "transferencias" ? state.transferencias : tab === "envio" ? state.envio : state.reposicao;
+    const r = arr.find(x=>x.id===id);
+    if(r) semearItensFechados(r);
     render();
   }
 
@@ -2111,7 +2133,7 @@
     state.tab = tab;
     state.openIds.clear();
     state.openIds.add(id);
-    if(r){ state.editSnapshots.set(id, JSON.parse(JSON.stringify(r))); state.editIds.add(id); }
+    if(r){ state.editSnapshots.set(id, JSON.parse(JSON.stringify(r))); state.editIds.add(id); semearItensFechados(r); }
     render();
   }
 
@@ -2748,18 +2770,15 @@
   }
 
   /* ================= item array rendering ================= */
-  // Controla, por item, se ele está sendo editado (mostra os campos de
-  // seleção/texto) ou já "fechado" numa linha limpa de resumo (igual à exibição do
-  // Visto da gerente) — é só um estado de tela, não é salvo no registro. Um item
-  // sem produto definido SEMPRE aparece editável (ainda não tem o que resumir).
-  const itemEditState = new Set();
+  // Controla, por item, se ele está "fechado" numa linha limpa de resumo (igual à
+  // exibição do Visto da gerente) ou ainda aberto pra edição — é só um estado de
+  // tela, não é salvo no registro. Um item só fecha quando o usuário clica
+  // explicitamente no botão "✓ Adicionar" — nunca sozinho ao digitar, pra dar tempo
+  // de preencher produto, metal, quantidade, fator e foto sem interrupção.
+  const itemFechadoState = new Set();
   function chaveItemEdit(r, arrKey, idx){ return r.id + "|" + arrKey + "|" + idx; }
   function itemEstaEditando(r, arrKey, idx, it){
-    // Só considera "completo" (e por isso colapsável em linha de resumo) quando
-    // produto E quantidade estiverem preenchidos — os mesmos dois campos exigidos
-    // pra liberar o botão "+ Adicionar item".
-    if(!it.produto || String(it.quantidade || "").trim() === "") return true;
-    return itemEditState.has(chaveItemEdit(r, arrKey, idx));
+    return !itemFechadoState.has(chaveItemEdit(r, arrKey, idx));
   }
 
   // Exibição somente-leitura dos itens — usada no Ciclo 2 da TROCA, que agora só
@@ -2815,9 +2834,15 @@
           return `<input type="text" placeholder="${fc.ph||""}" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" value="${escapeHtml(it[fc.f])}">`;
         }).join("");
         const fotoCell = withPhoto ? fotoItemCellHtml(it, arrKey, idx) : "";
-        return `<div class="item-row-multi">${cells}${fotoCell}<button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>`;
+        // Botão "✓ Adicionar" próprio deste item — só fecha (colapsa em linha de
+        // resumo) quando o usuário clica nele, nunca sozinho ao digitar. Assim dá
+        // tempo de preencher produto, metal, quantidade, fator e foto com calma.
+        return `
+          <div class="item-row-multi">${cells}${fotoCell}<button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>
+          <button class="btn-add-item btn-confirmar-item" type="button" data-action="confirmar-item" data-arr="${arrKey}" data-item-idx="${idx}">✓ Adicionar</button>
+        `;
       }
-      // Item já preenchido: fecha numa linha limpa de resumo (mesmo formato usado no
+      // Item já confirmado: fecha numa linha limpa de resumo (mesmo formato usado no
       // Visto da gerente), com botões discretos de editar/remover ao lado.
       const partes = [];
       if(it.produto) partes.push(escapeHtml(it.produto));
@@ -2833,8 +2858,8 @@
         </div>
       `;
     }).join("");
-    // Enquanto tiver algum item em edição (ainda sem produto, por exemplo), o botão de
-    // adicionar fica escondido — só reaparece depois que esse item for concluído.
+    // Enquanto tiver algum item ainda aberto (não confirmado), o botão de adicionar
+    // um item NOVO fica escondido — só reaparece depois que o atual for confirmado.
     const btnAdd = algumEditando ? "" : `<button class="btn-add-item" type="button" data-action="add-item" data-arr="${arrKey}">${addLabel}</button>`;
     return `<div class="item-array-wrap">${rows}${btnAdd}</div>`;
   }
@@ -3524,17 +3549,24 @@
       btn.addEventListener("click", ()=>{
         if(!state.editIds.has(r.id)) return;
         const arr = btn.dataset.arr;
-        const itens = r[arr];
-        const ultimo = itens[itens.length - 1];
-        // Valida o item atual (produto + quantidade preenchidos) antes de liberar um
-        // novo — assim o usuário sempre completa uma linha antes de abrir a próxima.
-        // (Na prática o botão já fica escondido enquanto há item em edição — isso aqui
-        // é só uma segunda trava de segurança.)
-        if(ultimo && (!ultimo.produto || String(ultimo.quantidade || "").trim() === "")){
-          alert("Preencha o produto e a quantidade do item atual antes de adicionar um novo.");
+        r[arr].push(ITEM_FACTORIES[arr]());
+        rebuildBody(r);
+      });
+    });
+
+    // Botão "✓ Adicionar" de cada item: valida produto + quantidade preenchidos e,
+    // só então, fecha esse item numa linha de resumo (nunca fecha sozinho ao digitar
+    // — dá tempo de preencher fator e foto com calma antes de confirmar).
+    body.querySelectorAll('[data-action="confirmar-item"]').forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        if(!state.editIds.has(r.id)) return;
+        const arr = btn.dataset.arr, idx = Number(btn.dataset.itemIdx);
+        const item = r[arr][idx];
+        if(!item || !item.produto || String(item.quantidade || "").trim() === ""){
+          alert("Preencha ao menos o produto e a quantidade antes de adicionar este item.");
           return;
         }
-        itens.push(ITEM_FACTORIES[arr]());
+        itemFechadoState.add(chaveItemEdit(r, arr, idx));
         rebuildBody(r);
       });
     });
@@ -3543,7 +3575,7 @@
       btn.addEventListener("click", ()=>{
         if(!state.editIds.has(r.id)) return;
         const chave = chaveItemEdit(r, btn.dataset.arr, btn.dataset.itemIdx);
-        if(itemEditState.has(chave)) itemEditState.delete(chave); else itemEditState.add(chave);
+        itemFechadoState.delete(chave);
         rebuildBody(r);
       });
     });
@@ -3556,7 +3588,7 @@
         // Os índices dos itens que vêm depois mudam ao remover um do meio — limpa o
         // estado de "em edição" desse array pra não ficar associado ao item errado.
         const prefixo = r.id + "|" + arr + "|";
-        [...itemEditState].forEach(chave=>{ if(chave.startsWith(prefixo)) itemEditState.delete(chave); });
+        [...itemFechadoState].forEach(chave=>{ if(chave.startsWith(prefixo)) itemFechadoState.delete(chave); });
         rebuildBody(r);
       });
     });
