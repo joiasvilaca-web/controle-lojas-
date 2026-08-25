@@ -786,6 +786,35 @@
     if(ehTroca(r.tipoTransf)) return !!r["mercadoriaBaixadaC"+ciclo] && !!r["mercadoriaEntradaC"+ciclo];
     return true;
   }
+  // Cada linha de item só é validada de verdade (produto + quantidade preenchidos)
+  // quando o usuário clica em "✓ Concluir etapa" — o botão "✓ Adicionar" de cada item
+  // não valida nada, só fecha e já abre o próximo em branco. Esse mapa diz qual
+  // array de itens conferir em cada etapa, por aba.
+  const ITEM_ARRAY_POR_STEP = {
+    transferencias: { vistoSaida: "transferItens", vistoRetornoSaida: "retornoItens" },
+    reposicao: { vistoDiretoria: "pedidoItens", vistoAdministrativo: "disponibilizadoItens" },
+    envio: { vistoSaidaEscritorio: "itensEnvio" },
+  };
+  // Antes de concluir, tira do array o item aberto que ficou vazio (o que sobra
+  // depois do último "✓ Adicionar", que sempre abre um novo em branco na sequência)
+  // — evita salvar uma linha em branco sem querer.
+  function limparItemAbertoVazio(r, arrKey){
+    const arr = r[arrKey];
+    if(!Array.isArray(arr) || arr.length === 0) return;
+    const ultimoIdx = arr.length - 1;
+    const ultimo = arr[ultimoIdx];
+    if(itemEstaEditando(r, arrKey, ultimoIdx, ultimo) && !ultimo.produto && String(ultimo.quantidade||"").trim()===""){
+      arr.splice(ultimoIdx, 1);
+    }
+  }
+  // Confere se o array de itens daquela etapa tem pelo menos UM item de verdade
+  // (produto + quantidade preenchidos) — tolera a linha em branco que sempre fica
+  // aberta esperando o próximo lançamento.
+  function temItemValido(r, arrKey){
+    const arr = r[arrKey];
+    if(!Array.isArray(arr)) return false;
+    return arr.some(it=> it && it.produto && String(it.quantidade||"").trim() !== "");
+  }
   function multisetEqual(a,b){
     if(a.length !== b.length) return false;
     const sa=[...a].sort(), sb=[...b].sort();
@@ -1192,6 +1221,17 @@
     const steps = tab === "transferencias" ? getTransferStepsMeta(r) : tab === "envio" ? getEnvioDiretoriaStepsMeta(r) : getReposicaoStepsMeta(r);
     const step = steps.find(s=>s.field===vistoField);
     if(!step) return;
+    // Só valida os itens (produto + quantidade) na hora de concluir a etapa — nunca
+    // ao clicar em "✓ Adicionar" de cada item.
+    const arrKeyDaEtapa = (ITEM_ARRAY_POR_STEP[tab] || {})[vistoField];
+    if(arrKeyDaEtapa){
+      limparItemAbertoVazio(r, arrKeyDaEtapa);
+      if(!temItemValido(r, arrKeyDaEtapa)){
+        alert("Adicione pelo menos um item (com produto e quantidade preenchidos) antes de concluir esta etapa.");
+        rebuildBody(r);
+        return;
+      }
+    }
     const nomeField = "nome" + vistoField.slice(5);
     const dataField = "data" + vistoField.slice(5);
     if(!r[nomeField] || String(r[nomeField]).trim() === ""){
@@ -3557,19 +3597,16 @@
       });
     });
 
-    // Botão "✓ Adicionar" de cada item: valida produto + quantidade preenchidos e,
-    // só então, fecha esse item numa linha de resumo (nunca fecha sozinho ao digitar
-    // — dá tempo de preencher fator e foto com calma antes de confirmar).
+    // Botão "✓ Adicionar" de cada item: fecha o item numa linha de resumo (sem
+    // validar nada aqui — a validação de verdade só acontece ao clicar em "Concluir
+    // etapa") e JÁ abre um item novo em branco na sequência, pra continuar lançando
+    // sem precisar clicar num botão separado de "+ Adicionar item".
     body.querySelectorAll('[data-action="confirmar-item"]').forEach(btn=>{
       btn.addEventListener("click", ()=>{
         if(!state.editIds.has(r.id)) return;
         const arr = btn.dataset.arr, idx = Number(btn.dataset.itemIdx);
-        const item = r[arr][idx];
-        if(!item || !item.produto || String(item.quantidade || "").trim() === ""){
-          alert("Preencha ao menos o produto e a quantidade antes de adicionar este item.");
-          return;
-        }
         itemFechadoState.add(chaveItemEdit(r, arr, idx));
+        r[arr].push(ITEM_FACTORIES[arr]());
         rebuildBody(r);
       });
     });
