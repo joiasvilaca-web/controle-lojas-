@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravações — Gestão e Controle</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --bg:#EEF1F4; --surface:#FFFFFF; --surface-2:#F5F7F9;
+    --ink:#151C28; --ink-soft:#4B5563; --ink-faint:#8B93A1;
+    --line:#D7DCE2; --accent:#662344; --accent-ink:#4A1830; --accent-soft:#FDD49E;
+    --ok:#188A54; --ok-soft:#D7F3E3;
+    --danger:#C4272B; --danger-soft:#FADADA;
+    --wait:#B8650A; --wait-soft:#FBE6C7;
+    --just:#6425C9; --just-soft:#E9DBFA;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); min-height:100vh; -webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer;}
+  input,select{font-family:inherit;}
+
+  #view-login{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card{ width:100%; max-width:380px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:32px 28px; box-shadow:0 12px 32px -18px rgba(20,30,45,0.25); }
+  .login-tag{ font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:8px; }
+  .login-title{ font-size:20px; font-weight:750; margin:0 0 4px; }
+  .login-sub{ color:var(--ink-soft); font-size:13px; margin:0 0 22px; line-height:1.5; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:6px; }
+  .field input, .field select{ width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:14px; background:var(--surface-2); color:var(--ink); }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--accent); background:#fff; }
+  .btn{ border:none; border-radius:8px; padding:10px 16px; font-size:13.5px; font-weight:700; }
+  .btn-primary{ background:var(--ink); color:#fff; width:100%; }
+  .btn-accent{ background:var(--accent); color:#fff; }
+  .btn-ghost{ background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line); }
+  .btn-sm{ padding:7px 12px; font-size:12.5px; }
+  .login-error{ background:var(--danger-soft); color:var(--danger); font-size:12.5px; padding:9px 11px; border-radius:7px; margin-bottom:12px; display:none; }
+  .login-error.show{ display:block; }
+  .back-link{ display:inline-block; font-size:12px; font-weight:700; color:var(--ink-soft); text-decoration:none; margin-bottom:16px; }
+
+  #view-grav{ display:none; }
+  header.topbar{
+    background:var(--ink); color:#fff; padding:0 20px; height:56px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px; position:sticky; top:0; z-index:20;
+  }
+  header.topbar a{ color:rgba(255,255,255,.7); text-decoration:none; font-size:13px; font-weight:700; }
+  .who{ font-size:12.5px; color:rgba(255,255,255,.75); display:flex; align-items:center; gap:10px; }
+  .level-pill{ font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.04em; background:rgba(255,255,255,.14); padding:3px 9px; border-radius:20px; }
+  main{ max-width:1120px; margin:0 auto; padding:24px 18px 60px; }
+
+  .page-head{ margin-bottom:16px; }
+  .page-title{ font-size:24px; font-weight:800; margin:0 0 4px; }
+  .page-sub{ color:var(--ink-soft); font-size:13.5px; margin:0; }
+  .section-label{ font-size:11.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--accent-ink); margin-bottom:12px; padding-bottom:8px; border-bottom:2px solid var(--line); }
+  .muted{ color:var(--ink-soft); font-size:13px; }
+  .empty{ text-align:center; padding:36px 20px; color:var(--ink-faint); font-size:13px; }
+
+  .mini-tabs{ display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
+  .mini-tabs button{ background:var(--surface-2); color:var(--ink-soft); border:1px solid var(--line); padding:8px 15px; border-radius:999px; font-size:13px; font-weight:700; }
+  .mini-tabs button.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
+
+  .filters{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:flex-end; }
+  .filters select, .filters input{ padding:8px 10px; border:1px solid var(--line); border-radius:7px; font-size:12.5px; background:var(--surface); color:var(--ink); }
+
+  .card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; margin-bottom:14px; box-shadow:0 2px 10px -4px rgba(43,15,31,0.07); }
+  .grid-2{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  .grid-3{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  @media(max-width:640px){ .grid-2,.grid-3{ grid-template-columns:1fr; } }
+
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  thead th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:750; padding:10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody td{ padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+
+  .badge{ display:inline-block; font-size:10.5px; font-weight:750; padding:3px 9px; border-radius:999px; }
+  .badge-wait{ background:var(--wait-soft); color:var(--wait); }
+  .badge-ok{ background:var(--ok-soft); color:var(--ok); }
+  .badge-just{ background:var(--just-soft); color:var(--just); }
+  .badge-danger{ background:var(--danger-soft); color:var(--danger); }
+
+  .item-select-row{ display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
+  .item-select-row label{ font-size:12.5px; font-weight:700; color:var(--ink-soft); min-width:70px; }
+  .item-select-row select{ flex:1; min-width:120px; }
+
+  .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
+  .modal-overlay.show{display:flex;}
+  .modal{background:var(--surface); color:var(--ink); border-radius:16px; max-width:640px; width:100%; max-height:88vh; overflow:auto; padding:26px;}
+  .modal-actions{display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;}
+
+  html.embedded #view-login{ display:none !important; }
+  html.embedded header.topbar{ display:none !important; }
+
+  #cupomImpressao{ display:none; }
+  @media print{
+    body *{ visibility:hidden; }
+    #cupomImpressao, #cupomImpressao *{ visibility:visible; }
+    #cupomImpressao{ display:block; position:absolute; top:0; left:0; width:100%; padding:16px; font-family:Arial,sans-serif; }
+  }
+</style>
+</head>
+<body>
+
+<div id="view-login">
+  <div class="login-card">
+    <a href="index.html" class="back-link">← Gestão e Controle</a>
+    <div class="login-tag">Gravações</div>
+    <div class="login-title">Acessar Gravações</div>
+    <p class="login-sub">Use a mesma senha do resto do sistema.</p>
+    <div class="login-error" id="loginError">Senha não encontrada.</div>
+    <div class="field"><label>Senha</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="off"></div>
+    <button class="btn btn-primary" id="btnLogin">Entrar</button>
+  </div>
+</div>
+
+<div id="view-grav">
+  <header class="topbar">
+    <a href="index.html">← Gestão e Controle</a>
+    <div class="who">
+      <span id="whoName"></span>
+      <span class="level-pill" id="whoLevel"></span>
+      <button class="btn btn-ghost" id="btnLogout" style="padding:5px 10px; background:rgba(179,38,30,0.18); color:#ffb3ac;">🚪 Sair</button>
+    </div>
+  </header>
+  <div id="lojaFaixa" style="display:none; width:100%; padding:8px 16px; color:#fff; font-family:'Cormorant Garamond',serif; font-size:15px; font-weight:700; text-align:center; text-shadow:0 1px 2px rgba(0,0,0,.25);"></div>
+  <main id="mainContent"></main>
+</div>
+<div class="modal-overlay" id="modalOverlay"><div class="modal" id="modalBox"></div></div>
+<div id="cupomImpressao"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+  const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+  const APP_BASE_URL = "https://vilaca-controle-lojas.vercel.app";
+  const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  let __gatewaySenha = null;
+  async function gatewayCall(body){
+    try{
+      const res = await fetch(GATEWAY_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha: __gatewaySenha, ...body }),
+      });
+      return await res.json();
+    }catch(e){
+      console.error("erro ao falar com o servidor", e);
+      return { error: "Não foi possível conectar. Verifique sua internet." };
+    }
+  }
+  async function gatewayLogin(senhaTentativa){
+    return gatewayCall({ op:"login", senha: senhaTentativa });
+  }
+
+  let currentUser = null;
+  let config = null;
+  let registros = [];
+  let abaAtiva = 'lista';
+  window.__lojaAtual = null;
+
+  function escapeHtml(s){ return (s==null?"":String(s)).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function fmtMoeda(v){ return "R$ " + (Number(v)||0).toFixed(2).replace(".", ","); }
+  function fmtDataBr(iso){ if(!iso) return "—"; const p=iso.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : iso; }
+  function uid(pfx){ return pfx+"_"+Math.random().toString(36).slice(2,11); }
+  function isoHoje(d){ d=d||new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  function horaAgora(d){ d=d||new Date(); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+  function somenteDigitos(s){ return (s||"").replace(/\D/g,""); }
+  function lojaOptionsHtml(selected){
+    return (config.lojas||[]).map(l=>`<option value="${l.id}" ${selected===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('');
+  }
+  function nomeLoja(id){ const l=(config.lojas||[]).find(x=>x.id===id); return l?l.nome:(id||'—'); }
+  function showToast(msg){
+    let el = document.getElementById('toastBox');
+    if(!el){ el = document.createElement('div'); el.id='toastBox'; el.style.cssText='position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; padding:11px 18px; border-radius:8px; font-size:13px; z-index:100; box-shadow:0 10px 30px -10px rgba(0,0,0,.4);'; document.body.appendChild(el); }
+    el.textContent = msg; el.style.display='block';
+    clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(()=>{ el.style.display='none'; }, 3200);
+  }
+  function closeModal(){ document.getElementById('modalOverlay').classList.remove('show'); document.getElementById('modalBox').innerHTML=''; }
+  function openModal(html){ document.getElementById('modalBox').innerHTML = html; document.getElementById('modalOverlay').classList.add('show'); }
+
+  /* Regra fixa: O.S. aberta até meio-dia (11:59) entrega no MESMO dia às 18h.
+     O.S. aberta a partir do meio-dia (12:00) entrega no dia SEGUINTE até meio-dia (12h). */
+  function calcularEntrega(agora){
+    agora = agora || new Date();
+    const entrega = new Date(agora);
+    if(agora.getHours() < 12){
+      entrega.setHours(18,0,0,0);
+    } else {
+      entrega.setDate(entrega.getDate()+1);
+      entrega.setHours(12,0,0,0);
+    }
+    return { dataEntrega: isoHoje(entrega), horaEntrega: horaAgora(entrega) };
+  }
+
+  function atualizarFaixaLoja(){
+    const faixa = document.getElementById('lojaFaixa');
+    if(!faixa) return;
+    if(window.__lojaAtual && window.__lojaAtual.nome){
+      faixa.style.display = 'block';
+      faixa.style.background = window.__lojaAtual.cor || '#7a1f3d';
+      faixa.textContent = '🏬 ' + window.__lojaAtual.nome;
+    } else {
+      faixa.style.display = 'none';
+    }
+  }
+
+  /* ================= CARREGAMENTO ================= */
+  async function carregarConfig(){
+    const r = await gatewayCall({ op:"getConfig" });
+    config = (r && r.data) ? r.data : { lojas:[] };
+  }
+  async function carregarRegistros(){
+    try{
+      const { data, error } = await realSupabaseClient.from('gravacoes_kv').select('value').eq('key','registros').maybeSingle();
+      if(error) throw error;
+      registros = (data && data.value) || [];
+    }catch(e){ console.error('erro ao carregar gravações', e); registros = []; }
+  }
+  async function salvarRegistros(){
+    try{
+      const { error } = await realSupabaseClient.from('gravacoes_kv').upsert({ key:'registros', value: registros, updated_at: new Date().toISOString() });
+      if(error) throw error;
+      return true;
+    }catch(e){ console.error('erro ao salvar gravações', e); showToast('Não foi possível salvar. Tente de novo.'); return false; }
+  }
+
+  /* ================= LOGIN ================= */
+  const EMBEDDED = window.self !== window.top;
+  if(EMBEDDED){
+    document.documentElement.classList.add('embedded');
+    window.addEventListener('message', async (ev)=>{
+      if(!ev.data || !ev.data.type) return;
+      if(ev.data.type === 'auth'){
+        currentUser = ev.data.user;
+        __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
+        await carregarConfig();
+        await carregarRegistros();
+        enterApp();
+      } else if(ev.data.type === 'lojaAtual'){
+        window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
+        atualizarFaixaLoja();
+        if(currentUser) render();
+      }
+    });
+  } else {
+    document.getElementById('btnLogin').addEventListener('click', fazerLogin);
+    document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') fazerLogin(); });
+  }
+  async function fazerLogin(){
+    const pass = document.getElementById('loginPass').value;
+    const r = await gatewayLogin(pass);
+    if(!r.ok){ document.getElementById('loginError').classList.add('show'); return; }
+    document.getElementById('loginError').classList.remove('show');
+    __gatewaySenha = pass;
+    currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
+    await carregarConfig();
+    await carregarRegistros();
+    enterApp();
+  }
+  document.getElementById('btnLogout').addEventListener('click', ()=>{ window.location.href = 'index.html'; });
+
+  function enterApp(){
+    document.getElementById('view-login').style.display = 'none';
+    document.getElementById('view-grav').style.display = 'block';
+    document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
+    document.getElementById('whoLevel').textContent = currentUser.nivel==='diretoria'?'Diretoria':currentUser.nivel==='gerente'?'Gerente':currentUser.nivel==='oficina'?'Oficina':'Vendedora';
+    render();
+  }
+
+  /* ================= RENDER PRINCIPAL ================= */
+  function render(){
+    const main = document.getElementById('mainContent');
+    main.innerHTML = `
+      <div class="page-head">
+        <div class="page-title">✍️ Gravações</div>
+        <p class="page-sub">Controle de personalizações — via, prazos automáticos e valores por item.</p>
+      </div>
+      <div class="mini-tabs">
+        <button data-aba="lista" class="${abaAtiva==='lista'?'active':''}">📋 Lista</button>
+        <button data-aba="nova" class="${abaAtiva==='nova'?'active':''}">+ Nova gravação</button>
+        <button data-aba="relatorio" class="${abaAtiva==='relatorio'?'active':''}">📊 Relatório mensal</button>
+      </div>
+      <div id="corpoGrav"></div>
+    `;
+    main.querySelectorAll('[data-aba]').forEach(b=> b.addEventListener('click', ()=>{ abaAtiva = b.dataset.aba; render(); }));
+    if(abaAtiva==='lista') renderLista(document.getElementById('corpoGrav'));
+    else if(abaAtiva==='nova') renderNova(document.getElementById('corpoGrav'));
+    else renderRelatorio(document.getElementById('corpoGrav'));
+  }
+
+  /* ================= LISTA ================= */
+  function statusBadge(s){
+    return s==='entregue' ? `<span class="badge badge-ok">Entregue</span>`
+      : s==='pronto' ? `<span class="badge badge-just">Pronto</span>`
+      : `<span class="badge badge-wait">Em aberto</span>`;
+  }
+  function pagamentoBadge(g){
+    if(!g.pagamento || g.pagamento.status!=='pago') return `<span class="badge badge-danger">Em aberto</span>`;
+    const formaLabel = { dinheiro:'Dinheiro', cartao:'Cartão', pix:'Pix' }[g.pagamento.forma] || g.pagamento.forma;
+    return `<span class="badge badge-ok">Pago · ${escapeHtml(formaLabel)}</span>`;
+  }
+  function renderLista(wrap){
+    const lojaAtivaId = window.__lojaAtual && window.__lojaAtual.id;
+    wrap.innerHTML = `
+      <div class="filters">
+        <select id="f_loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
+        <select id="f_status"><option value="">Todos os status</option><option value="em_aberto">Em aberto</option><option value="pronto">Pronto</option><option value="entregue">Entregue</option></select>
+        <input type="text" id="f_busca" placeholder="Buscar cliente...">
+      </div>
+      <div id="tabelaGrav"></div>
+    `;
+    const fLoja = document.getElementById('f_loja');
+    const fStatus = document.getElementById('f_status');
+    const fBusca = document.getElementById('f_busca');
+    function desenhar(){
+      const loja = fLoja.value, status = fStatus.value, busca = fBusca.value.trim().toLowerCase();
+      const lista = registros.filter(g=>{
+        if(loja && g.loja!==loja) return false;
+        if(status && g.status!==status) return false;
+        if(busca && !(g.cliente||'').toLowerCase().includes(busca)) return false;
+        return true;
+      }).sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0));
+      const tabela = document.getElementById('tabelaGrav');
+      if(lista.length===0){ tabela.innerHTML = `<div class="empty">Nenhuma gravação encontrada.</div>`; return; }
+      tabela.innerHTML = `
+        <table>
+          <thead><tr><th>Via</th><th>Cliente</th><th>Loja</th><th>Itens</th><th>Valor</th><th>Entrega</th><th>Status</th><th>Pagamento</th><th>Ações</th></tr></thead>
+          <tbody>${lista.map(g=>`
+            <tr>
+              <td>#${escapeHtml(g.viaNumero)}</td>
+              <td>${escapeHtml(g.cliente)}<div class="muted" style="font-size:11px;">${escapeHtml(g.whatsapp)}</div></td>
+              <td>${escapeHtml(nomeLoja(g.loja))}</td>
+              <td>${escapeHtml(g.quantidadeItens)}</td>
+              <td>${fmtMoeda(g.valorTotal)}</td>
+              <td>${fmtDataBr(g.dataEntrega)}<br><b>${escapeHtml(g.horaEntrega)}</b></td>
+              <td>${statusBadge(g.status)}</td>
+              <td>${pagamentoBadge(g)}</td>
+              <td style="white-space:nowrap;">
+                <button class="btn btn-ghost btn-sm" data-detalhe="${g.id}">Abrir</button>
+              </td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      `;
+      tabela.querySelectorAll('[data-detalhe]').forEach(b=> b.addEventListener('click', ()=> abrirDetalhe(b.dataset.detalhe)));
+    }
+    if(lojaAtivaId){ fLoja.value = lojaAtivaId; fLoja.disabled = true; fLoja.title = 'Filtrando pela loja ativa — pra ver outra loja, troque em "Loja" no menu.'; }
+    [fLoja,fStatus,fBusca].forEach(el=> el.addEventListener('input', desenhar));
+    desenhar();
+  }
+
+  /* ================= NOVA GRAVAÇÃO ================= */
+  function renderNova(wrap){
+    const lojaAtivaId = window.__lojaAtual && window.__lojaAtual.id;
+    wrap.innerHTML = `
+      <div class="card">
+        <div class="section-label">Cliente</div>
+        <div class="grid-3">
+          <div class="field"><label>Nome *</label><input id="n_cliente"></div>
+          <div class="field"><label>WhatsApp *</label><input id="n_whatsapp" placeholder="(32) 90000-0000"></div>
+          <div class="field"><label>E-mail (opcional)</label><input id="n_email" type="email"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Loja</label><select id="n_loja"><option value="">Selecione</option>${lojaOptionsHtml(lojaAtivaId||'')}</select></div>
+          <div class="field"><label>Quantidade de itens *</label><input id="n_qtd" type="number" min="1" max="50" value="1"></div>
+        </div>
+        <div class="section-label">Valor por item</div>
+        <div id="areaItens"></div>
+        <div class="card" style="background:var(--surface-2); box-shadow:none;">
+          <div class="grid-2">
+            <div><span class="muted">Quantidade de itens</span><div style="font-size:20px; font-weight:800;" id="resumoQtd">1</div></div>
+            <div><span class="muted">Valor total</span><div style="font-size:20px; font-weight:800;" id="resumoValor">R$ 0,00</div></div>
+          </div>
+        </div>
+        <button class="btn btn-accent" id="btnSalvarNova" style="margin-top:8px;">💾 Salvar gravação</button>
+      </div>
+    `;
+    const OPCOES_VALOR = [10,20,30,40,50];
+    function desenharItens(){
+      const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
+      const area = document.getElementById('areaItens');
+      const atuais = area.querySelectorAll('[data-itemvalor]').length;
+      let html = '';
+      for(let i=0;i<qtd;i++){
+        const valorAtual = area.querySelector(`[data-itemvalor="${i}"]`) ? area.querySelector(`[data-itemvalor="${i}"]`).value : '';
+        html += `<div class="item-select-row"><label>Item ${i+1}</label><select data-itemvalor="${i}">
+          <option value="">Selecione o valor</option>
+          ${OPCOES_VALOR.map(v=>`<option value="${v}" ${String(valorAtual)===String(v)?'selected':''}>${fmtMoeda(v)}</option>`).join('')}
+        </select></div>`;
+      }
+      area.innerHTML = html;
+      area.querySelectorAll('[data-itemvalor]').forEach(sel=> sel.addEventListener('change', atualizarResumo));
+      atualizarResumo();
+    }
+    function atualizarResumo(){
+      const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
+      const valores = Array.from(document.querySelectorAll('[data-itemvalor]')).map(s=> Number(s.value)||0);
+      const total = valores.reduce((a,b)=>a+b,0);
+      document.getElementById('resumoQtd').textContent = qtd;
+      document.getElementById('resumoValor').textContent = fmtMoeda(total);
+    }
+    document.getElementById('n_qtd').addEventListener('input', desenharItens);
+    desenharItens();
+
+    document.getElementById('btnSalvarNova').addEventListener('click', async ()=>{
+      const cliente = document.getElementById('n_cliente').value.trim();
+      const whatsapp = document.getElementById('n_whatsapp').value.trim();
+      const email = document.getElementById('n_email').value.trim();
+      const loja = document.getElementById('n_loja').value;
+      const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
+      const selects = Array.from(document.querySelectorAll('[data-itemvalor]'));
+      const valores = selects.map(s=> Number(s.value)||0);
+      if(!cliente){ showToast('Informe o nome do cliente.'); return; }
+      if(!whatsapp){ showToast('Informe o WhatsApp do cliente.'); return; }
+      if(!loja){ showToast('Selecione a loja.'); return; }
+      if(valores.some(v=>!v)){ showToast('Selecione o valor de todos os itens.'); return; }
+
+      const btn = document.getElementById('btnSalvarNova');
+      btn.disabled = true; btn.textContent = 'Salvando...';
+      const rSeq = await gatewayCall({ op:'bumpViaSequence', params:{ loja: 'grav_'+loja } });
+      const viaNumero = (rSeq && rSeq.proximo) || (registros.filter(g=>g.loja===loja).length+1);
+      const agora = new Date();
+      const { dataEntrega, horaEntrega } = calcularEntrega(agora);
+      const novoRegistro = {
+        id: uid('grav'),
+        viaNumero, loja, cliente, whatsapp, email,
+        dataEntrada: isoHoje(agora), horaEntrada: horaAgora(agora),
+        dataEntrega, horaEntrega,
+        quantidadeItens: qtd,
+        itens: valores.map(v=>({ valor:v })),
+        valorTotal: valores.reduce((a,b)=>a+b,0),
+        status: 'em_aberto',
+        pagamento: { status:'em_aberto', forma:null },
+        criadoEm: Date.now(), criadoPor: currentUser.nome,
+      };
+      registros.push(novoRegistro);
+      const ok = await salvarRegistros();
+      btn.disabled = false; btn.textContent = '💾 Salvar gravação';
+      if(!ok) return;
+      showToast(`Gravação #${viaNumero} salva!`);
+      abaAtiva = 'lista';
+      render();
+      abrirDetalhe(novoRegistro.id);
+    });
+  }
+
+  /* ================= DETALHE / AÇÕES ================= */
+  function abrirDetalhe(id){
+    const g = registros.find(r=>r.id===id);
+    if(!g) return;
+    openModal(`
+      <div class="section-label">Via #${escapeHtml(g.viaNumero)} — ${escapeHtml(g.cliente)}</div>
+      <div class="muted" style="margin-bottom:14px;">${escapeHtml(nomeLoja(g.loja))} · ${escapeHtml(g.whatsapp)}${g.email?(' · '+escapeHtml(g.email)):''}</div>
+      <div class="grid-2" style="margin-bottom:16px;">
+        <div><span class="muted">Entrada</span><div><b>${fmtDataBr(g.dataEntrada)} às ${escapeHtml(g.horaEntrada)}</b></div></div>
+        <div><span class="muted">Entrega prevista</span><div><b>${fmtDataBr(g.dataEntrega)} às ${escapeHtml(g.horaEntrega)}</b></div></div>
+        <div><span class="muted">Itens</span><div><b>${escapeHtml(g.quantidadeItens)}</b> (${g.itens.map(i=>fmtMoeda(i.valor)).join(' + ')})</div></div>
+        <div><span class="muted">Valor total</span><div><b>${fmtMoeda(g.valorTotal)}</b></div></div>
+      </div>
+      <div class="field"><label>Status da O.S.</label>
+        <select id="d_status">
+          <option value="em_aberto" ${g.status==='em_aberto'?'selected':''}>Em aberto</option>
+          <option value="pronto" ${g.status==='pronto'?'selected':''}>Pronto</option>
+          <option value="entregue" ${g.status==='entregue'?'selected':''}>Entregue</option>
+        </select>
+      </div>
+      <div class="field"><label>Pagamento</label>
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <button type="button" class="btn btn-sm ${g.pagamento&&g.pagamento.status==='pago'?'btn-accent':'btn-ghost'}" id="btnPagoSim">✅ Pago</button>
+          <button type="button" class="btn btn-sm ${(!g.pagamento||g.pagamento.status==='em_aberto')?'btn-accent':'btn-ghost'}" id="btnPagoNao">Em aberto</button>
+        </div>
+        <select id="d_forma" style="display:${g.pagamento&&g.pagamento.status==='pago'?'block':'none'};">
+          <option value="">Selecione a forma...</option>
+          <option value="dinheiro" ${g.pagamento&&g.pagamento.forma==='dinheiro'?'selected':''}>Dinheiro</option>
+          <option value="cartao" ${g.pagamento&&g.pagamento.forma==='cartao'?'selected':''}>Cartão</option>
+          <option value="pix" ${g.pagamento&&g.pagamento.forma==='pix'?'selected':''}>Pix</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-accent" id="btnSalvarDetalhe">💾 Salvar</button>
+        <button class="btn btn-ghost" id="btnImprimir">🖨️ Imprimir via</button>
+        <button class="btn btn-ghost" id="btnWhats" style="background:#dcf8c6; color:#1f5c1f;">💬 Enviar por WhatsApp</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('modalOverlay').classList.remove('show')">Fechar</button>
+      </div>
+    `);
+    let pagoSelecionado = g.pagamento && g.pagamento.status==='pago';
+    document.getElementById('btnPagoSim').addEventListener('click', ()=>{
+      pagoSelecionado = true;
+      document.getElementById('btnPagoSim').className = 'btn btn-sm btn-accent';
+      document.getElementById('btnPagoNao').className = 'btn btn-sm btn-ghost';
+      document.getElementById('d_forma').style.display = 'block';
+    });
+    document.getElementById('btnPagoNao').addEventListener('click', ()=>{
+      pagoSelecionado = false;
+      document.getElementById('btnPagoNao').className = 'btn btn-sm btn-accent';
+      document.getElementById('btnPagoSim').className = 'btn btn-sm btn-ghost';
+      document.getElementById('d_forma').style.display = 'none';
+    });
+    document.getElementById('btnSalvarDetalhe').addEventListener('click', async ()=>{
+      const forma = document.getElementById('d_forma').value;
+      if(pagoSelecionado && !forma){ showToast('Selecione a forma de pagamento.'); return; }
+      g.status = document.getElementById('d_status').value;
+      g.pagamento = { status: pagoSelecionado?'pago':'em_aberto', forma: pagoSelecionado?forma:null };
+      const ok = await salvarRegistros();
+      if(ok){ showToast('Atualizado!'); document.getElementById('modalOverlay').classList.remove('show'); render(); }
+    });
+    document.getElementById('btnImprimir').addEventListener('click', ()=> imprimirVia(g));
+    document.getElementById('btnWhats').addEventListener('click', ()=> enviarWhatsapp(g));
+  }
+
+  /* ================= IMPRESSÃO ================= */
+  function imprimirVia(g){
+    const cupom = document.getElementById('cupomImpressao');
+    cupom.innerHTML = `
+      <div style="text-align:center; margin-bottom:10px;">
+        <div style="font-size:16px; font-weight:800;">VILAÇA JOIAS — GRAVAÇÕES</div>
+        <div>Via nº ${escapeHtml(g.viaNumero)} — ${escapeHtml(nomeLoja(g.loja))}</div>
+      </div>
+      <hr>
+      <div>Cliente: <b>${escapeHtml(g.cliente)}</b></div>
+      <div>WhatsApp: ${escapeHtml(g.whatsapp)}</div>
+      <hr>
+      <div>Entrada: <b>${fmtDataBr(g.dataEntrada)}</b> às <b>${escapeHtml(g.horaEntrada)}</b></div>
+      <div>Entrega prevista: <b>${fmtDataBr(g.dataEntrega)}</b> às <b>${escapeHtml(g.horaEntrega)}</b></div>
+      <hr>
+      <div>Quantidade de itens: <b>${escapeHtml(g.quantidadeItens)}</b></div>
+      ${g.itens.map((it,i)=>`<div>Item ${i+1}: <b>${fmtMoeda(it.valor)}</b></div>`).join('')}
+      <div style="margin-top:6px;">Valor total: <b>${fmtMoeda(g.valorTotal)}</b></div>
+      <div>Pagamento: <b>${g.pagamento&&g.pagamento.status==='pago' ? ('Pago — '+({dinheiro:'Dinheiro',cartao:'Cartão',pix:'Pix'}[g.pagamento.forma]||'')) : 'Em aberto'}</b></div>
+      <hr>
+      <div style="margin-top:30px;">Assinatura de autorização:</div>
+      <div style="margin-top:26px; border-top:1px solid #000; width:80%;"></div>
+    `;
+    window.print();
+  }
+
+  /* ================= WHATSAPP ================= */
+  function enviarWhatsapp(g){
+    const link = `${APP_BASE_URL}/acompanhar-gravacao.html?id=${g.id}`;
+    const msg = `SUA O.S. FOI GERADA COM SUCESSO, ACOMPANHE NO LINK ABAIXO O ANDAMENTO DO SERVIÇO.\n\n${link}`;
+    const numero = somenteDigitos(g.whatsapp);
+    const numeroCom55 = numero.startsWith('55') ? numero : ('55'+numero);
+    window.open(`https://wa.me/${numeroCom55}?text=${encodeURIComponent(msg)}`, '_blank');
+  }
+
+  /* ================= RELATÓRIO MENSAL ================= */
+  function renderRelatorio(wrap){
+    const agora = new Date();
+    const mesPadrao = agora.getFullYear()+"-"+String(agora.getMonth()+1).padStart(2,"0");
+    wrap.innerHTML = `
+      <div class="filters">
+        <input type="month" id="r_mes" value="${mesPadrao}">
+        <select id="r_loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
+      </div>
+      <div id="corpoRelatorio"></div>
+    `;
+    function desenhar(){
+      const mes = document.getElementById('r_mes').value;
+      const loja = document.getElementById('r_loja').value;
+      const doMes = registros.filter(g=>{
+        if(!g.dataEntrada || !g.dataEntrada.startsWith(mes)) return false;
+        if(loja && g.loja!==loja) return false;
+        return true;
+      });
+      const totalItens = doMes.reduce((a,g)=>a+(Number(g.quantidadeItens)||0),0);
+      const totalValor = doMes.reduce((a,g)=>a+(Number(g.valorTotal)||0),0);
+      const valorOficina = totalItens * 1;
+      const valorVilaca = totalValor - valorOficina;
+      const valorUpcase = valorVilaca;
+      document.getElementById('corpoRelatorio').innerHTML = `
+        <div class="grid-3">
+          <div class="card"><span class="muted">Quantidade de itens no mês</span><div style="font-size:26px; font-weight:800;">${totalItens}</div></div>
+          <div class="card"><span class="muted">Valor total gravado no mês</span><div style="font-size:26px; font-weight:800;">${fmtMoeda(totalValor)}</div></div>
+          <div class="card"><span class="muted">Gravações no mês</span><div style="font-size:26px; font-weight:800;">${doMes.length}</div></div>
+        </div>
+        <div class="card">
+          <div class="section-label">Resumo de repasse (R$ 1,00 por item)</div>
+          <div class="grid-3">
+            <div><span class="muted">Valor a pagar à Oficina</span><div style="font-size:19px; font-weight:800;">${fmtMoeda(valorOficina)}</div></div>
+            <div><span class="muted">Valor a pagar à Vilaça</span><div style="font-size:19px; font-weight:800;">${fmtMoeda(valorVilaca)}</div></div>
+            <div><span class="muted">Valor a pagar à Up Case</span><div style="font-size:19px; font-weight:800;">${fmtMoeda(valorUpcase)}</div></div>
+          </div>
+        </div>
+      `;
+    }
+    document.getElementById('r_mes').addEventListener('input', desenhar);
+    document.getElementById('r_loja').addEventListener('input', desenhar);
+    desenhar();
+  }
+
+  if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'gravacoes', tabs: [], active: null }, '*');
+})();
+</script>
+</body>
+</html>
