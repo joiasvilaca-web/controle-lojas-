@@ -242,6 +242,7 @@ const MODULOS_APP = {
     { id:'vendas', label:'Vendas' },
   ]},
   caixa: { nome:'Caixa', abas:[] },
+  gravacoes: { nome:'Gravações', abas:[] },
   orcamentos: { nome:'Orçamentos', abas:[
     { id:'novo', label:'Novo orçamento' },
     { id:'lista', label:'Orçamentos' },
@@ -281,6 +282,7 @@ function permissoesPadrao(nivel){
       os:{ ativo:true, abas:todasAbas('os') },
       vendas:{ ativo:true, abas:todasAbas('vendas') },
       caixa:{ ativo:true },
+      gravacoes:{ ativo:true },
       orcamentos:{ ativo:true, abas:todasAbas('orcamentos') },
       vendapg:{ ativo:true },
       conciliacao:{ ativo:true, abas:todasAbas('conciliacao') },
@@ -297,6 +299,7 @@ function permissoesPadrao(nivel){
       os:{ ativo:true, abas:{ painel:true, agenda:true, clientes:false, codigo:true } },
       vendas:{ ativo:false, abas:{} },
       caixa:{ ativo:false },
+      gravacoes:{ ativo:true },
       orcamentos:{ ativo:false, abas:{} },
       vendapg:{ ativo:false },
       conciliacao:{ ativo:false, abas:{} },
@@ -312,6 +315,7 @@ function permissoesPadrao(nivel){
     os:{ ativo:true, abas:{ painel:true, agenda:true, clientes:true, codigo:false } },
     vendas:{ ativo:true, abas:todasAbas('vendas') },
     caixa:{ ativo:true },
+    gravacoes:{ ativo:true },
     orcamentos:{ ativo:true, abas:todasAbas('orcamentos') },
     vendapg:{ ativo:true },
     conciliacao:{ ativo:false, abas:{} },
@@ -389,6 +393,7 @@ function lerPermissoesDoFormulario(container){
 }
 function openAcessoModal(usuario){
   const permissoesIniciais = usuario ? permissoesDoUsuario(usuario) : permissoesPadrao('vendedora');
+  const lojaAtualDoUsuario = usuario && Array.isArray(usuario.lojas) ? usuario.lojas[0] : '';
   openModal(`
     <div class="section-label">${usuario ? 'Editar acesso' : 'Novo acesso'}</div>
     <div class="grid-3">
@@ -402,6 +407,12 @@ function openAcessoModal(usuario){
           <option value="custom" ${usuario&&usuario.nivel==='custom'?'selected':''}>Personalizado</option>
         </select>
       </div>
+    </div>
+    <div class="field"><label>Loja <span class="muted" style="text-transform:none; font-weight:500;">(opcional — usada pelo módulo Loja e pelos filtros por loja, ex: Vendas, Gravações)</span></label>
+      <select id="ac_loja">
+        <option value="">Nenhuma (vê sem trava de loja)</option>
+        ${(config.lojas||[]).map(l=>`<option value="${l.id}" ${lojaAtualDoUsuario===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}
+      </select>
     </div>
     <p class="muted" style="margin:2px 0 12px;">O nível só define o rótulo mostrado; o que realmente controla o acesso são os módulos e abas marcados abaixo.</p>
     <div class="section-label" style="margin-top:10px;">Módulos e abas liberados</div>
@@ -426,15 +437,17 @@ function openAcessoModal(usuario){
     const nome = document.getElementById('ac_nome').value.trim();
     const senha = document.getElementById('ac_senha').value.trim();
     const nivel = document.getElementById('ac_nivel').value;
+    const lojaEscolhida = document.getElementById('ac_loja').value;
     if(!nome || !senha){ showToast('Preencha nome e senha.'); return; }
     const outroComMesmaSenha = (config.users||[]).some(u=> u.senha===senha && (!usuario || u.id!==usuario.id));
     if(outroComMesmaSenha){ showToast('Essa senha já está em uso.'); return; }
     const permissoes = lerPermissoesDoFormulario(permWrap);
+    const lojas = lojaEscolhida ? [lojaEscolhida] : [];
     config.users = Array.isArray(config.users) ? config.users : [];
     if(usuario){
-      Object.assign(usuario, { nome, senha, nivel, permissoes });
+      Object.assign(usuario, { nome, senha, nivel, permissoes, lojas });
     }else{
-      config.users.push({ id: uid('u'), nome, senha, nivel, permissoes });
+      config.users.push({ id: uid('u'), nome, senha, nivel, permissoes, lojas });
     }
     const ok = await configSave();
     if(!ok) return;
@@ -574,7 +587,7 @@ function renderAcessosDP(main){
     wrap.innerHTML = users.map((u,i)=>`
       <div class="code-list-item" style="align-items:flex-start;">
         <div style="flex:1;">
-          <div><b>${escapeHtml(u.nome)}</b> <span class="muted" style="margin-left:8px;">senha: ${escapeHtml(u.senha)}</span> <span class="level-pill" style="background:var(--surface-2); color:var(--ink-soft); margin-left:6px;">${levelLabel(u.nivel)}</span></div>
+          <div><b>${escapeHtml(u.nome)}</b> <span class="muted" style="margin-left:8px;">senha: ${escapeHtml(u.senha)}</span> <span class="level-pill" style="background:var(--surface-2); color:var(--ink-soft); margin-left:6px;">${levelLabel(u.nivel)}</span>${Array.isArray(u.lojas)&&u.lojas.length?` <span class="level-pill" style="background:var(--accent-soft); color:var(--accent-ink); margin-left:6px;">${escapeHtml(nomeLojaPorId(u.lojas[0]))}</span>`:''}</div>
           <div style="margin-top:6px; display:flex; gap:5px; flex-wrap:wrap;">${resumoPermissoesHtml(u)}</div>
         </div>
         <div style="display:flex; gap:4px;">
@@ -635,6 +648,7 @@ function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOStri
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function fmtMoeda(v){ return 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ','); }
 function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function nomeLojaPorId(id){ const l=(config.lojas||[]).find(x=>x.id===id); return l?(l.abreviacao||l.nome):id; }
 function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='gerente'?'Gerente':n==='oficina'?'Oficina':n==='vendedora'?'Vendedora':'Personalizado'; }
 /** Diretoria/gerente podem editar QUALQUER funcionário. Vendedora/oficina só podem editar o PRÓPRIO perfil (podem ver todos os outros, só leitura). */
 function podeEditarDP(){ return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente'); }
