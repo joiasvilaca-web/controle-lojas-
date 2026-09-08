@@ -308,6 +308,16 @@
     const idUp = nomeLojaUpCase();
     return lojas.includes(idUp) || lojas.some(l=> String(l).toUpperCase().replace(/[^A-Z]/g,'').includes('UPCASE'));
   }
+  /* Perfil Oficina (a fábrica que produz a gravação, sem vínculo com a loja Up Case):
+     não cria gravação, na lista só abre "Ver via" (e adiciona informação interna) e
+     a única mudança de status permitida é marcar "Up Case" (liberado pela fábrica). */
+  function perfilOficina(){
+    if(!currentUser || currentUser.nivel!=='oficina') return false;
+    const lojas = Array.isArray(currentUser.lojas) ? currentUser.lojas : [];
+    const idUp = nomeLojaUpCase();
+    const vinculadoUpCase = lojas.includes(idUp) || lojas.some(l=> String(l).toUpperCase().replace(/[^A-Z]/g,'').includes('UPCASE'));
+    return !vinculadoUpCase;
+  }
   /* Informações internas: nunca vão pro cupom nem pro link do cliente. */
   function infoInternaHtml(g, opts){
     opts = opts || {};
@@ -406,6 +416,7 @@
 
   /* ================= RENDER PRINCIPAL ================= */
   function render(){
+    if(perfilOficina() && abaAtiva==='nova') abaAtiva = 'lista';
     const main = document.getElementById('mainContent');
     main.innerHTML = `
       <div class="page-head">
@@ -413,7 +424,7 @@
         <p class="page-sub">Serviço de personalização prestado em parceria com a Up Case — controle interno, não entra no faturamento das lojas.</p>
       </div>
       <div class="mini-tabs">
-        <button data-aba="nova" class="${abaAtiva==='nova'?'active':''}">+ Nova gravação</button>
+        ${perfilOficina() ? '' : `<button data-aba="nova" class="${abaAtiva==='nova'?'active':''}">+ Nova gravação</button>`}
         <button data-aba="lista" class="${abaAtiva==='lista'?'active':''}">📋 Lista</button>
         <button data-aba="relatorio" class="${abaAtiva==='relatorio'?'active':''}">📊 Relatório mensal</button>
       </div>
@@ -455,16 +466,20 @@
           <thead><tr><th>Via</th><th>Cliente</th><th>Funcionário</th><th>Itens</th><th>Valor</th><th>Entrega</th><th>Status</th><th>Pagamento</th><th>Ações</th></tr></thead>
           <tbody>${lista.map(g=>`
             <tr data-linha="${g.id}" class="${g.status==='cancelado'?'linha-cancelada':''}">
-              <td>#${escapeHtml(g.viaNumero)}${g.status==='cancelado'?'<br><span class="badge badge-danger">Cancelada</span>':''}${Array.isArray(g.infoInterna)&&g.infoInterna.length?`<br><span class="badge badge-info" title="Possui informação interna">🔒 ${g.infoInterna.length}</span>`:''}</td>
+              <td>${escapeHtml(g.viaNumero)}${g.status==='cancelado'?'<br><span class="badge badge-danger">Cancelada</span>':''}${Array.isArray(g.infoInterna)&&g.infoInterna.length?`<br><span class="badge badge-info" title="Possui informação interna">🔒 ${g.infoInterna.length}</span>`:''}</td>
               <td>${escapeHtml(g.cliente)}<div class="muted" style="font-size:11px;">${escapeHtml(g.whatsapp)}</div></td>
               <td>${escapeHtml(g.funcionario||'—')}</td>
               <td>${escapeHtml(g.quantidadeItens)}</td>
               <td>${fmtMoeda(g.valorTotal)}</td>
               <td>${fmtDataBr(g.dataEntrega)}<br><b>${escapeHtml(g.horaEntrega)}</b></td>
               <td>
+                ${perfilOficina() ? `
+                  <div><b>${escapeHtml(statusLabel(g.status))}</b></div>
+                  ${(g.status==='pedido'||g.status==='fabrica') ? `<button class="btn btn-accent btn-xs" data-marcarupcase="${g.id}" style="margin-top:4px;">✔ Marcar: Up Case</button>` : ''}
+                ` : `
                 <select class="sel-status" data-id="${g.id}">
                   ${STATUS_ORDEM.map(k=>`<option value="${k}" ${g.status===k?'selected':''}>${statusLabel(k)}</option>`).join('')}
-                </select>
+                </select>`}
                 ${leituraStatusHtml(g)}
                 ${g.status==='cancelado' && g.cancelamento ? `<div class="cancel-info">${g.cancelamento.motivo?escapeHtml(g.cancelamento.motivo)+' · ':''}por ${escapeHtml(g.cancelamento.por||'—')} em ${escapeHtml(fmtDataBr((g.cancelamento.em||'').slice(0,10)))}</div>` : ''}
               </td>
@@ -480,15 +495,26 @@
               </td>
               <td style="white-space:nowrap;">
                 <button class="btn btn-ghost btn-xs" data-ver="${g.id}" title="Ver via completa">👁 Ver</button>
+                ${perfilOficina() ? '' : `
                 ${podeEditarVia() ? `<button class="btn btn-ghost btn-xs" data-editar="${g.id}">✎ Editar</button>` : ''}
                 <button class="btn btn-ghost btn-xs" data-imprimir="${g.id}">🖨️</button>
                 <button class="btn btn-ghost btn-xs" data-whats="${g.id}" style="background:#dcf8c6; color:#1f5c1f;">💬</button>
-                ${g.status!=='cancelado' ? `<button class="btn btn-ghost btn-xs" data-cancelar="${g.id}" title="Cancelar esta gravação" style="background:var(--danger-soft); color:var(--danger);">🚫</button>` : ''}
+                ${g.status!=='cancelado' ? `<button class="btn btn-ghost btn-xs" data-cancelar="${g.id}" title="Cancelar esta gravação" style="background:var(--danger-soft); color:var(--danger);">🚫</button>` : ''}`}
               </td>
             </tr>
           `).join('')}</tbody>
         </table>
       `;
+      tabela.querySelectorAll('[data-marcarupcase]').forEach(b=> b.addEventListener('click', async ()=>{
+        const g = registros.find(r=>r.id===b.dataset.marcarupcase);
+        if(!g) return;
+        const anterior = g.status;
+        b.disabled = true; b.textContent = 'Salvando...';
+        g.status = 'upcase';
+        const ok = await salvarRegistro(g);
+        if(ok){ showToast('Gravação '+g.viaNumero+' marcada como Up Case (liberada pela fábrica).'); desenhar(); }
+        else { g.status = anterior; desenhar(); }
+      }));
       tabela.querySelectorAll('.sel-status').forEach(sel=> sel.addEventListener('change', async ()=>{
         const g = registros.find(r=>r.id===sel.dataset.id);
         if(!g) return;
@@ -533,7 +559,7 @@
        cancelada e fora do relatório mensal. Cancelar no modal volta o select ao status anterior. */
     function abrirCancelamento(g, anterior){
       openModal(`
-        <div class="section-label" style="color:var(--danger);">Cancelar gravação · Via #${escapeHtml(g.viaNumero)}</div>
+        <div class="section-label" style="color:var(--danger);">Cancelar gravação · Via ${escapeHtml(g.viaNumero)}</div>
         <div class="muted" style="margin-bottom:10px;">Cliente: <b>${escapeHtml(g.cliente)}</b> · Valor: <b>${fmtMoeda(g.valorTotal)}</b>${g.pagamento&&g.pagamento.status==='pago'?' · <b style="color:var(--danger);">já consta como paga</b>':''}</div>
         <div class="field">
           <label>Motivo do cancelamento (opcional)</label>
@@ -554,7 +580,7 @@
         g.cancelamento = { motivo: document.getElementById('cancel_motivo').value.trim(), por: currentUser ? currentUser.nome : '', em: new Date().toISOString(), statusAnterior: anterior };
         const ok = await salvarRegistro(g);
         if(!ok){ g.status = anterior; g.cancelamento = cancelAntes; btn.disabled=false; btn.textContent='🚫 Confirmar cancelamento'; return; }
-        closeModal(); showToast(`Gravação #${g.viaNumero} cancelada.`); desenhar();
+        closeModal(); showToast(`Gravação ${g.viaNumero} cancelada.`); desenhar();
       });
     }
     /* Modal do campo livre de pagamento. Cancelar volta o select ao valor anterior;
@@ -562,7 +588,7 @@
     function abrirDetalhesPagamento(g, forma, anterior){
       const jaTinha = g.pagamento && g.pagamento.status==='pago' ? (g.pagamento.detalhes||'') : '';
       openModal(`
-        <div class="section-label">Pagamento — ${escapeHtml(FORMAS_PAG[forma]||forma)} · Via #${escapeHtml(g.viaNumero)}</div>
+        <div class="section-label">Pagamento — ${escapeHtml(FORMAS_PAG[forma]||forma)} · Via ${escapeHtml(g.viaNumero)}</div>
         <div class="muted" style="margin-bottom:10px;">Cliente: <b>${escapeHtml(g.cliente)}</b> · Valor: <b>${fmtMoeda(g.valorTotal)}</b></div>
         <div class="field">
           <label>Detalhes do recebimento</label>
@@ -757,7 +783,7 @@
         const ok = await salvarRegistro(registroExistente);
         btn.disabled = false; btn.textContent = '💾 Salvar alterações';
         if(!ok){ Object.assign(registroExistente, antes); return; }
-        showToast(`Gravação #${registroExistente.viaNumero} atualizada.`);
+        showToast(`Gravação ${registroExistente.viaNumero} atualizada.`);
         abaAtiva = 'lista'; render();
         if(aoSalvarComSucesso) aoSalvarComSucesso();
       }else{
@@ -779,7 +805,7 @@
         const ok = await salvarRegistro(novoRegistro);
         btn.disabled = false; btn.textContent = '💾 Salvar gravação';
         if(!ok){ registros = registros.filter(r=>r.id!==novoRegistro.id); return; }
-        showToast(`Gravação #${viaNumero} salva!`);
+        showToast(`Gravação ${viaNumero} salva!`);
         abaAtiva = 'lista'; render();
       }
     });
@@ -791,7 +817,7 @@
     const itens = g.itens || [];
     const pago = !!(g.pagamento && g.pagamento.status==='pago');
     openModal(`
-      <div class="section-label">Via #${escapeHtml(g.viaNumero)} — ${escapeHtml(g.cliente)} ${g.status==='cancelado'?'<span class="badge badge-danger" style="margin-left:6px;">Cancelada</span>':''}</div>
+      <div class="section-label">Via ${escapeHtml(g.viaNumero)} — ${escapeHtml(g.cliente)} ${g.status==='cancelado'?'<span class="badge badge-danger" style="margin-left:6px;">Cancelada</span>':''}</div>
       <div class="ver-grid">
         <div><div class="k">Cliente</div><div class="v">${escapeHtml(g.cliente)}</div></div>
         <div><div class="k">WhatsApp</div><div class="v">${escapeHtml(g.whatsapp||'—')}</div></div>
@@ -816,13 +842,14 @@
         </div>`).join('') : '<div class="muted">Nenhum item registrado.</div>'}
       ${leiturasHistoricoHtml(g)}
       <div class="modal-actions">
-        <button class="btn btn-ghost" id="btnVerImprimir">🖨️ Imprimir</button>
+        ${perfilOficina() ? '' : `<button class="btn btn-ghost" id="btnVerImprimir">🖨️ Imprimir</button>`}
         ${podeEditarVia() ? `<button class="btn btn-ghost" id="btnVerEditar">✎ Editar</button>` : ''}
         <button class="btn btn-ghost" id="btnFecharVer">Fechar</button>
       </div>
     `);
     document.getElementById('btnFecharVer').addEventListener('click', closeModal);
-    document.getElementById('btnVerImprimir').addEventListener('click', ()=> imprimirVia(g));
+    const bImp = document.getElementById('btnVerImprimir');
+    if(bImp) bImp.addEventListener('click', ()=> imprimirVia(g));
     const bEd = document.getElementById('btnVerEditar');
     if(bEd) bEd.addEventListener('click', ()=>{ closeModal(); abrirEditar(g.id); });
     document.querySelectorAll('#modalBox [data-baixar]').forEach(b=> b.addEventListener('click', ()=>{
