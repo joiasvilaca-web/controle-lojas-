@@ -39,7 +39,12 @@
   .step.done .label, .step.current .label{ color:var(--ink); }
 
   .status-banner{ text-align:center; padding:13px; border-radius:10px; margin-bottom:20px; font-weight:750; font-size:14px; }
-  .status-banner.em_aberto{ background:var(--wait-soft); color:var(--wait); }
+  .status-banner.pedido, .status-banner.fabrica, .status-banner.upcase{ background:var(--wait-soft); color:var(--wait); }
+  .status-msg{ text-align:center; font-size:13.5px; color:var(--ink-soft); line-height:1.5; margin:-10px 0 18px; }
+  .etapas{ margin-top:18px; font-size:12px; color:var(--ink-soft); line-height:1.5; }
+  .etapas b{ color:var(--ink); }
+  .etapas div{ padding:3px 0; }
+  .stepper .step .label{ font-size:9.5px; }
   .status-banner.pronto{ background:var(--ok-soft); color:var(--ok); }
   .status-banner.entregue{ background:var(--delivered-soft); color:var(--delivered); }
   .status-banner.cancelado{ background:#FADADA; color:#8E1B1F; }
@@ -92,17 +97,28 @@
     const params = new URLSearchParams(window.location.search);
     return params.get("id");
   }
-  function statusLabel(s){
-    return s==="em_aberto" ? "Em produção" : s==="pronto" ? "Pronto para retirada" : s==="cancelado" ? "Gravação cancelada" : "Entregue";
-  }
+  /* Etapas do pedido e o texto que o cliente vê em cada uma */
+  const STATUS_INFO = {
+    pedido:    { label:"Pedido realizado",        msg:"Seu pedido foi realizado com sucesso e em breve será enviado para a fábrica." },
+    fabrica:   { label:"Na fábrica",              msg:"Seu pedido foi enviado para a fábrica e está em produção." },
+    upcase:    { label:"A caminho da Up Case",    msg:"Seu pedido foi liberado pela fábrica e chegará em breve na loja Up Case." },
+    pronto:    { label:"Pronto para retirada",    msg:"Seu pedido está pronto! Já pode ser retirado na loja Up Case." },
+    entregue:  { label:"Entregue",                msg:"Seu pedido foi entregue e conferido. Obrigado pela preferência!" },
+    cancelado: { label:"Pedido cancelado",        msg:"Seu pedido foi cancelado. Em caso de dúvida, fale com a loja." },
+  };
+  function normStatus(s){ return s==="em_aberto" ? "pedido" : s; }
+  function statusLabel(s){ return (STATUS_INFO[normStatus(s)]||{}).label || s; }
+  function statusMsg(s){ return (STATUS_INFO[normStatus(s)]||{}).msg || ""; }
   function stepperHtml(status){
     const steps = [
-      { key:"em_aberto", label:"Recebido" },
+      { key:"pedido", label:"Pedido" },
+      { key:"fabrica", label:"Fábrica" },
+      { key:"upcase", label:"Up Case" },
       { key:"pronto", label:"Pronto" },
       { key:"entregue", label:"Entregue" },
     ];
-    const order = ["em_aberto","pronto","entregue"];
-    const currentIdx = order.indexOf(status);
+    const order = steps.map(s=>s.key);
+    const currentIdx = order.indexOf(normStatus(status));
     return `<div class="stepper">${steps.map((s,i)=>{
       let cls = "";
       if(i < currentIdx) cls = "done";
@@ -119,6 +135,7 @@
   }
 
   function render(g){
+    g.status = normStatus(g.status);
     const isFinal = g.status === "entregue" || g.status === "cancelado";
     const cancelada = g.status === "cancelado";
     document.getElementById("card").innerHTML = `
@@ -126,6 +143,7 @@
       <h1>Olá, ${escapeHtml(g.cliente)}!</h1>
       <div class="sub">Via nº ${escapeHtml(g.viaNumero)}</div>
       <div class="status-banner ${escapeHtml(g.status)}">${statusLabel(g.status)}</div>
+      <div class="status-msg">${escapeHtml(statusMsg(g.status))}</div>
       ${cancelada ? "" : stepperHtml(g.status)}
       <div class="details">
         <div><span class="k">Entrada</span><span class="v">${fmtDate(g.dataEntrada)} às ${escapeHtml(g.horaEntrada)}</span></div>
@@ -136,6 +154,7 @@
       ${cancelada ? "" : (g.pagamentoStatus === "pago"
         ? `<div class="pag-ok">✓ Pagamento confirmado</div>`
         : `<div class="pag-aberto">⚠ Pagamento em aberto — ${fmtMoeda(g.valorTotal)}<small>O pagamento será efetuado na retirada.</small></div>`)}
+      ${cancelada ? "" : `<div class="etapas"><b>Etapas do seu pedido</b>${["pedido","fabrica","upcase","pronto","entregue"].map(k=>`<div>${normStatus(g.status)===k?"➡️":"•"} <b>${STATUS_INFO[k].label}</b> — ${STATUS_INFO[k].msg}</div>`).join("")}</div>`}
       <div class="refresh-note">${cancelada ? "Essa gravação foi cancelada. Em caso de dúvida, fale com a loja." : isFinal ? "Essa gravação já foi entregue." : "Esta página se atualiza automaticamente — não precisa recarregar."}</div>
     `;
   }
@@ -145,6 +164,7 @@
      antes de ver os detalhes; a confirmação fica registrada no módulo Gravações. */
   let gateStatusExibido = null;
   function renderConfirmGate(g){
+    g.status = normStatus(g.status);
     if(gateStatusExibido === g.status) return; // já está na tela — não reinicia o botão a cada atualização automática
     gateStatusExibido = g.status;
     document.getElementById("card").innerHTML = `
