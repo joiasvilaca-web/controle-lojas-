@@ -105,6 +105,12 @@
   .ver-item{ border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; background:var(--surface-2); font-size:13px; }
   .ver-item .titulo{ font-weight:800; margin-bottom:6px; display:flex; justify-content:space-between; }
   .ver-item img{ max-width:180px; max-height:140px; border-radius:8px; border:1px solid var(--line); display:block; margin-top:6px; background:#fff; }
+  .info-interna{ background:#FFF6D6; border:2px solid #E7B93C; border-radius:10px; padding:12px 14px; margin:12px 0; }
+  .info-interna .titulo{ font-size:11.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:#8A5A00; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+  .info-interna .nota{ background:#fff; border:1px solid #F0D48A; border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:13px; white-space:pre-wrap; }
+  .info-interna .nota .meta{ font-size:11px; color:var(--ink-faint); margin-top:4px; }
+  .info-interna textarea{ width:100%; padding:9px 11px; border:1px solid #E7B93C; border-radius:8px; font-size:13.5px; font-family:inherit; resize:vertical; min-height:60px; background:#fff; }
+  .badge-info{ background:#FFF6D6; color:#8A5A00; border:1px solid #E7B93C; }
   .cancel-info{ font-size:10.5px; color:var(--danger); margin-top:4px; white-space:normal; max-width:190px; line-height:1.35; }
 
   .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
@@ -293,6 +299,65 @@
     }
     return `<div class="leitura-info wait" title="Cliente ainda não confirmou a leitura desta etapa">⏳ Sem confirmação</div>`;
   }
+  /* Quem pode editar a via inteira (dados do cliente, itens, pagamento): o login vinculado
+     à loja Up Case e a Diretoria. Os demais só mudam o status e acrescentam informação interna. */
+  function podeEditarVia(){
+    if(!currentUser) return false;
+    if(currentUser.nivel==='diretoria') return true;
+    const lojas = Array.isArray(currentUser.lojas) ? currentUser.lojas : [];
+    const idUp = nomeLojaUpCase();
+    return lojas.includes(idUp) || lojas.some(l=> String(l).toUpperCase().replace(/[^A-Z]/g,'').includes('UPCASE'));
+  }
+  /* Informações internas: nunca vão pro cupom nem pro link do cliente. */
+  function infoInternaHtml(g, opts){
+    opts = opts || {};
+    const notas = Array.isArray(g.infoInterna) ? g.infoInterna : [];
+    const lista = notas.length ? notas.map((n,i)=>`
+      <div class="nota">${escapeHtml(n.texto)}<div class="meta">${escapeHtml(n.por||'—')} · ${escapeHtml(n.em ? new Date(n.em).toLocaleString('pt-BR') : '')}${opts.removivel?` · <a href="#" data-rminfo="${i}" style="color:var(--danger);">remover</a>`:''}</div></div>`).join('')
+      : `<div class="muted" style="margin-bottom:6px;">Nenhuma informação interna registrada.</div>`;
+    return `
+      <div class="info-interna" id="${opts.id||'blocoInfoInterna'}">
+        <div class="titulo"><span>🔒 Informações internas (não aparecem para o cliente)</span><button type="button" class="btn btn-ghost btn-xs" data-addinfo="1">➕ Adicionar informação</button></div>
+        <div data-listainfo="1">${lista}</div>
+        <div data-forminfo="1" style="display:none; margin-top:6px;">
+          <textarea data-txtinfo="1" placeholder="Informação de uso interno (fornecedor, custo, problema na peça, combinado com o cliente...)"></textarea>
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button type="button" class="btn btn-accent btn-sm" data-saveinfo="1">Salvar informação</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-cancelinfo="1">Cancelar</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  /* Liga os eventos do bloco; aoSalvar(texto) recebe a nota nova e decide o que fazer
+     (gravar na hora, no modal Ver; ou só acumular, no formulário). */
+  function ligarInfoInterna(bloco, aoSalvar, aoRemover){
+    if(!bloco) return;
+    const form = bloco.querySelector('[data-forminfo]');
+    const txt = bloco.querySelector('[data-txtinfo]');
+    bloco.querySelector('[data-addinfo]').addEventListener('click', ()=>{ form.style.display='block'; txt.focus(); });
+    bloco.querySelector('[data-cancelinfo]').addEventListener('click', ()=>{ form.style.display='none'; txt.value=''; });
+    bloco.querySelector('[data-saveinfo]').addEventListener('click', async ()=>{
+      const texto = txt.value.trim();
+      if(!texto){ showToast('Escreva a informação antes de salvar.'); return; }
+      await aoSalvar(texto);
+    });
+    bloco.querySelectorAll('[data-rminfo]').forEach(a=> a.addEventListener('click', (e)=>{ e.preventDefault(); if(aoRemover) aoRemover(Number(a.dataset.rminfo)); }));
+  }
+  /* Baixa a imagem anexa; se o Drive bloquear o download direto, abre numa aba nova. */
+  async function baixarImagem(url, nomeArquivo){
+    try{
+      const res = await fetch(url, { mode:'cors' });
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = nomeArquivo || 'imagem.jpg';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+    }catch(e){
+      window.open(url, '_blank');
+      showToast('Abrindo a imagem em nova aba — use "Salvar imagem como".');
+    }
+  }
   const FORMAS_PAG = { dinheiro:'Dinheiro', cartao:'Cartão', pix:'Pix' };
   function pagamentoTexto(g){
     if(!(g.pagamento && g.pagamento.status==='pago')) return 'EM ABERTO';
@@ -324,7 +389,7 @@
     if(!r.ok){ document.getElementById('loginError').classList.add('show'); return; }
     document.getElementById('loginError').classList.remove('show');
     __gatewaySenha = pass;
-    currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
+    currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass, lojas: Array.isArray(r.user.lojas) ? r.user.lojas : [] };
     await carregarConfig();
     await carregarRegistros();
     enterApp();
@@ -390,7 +455,7 @@
           <thead><tr><th>Via</th><th>Cliente</th><th>Funcionário</th><th>Itens</th><th>Valor</th><th>Entrega</th><th>Status</th><th>Pagamento</th><th>Ações</th></tr></thead>
           <tbody>${lista.map(g=>`
             <tr data-linha="${g.id}" class="${g.status==='cancelado'?'linha-cancelada':''}">
-              <td>#${escapeHtml(g.viaNumero)}${g.status==='cancelado'?'<br><span class="badge badge-danger">Cancelada</span>':''}</td>
+              <td>#${escapeHtml(g.viaNumero)}${g.status==='cancelado'?'<br><span class="badge badge-danger">Cancelada</span>':''}${Array.isArray(g.infoInterna)&&g.infoInterna.length?`<br><span class="badge badge-info" title="Possui informação interna">🔒 ${g.infoInterna.length}</span>`:''}</td>
               <td>${escapeHtml(g.cliente)}<div class="muted" style="font-size:11px;">${escapeHtml(g.whatsapp)}</div></td>
               <td>${escapeHtml(g.funcionario||'—')}</td>
               <td>${escapeHtml(g.quantidadeItens)}</td>
@@ -404,17 +469,18 @@
                 ${g.status==='cancelado' && g.cancelamento ? `<div class="cancel-info">${g.cancelamento.motivo?escapeHtml(g.cancelamento.motivo)+' · ':''}por ${escapeHtml(g.cancelamento.por||'—')} em ${escapeHtml(fmtDataBr((g.cancelamento.em||'').slice(0,10)))}</div>` : ''}
               </td>
               <td>
-                <select class="sel-pagamento" data-id="${g.id}">
+                ${!podeEditarVia() ? `<div>${escapeHtml(pagamentoTexto(g))}</div>` : ''}
+                <select class="sel-pagamento" data-id="${g.id}" style="${podeEditarVia()?'':'display:none;'}">
                   <option value="aberto" ${pagamentoValorSelect(g)==='aberto'?'selected':''}>Em aberto</option>
                   <option value="pago:dinheiro" ${pagamentoValorSelect(g)==='pago:dinheiro'?'selected':''}>Pago — Dinheiro</option>
                   <option value="pago:cartao" ${pagamentoValorSelect(g)==='pago:cartao'?'selected':''}>Pago — Cartão</option>
                   <option value="pago:pix" ${pagamentoValorSelect(g)==='pago:pix'?'selected':''}>Pago — Pix</option>
                 </select>
-                ${g.pagamento && g.pagamento.status==='pago' ? `<div class="pag-detalhes">${g.pagamento.detalhes ? escapeHtml(g.pagamento.detalhes) : '<span class="muted">Sem detalhes</span>'} <a href="#" data-pagdet="${g.id}" title="Editar detalhes do pagamento">✎</a></div>` : ''}
+                ${g.pagamento && g.pagamento.status==='pago' ? `<div class="pag-detalhes">${g.pagamento.detalhes ? escapeHtml(g.pagamento.detalhes) : '<span class="muted">Sem detalhes</span>'} ${podeEditarVia()?`<a href="#" data-pagdet="${g.id}" title="Editar detalhes do pagamento">✎</a>`:''}</div>` : ''}
               </td>
               <td style="white-space:nowrap;">
                 <button class="btn btn-ghost btn-xs" data-ver="${g.id}" title="Ver via completa">👁 Ver</button>
-                <button class="btn btn-ghost btn-xs" data-editar="${g.id}">✎ Editar</button>
+                ${podeEditarVia() ? `<button class="btn btn-ghost btn-xs" data-editar="${g.id}">✎ Editar</button>` : ''}
                 <button class="btn btn-ghost btn-xs" data-imprimir="${g.id}">🖨️</button>
                 <button class="btn btn-ghost btn-xs" data-whats="${g.id}" style="background:#dcf8c6; color:#1f5c1f;">💬</button>
                 ${g.status!=='cancelado' ? `<button class="btn btn-ghost btn-xs" data-cancelar="${g.id}" title="Cancelar esta gravação" style="background:var(--danger-soft); color:var(--danger);">🚫</button>` : ''}
@@ -541,6 +607,7 @@
       ? (registroExistente.itens||[]).map(it=>({ valor: it.valor||'', nome: it.nome||'', logoUrl: it.logoUrl||'', observacoes: it.observacoes||'', nomeAtivo: !!it.nome, logoAtivo: !!it.logoUrl }))
       : [{ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }];
     if(itensState.length===0) itensState = [{ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }];
+    let infoState = editando && Array.isArray(registroExistente.infoInterna) ? registroExistente.infoInterna.map(n=>({...n})) : [];
 
     wrap.innerHTML = `
       <div class="card">
@@ -556,6 +623,7 @@
         </div>
         <div class="section-label">Itens</div>
         <div id="areaItens"></div>
+        ${infoInternaHtml({ infoInterna: infoState }, { id:'infoInternaForm', removivel:true })}
         <div class="card" style="background:var(--surface-2); box-shadow:none;">
           <div class="grid-2">
             <div><span class="muted">Quantidade de itens</span><div style="font-size:20px; font-weight:800;" id="resumoQtd">1</div></div>
@@ -644,6 +712,16 @@
       document.getElementById('resumoQtd').textContent = itensState.length;
       document.getElementById('resumoValor').textContent = fmtMoeda(total);
     }
+    function desenharInfoInterna(){
+      const velho = document.getElementById('infoInternaForm');
+      const tmp = document.createElement('div'); tmp.innerHTML = infoInternaHtml({ infoInterna: infoState }, { id:'infoInternaForm', removivel:true });
+      velho.replaceWith(tmp.firstElementChild);
+      ligarInfoInterna(document.getElementById('infoInternaForm'), async (texto)=>{
+        infoState.push({ texto, por: currentUser ? currentUser.nome : '', em: new Date().toISOString() });
+        desenharInfoInterna();
+      }, (i)=>{ infoState.splice(i,1); desenharInfoInterna(); });
+    }
+    desenharInfoInterna();
     document.getElementById('n_qtd').addEventListener('input', ()=>{
       const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
       if(qtd > itensState.length){ while(itensState.length<qtd) itensState.push({ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }); }
@@ -674,6 +752,7 @@
         Object.assign(registroExistente, {
           cliente, whatsapp, email, funcionario,
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
+          infoInterna: infoState,
         });
         const ok = await salvarRegistro(registroExistente);
         btn.disabled = false; btn.textContent = '💾 Salvar alterações';
@@ -694,6 +773,7 @@
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
           status: 'pedido',
           pagamento: { status:'em_aberto', forma:null },
+          infoInterna: infoState,
           criadoEm: Date.now(), criadoPor: currentUser.nome,
         };
         const ok = await salvarRegistro(novoRegistro);
@@ -725,28 +805,44 @@
         ${g.criadoPor?`<div><div class="k">Registrado por</div><div class="v">${escapeHtml(g.criadoPor)}</div></div>`:''}
         ${g.status==='cancelado'&&g.cancelamento?`<div style="grid-column:1/-1;"><div class="k">Cancelamento</div><div class="v" style="color:var(--danger);">${g.cancelamento.motivo?escapeHtml(g.cancelamento.motivo)+' · ':''}por ${escapeHtml(g.cancelamento.por||'—')} em ${escapeHtml(fmtDataBr((g.cancelamento.em||'').slice(0,10)))}</div></div>`:''}
       </div>
+      ${infoInternaHtml(g, { id:'infoInternaVer' })}
       <div class="section-label">Itens</div>
       ${itens.length ? itens.map((it,i)=>`
         <div class="ver-item">
           <div class="titulo"><span>Item ${i+1}</span><span>${fmtMoeda(it.valor)}</span></div>
           <div><b>Nome / frase:</b> ${it.nome ? escapeHtml(it.nome) : '<span class="muted">— sem texto</span>'}</div>
-          <div><b>Arquivo anexo:</b> ${it.logoUrl ? `<a href="${escapeHtml(it.logoUrl)}" target="_blank">abrir arquivo</a><img src="${escapeHtml(it.logoUrl)}" alt="Logo do item ${i+1}" onerror="this.style.display='none'">` : '<span class="muted">— sem arquivo</span>'}</div>
+          <div><b>Arquivo anexo:</b> ${it.logoUrl ? `<a href="${escapeHtml(it.logoUrl)}" target="_blank">abrir arquivo</a> · <button type="button" class="btn btn-ghost btn-xs" data-baixar="${i}">💾 Salvar imagem</button><img src="${escapeHtml(it.logoUrl)}" alt="Logo do item ${i+1}" onerror="this.style.display='none'">` : '<span class="muted">— sem arquivo</span>'}</div>
           <div><b>Observações:</b> ${it.observacoes ? escapeHtml(it.observacoes) : '<span class="muted">—</span>'}</div>
         </div>`).join('') : '<div class="muted">Nenhum item registrado.</div>'}
       ${leiturasHistoricoHtml(g)}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="btnVerImprimir">🖨️ Imprimir</button>
-        <button class="btn btn-ghost" id="btnVerEditar">✎ Editar</button>
+        ${podeEditarVia() ? `<button class="btn btn-ghost" id="btnVerEditar">✎ Editar</button>` : ''}
         <button class="btn btn-ghost" id="btnFecharVer">Fechar</button>
       </div>
     `);
     document.getElementById('btnFecharVer').addEventListener('click', closeModal);
     document.getElementById('btnVerImprimir').addEventListener('click', ()=> imprimirVia(g));
-    document.getElementById('btnVerEditar').addEventListener('click', ()=>{ closeModal(); abrirEditar(g.id); });
+    const bEd = document.getElementById('btnVerEditar');
+    if(bEd) bEd.addEventListener('click', ()=>{ closeModal(); abrirEditar(g.id); });
+    document.querySelectorAll('#modalBox [data-baixar]').forEach(b=> b.addEventListener('click', ()=>{
+      const it = itens[Number(b.dataset.baixar)];
+      if(it && it.logoUrl) baixarImagem(it.logoUrl, `via_${g.viaNumero}_item_${Number(b.dataset.baixar)+1}.jpg`);
+    }));
+    // informação interna: salva na hora e redesenha o modal
+    ligarInfoInterna(document.getElementById('infoInternaVer'), async (texto)=>{
+      if(!Array.isArray(g.infoInterna)) g.infoInterna = [];
+      g.infoInterna.push({ texto, por: currentUser ? currentUser.nome : '', em: new Date().toISOString() });
+      const ok = await salvarRegistro(g);
+      if(!ok){ g.infoInterna.pop(); return; }
+      showToast('Informação interna salva.');
+      abrirVer(g.id);
+    });
   }
   function abrirEditar(id){
     const g = registros.find(r=>r.id===id);
     if(!g) return;
+    if(!podeEditarVia()){ showToast('Somente o login da Up Case pode editar a via. Você pode alterar o status e adicionar informação interna.'); return; }
     openModal(`<div id="areaEditarModal"></div>${leiturasHistoricoHtml(g)}<div class="modal-actions"><button class="btn btn-ghost" id="btnFecharEditar">Fechar</button></div>`);
     document.getElementById('btnFecharEditar').addEventListener('click', closeModal);
     renderFormulario(document.getElementById('areaEditarModal'), g, closeModal);
@@ -774,8 +870,8 @@
     const pago = !!(g.pagamento && g.pagamento.status==='pago');
     cupom.innerHTML = `
       <div style="text-align:center; margin-bottom:10px;">
-        <div style="font-size:16px; font-weight:800;">UP CASE</div>
-        <div style="font-size:12px;">Personalizado pela Vilaça Joias</div>
+        <div style="font-size:18px; font-weight:800;">UP CASE</div>
+        <div style="font-size:15px;">Personalizado pela <b>Vilaça Joias</b></div>
         <div>Via nº ${escapeHtml(g.viaNumero)}</div>
         ${g.status==='cancelado' ? `<div style="margin-top:6px; padding:6px; border:2px solid #000; font-weight:800; font-size:15px;">*** GRAVAÇÃO CANCELADA ***${g.cancelamento&&g.cancelamento.motivo?('<div style="font-size:11px; font-weight:400;">Motivo: '+escapeHtml(g.cancelamento.motivo)+'</div>'):''}</div>` : ''}
       </div>
