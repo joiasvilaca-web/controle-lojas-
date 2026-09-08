@@ -90,6 +90,13 @@
   .item-toggle{ padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; border:1px solid var(--line); background:var(--surface); color:var(--ink-soft); }
   .item-toggle.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
   .item-sub{ margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); }
+  .field textarea{ width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13.5px; background:var(--surface-2); color:var(--ink); font-family:inherit; resize:vertical; min-height:58px; }
+  .field textarea:focus{ outline:none; border-color:var(--accent); background:#fff; }
+  .pag-detalhes{ font-size:11px; color:var(--ink-soft); margin-top:4px; max-width:190px; white-space:normal; line-height:1.35; }
+  .pag-detalhes a{ color:var(--accent-ink); font-weight:700; text-decoration:none; }
+  .leitura-info{ font-size:10.5px; margin-top:4px; white-space:nowrap; font-weight:700; }
+  .leitura-info.ok{ color:var(--ok); }
+  .leitura-info.wait{ color:var(--ink-faint); font-weight:600; }
 
   .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
   .modal-overlay.show{display:flex;}
@@ -233,6 +240,37 @@
     }
     return true;
   }
+  /* Salva UM registro sem sobrescrever o que outros usuários (ou a confirmação de leitura do
+     cliente) gravaram nesse meio-tempo: recarrega a lista do banco, encaixa só este registro
+     e grava. Se não conseguir recarregar, cai no salvamento normal da lista em memória. */
+  async function salvarRegistro(g){
+    const r = await gatewayCall({ op:'kvGet', table:'gravacoes_kv', params:{ key:'registros' } });
+    if(r && !r.error && Array.isArray(r.value)){
+      const atuais = r.value;
+      // preserva as confirmações de leitura já gravadas pelo cliente nesse registro
+      const noBanco = atuais.find(x=>x.id===g.id);
+      if(noBanco && Array.isArray(noBanco.leituras) && !Array.isArray(g.leituras)) g.leituras = noBanco.leituras;
+      const idx = atuais.findIndex(x=>x.id===g.id);
+      if(idx>=0) atuais[idx] = g; else atuais.push(g);
+      registros = atuais;
+    }
+    return salvarRegistros();
+  }
+  function leituraStatusHtml(g){
+    const leituras = Array.isArray(g.leituras) ? g.leituras : [];
+    const conf = leituras.find(l=> l.status===g.status);
+    if(conf){
+      const dt = new Date(conf.confirmadoEm);
+      const dtFmt = isNaN(dt.getTime()) ? conf.confirmadoEm : dt.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+      return `<div class="leitura-info ok" title="Cliente confirmou a leitura desta etapa">✓ Cliente confirmou ${escapeHtml(dtFmt)}</div>`;
+    }
+    return `<div class="leitura-info wait" title="Cliente ainda não confirmou a leitura desta etapa">⏳ Sem confirmação</div>`;
+  }
+  const FORMAS_PAG = { dinheiro:'Dinheiro', cartao:'Cartão', pix:'Pix' };
+  function pagamentoTexto(g){
+    if(!(g.pagamento && g.pagamento.status==='pago')) return 'EM ABERTO';
+    return 'Pago — ' + (FORMAS_PAG[g.pagamento.forma] || '');
+  }
 
   /* ================= LOGIN ================= */
   const EMBEDDED = window.self !== window.top;
@@ -283,8 +321,8 @@
         <p class="page-sub">Serviço de personalização prestado em parceria com a Up Case — controle interno, não entra no faturamento das lojas.</p>
       </div>
       <div class="mini-tabs">
-        <button data-aba="lista" class="${abaAtiva==='lista'?'active':''}">📋 Lista</button>
         <button data-aba="nova" class="${abaAtiva==='nova'?'active':''}">+ Nova gravação</button>
+        <button data-aba="lista" class="${abaAtiva==='lista'?'active':''}">📋 Lista</button>
         <button data-aba="relatorio" class="${abaAtiva==='relatorio'?'active':''}">📊 Relatório mensal</button>
       </div>
       <div id="corpoGrav"></div>
@@ -306,18 +344,19 @@
         <select id="f_status"><option value="">Todos os status</option><option value="em_aberto">Em aberto</option><option value="pronto">Pronto</option><option value="entregue">Entregue</option></select>
         <input type="text" id="f_busca" placeholder="Buscar cliente...">
       </div>
-      <div id="tabelaGrav"></div>
+      <div id="tabelaGrav"><div class="empty">Carregando…</div></div>
     `;
     const fStatus = document.getElementById('f_status');
     const fBusca = document.getElementById('f_busca');
     function desenhar(){
+      const tabela = document.getElementById('tabelaGrav');
+      if(!tabela) return; // aba trocada enquanto carregava
       const status = fStatus.value, busca = fBusca.value.trim().toLowerCase();
       const lista = registros.filter(g=>{
         if(status && g.status!==status) return false;
         if(busca && !(g.cliente||'').toLowerCase().includes(busca)) return false;
         return true;
       }).sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0));
-      const tabela = document.getElementById('tabelaGrav');
       if(lista.length===0){ tabela.innerHTML = `<div class="empty">Nenhuma gravação encontrada.</div>`; return; }
       tabela.innerHTML = `
         <table>
@@ -336,11 +375,16 @@
                   <option value="pronto" ${g.status==='pronto'?'selected':''}>Pronto</option>
                   <option value="entregue" ${g.status==='entregue'?'selected':''}>Entregue</option>
                 </select>
+                ${leituraStatusHtml(g)}
               </td>
               <td>
-                <button type="button" class="btn btn-sm ${g.pagamento&&g.pagamento.status==='pago'?'btn-accent':'btn-ghost'}" data-pagamento="${g.id}">
-                  ${g.pagamento&&g.pagamento.status==='pago' ? ('✅ '+({dinheiro:'Dinheiro',cartao:'Cartão',pix:'Pix'}[g.pagamento.forma]||'Pago')) : 'Em aberto'}
-                </button>
+                <select class="sel-pagamento" data-id="${g.id}">
+                  <option value="aberto" ${pagamentoValorSelect(g)==='aberto'?'selected':''}>Em aberto</option>
+                  <option value="pago:dinheiro" ${pagamentoValorSelect(g)==='pago:dinheiro'?'selected':''}>Pago — Dinheiro</option>
+                  <option value="pago:cartao" ${pagamentoValorSelect(g)==='pago:cartao'?'selected':''}>Pago — Cartão</option>
+                  <option value="pago:pix" ${pagamentoValorSelect(g)==='pago:pix'?'selected':''}>Pago — Pix</option>
+                </select>
+                ${g.pagamento && g.pagamento.status==='pago' ? `<div class="pag-detalhes">${g.pagamento.detalhes ? escapeHtml(g.pagamento.detalhes) : '<span class="muted">Sem detalhes</span>'} <a href="#" data-pagdet="${g.id}" title="Editar detalhes do pagamento">✎</a></div>` : ''}
               </td>
               <td style="white-space:nowrap;">
                 <button class="btn btn-ghost btn-xs" data-editar="${g.id}">✎ Editar</button>
@@ -354,46 +398,77 @@
       tabela.querySelectorAll('.sel-status').forEach(sel=> sel.addEventListener('change', async ()=>{
         const g = registros.find(r=>r.id===sel.dataset.id);
         if(!g) return;
+        const anterior = g.status;
         g.status = sel.value;
-        const ok = await salvarRegistros();
-        if(ok) showToast('Status atualizado.'); else desenhar();
+        const ok = await salvarRegistro(g);
+        if(ok){ showToast('Status atualizado.'); desenhar(); }
+        else { g.status = anterior; desenhar(); }
       }));
-      tabela.querySelectorAll('[data-pagamento]').forEach(b=> b.addEventListener('click', ()=> abrirPopupPagamento(b.dataset.pagamento, desenhar)));
+      tabela.querySelectorAll('.sel-pagamento').forEach(sel=> sel.addEventListener('change', async ()=>{
+        const g = registros.find(r=>r.id===sel.dataset.id);
+        if(!g) return;
+        const anterior = g.pagamento ? { ...g.pagamento } : { status:'em_aberto', forma:null };
+        if(sel.value==='aberto'){
+          g.pagamento = { status:'em_aberto', forma:null };
+          const ok = await salvarRegistro(g);
+          if(ok){ showToast('Pagamento marcado como em aberto.'); desenhar(); }
+          else { g.pagamento = anterior; desenhar(); }
+          return;
+        }
+        const forma = sel.value.split(':')[1];
+        // escolhido o tipo de pagamento, abre o campo livre pra registrar quem recebeu / cupom / conta do Pix
+        abrirDetalhesPagamento(g, forma, anterior);
+      }));
+      tabela.querySelectorAll('[data-pagdet]').forEach(a=> a.addEventListener('click', (e)=>{
+        e.preventDefault();
+        const g = registros.find(r=>r.id===a.dataset.pagdet);
+        if(!g || !g.pagamento) return;
+        abrirDetalhesPagamento(g, g.pagamento.forma, { ...g.pagamento });
+      }));
       tabela.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditar(b.dataset.editar)));
       tabela.querySelectorAll('[data-imprimir]').forEach(b=> b.addEventListener('click', ()=> imprimirVia(registros.find(r=>r.id===b.dataset.imprimir))));
       tabela.querySelectorAll('[data-whats]').forEach(b=> b.addEventListener('click', ()=> enviarWhatsapp(registros.find(r=>r.id===b.dataset.whats))));
     }
+    /* Modal do campo livre de pagamento. Cancelar volta o select ao valor anterior;
+       salvar grava forma + detalhes + quem/quando registrou. */
+    function abrirDetalhesPagamento(g, forma, anterior){
+      const jaTinha = g.pagamento && g.pagamento.status==='pago' ? (g.pagamento.detalhes||'') : '';
+      openModal(`
+        <div class="section-label">Pagamento — ${escapeHtml(FORMAS_PAG[forma]||forma)} · Via #${escapeHtml(g.viaNumero)}</div>
+        <div class="muted" style="margin-bottom:10px;">Cliente: <b>${escapeHtml(g.cliente)}</b> · Valor: <b>${fmtMoeda(g.valorTotal)}</b></div>
+        <div class="field">
+          <label>Detalhes do recebimento</label>
+          <textarea id="pag_detalhes" placeholder="Ex.: quem recebeu, número do cupom, conta do Pix...">${escapeHtml(jaTinha)}</textarea>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-accent" id="btnSalvarPag">💾 Salvar pagamento</button>
+          <button class="btn btn-ghost" id="btnCancelarPag">Cancelar</button>
+        </div>
+      `);
+      document.getElementById('pag_detalhes').focus();
+      document.getElementById('btnCancelarPag').addEventListener('click', ()=>{
+        g.pagamento = anterior;
+        closeModal(); desenhar();
+      });
+      document.getElementById('btnSalvarPag').addEventListener('click', async ()=>{
+        const btn = document.getElementById('btnSalvarPag');
+        btn.disabled = true; btn.textContent = 'Salvando...';
+        const detalhes = document.getElementById('pag_detalhes').value.trim();
+        g.pagamento = {
+          status:'pago', forma, detalhes,
+          registradoPor: currentUser ? currentUser.nome : '',
+          registradoEm: new Date().toISOString(),
+          dataPagamento: (anterior && anterior.status==='pago' && anterior.dataPagamento) ? anterior.dataPagamento : isoHoje(),
+        };
+        const ok = await salvarRegistro(g);
+        if(!ok){ g.pagamento = anterior; btn.disabled=false; btn.textContent='💾 Salvar pagamento'; return; }
+        closeModal(); showToast('Pagamento registrado.'); desenhar();
+      });
+    }
     [fStatus,fBusca].forEach(el=> el.addEventListener('input', desenhar));
-    desenhar();
-  }
-
-  /* Popup de pagamento — obrigatório escolher a forma antes de marcar como pago;
-   * também permite reverter pra "Em aberto" ou trocar a forma de um já pago. */
-  function abrirPopupPagamento(id, aoFechar){
-    const g = registros.find(r=>r.id===id);
-    if(!g) return;
-    const formaAtual = g.pagamento ? g.pagamento.forma : null;
-    openModal(`
-      <div class="section-label">Pagamento — Via #${escapeHtml(g.viaNumero)}</div>
-      <p class="muted" style="margin-bottom:14px;">Cliente: ${escapeHtml(g.cliente)} · Valor total: ${fmtMoeda(g.valorTotal)}</p>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
-        <button type="button" class="btn ${formaAtual==='dinheiro'?'btn-accent':'btn-ghost'}" data-forma="dinheiro" style="width:auto;">💵 Dinheiro</button>
-        <button type="button" class="btn ${formaAtual==='cartao'?'btn-accent':'btn-ghost'}" data-forma="cartao" style="width:auto;">💳 Cartão</button>
-        <button type="button" class="btn ${formaAtual==='pix'?'btn-accent':'btn-ghost'}" data-forma="pix" style="width:auto;">📱 Pix</button>
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn btn-ghost" data-forma="__aberto">Marcar como Em aberto</button>
-        <button type="button" class="btn btn-ghost" onclick="document.getElementById('modalOverlay').classList.remove('show')">Cancelar</button>
-      </div>
-    `);
-    document.querySelectorAll('[data-forma]').forEach(b=> b.addEventListener('click', async ()=>{
-      const forma = b.dataset.forma;
-      g.pagamento = forma==='__aberto' ? { status:'em_aberto', forma:null } : { status:'pago', forma };
-      const ok = await salvarRegistros();
-      closeModal();
-      if(ok){ showToast('Pagamento atualizado.'); } 
-      if(aoFechar) aoFechar();
-    }));
+    // recarrega do banco ao abrir a lista: o cliente pode ter confirmado a leitura, ou outro
+    // funcionário pode ter alterado algo em outro aparelho (mesmo padrão do Painel de O.S.)
+    carregarRegistros().then(desenhar);
   }
 
   /* ================= FORMULÁRIO (nova / editar) ================= */
@@ -401,8 +476,9 @@
   function renderFormulario(wrap, registroExistente, aoSalvarComSucesso){
     const editando = !!registroExistente;
     let itensState = editando
-      ? registroExistente.itens.map(it=>({ valor: it.valor||'', nome: it.nome||'', logoUrl: it.logoUrl||'', nomeAtivo: !!it.nome, logoAtivo: !!it.logoUrl }))
-      : [{ valor:'', nome:'', logoUrl:'', nomeAtivo:false, logoAtivo:false }];
+      ? (registroExistente.itens||[]).map(it=>({ valor: it.valor||'', nome: it.nome||'', logoUrl: it.logoUrl||'', observacoes: it.observacoes||'', nomeAtivo: !!it.nome, logoAtivo: !!it.logoUrl }))
+      : [{ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }];
+    if(itensState.length===0) itensState = [{ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }];
 
     wrap.innerHTML = `
       <div class="card">
@@ -449,8 +525,11 @@
             <div class="field" style="margin-bottom:0;">
               <label>Arquivo do logo/imagem</label>
               <input type="file" accept="image/*" data-itemlogo="${i}">
-              <div class="muted" style="margin-top:4px;" data-logostatus="${i}">${it.logoUrl?('✅ Arquivo enviado — <a href="'+it.logoUrl+'" target="_blank">ver</a>'):''}</div>
+              <div class="muted" style="margin-top:4px;" data-logostatus="${i}">${it.logoUrl?('✅ Arquivo enviado — <a href="'+escapeHtml(it.logoUrl)+'" target="_blank">ver</a>'):''}</div>
             </div>
+          </div>
+          <div class="item-sub">
+            <div class="field" style="margin-bottom:0;"><label>Observações do item</label><textarea data-itemobs="${i}" placeholder="Ex.: fonte cursiva, gravar na parte interna, posição do logo...">${escapeHtml(it.observacoes||'')}</textarea></div>
           </div>
         </div>
       `;
@@ -478,6 +557,9 @@
       document.querySelectorAll('[data-itemnome]').forEach(inp=> inp.addEventListener('input', ()=>{
         itensState[Number(inp.dataset.itemnome)].nome = inp.value;
       }));
+      document.querySelectorAll('[data-itemobs]').forEach(ta=> ta.addEventListener('input', ()=>{
+        itensState[Number(ta.dataset.itemobs)].observacoes = ta.value;
+      }));
       document.querySelectorAll('[data-itemlogo]').forEach(inp=> inp.addEventListener('change', async (e)=>{
         const i = Number(inp.dataset.itemlogo);
         const file = e.target.files[0];
@@ -488,7 +570,7 @@
           const dataUrl = await readFileAsDataUrl(file);
           const resultado = await uploadArquivoDrive(dataUrl, 'gravacao_item_'+Date.now()+'.jpg');
           itensState[i].logoUrl = resultado.url;
-          status.innerHTML = '✅ Arquivo enviado — <a href="'+resultado.url+'" target="_blank">ver</a>';
+          status.innerHTML = '✅ Arquivo enviado — <a href="'+escapeHtml(resultado.url)+'" target="_blank">ver</a>';
         }catch(err){
           console.error('erro ao enviar logo', err);
           status.textContent = 'Não foi possível enviar o arquivo.';
@@ -502,14 +584,14 @@
     }
     document.getElementById('n_qtd').addEventListener('input', ()=>{
       const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
-      if(qtd > itensState.length){ while(itensState.length<qtd) itensState.push({ valor:'', nome:'', logoUrl:'', nomeAtivo:false, logoAtivo:false }); }
+      if(qtd > itensState.length){ while(itensState.length<qtd) itensState.push({ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }); }
       else if(qtd < itensState.length){ itensState = itensState.slice(0,qtd); }
       desenharItens();
     });
     desenharItens();
 
     if(editando){
-      document.getElementById('btnCancelarForm').addEventListener('click', ()=>{ abaAtiva='lista'; render(); });
+      document.getElementById('btnCancelarForm').addEventListener('click', ()=>{ if(aoSalvarComSucesso) aoSalvarComSucesso(); else { abaAtiva='lista'; render(); } });
     }
     document.getElementById('btnSalvarForm').addEventListener('click', async ()=>{
       const cliente = document.getElementById('n_cliente').value.trim();
@@ -522,17 +604,18 @@
 
       const btn = document.getElementById('btnSalvarForm');
       btn.disabled = true; btn.textContent = 'Salvando...';
-      const itensFinal = itensState.map(it=>({ valor: Number(it.valor), nome: it.nomeAtivo ? (it.nome||'').trim() : '', logoUrl: it.logoAtivo ? (it.logoUrl||'') : '' }));
+      const itensFinal = itensState.map(it=>({ valor: Number(it.valor), nome: it.nomeAtivo ? (it.nome||'').trim() : '', logoUrl: it.logoAtivo ? (it.logoUrl||'') : '', observacoes: (it.observacoes||'').trim() }));
       const valorTotal = itensFinal.reduce((a,it)=>a+it.valor,0);
 
       if(editando){
+        const antes = JSON.parse(JSON.stringify(registroExistente));
         Object.assign(registroExistente, {
           cliente, whatsapp, email, funcionario,
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
         });
-        const ok = await salvarRegistros();
+        const ok = await salvarRegistro(registroExistente);
         btn.disabled = false; btn.textContent = '💾 Salvar alterações';
-        if(!ok) return;
+        if(!ok){ Object.assign(registroExistente, antes); return; }
         showToast(`Gravação #${registroExistente.viaNumero} atualizada.`);
         abaAtiva = 'lista'; render();
         if(aoSalvarComSucesso) aoSalvarComSucesso();
@@ -551,10 +634,9 @@
           pagamento: { status:'em_aberto', forma:null },
           criadoEm: Date.now(), criadoPor: currentUser.nome,
         };
-        registros.push(novoRegistro);
-        const ok = await salvarRegistros();
+        const ok = await salvarRegistro(novoRegistro);
         btn.disabled = false; btn.textContent = '💾 Salvar gravação';
-        if(!ok){ registros.pop(); return; }
+        if(!ok){ registros = registros.filter(r=>r.id!==novoRegistro.id); return; }
         showToast(`Gravação #${viaNumero} salva!`);
         abaAtiva = 'lista'; render();
       }
@@ -563,16 +645,31 @@
   function abrirEditar(id){
     const g = registros.find(r=>r.id===id);
     if(!g) return;
-    openModal(`<div id="areaEditarModal"></div><div class="modal-actions"><button class="btn btn-ghost" onclick="document.getElementById('modalOverlay').classList.remove('show')">Fechar</button></div>`);
-    renderFormulario(document.getElementById('areaEditarModal'), g, ()=>{
-      document.getElementById('modalOverlay').classList.remove('show');
-    });
+    openModal(`<div id="areaEditarModal"></div>${leiturasHistoricoHtml(g)}<div class="modal-actions"><button class="btn btn-ghost" id="btnFecharEditar">Fechar</button></div>`);
+    document.getElementById('btnFecharEditar').addEventListener('click', closeModal);
+    renderFormulario(document.getElementById('areaEditarModal'), g, closeModal);
+  }
+
+  /* Histórico de confirmações de leitura do cliente (mesmo padrão do Painel de O.S.). */
+  function leiturasHistoricoHtml(g){
+    const leituras = Array.isArray(g.leituras) ? g.leituras : [];
+    const rotulo = { em_aberto:'Recebido / em produção', pronto:'Pronto para retirada', entregue:'Entregue' };
+    if(leituras.length===0){
+      return `<div class="section-label" style="margin-top:18px;">Confirmações do cliente</div><div class="muted" style="margin-bottom:8px;">O cliente ainda não confirmou nenhuma atualização pelo link.</div>`;
+    }
+    const linhas = leituras.map(l=>{
+      const dt = new Date(l.confirmadoEm);
+      const dtFmt = isNaN(dt.getTime()) ? l.confirmadoEm : dt.toLocaleString('pt-BR');
+      return `<div style="font-size:12.5px; padding:5px 0; border-bottom:1px solid var(--line);">✓ Confirmou <b>${escapeHtml(rotulo[l.status]||l.status)}</b> em ${escapeHtml(dtFmt)}</div>`;
+    }).join('');
+    return `<div class="section-label" style="margin-top:18px;">Confirmações do cliente</div><div style="margin-bottom:8px;">${linhas}</div>`;
   }
 
   /* ================= IMPRESSÃO ================= */
   function imprimirVia(g){
     if(!g) return;
     const cupom = document.getElementById('cupomImpressao');
+    const pago = !!(g.pagamento && g.pagamento.status==='pago');
     cupom.innerHTML = `
       <div style="text-align:center; margin-bottom:10px;">
         <div style="font-size:16px; font-weight:800;">UP CASE</div>
@@ -588,9 +685,11 @@
       <div>Entrega prevista: <b>${fmtDataBr(g.dataEntrega)}</b> às <b>${escapeHtml(g.horaEntrega)}</b></div>
       <hr>
       <div>Quantidade de itens: <b>${escapeHtml(g.quantidadeItens)}</b></div>
-      ${g.itens.map((it,i)=>`<div>Item ${i+1}: <b>${fmtMoeda(it.valor)}</b>${it.nome?(' — "'+escapeHtml(it.nome)+'"'):''}${it.logoUrl?' — (com logo)':''}</div>`).join('')}
+      ${(g.itens||[]).map((it,i)=>`<div>Item ${i+1}: <b>${fmtMoeda(it.valor)}</b>${it.nome?(' — "'+escapeHtml(it.nome)+'"'):''}${it.logoUrl?' — (com logo)':''}${it.observacoes?('<div style="font-size:12px; margin-left:12px;">Obs.: '+escapeHtml(it.observacoes)+'</div>'):''}</div>`).join('')}
       <div style="margin-top:6px;">Valor total: <b>${fmtMoeda(g.valorTotal)}</b></div>
-      <div>Pagamento: <b>${g.pagamento&&g.pagamento.status==='pago' ? ('Pago — '+({dinheiro:'Dinheiro',cartao:'Cartão',pix:'Pix'}[g.pagamento.forma]||'')) : 'Em aberto'}</b></div>
+      ${pago
+        ? `<div>Pagamento: <b>${escapeHtml(pagamentoTexto(g))}</b>${g.pagamento.detalhes?(' — '+escapeHtml(g.pagamento.detalhes)):''}</div>`
+        : `<div style="margin-top:8px; padding:8px; border:2px solid #000; text-align:center; font-weight:800; font-size:14px;">⚠ PAGAMENTO EM ABERTO — ${fmtMoeda(g.valorTotal)}<div style="font-size:11px; font-weight:400;">Pagamento a ser efetuado na retirada.</div></div>`}
       <hr>
       <div style="margin-top:30px;">Assinatura de autorização:</div>
       <div style="margin-top:26px; border-top:1px solid #000; width:80%;"></div>
@@ -621,41 +720,26 @@
     `;
     function desenhar(){
       const mes = document.getElementById('r_mes').value;
-      const doMes = registros.filter(g=> g.dataEntrada && g.dataEntrada.startsWith(mes));
+      const todasDoMes = registros.filter(g=> g.dataEntrada && g.dataEntrada.startsWith(mes));
+      // só entra no relatório o que já está PAGO; pagamentos em aberto ficam de fora
+      const doMes = todasDoMes.filter(g=> g.pagamento && g.pagamento.status==='pago');
+      const emAberto = todasDoMes.filter(g=> !(g.pagamento && g.pagamento.status==='pago'));
+      const valorEmAberto = emAberto.reduce((a,g)=>a+(Number(g.valorTotal)||0),0);
       const totalItens = doMes.reduce((a,g)=>a+(Number(g.quantidadeItens)||0),0);
       const totalValor = doMes.reduce((a,g)=>a+(Number(g.valorTotal)||0),0);
       const valorOficina = totalItens * 1;
       const restante = totalValor - valorOficina;
       const valorVilaca = restante / 2;
       const valorUpcase = restante / 2;
-      const pagos = doMes.filter(g=> g.pagamento && g.pagamento.status==='pago').length;
-      const semPagar = doMes.length - pagos;
-      const qtdAberto = doMes.filter(g=> g.status==='em_aberto').length;
-      const qtdPronto = doMes.filter(g=> g.status==='pronto').length;
-      const qtdEntregue = doMes.filter(g=> g.status==='entregue').length;
       document.getElementById('corpoRelatorio').innerHTML = `
         <div class="grid-3">
-          <div class="card"><span class="muted">Quantidade de itens no mês</span><div style="font-size:26px; font-weight:800;">${totalItens}</div></div>
-          <div class="card"><span class="muted">Valor total gravado no mês</span><div style="font-size:26px; font-weight:800;">${fmtMoeda(totalValor)}</div></div>
-          <div class="card"><span class="muted">Gravações no mês</span><div style="font-size:26px; font-weight:800;">${doMes.length}</div></div>
+          <div class="card"><span class="muted">Quantidade de itens pagos no mês</span><div style="font-size:26px; font-weight:800;">${totalItens}</div></div>
+          <div class="card"><span class="muted">Valor total pago no mês</span><div style="font-size:26px; font-weight:800;">${fmtMoeda(totalValor)}</div></div>
+          <div class="card"><span class="muted">Gravações pagas no mês</span><div style="font-size:26px; font-weight:800;">${doMes.length}</div></div>
         </div>
+        ${emAberto.length ? `<div class="muted" style="margin:-4px 0 14px;">⚠ ${emAberto.length} gravação(ões) do mês com pagamento em aberto (${fmtMoeda(valorEmAberto)}) não entram neste relatório até serem marcadas como pagas.</div>` : ''}
         <div class="card">
-          <div class="section-label">Pagamento</div>
-          <div class="grid-2">
-            <div><span class="muted">Pagos</span><div style="font-size:22px; font-weight:800; color:var(--ok);">${pagos}</div></div>
-            <div><span class="muted">Sem pagar</span><div style="font-size:22px; font-weight:800; color:var(--danger);">${semPagar}</div></div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="section-label">Status das vias</div>
-          <div class="grid-3">
-            <div><span class="muted">Em aberto</span><div style="font-size:22px; font-weight:800; color:var(--wait);">${qtdAberto}</div></div>
-            <div><span class="muted">Prontos</span><div style="font-size:22px; font-weight:800; color:var(--just);">${qtdPronto}</div></div>
-            <div><span class="muted">Retirados</span><div style="font-size:22px; font-weight:800; color:var(--ok);">${qtdEntregue}</div></div>
-          </div>
-        </div>
-        <div class="card">
-          <div class="section-label">Resumo de repasse (R$ 1,00 por item pra Oficina; o restante dividido meio a meio)</div>
+          <div class="section-label">Resumo de repasse — somente pagamentos recebidos (R$ 1,00 por item pra Oficina; o restante dividido meio a meio)</div>
           <div class="grid-3">
             <div><span class="muted">Valor a pagar à Oficina</span><div style="font-size:19px; font-weight:800;">${fmtMoeda(valorOficina)}</div></div>
             <div><span class="muted">Valor a pagar à Vilaça (50%)</span><div style="font-size:19px; font-weight:800;">${fmtMoeda(valorVilaca)}</div></div>

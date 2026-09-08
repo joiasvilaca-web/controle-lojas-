@@ -49,6 +49,14 @@
   .details .k{ color:var(--ink-soft); flex-shrink:0; }
   .details .v{ font-weight:650; text-align:right; }
 
+  .pag-aberto{ margin-top:16px; padding:12px 14px; border-radius:10px; background:#FADADA; color:#8E1B1F; font-size:13.5px; font-weight:700; text-align:center; line-height:1.45; }
+  .pag-aberto small{ display:block; font-weight:500; font-size:12px; margin-top:3px; }
+  .pag-ok{ margin-top:16px; padding:10px 14px; border-radius:10px; background:var(--ok-soft); color:var(--ok); font-size:13px; font-weight:700; text-align:center; }
+  .confirm-box{ text-align:center; background:var(--bg); border-radius:12px; padding:20px 16px; margin-top:6px; }
+  .confirm-icon{ font-size:30px; margin-bottom:8px; }
+  .confirm-box p{ font-size:13.5px; color:var(--ink-soft); line-height:1.5; margin:0 0 16px; }
+  .confirm-btn{ width:100%; border:none; border-radius:10px; padding:13px 16px; font-size:14px; font-weight:750; background:var(--accent); color:#fff; cursor:pointer; font-family:inherit; }
+  .confirm-btn:disabled{ opacity:.7; cursor:default; }
   .loading, .error{ text-align:center; color:var(--ink-soft); font-size:14px; padding:30px 0; }
   .refresh-note{ text-align:center; font-size:11px; color:var(--ink-faint); margin-top:18px; line-height:1.5; }
 </style>
@@ -123,8 +131,50 @@
         <div><span class="k">Quantidade de itens</span><span class="v">${escapeHtml(g.quantidadeItens)}</span></div>
         <div><span class="k">Valor total</span><span class="v">${fmtMoeda(g.valorTotal)}</span></div>
       </div>
+      ${g.pagamentoStatus === "pago"
+        ? `<div class="pag-ok">✓ Pagamento confirmado</div>`
+        : `<div class="pag-aberto">⚠ Pagamento em aberto — ${fmtMoeda(g.valorTotal)}<small>O pagamento será efetuado na retirada.</small></div>`}
       <div class="refresh-note">${isFinal ? "Essa gravação já foi entregue." : "Esta página se atualiza automaticamente — não precisa recarregar."}</div>
     `;
+  }
+
+  /* Confirmação de leitura — mesmo padrão da página de acompanhamento de O.S.:
+     a cada nova etapa (status) o cliente precisa confirmar que recebeu a atualização
+     antes de ver os detalhes; a confirmação fica registrada no módulo Gravações. */
+  let gateStatusExibido = null;
+  function renderConfirmGate(g){
+    if(gateStatusExibido === g.status) return; // já está na tela — não reinicia o botão a cada atualização automática
+    gateStatusExibido = g.status;
+    document.getElementById("card").innerHTML = `
+      <div class="brand">Gestão e Controle · Gravações</div>
+      <h1>Olá, ${escapeHtml(g.cliente)}!</h1>
+      <div class="sub">Você tem uma atualização sobre sua gravação (via nº ${escapeHtml(g.viaNumero)})</div>
+      <div class="confirm-box">
+        <div class="confirm-icon">🔔</div>
+        <p>Para ver os detalhes atualizados, confirme que você recebeu esta notificação.</p>
+        <button class="confirm-btn" id="btnConfirmarLeitura" disabled>Carregando…</button>
+      </div>
+    `;
+    // Espera um instante antes de liberar o botão: robôs de varredura de link agem na hora,
+    // sem esperar — isso evita que a confirmação seja "gasta" antes do cliente abrir de verdade.
+    setTimeout(()=>{
+      const btn = document.getElementById("btnConfirmarLeitura");
+      if(!btn) return;
+      btn.disabled = false;
+      btn.textContent = "Sim, recebi esta atualização";
+    }, 1500);
+    document.getElementById("btnConfirmarLeitura").addEventListener("click", async ()=>{
+      const btn = document.getElementById("btnConfirmarLeitura");
+      btn.disabled = true;
+      btn.textContent = "Confirmando…";
+      try{
+        await supabaseClient.functions.invoke("confirmar-leitura-gravacao", { body: { id: getId(), status: g.status } });
+      }catch(e){
+        console.error("Falha ao registrar confirmação de leitura:", e);
+      }
+      gateStatusExibido = null;
+      render(g);
+    });
   }
 
   async function loadStatus(){
@@ -137,7 +187,12 @@
       const { data, error } = await supabaseClient.functions.invoke("get-gravacao-status", { body: { id } });
       if(error) throw error;
       if(!data || data.error) throw new Error((data && data.error) || "Gravação não encontrada.");
-      render(data);
+      if(!data.confirmadoStatusAtual){
+        renderConfirmGate(data);
+      }else{
+        gateStatusExibido = null;
+        render(data);
+      }
     }catch(e){
       showError("Não foi possível carregar essa gravação agora. Verifique o link ou tente novamente mais tarde.");
     }
