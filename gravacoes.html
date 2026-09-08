@@ -97,6 +97,9 @@
   .leitura-info{ font-size:10.5px; margin-top:4px; white-space:nowrap; font-weight:700; }
   .leitura-info.ok{ color:var(--ok); }
   .leitura-info.wait{ color:var(--ink-faint); font-weight:600; }
+  tr.linha-cancelada td{ background:#FBF3F3; color:var(--ink-faint); }
+  tr.linha-cancelada td:nth-child(2), tr.linha-cancelada td:nth-child(5){ text-decoration:line-through; }
+  .cancel-info{ font-size:10.5px; color:var(--danger); margin-top:4px; white-space:normal; max-width:190px; line-height:1.35; }
 
   .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
   .modal-overlay.show{display:flex;}
@@ -341,7 +344,7 @@
   function renderLista(wrap){
     wrap.innerHTML = `
       <div class="filters">
-        <select id="f_status"><option value="">Todos os status</option><option value="em_aberto">Em aberto</option><option value="pronto">Pronto</option><option value="entregue">Entregue</option></select>
+        <select id="f_status"><option value="">Todos os status</option><option value="em_aberto">Em aberto</option><option value="pronto">Pronto</option><option value="entregue">Entregue</option><option value="cancelado">Cancelado</option></select>
         <input type="text" id="f_busca" placeholder="Buscar cliente...">
       </div>
       <div id="tabelaGrav"><div class="empty">Carregando…</div></div>
@@ -362,8 +365,8 @@
         <table>
           <thead><tr><th>Via</th><th>Cliente</th><th>Funcionário</th><th>Itens</th><th>Valor</th><th>Entrega</th><th>Status</th><th>Pagamento</th><th>Ações</th></tr></thead>
           <tbody>${lista.map(g=>`
-            <tr data-linha="${g.id}">
-              <td>#${escapeHtml(g.viaNumero)}</td>
+            <tr data-linha="${g.id}" class="${g.status==='cancelado'?'linha-cancelada':''}">
+              <td>#${escapeHtml(g.viaNumero)}${g.status==='cancelado'?'<br><span class="badge badge-danger">Cancelada</span>':''}</td>
               <td>${escapeHtml(g.cliente)}<div class="muted" style="font-size:11px;">${escapeHtml(g.whatsapp)}</div></td>
               <td>${escapeHtml(g.funcionario||'—')}</td>
               <td>${escapeHtml(g.quantidadeItens)}</td>
@@ -374,8 +377,10 @@
                   <option value="em_aberto" ${g.status==='em_aberto'?'selected':''}>Em aberto</option>
                   <option value="pronto" ${g.status==='pronto'?'selected':''}>Pronto</option>
                   <option value="entregue" ${g.status==='entregue'?'selected':''}>Entregue</option>
+                  <option value="cancelado" ${g.status==='cancelado'?'selected':''}>Cancelado</option>
                 </select>
                 ${leituraStatusHtml(g)}
+                ${g.status==='cancelado' && g.cancelamento ? `<div class="cancel-info">${g.cancelamento.motivo?escapeHtml(g.cancelamento.motivo)+' · ':''}por ${escapeHtml(g.cancelamento.por||'—')} em ${escapeHtml(fmtDataBr((g.cancelamento.em||'').slice(0,10)))}</div>` : ''}
               </td>
               <td>
                 <select class="sel-pagamento" data-id="${g.id}">
@@ -399,6 +404,7 @@
         const g = registros.find(r=>r.id===sel.dataset.id);
         if(!g) return;
         const anterior = g.status;
+        if(sel.value==='cancelado'){ abrirCancelamento(g, anterior); return; }
         g.status = sel.value;
         const ok = await salvarRegistro(g);
         if(ok){ showToast('Status atualizado.'); desenhar(); }
@@ -428,6 +434,34 @@
       tabela.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditar(b.dataset.editar)));
       tabela.querySelectorAll('[data-imprimir]').forEach(b=> b.addEventListener('click', ()=> imprimirVia(registros.find(r=>r.id===b.dataset.imprimir))));
       tabela.querySelectorAll('[data-whats]').forEach(b=> b.addEventListener('click', ()=> enviarWhatsapp(registros.find(r=>r.id===b.dataset.whats))));
+    }
+    /* Cancelamento: a gravação continua no sistema (com tudo visível), mas marcada como
+       cancelada e fora do relatório mensal. Cancelar no modal volta o select ao status anterior. */
+    function abrirCancelamento(g, anterior){
+      openModal(`
+        <div class="section-label" style="color:var(--danger);">Cancelar gravação · Via #${escapeHtml(g.viaNumero)}</div>
+        <div class="muted" style="margin-bottom:10px;">Cliente: <b>${escapeHtml(g.cliente)}</b> · Valor: <b>${fmtMoeda(g.valorTotal)}</b>${g.pagamento&&g.pagamento.status==='pago'?' · <b style="color:var(--danger);">já consta como paga</b>':''}</div>
+        <div class="field">
+          <label>Motivo do cancelamento (opcional)</label>
+          <textarea id="cancel_motivo" placeholder="Ex.: cliente desistiu, peça não comporta gravação..."></textarea>
+        </div>
+        <div class="muted" style="margin-bottom:6px;">A gravação fica registrada como <b>Cancelada</b>, continua visível na lista, e o valor sai do relatório mensal.</div>
+        <div class="modal-actions">
+          <button class="btn btn-accent" id="btnConfirmarCancel" style="background:var(--danger);">🚫 Confirmar cancelamento</button>
+          <button class="btn btn-ghost" id="btnVoltarCancel">Voltar</button>
+        </div>
+      `);
+      document.getElementById('btnVoltarCancel').addEventListener('click', ()=>{ g.status = anterior; closeModal(); desenhar(); });
+      document.getElementById('btnConfirmarCancel').addEventListener('click', async ()=>{
+        const btn = document.getElementById('btnConfirmarCancel');
+        btn.disabled = true; btn.textContent = 'Cancelando...';
+        const cancelAntes = g.cancelamento;
+        g.status = 'cancelado';
+        g.cancelamento = { motivo: document.getElementById('cancel_motivo').value.trim(), por: currentUser ? currentUser.nome : '', em: new Date().toISOString(), statusAnterior: anterior };
+        const ok = await salvarRegistro(g);
+        if(!ok){ g.status = anterior; g.cancelamento = cancelAntes; btn.disabled=false; btn.textContent='🚫 Confirmar cancelamento'; return; }
+        closeModal(); showToast(`Gravação #${g.viaNumero} cancelada.`); desenhar();
+      });
     }
     /* Modal do campo livre de pagamento. Cancelar volta o select ao valor anterior;
        salvar grava forma + detalhes + quem/quando registrou. */
@@ -653,7 +687,7 @@
   /* Histórico de confirmações de leitura do cliente (mesmo padrão do Painel de O.S.). */
   function leiturasHistoricoHtml(g){
     const leituras = Array.isArray(g.leituras) ? g.leituras : [];
-    const rotulo = { em_aberto:'Recebido / em produção', pronto:'Pronto para retirada', entregue:'Entregue' };
+    const rotulo = { em_aberto:'Recebido / em produção', pronto:'Pronto para retirada', entregue:'Entregue', cancelado:'Cancelamento' };
     if(leituras.length===0){
       return `<div class="section-label" style="margin-top:18px;">Confirmações do cliente</div><div class="muted" style="margin-bottom:8px;">O cliente ainda não confirmou nenhuma atualização pelo link.</div>`;
     }
@@ -675,6 +709,7 @@
         <div style="font-size:16px; font-weight:800;">UP CASE</div>
         <div style="font-size:12px;">Personalizado pela Vilaça Joias</div>
         <div>Via nº ${escapeHtml(g.viaNumero)}</div>
+        ${g.status==='cancelado' ? `<div style="margin-top:6px; padding:6px; border:2px solid #000; font-weight:800; font-size:15px;">*** GRAVAÇÃO CANCELADA ***${g.cancelamento&&g.cancelamento.motivo?('<div style="font-size:11px; font-weight:400;">Motivo: '+escapeHtml(g.cancelamento.motivo)+'</div>'):''}</div>` : ''}
       </div>
       <hr>
       <div>Cliente: <b>${escapeHtml(g.cliente)}</b></div>
@@ -721,9 +756,13 @@
     function desenhar(){
       const mes = document.getElementById('r_mes').value;
       const todasDoMes = registros.filter(g=> g.dataEntrada && g.dataEntrada.startsWith(mes));
+      // canceladas ficam totalmente fora do relatório (mesmo que constem como pagas)
+      const canceladas = todasDoMes.filter(g=> g.status==='cancelado');
+      const ativas = todasDoMes.filter(g=> g.status!=='cancelado');
       // só entra no relatório o que já está PAGO; pagamentos em aberto ficam de fora
-      const doMes = todasDoMes.filter(g=> g.pagamento && g.pagamento.status==='pago');
-      const emAberto = todasDoMes.filter(g=> !(g.pagamento && g.pagamento.status==='pago'));
+      const doMes = ativas.filter(g=> g.pagamento && g.pagamento.status==='pago');
+      const emAberto = ativas.filter(g=> !(g.pagamento && g.pagamento.status==='pago'));
+      const valorCanceladas = canceladas.reduce((a,g)=>a+(Number(g.valorTotal)||0),0);
       const valorEmAberto = emAberto.reduce((a,g)=>a+(Number(g.valorTotal)||0),0);
       const totalItens = doMes.reduce((a,g)=>a+(Number(g.quantidadeItens)||0),0);
       const totalValor = doMes.reduce((a,g)=>a+(Number(g.valorTotal)||0),0);
@@ -737,7 +776,8 @@
           <div class="card"><span class="muted">Valor total pago no mês</span><div style="font-size:26px; font-weight:800;">${fmtMoeda(totalValor)}</div></div>
           <div class="card"><span class="muted">Gravações pagas no mês</span><div style="font-size:26px; font-weight:800;">${doMes.length}</div></div>
         </div>
-        ${emAberto.length ? `<div class="muted" style="margin:-4px 0 14px;">⚠ ${emAberto.length} gravação(ões) do mês com pagamento em aberto (${fmtMoeda(valorEmAberto)}) não entram neste relatório até serem marcadas como pagas.</div>` : ''}
+        ${emAberto.length ? `<div class="muted" style="margin:-4px 0 8px;">⚠ ${emAberto.length} gravação(ões) do mês com pagamento em aberto (${fmtMoeda(valorEmAberto)}) não entram neste relatório até serem marcadas como pagas.</div>` : ''}
+        ${canceladas.length ? `<div class="muted" style="margin:0 0 14px;">🚫 ${canceladas.length} gravação(ões) do mês cancelada(s) (${fmtMoeda(valorCanceladas)}) — fora do relatório.</div>` : ''}
         <div class="card">
           <div class="section-label">Resumo de repasse — somente pagamentos recebidos (R$ 1,00 por item pra Oficina; o restante dividido meio a meio)</div>
           <div class="grid-3">
