@@ -99,6 +99,12 @@
   .leitura-info.wait{ color:var(--ink-faint); font-weight:600; }
   tr.linha-cancelada td{ background:#FBF3F3; color:var(--ink-faint); }
   tr.linha-cancelada td:nth-child(2), tr.linha-cancelada td:nth-child(5){ text-decoration:line-through; }
+  .ver-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px 16px; font-size:13px; margin-bottom:14px; }
+  .ver-grid .k{ font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint); font-weight:750; }
+  .ver-grid .v{ font-weight:650; }
+  .ver-item{ border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; background:var(--surface-2); font-size:13px; }
+  .ver-item .titulo{ font-weight:800; margin-bottom:6px; display:flex; justify-content:space-between; }
+  .ver-item img{ max-width:180px; max-height:140px; border-radius:8px; border:1px solid var(--line); display:block; margin-top:6px; background:#fff; }
   .cancel-info{ font-size:10.5px; color:var(--danger); margin-top:4px; white-space:normal; max-width:190px; line-height:1.35; }
 
   .modal-overlay{position:fixed; inset:0; background:rgba(10,12,18,0.55); display:none; align-items:center; justify-content:center; z-index:60; padding:20px; overflow-y:auto;}
@@ -407,6 +413,7 @@
                 ${g.pagamento && g.pagamento.status==='pago' ? `<div class="pag-detalhes">${g.pagamento.detalhes ? escapeHtml(g.pagamento.detalhes) : '<span class="muted">Sem detalhes</span>'} <a href="#" data-pagdet="${g.id}" title="Editar detalhes do pagamento">✎</a></div>` : ''}
               </td>
               <td style="white-space:nowrap;">
+                <button class="btn btn-ghost btn-xs" data-ver="${g.id}" title="Ver via completa">👁 Ver</button>
                 <button class="btn btn-ghost btn-xs" data-editar="${g.id}">✎ Editar</button>
                 <button class="btn btn-ghost btn-xs" data-imprimir="${g.id}">🖨️</button>
                 <button class="btn btn-ghost btn-xs" data-whats="${g.id}" style="background:#dcf8c6; color:#1f5c1f;">💬</button>
@@ -451,6 +458,7 @@
         const g = registros.find(r=>r.id===b.dataset.cancelar);
         if(g) abrirCancelamento(g, g.status);
       }));
+      tabela.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=> abrirVer(b.dataset.ver)));
       tabela.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditar(b.dataset.editar)));
       tabela.querySelectorAll('[data-imprimir]').forEach(b=> b.addEventListener('click', ()=> imprimirVia(registros.find(r=>r.id===b.dataset.imprimir))));
       tabela.querySelectorAll('[data-whats]').forEach(b=> b.addEventListener('click', ()=> enviarWhatsapp(registros.find(r=>r.id===b.dataset.whats))));
@@ -695,6 +703,46 @@
         abaAtiva = 'lista'; render();
       }
     });
+  }
+  /* Visualização completa da via (somente leitura). */
+  function abrirVer(id){
+    const g = registros.find(r=>r.id===id);
+    if(!g) return;
+    const itens = g.itens || [];
+    const pago = !!(g.pagamento && g.pagamento.status==='pago');
+    openModal(`
+      <div class="section-label">Via #${escapeHtml(g.viaNumero)} — ${escapeHtml(g.cliente)} ${g.status==='cancelado'?'<span class="badge badge-danger" style="margin-left:6px;">Cancelada</span>':''}</div>
+      <div class="ver-grid">
+        <div><div class="k">Cliente</div><div class="v">${escapeHtml(g.cliente)}</div></div>
+        <div><div class="k">WhatsApp</div><div class="v">${escapeHtml(g.whatsapp||'—')}</div></div>
+        <div><div class="k">Entrada</div><div class="v">${fmtDataBr(g.dataEntrada)} às ${escapeHtml(g.horaEntrada||'—')}</div></div>
+        <div><div class="k">Entrega prevista</div><div class="v">${fmtDataBr(g.dataEntrega)} às ${escapeHtml(g.horaEntrega||'—')}</div></div>
+        <div><div class="k">Status</div><div class="v">${escapeHtml(statusLabel(g.status))}</div></div>
+        <div><div class="k">Pagamento</div><div class="v">${escapeHtml(pagamentoTexto(g))}${pago&&g.pagamento.detalhes?('<div class="muted" style="font-size:12px;">'+escapeHtml(g.pagamento.detalhes)+'</div>'):''}</div></div>
+        <div><div class="k">Funcionário</div><div class="v">${escapeHtml(g.funcionario||'—')}</div></div>
+        <div><div class="k">Valor total</div><div class="v">${fmtMoeda(g.valorTotal)} · ${escapeHtml(g.quantidadeItens)} item(ns)</div></div>
+        ${g.email?`<div><div class="k">E-mail</div><div class="v">${escapeHtml(g.email)}</div></div>`:''}
+        ${g.criadoPor?`<div><div class="k">Registrado por</div><div class="v">${escapeHtml(g.criadoPor)}</div></div>`:''}
+        ${g.status==='cancelado'&&g.cancelamento?`<div style="grid-column:1/-1;"><div class="k">Cancelamento</div><div class="v" style="color:var(--danger);">${g.cancelamento.motivo?escapeHtml(g.cancelamento.motivo)+' · ':''}por ${escapeHtml(g.cancelamento.por||'—')} em ${escapeHtml(fmtDataBr((g.cancelamento.em||'').slice(0,10)))}</div></div>`:''}
+      </div>
+      <div class="section-label">Itens</div>
+      ${itens.length ? itens.map((it,i)=>`
+        <div class="ver-item">
+          <div class="titulo"><span>Item ${i+1}</span><span>${fmtMoeda(it.valor)}</span></div>
+          <div><b>Nome / frase:</b> ${it.nome ? escapeHtml(it.nome) : '<span class="muted">— sem texto</span>'}</div>
+          <div><b>Arquivo anexo:</b> ${it.logoUrl ? `<a href="${escapeHtml(it.logoUrl)}" target="_blank">abrir arquivo</a><img src="${escapeHtml(it.logoUrl)}" alt="Logo do item ${i+1}" onerror="this.style.display='none'">` : '<span class="muted">— sem arquivo</span>'}</div>
+          <div><b>Observações:</b> ${it.observacoes ? escapeHtml(it.observacoes) : '<span class="muted">—</span>'}</div>
+        </div>`).join('') : '<div class="muted">Nenhum item registrado.</div>'}
+      ${leiturasHistoricoHtml(g)}
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="btnVerImprimir">🖨️ Imprimir</button>
+        <button class="btn btn-ghost" id="btnVerEditar">✎ Editar</button>
+        <button class="btn btn-ghost" id="btnFecharVer">Fechar</button>
+      </div>
+    `);
+    document.getElementById('btnFecharVer').addEventListener('click', closeModal);
+    document.getElementById('btnVerImprimir').addEventListener('click', ()=> imprimirVia(g));
+    document.getElementById('btnVerEditar').addEventListener('click', ()=>{ closeModal(); abrirEditar(g.id); });
   }
   function abrirEditar(id){
     const g = registros.find(r=>r.id===id);
