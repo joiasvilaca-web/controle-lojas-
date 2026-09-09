@@ -2048,12 +2048,10 @@ function renderLojasTab(main){
    PRODUTO UNIFICADO — Categorias + Subcategorias + Joias/Metais + Estoque/Composição
    Substitui as 3 abas separadas (Categoria, Joias & Metais, Produtos & Estoque).
    ============================================================ */
-const TIPOS_PRODUTO = [
-  { id:'servico', label:'Serviço' },
-  { id:'estoque', label:'Produto em estoque' },
-  { id:'encomenda', label:'Produto por encomenda' },
-];
-function tipoProdutoLabel(id){ return (TIPOS_PRODUTO.find(t=>t.id===id)||{}).label || ''; }
+/** "Tipo" do produto agora é uma lista editável (config.tiposProduto) — antes era fixa
+ * (Serviço/Produto em estoque/Produto por encomenda). O valor salvo é o próprio texto. */
+function tipoProdutoLabel(v){ return v||''; }
+function ehTipoServico(tipo){ return (tipo||'').toLowerCase().includes('serv'); }
 
 async function renderProdutoUnificadoTab(main){
   garantirConfigProduto();
@@ -2083,7 +2081,7 @@ async function renderProdutoUnificadoTab(main){
         <div style="display:flex;gap:4px;align-items:center;">
           <select id="peUnifFiltroTipo" style="padding:7px 11px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
             <option value="">Tipo: todos</option>
-            ${TIPOS_PRODUTO.map(t=>`<option value="${t.id}">${t.label}</option>`).join('')}
+            ${config.tiposProduto.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
           </select>
           <button type="button" class="icon-btn" id="btnGerenciarTiposServico" title="Cadastrar tipos de serviço">+</button>
         </div>
@@ -2129,7 +2127,7 @@ async function renderProdutoUnificadoTab(main){
             ${p.tipo?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">${escapeHtml(tipoProdutoLabel(p.tipo))}</span>`:''}
             ${catNome(p.categoriaId)?`<span class="chip">${escapeHtml(catNome(p.categoriaId))}</span>`:''}
             ${subNome(p.subcategoriaId)?`<span class="chip">${escapeHtml(subNome(p.subcategoriaId))}</span>`:''}
-            ${p.tipo!=='servico'?`<span class="chip">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>`:''}
+            ${!ehTipoServico(p.tipo)?`<span class="chip">${estoqueTotalDe(p)} ${escapeHtml(unidadeLabel(p.unidade))}</span>`:''}
             ${p.composicao&&p.composicao.length>0?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Composição: ${p.composicao.length}</span>`:''}
             ${p.vendavel===false?`<span class="chip">Só interno</span>`:`<span class="chip" style="background:var(--ok-soft);color:var(--ok);">Vendável</span>`}
             ${p.precoVenda!=null?`<span class="chip" style="background:var(--accent);color:#fff;">R$ ${Number(p.precoVenda).toFixed(2)}</span>`:''}
@@ -2266,7 +2264,7 @@ function garantirConfigProduto(){
   if(!Array.isArray(config.coresPedra)) config.coresPedra = [];
   garantirConfigFornecedor();
   if(!Array.isArray(config.representantes)) config.representantes = [];
-  if(!Array.isArray(config.tiposProduto)) config.tiposProduto = [];
+  if(!Array.isArray(config.tiposProduto) || config.tiposProduto.length===0) config.tiposProduto = ['Serviço','Produto em estoque','Produto por encomenda'];
   if(!Array.isArray(config.unidadesProduto)) config.unidadesProduto = ['un','g','kg'];
   if(!config.produtosOtica) config.produtosOtica = { categorias:[], subcategorias:[] };
   if(!config.produtosOtica.proximoCodigo) config.produtosOtica.proximoCodigo = 1;
@@ -2619,10 +2617,10 @@ function mountFotosProduto(container, holder, produtoId){
 
 const PE_TABS = [
   { id:'nomenclatura', label:'Nome' },
+  { id:'valores', label:'Estoque' },
   { id:'dadosTecnicos', label:'Dados Técnicos' },
   { id:'fiscal', label:'Fiscal' },
   { id:'composicao', label:'Composição' },
-  { id:'valores', label:'Estoque' },
   { id:'historico', label:'Histórico' },
 ];
 /** Desenha um código de barras pequeno (CODE128) a partir do texto informado, usando
@@ -2648,6 +2646,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
   const composicao = (base && base.composicao) ? JSON.parse(JSON.stringify(base.composicao)) : [];
   const numerosAro = (base && Array.isArray(base.numerosAro)) ? JSON.parse(JSON.stringify(base.numerosAro)) : [];
   const pedras = (base && Array.isArray(base.pedras)) ? JSON.parse(JSON.stringify(base.pedras)) : [];
+  const variacoes = (base && Array.isArray(base.variacoes)) ? JSON.parse(JSON.stringify(base.variacoes)) : [];
   const d = {
     nome: base ? (base.nome||'') : '',
     unidade: base ? (base.unidade||'un') : '',
@@ -2711,8 +2710,11 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             </div>
           </div>
         </div>
-        <div class="field"><label>Disponibilidade</label>
-          <select id="pe_tipo"><option value="" ${d.tipo===''?'selected':''}>Selecione</option>${TIPOS_PRODUTO.map(t=>`<option value="${t.id}" ${d.tipo===t.id?'selected':''}>${t.label}</option>`).join('')}</select>
+        <div class="field"><label>Tipo</label>
+          <div style="display:flex; gap:6px;">
+            <select id="pe_tipo" style="flex:1;"><option value="" ${d.tipo===''?'selected':''}>Selecione</option>${config.tiposProduto.map(t=>`<option value="${escapeHtml(t)}" ${d.tipo===t?'selected':''}>${escapeHtml(t)}</option>`).join('')}</select>
+            <button type="button" class="icon-btn" id="btnEditarTipo" title="Cadastrar/editar/excluir tipos">✎</button>
+          </div>
         </div>
         <div class="grid-2">
           <div class="field"><label>Categoria</label>
@@ -2755,6 +2757,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
       document.getElementById('btnEditarUnidade').addEventListener('click', ()=> abrirGerenciarListaStrings('Unidades', config.unidadesProduto, ()=> montarShellModalProduto()));
       document.getElementById('pe_tipo').addEventListener('change', e=> d.tipo=e.target.value);
+      document.getElementById('btnEditarTipo').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos', config.tiposProduto, ()=> montarShellModalProduto()));
       document.getElementById('pe_categoriaId').addEventListener('change', e=> d.categoriaId=e.target.value);
       document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
       document.getElementById('pe_fornecedor').addEventListener('change', e=>{
@@ -2815,6 +2818,11 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         <div class="field" style="margin-top:14px;"><label>Observação</label>
           <textarea id="pe_observacao" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(d.observacao||'')}</textarea>
         </div>
+
+        <div class="section-label" style="margin-top:18px;">Variações deste produto</div>
+        <p class="muted" style="margin:-4px 0 10px; font-size:12px;">Use quando o mesmo produto tem versões físicas diferentes (peso variando, aro diferente...), cada uma com seu próprio estoque por loja. O estoque da aba "Estoque" passa a ser a soma automática de todas as variações.</p>
+        <div id="pe_variacoesRows"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnAddVariacao" style="margin-top:8px;">+ Adicionar variação</button>
       `;
       aplicarAutoPontoDecimal(document.getElementById('pe_comprimento'));
       aplicarAutoPontoDecimal(document.getElementById('pe_altura'));
@@ -2866,6 +2874,124 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         document.getElementById('pe_pedraObs').value = '';
         renderPedrasRows();
       });
+
+      function estoqueTotalVariacao(v){
+        return (config.lojas||[]).reduce((acc,l)=> acc + (Number((v.estoquePorLoja||{})[l.id])||0), 0);
+      }
+      function renderVariacoesRows(){
+        const wrap = document.getElementById('pe_variacoesRows');
+        if(!wrap) return;
+        wrap.innerHTML = variacoes.length===0 ? `<div class="empty" style="padding:8px 0;">Nenhuma variação adicionada — sem variações, o produto usa só os dados técnicos e o estoque acima.</div>` : variacoes.map((v,i)=>{
+          const partes = [];
+          if(v.peso!=null && v.peso!=='') partes.push('Peso: '+v.peso+'g');
+          if(v.numerosAro && v.numerosAro.length) partes.push('Aro: '+v.numerosAro.join(', '));
+          partes.push('Estoque: '+estoqueTotalVariacao(v));
+          return `
+          <div class="code-list-item">
+            <div>Variação ${i+1} — ${escapeHtml(partes.join(' · '))}</div>
+            <div style="display:flex; gap:4px;">
+              <button type="button" class="icon-btn" data-vedit="${i}" title="Editar">✎</button>
+              <button type="button" class="icon-btn" data-vdel="${i}" title="Remover">✕</button>
+            </div>
+          </div>`;
+        }).join('');
+        wrap.querySelectorAll('[data-vedit]').forEach(b=> b.addEventListener('click', ()=> abrirVariacaoModal(Number(b.dataset.vedit))));
+        wrap.querySelectorAll('[data-vdel]').forEach(b=> b.addEventListener('click', ()=>{
+          variacoes.splice(Number(b.dataset.vdel),1);
+          renderVariacoesRows();
+        }));
+      }
+      renderVariacoesRows();
+      document.getElementById('btnAddVariacao').addEventListener('click', ()=> abrirVariacaoModal(null));
+
+      /** Sub-modal de uma variação: repete os mesmos dados técnicos (comprimento, altura,
+       * espessura, peso, número do aro, tipo de pedra, observação) + estoque por loja
+       * dessa variação específica. Usa o mesmo modal global — por isso, ao fechar, chama
+       * montarShellModalProduto() pra reconstruir a tela do produto sem perder nada. */
+      function abrirVariacaoModal(indice){
+        const editando = indice!=null;
+        const origem = editando ? variacoes[indice] : null;
+        const v = {
+          comprimento: origem&&origem.comprimento!=null?origem.comprimento:'',
+          altura: origem&&origem.altura!=null?origem.altura:'',
+          espessura: origem&&origem.espessura!=null?origem.espessura:'',
+          peso: origem&&origem.peso!=null?origem.peso:'',
+          observacao: origem?origem.observacao||'':'',
+        };
+        const numerosAroV = origem&&Array.isArray(origem.numerosAro) ? [...origem.numerosAro] : [];
+        const pedrasV = origem&&Array.isArray(origem.pedras) ? JSON.parse(JSON.stringify(origem.pedras)) : [];
+        const estoqueV = origem&&origem.estoquePorLoja ? {...origem.estoquePorLoja} : {};
+        const lojas = config.lojas||[];
+        openModal(`
+          <div class="section-label">${editando?'Editar variação':'Nova variação'}</div>
+          <div class="grid-3">
+            <div class="field"><label>Comprimento (cm)</label><input type="text" inputmode="decimal" id="vr_comprimento" value="${escapeHtml(String(v.comprimento))}"></div>
+            <div class="field"><label>Altura (cm)</label><input type="text" inputmode="decimal" id="vr_altura" value="${escapeHtml(String(v.altura))}"></div>
+            <div class="field"><label>Espessura (cm)</label><input type="text" inputmode="decimal" id="vr_espessura" value="${escapeHtml(String(v.espessura))}"></div>
+          </div>
+          <div class="field" style="max-width:220px;"><label>Peso (g)</label><input type="text" inputmode="decimal" id="vr_peso" value="${escapeHtml(String(v.peso))}"></div>
+          <div class="section-label" style="margin-top:10px; border:none; padding:0;">Número do aro</div>
+          <div style="display:flex; gap:8px; align-items:flex-end;">
+            <div class="field" style="flex:0 1 160px; margin-bottom:0;"><input type="text" inputmode="decimal" id="vr_aroNovo" placeholder="Ex: 18"></div>
+            <button type="button" class="btn btn-ghost btn-sm" id="vr_btnAddAro">+ Adicionar</button>
+          </div>
+          <div id="vr_arosRows" style="margin-top:6px;"></div>
+          <div class="field" style="margin-top:10px;"><label>Observação</label>
+            <textarea id="vr_observacao" rows="2" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px;">${escapeHtml(v.observacao)}</textarea>
+          </div>
+          <div class="section-label" style="margin-top:14px;">Estoque por loja desta variação</div>
+          <div class="grid-2" id="vr_estoqueRows">
+            ${lojas.map(l=>`
+              <div class="field" style="margin-bottom:6px;">
+                <label class="muted" style="font-size:11px; text-transform:uppercase;">${escapeHtml(l.abreviacao)}</label>
+                <input type="number" step="0.001" data-vestloja="${l.id}" value="${estoqueV[l.id]!==undefined?estoqueV[l.id]:0}">
+              </div>
+            `).join('')}
+          </div>
+          <div style="display:flex; gap:10px; margin-top:14px;">
+            <button class="btn btn-accent" id="btnSalvarVariacao">Salvar variação</button>
+            <button class="btn btn-ghost" id="btnCancelarVariacao">Cancelar</button>
+          </div>
+        `);
+        aplicarAutoPontoDecimal(document.getElementById('vr_comprimento'));
+        aplicarAutoPontoDecimal(document.getElementById('vr_altura'));
+        aplicarAutoPontoDecimal(document.getElementById('vr_espessura'));
+        aplicarAutoPontoDecimal(document.getElementById('vr_peso'));
+        aplicarAutoPontoDecimal(document.getElementById('vr_aroNovo'));
+        function renderArosRows(){
+          const wrap = document.getElementById('vr_arosRows');
+          wrap.innerHTML = numerosAroV.length===0 ? `<div class="empty" style="padding:6px 0;">Nenhum número de aro adicionado.</div>` : numerosAroV.map((n,i)=>`
+            <div class="code-list-item"><div>${escapeHtml(n)}</div><button type="button" class="icon-btn" data-vaddel="${i}">✕</button></div>
+          `).join('');
+          wrap.querySelectorAll('[data-vaddel]').forEach(b=> b.addEventListener('click', ()=>{ numerosAroV.splice(Number(b.dataset.vaddel),1); renderArosRows(); }));
+        }
+        renderArosRows();
+        document.getElementById('vr_btnAddAro').addEventListener('click', ()=>{
+          const campo = document.getElementById('vr_aroNovo');
+          const val = campo.value.trim();
+          if(!val){ showToast('Digite um número de aro.'); return; }
+          numerosAroV.push(val);
+          campo.value='';
+          renderArosRows();
+        });
+        document.getElementById('btnCancelarVariacao').addEventListener('click', ()=> montarShellModalProduto());
+        document.getElementById('btnSalvarVariacao').addEventListener('click', ()=>{
+          const nova = {
+            comprimento: document.getElementById('vr_comprimento').value===''?null:parseFloat(document.getElementById('vr_comprimento').value),
+            altura: document.getElementById('vr_altura').value===''?null:parseFloat(document.getElementById('vr_altura').value),
+            espessura: document.getElementById('vr_espessura').value===''?null:parseFloat(document.getElementById('vr_espessura').value),
+            peso: document.getElementById('vr_peso').value===''?null:parseFloat(document.getElementById('vr_peso').value),
+            observacao: document.getElementById('vr_observacao').value.trim(),
+            numerosAro: numerosAroV,
+            pedras: pedrasV,
+            estoquePorLoja: {},
+          };
+          document.querySelectorAll('[data-vestloja]').forEach(inp=>{ nova.estoquePorLoja[inp.dataset.vestloja] = parseFloat(inp.value)||0; });
+          if(editando) variacoes[indice] = nova; else variacoes.push(nova);
+          montarShellModalProduto();
+          showToast(editando?'Variação atualizada.':'Variação adicionada.');
+        });
+      }
     }
     else if(peTabAtiva==='fiscal'){
       body.innerHTML = `
@@ -2912,15 +3038,23 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     }
     else if(peTabAtiva==='valores'){
       const lojas = config.lojas||[];
+      const temVariacoes = variacoes.length > 0;
+      if(temVariacoes){
+        // Recalcula o estoque por loja como soma das variações — nunca fica dessincronizado.
+        lojas.forEach(l=>{
+          d.estoquePorLoja[l.id] = variacoes.reduce((acc,v)=> acc + (Number((v.estoquePorLoja||{})[l.id])||0), 0);
+        });
+      }
       const totalEstoque = lojas.reduce((a,l)=>a+(Number(d.estoquePorLoja[l.id])||0),0);
       body.innerHTML = `
         <div class="field">
           <label>Estoque por loja</label>
+          ${temVariacoes?`<p class="muted" style="margin:2px 0 8px;font-size:12px;">Este produto tem ${variacoes.length} variação(ões) cadastrada(s) na aba Dados Técnicos — o estoque aqui é a <b>soma automática</b> de todas elas, não dá pra editar direto.</p>`:''}
           <div class="grid-2" id="pe_estoquePorLojaRows">
             ${lojas.map(l=>`
               <div class="field" style="margin-bottom:6px;">
                 <label class="muted" style="font-size:11px; text-transform:uppercase;">${escapeHtml(l.abreviacao)}</label>
-                <input type="number" step="0.001" data-estloja="${l.id}" value="${d.estoquePorLoja[l.id]!==undefined?d.estoquePorLoja[l.id]:0}">
+                <input type="number" step="0.001" data-estloja="${l.id}" value="${d.estoquePorLoja[l.id]!==undefined?d.estoquePorLoja[l.id]:0}" ${temVariacoes?'disabled':''}>
               </div>
             `).join('')}
           </div>
@@ -2934,14 +3068,16 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           <div class="field"><label>Preço de venda (R$)</label><input type="text" inputmode="decimal" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
         </div>
       `;
-      body.querySelectorAll('[data-estloja]').forEach(inp=>{
-        inp.addEventListener('input', e=>{
-          d.estoquePorLoja[inp.dataset.estloja] = e.target.value;
-          const total = lojas.reduce((a,l)=>a+(Number(d.estoquePorLoja[l.id])||0),0);
-          const hint = document.getElementById('pe_estoqueTotalHint');
-          if(hint) hint.innerHTML = `Total: <b>${total} ${unidadeLabel(d.unidade)}</b>`;
+      if(!temVariacoes){
+        body.querySelectorAll('[data-estloja]').forEach(inp=>{
+          inp.addEventListener('input', e=>{
+            d.estoquePorLoja[inp.dataset.estloja] = e.target.value;
+            const total = lojas.reduce((a,l)=>a+(Number(d.estoquePorLoja[l.id])||0),0);
+            const hint = document.getElementById('pe_estoqueTotalHint');
+            if(hint) hint.innerHTML = `Total: <b>${total} ${unidadeLabel(d.unidade)}</b>`;
+          });
         });
-      });
+      }
       /** Valor de compra atualizado: se a subcategoria escolhida (aba Nome) tem "ouro" no
        * nome, usa (peso × Fator) × Valor do ouro DTVM (Cadastro → Fator → Compra Metal);
        * se tem "prata", usa (peso × Fator) × Valor da prata DTVM; qualquer outra
@@ -3035,6 +3171,13 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
   async function handleSalvarProdutoEstoque(){
     const nome = (d.nome||'').trim();
     if(!nome){ showToast('Informe o nome do produto (aba Nome).'); peTabAtiva='nomenclatura'; renderPeTabBody(); renderPeTabs(); return; }
+    // Se tem variação cadastrada, o estoque por loja SEMPRE é a soma delas — recalcula
+    // aqui de novo (não só quando a aba Estoque é visitada) pra nunca salvar dessincronizado.
+    if(variacoes.length > 0){
+      (config.lojas||[]).forEach(l=>{
+        d.estoquePorLoja[l.id] = variacoes.reduce((acc,v)=> acc + (Number((v.estoquePorLoja||{})[l.id])||0), 0);
+      });
+    }
     const composicaoValida = composicao.filter(c=> c.insumoId && c.quantidade && Number(c.quantidade) > 0)
       .map(c=> ({ insumoId: c.insumoId, quantidade: Number(c.quantidade) }));
     const dados = {
@@ -3051,6 +3194,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       numerosAro: numerosAro,
       peso: d.peso===null || d.peso==='' ? null : parseFloat(d.peso),
       pedras: pedras,
+      variacoes: variacoes,
       observacao: (d.observacao||'').trim(),
       vendavel: d.vendavel,
       ncm: (d.ncm||'').trim(),
@@ -3117,6 +3261,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
           numerosAro: JSON.parse(JSON.stringify(numerosAro)),
           pedras: JSON.parse(JSON.stringify(pedras)),
+          variacoes: JSON.parse(JSON.stringify(variacoes)),
           composicao: JSON.parse(JSON.stringify(composicao)),
           fotos: JSON.parse(JSON.stringify(fotosHolder.fotos)),
           // codigoInterno propositalmente NÃO vai — o clone gera o próprio (próximo da sequência)
