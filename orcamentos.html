@@ -147,7 +147,6 @@ html.embedded .mobile-tabbar{display:none !important;}
       <button class="icon-btn icon-btn-sair" id="btnLogout" title="Sair">🚪</button>
     </div>
   </header>
-  <div id="lojaFaixa" style="display:none; width:100%; padding:8px 16px; color:#fff; font-family:'Cormorant Garamond',serif; font-size:15px; font-weight:700; text-align:center; text-shadow:0 1px 2px rgba(0,0,0,.25);"></div>
   <main id="mainContent"></main>
   <nav class="mobile-tabbar" id="mobileTabbar"></nav>
 </div>
@@ -452,7 +451,8 @@ async function loadAll(){
   config = await configGetUnificada();
   if(!config){ config = { lojas:[], formasPagamento:[], joiasProdutos:[], metais:[] }; }
   orcamentos = await orcamentosGet();
-  clientes = await clientesGet();
+  // Clientes NÃO são mais pré-carregados aqui (eram 22 mil+ registros, deixava o módulo
+  // lento pra abrir). A busca de cliente agora consulta o banco sob demanda, ao digitar.
 }
 
 /* ============================================================
@@ -488,6 +488,46 @@ async function clientesGet(){
     if(error) throw error;
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar clientes', e); return []; }
+}
+/** Busca sob demanda no banco (não pré-carrega os 20 mil+ clientes de uma vez).
+ * Aceita nome (parcial) ou telefone/CPF (dígitos, casamento parcial). */
+async function buscarClientesRemoto(termo){
+  const termoDigits = onlyDigits(termo);
+  try{
+    let query = supabaseClient.from('clientes_cadastro').select('id,payload').limit(8);
+    if(termoDigits.length>=4){
+      query = query.or(`payload->>nome.ilike.%${termo}%,payload->>telefone.ilike.%${termoDigits}%,payload->>cpf.ilike.%${termoDigits}%`);
+    } else {
+      query = query.ilike('payload->>nome', `%${termo}%`);
+    }
+    const { data, error } = await query;
+    if(error) throw error;
+    const achados = (data||[]).map(r=>r.payload);
+    // Guarda no cache local (pra o clique no resultado e o botão "editar cadastro" acharem na hora).
+    achados.forEach(c=>{ if(!clientes.some(x=>x.id===c.id)) clientes.push(c); });
+    return achados;
+  }catch(e){ console.error('erro ao buscar clientes', e); return []; }
+}
+/** Localiza no banco um cliente por telefone ou CPF (usado pra evitar duplicar cadastro
+ * e pra achar o cliente de um orçamento já salvo, sem precisar de tudo em memória). */
+async function buscarClientePorTelefoneOuCpf(telefone, cpf){
+  const tel = onlyDigits(telefone);
+  const doc = onlyDigitsCpf(cpf);
+  if(!tel && !doc) return null;
+  const cacheado = clientes.find(c=>
+    (tel && onlyDigits(c.telefone||'')===tel) || (doc && onlyDigitsCpf(c.cpf||'')===doc)
+  );
+  if(cacheado) return cacheado;
+  try{
+    const ors = [];
+    if(tel) ors.push(`payload->>telefone.ilike.%${tel}%`);
+    if(doc) ors.push(`payload->>cpf.ilike.%${doc}%`);
+    const { data, error } = await supabaseClient.from('clientes_cadastro').select('id,payload').or(ors.join(',')).limit(1);
+    if(error) throw error;
+    const achado = (data && data[0]) ? data[0].payload : null;
+    if(achado) clientes.push(achado);
+    return achado;
+  }catch(e){ console.error('erro ao localizar cliente', e); return null; }
 }
 async function salvarUmCliente(cliente){
   try{
@@ -574,25 +614,26 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
     });
     selecionado = c;
   }
+  let buscaClienteTimeout = null;
   function renderResultados(termo){
     const wrap = document.getElementById('resultados_cliente');
     if(!termo){ wrap.innerHTML=''; return; }
-    const termoDigits = onlyDigits(termo);
-    const termoLower = termo.toLowerCase();
-    const achados = clientes.filter(c=>
-      (c.nome||'').toLowerCase().includes(termoLower) ||
-      (termoDigits.length>=4 && onlyDigits(c.telefone||'').includes(termoDigits)) ||
-      (termoDigits.length>=4 && onlyDigitsCpf(c.cpf||'').includes(termoDigits))
-    ).slice(0,8);
-    wrap.innerHTML = achados.length===0
-      ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
-      : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
-    wrap.querySelectorAll('[data-selcli]').forEach(el=>{
-      el.addEventListener('click', ()=>{
-        const c = clientes.find(x=>x.id===el.dataset.selcli);
-        if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+    wrap.innerHTML = `<div class="muted" style="padding:6px 2px;">Buscando...</div>`;
+    clearTimeout(buscaClienteTimeout);
+    buscaClienteTimeout = setTimeout(async ()=>{
+      const achados = await buscarClientesRemoto(termo);
+      const inputAtual = document.getElementById('busca_cliente');
+      if(!inputAtual || inputAtual.value.trim() !== termo) return; // digitou outra coisa nesse meio-tempo
+      wrap.innerHTML = achados.length===0
+        ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
+        : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
+      wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+        el.addEventListener('click', ()=>{
+          const c = achados.find(x=>x.id===el.dataset.selcli);
+          if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+        });
       });
-    });
+    }, 350);
   }
   document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
 
@@ -620,10 +661,11 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
       const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
       if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
     } else {
-      const idxExistente = findClienteIndex(patch.telefone, patch.cpf);
-      if(idxExistente >= 0){
-        clienteFinal = { ...clientes[idxExistente], ...patch };
-        clientes[idxExistente] = clienteFinal;
+      const existente = await buscarClientePorTelefoneOuCpf(patch.telefone, patch.cpf);
+      if(existente){
+        clienteFinal = { ...existente, ...patch };
+        const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+        if(idx>=0) clientes[idx] = clienteFinal;
       } else {
         clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
         clientes.unshift(clienteFinal);
@@ -636,17 +678,6 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
 }
 
 const EMBEDDED = window.self !== window.top;
-function atualizarFaixaLoja(){
-  const faixa = document.getElementById('lojaFaixa');
-  if(!faixa) return;
-  if(window.__lojaAtual && window.__lojaAtual.nome){
-    faixa.style.display = 'block';
-    faixa.style.background = window.__lojaAtual.cor || '#7a1f3d';
-    faixa.textContent = '🏬 ' + window.__lojaAtual.nome;
-  } else {
-    faixa.style.display = 'none';
-  }
-}
 if(EMBEDDED){
   document.documentElement.classList.add('embedded');
   window.addEventListener('message', async (ev)=>{
@@ -662,12 +693,12 @@ if(EMBEDDED){
       renderTabs();
       renderView();
     } else if(ev.data.type === 'clientesAtualizados'){
-      // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
-      // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
-      if(__gatewaySenha){ clientes = await clientesGet(); }
+      // O módulo Cadastro mexeu no cadastro de clientes. Como a busca agora é sob demanda
+      // (sem pré-carregar todo mundo), só precisa limpar o cache local pra próxima busca
+      // trazer os dados atualizados do banco.
+      clientes = [];
     } else if(ev.data.type === 'lojaAtual'){
       window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
-      atualizarFaixaLoja();
       if(currentUser) renderView();
     }
   });
@@ -871,9 +902,16 @@ function renderNovo(main, orcamentoEditando){
   document.getElementById('btnAddItem').addEventListener('click', ()=>{ itens.push({produto:'', quantidade:1, valorUnitario:''}); drawItens(); });
 
   // Guarda o registro completo do cliente escolhido, pra o ✎ abrir o cadastro preenchido.
+  // Começa com o que já sabemos (do próprio orçamento) e, em segundo plano, tenta achar
+  // o cadastro completo no banco pelo telefone — sem bloquear a tela esperando isso.
   let clienteSelecionadoOrc = editando
-    ? (clientes.find(c=> c.telefone && orcamentoEditando.telefone && onlyDigits(c.telefone)===onlyDigits(orcamentoEditando.telefone)) || { nome:orcamentoEditando.cliente, telefone:orcamentoEditando.telefone, email:orcamentoEditando.email })
+    ? { nome:orcamentoEditando.cliente, telefone:orcamentoEditando.telefone, email:orcamentoEditando.email }
     : null;
+  if(editando && orcamentoEditando.telefone){
+    buscarClientePorTelefoneOuCpf(orcamentoEditando.telefone, null).then(achado=>{
+      if(achado){ clienteSelecionadoOrc = achado; atualizarResumoClienteOrc(); }
+    });
+  }
   function atualizarResumoClienteOrc(){
     const nome = document.getElementById('o_cliente').value;
     const tel = document.getElementById('o_telefone').value;
