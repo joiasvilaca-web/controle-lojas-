@@ -90,6 +90,13 @@
   .item-toggle{ padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; border:1px solid var(--line); background:var(--surface); color:var(--ink-soft); }
   .item-toggle.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
   .item-sub{ margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); }
+  .orient-group{ display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-left:auto; }
+  .orient-btn{ display:inline-flex; align-items:center; gap:5px; padding:6px 10px; font-size:12px; font-weight:700; background:var(--surface-2); color:var(--ink-soft); border:none; cursor:pointer; font-family:inherit; }
+  .orient-btn + .orient-btn{ border-left:1px solid var(--line); }
+  .orient-btn.active{ background:var(--accent); color:#fff; }
+  .orient-btn svg{ width:16px; height:16px; }
+  .orient-mini{ display:inline-flex; align-items:center; gap:4px; vertical-align:middle; }
+  .orient-mini svg{ width:14px; height:14px; }
   .field textarea{ width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; font-size:13.5px; background:var(--surface-2); color:var(--ink); font-family:inherit; resize:vertical; min-height:58px; }
   .field textarea:focus{ outline:none; border-color:var(--accent); background:#fff; }
   .pag-detalhes{ font-size:11px; color:var(--ink-soft); margin-top:4px; max-width:190px; white-space:normal; line-height:1.35; }
@@ -199,6 +206,17 @@
   };
   const STATUS_ORDEM = ['pedido','fabrica','upcase','pronto','entregue','cancelado'];
   function statusLabel(s){ return (STATUS_INFO[s]||{}).label || s; }
+  /* Orientação da gravação no item: vertical ou horizontal (desenho de uma linha). */
+  const ORIENT = { vertical:'Vertical', horizontal:'Horizontal' };
+  function orientSvg(o){
+    return o==='vertical'
+      ? `<svg viewBox="0 0 16 16" aria-hidden="true"><line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`
+      : `<svg viewBox="0 0 16 16" aria-hidden="true"><line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+  }
+  function orientHtml(o){
+    if(!ORIENT[o]) return '';
+    return `<span class="orient-mini" title="${ORIENT[o]}">${orientSvg(o)} ${ORIENT[o]}</span>`;
+  }
   // registros antigos usavam "em_aberto" como primeira etapa — agora é "pedido"
   function normalizarStatus(g){
     if(g.status==='em_aberto') g.status='pedido';
@@ -638,9 +656,9 @@
   function renderFormulario(wrap, registroExistente, aoSalvarComSucesso){
     const editando = !!registroExistente;
     let itensState = editando
-      ? (registroExistente.itens||[]).map(it=>({ valor: it.valor||'', nome: it.nome||'', logoUrl: it.logoUrl||'', observacoes: it.observacoes||'', nomeAtivo: !!it.nome, logoAtivo: !!it.logoUrl }))
-      : [{ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }];
-    if(itensState.length===0) itensState = [{ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }];
+      ? (registroExistente.itens||[]).map(it=>({ valor: it.valor||'', nome: it.nome||'', logoUrl: it.logoUrl||'', observacoes: it.observacoes||'', orientacao: it.orientacao||'', nomeAtivo: !!it.nome, logoAtivo: !!it.logoUrl }))
+      : [{ valor:'', nome:'', logoUrl:'', observacoes:'', orientacao:'', nomeAtivo:false, logoAtivo:false }];
+    if(itensState.length===0) itensState = [{ valor:'', nome:'', logoUrl:'', observacoes:'', orientacao:'', nomeAtivo:false, logoAtivo:false }];
     let infoState = editando && Array.isArray(registroExistente.infoInterna) ? registroExistente.infoInterna.map(n=>({...n})) : [];
 
     wrap.innerHTML = `
@@ -681,6 +699,10 @@
             </select>
             <button type="button" class="item-toggle ${it.nomeAtivo?'active':''}" data-toggle-nome="${i}">🔤 Nome</button>
             <button type="button" class="item-toggle ${it.logoAtivo?'active':''}" data-toggle-logo="${i}">🖼️ Logo</button>
+            <div class="orient-group" title="Orientação da gravação">
+              <button type="button" class="orient-btn ${it.orientacao==='vertical'?'active':''}" data-orient="${i}" data-val="vertical">${orientSvg('vertical')} Vertical</button>
+              <button type="button" class="orient-btn ${it.orientacao==='horizontal'?'active':''}" data-orient="${i}" data-val="horizontal">${orientSvg('horizontal')} Horizontal</button>
+            </div>
           </div>
           <div class="item-sub" data-sub-nome="${i}" style="display:${it.nomeAtivo?'block':'none'};">
             <div class="field" style="margin-bottom:0;"><label>Nome / frase pra gravar</label><input data-itemnome="${i}" value="${escapeHtml(it.nome||'')}" placeholder="Ex: Maria, Sempre Juntos..."></div>
@@ -721,6 +743,11 @@
       document.querySelectorAll('[data-itemnome]').forEach(inp=> inp.addEventListener('input', ()=>{
         itensState[Number(inp.dataset.itemnome)].nome = inp.value;
       }));
+      document.querySelectorAll('[data-orient]').forEach(b=> b.addEventListener('click', ()=>{
+        const i = Number(b.dataset.orient), val = b.dataset.val;
+        itensState[i].orientacao = (itensState[i].orientacao===val) ? '' : val; // clicar de novo desmarca
+        document.querySelectorAll(`[data-orient="${i}"]`).forEach(x=> x.classList.toggle('active', x.dataset.val===itensState[i].orientacao));
+      }));
       document.querySelectorAll('[data-itemobs]').forEach(ta=> ta.addEventListener('input', ()=>{
         itensState[Number(ta.dataset.itemobs)].observacoes = ta.value;
       }));
@@ -758,7 +785,7 @@
     desenharInfoInterna();
     document.getElementById('n_qtd').addEventListener('input', ()=>{
       const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
-      if(qtd > itensState.length){ while(itensState.length<qtd) itensState.push({ valor:'', nome:'', logoUrl:'', observacoes:'', nomeAtivo:false, logoAtivo:false }); }
+      if(qtd > itensState.length){ while(itensState.length<qtd) itensState.push({ valor:'', nome:'', logoUrl:'', observacoes:'', orientacao:'', nomeAtivo:false, logoAtivo:false }); }
       else if(qtd < itensState.length){ itensState = itensState.slice(0,qtd); }
       desenharItens();
     });
@@ -778,7 +805,7 @@
 
       const btn = document.getElementById('btnSalvarForm');
       btn.disabled = true; btn.textContent = 'Salvando...';
-      const itensFinal = itensState.map(it=>({ valor: Number(it.valor), nome: it.nomeAtivo ? (it.nome||'').trim() : '', logoUrl: it.logoAtivo ? (it.logoUrl||'') : '', observacoes: (it.observacoes||'').trim() }));
+      const itensFinal = itensState.map(it=>({ valor: Number(it.valor), nome: it.nomeAtivo ? (it.nome||'').trim() : '', logoUrl: it.logoAtivo ? (it.logoUrl||'') : '', observacoes: (it.observacoes||'').trim(), orientacao: ORIENT[it.orientacao] ? it.orientacao : '' }));
       const valorTotal = itensFinal.reduce((a,it)=>a+it.valor,0);
 
       if(editando){
@@ -845,6 +872,7 @@
         <div class="ver-item">
           <div class="titulo"><span>Item ${i+1}</span><span>${fmtMoeda(it.valor)}</span></div>
           <div><b>Nome / frase:</b> ${it.nome ? escapeHtml(it.nome) : '<span class="muted">— sem texto</span>'}</div>
+          <div><b>Orientação:</b> ${it.orientacao ? orientHtml(it.orientacao) : '<span class="muted">—</span>'}</div>
           <div><b>Arquivo anexo:</b> ${it.logoUrl ? `<a href="${escapeHtml(it.logoUrl)}" target="_blank">abrir arquivo</a> · <button type="button" class="btn btn-ghost btn-xs" data-baixar="${i}">💾 Salvar imagem</button><img src="${escapeHtml(it.logoUrl)}" alt="Logo do item ${i+1}" onerror="this.style.display='none'">` : '<span class="muted">— sem arquivo</span>'}</div>
           <div><b>Observações:</b> ${it.observacoes ? escapeHtml(it.observacoes) : '<span class="muted">—</span>'}</div>
         </div>`).join('') : '<div class="muted">Nenhum item registrado.</div>'}
@@ -920,7 +948,7 @@
       <div style="margin-top:6px;">Situação atual: <b>${escapeHtml(statusLabel(g.status))}</b> — ${escapeHtml((STATUS_INFO[g.status]||{}).cliente||'')}</div>
       <hr>
       <div>Quantidade de itens: <b>${escapeHtml(g.quantidadeItens)}</b></div>
-      ${(g.itens||[]).map((it,i)=>`<div>Item ${i+1}: <b>${fmtMoeda(it.valor)}</b>${it.nome?(' — "'+escapeHtml(it.nome)+'"'):''}${it.logoUrl?' — (com logo)':''}${it.observacoes?('<div style="font-size:12px; margin-left:12px;">Obs.: '+escapeHtml(it.observacoes)+'</div>'):''}</div>`).join('')}
+      ${(g.itens||[]).map((it,i)=>`<div>Item ${i+1}: <b>${fmtMoeda(it.valor)}</b>${it.nome?(' — "'+escapeHtml(it.nome)+'"'):''}${it.logoUrl?' — (com logo)':''}${it.orientacao?(' — '+orientHtml(it.orientacao)):''}${it.observacoes?('<div style="font-size:12px; margin-left:12px;">Obs.: '+escapeHtml(it.observacoes)+'</div>'):''}</div>`).join('')}
       <div style="margin-top:6px;">Valor total: <b>${fmtMoeda(g.valorTotal)}</b></div>
       ${pago
         ? `<div>Pagamento: <b>${escapeHtml(pagamentoTexto(g))}</b>${g.pagamento.detalhes?(' — '+escapeHtml(g.pagamento.detalhes)):''}</div>`
