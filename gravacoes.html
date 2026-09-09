@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gravações — Gestão e Controle</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
 <style>
   :root{
     --bg:#EEF1F4; --surface:#FFFFFF; --surface-2:#F5F7F9;
@@ -169,7 +169,16 @@
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
   const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
   const APP_BASE_URL = "https://vilaca-controle-lojas.vercel.app";
-  const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // A biblioteca supabase-js só é usada no upload do logo; carrega com "defer" pra não
+  // segurar a abertura da tela, e o client é criado na primeira vez que for preciso.
+  let __supabaseClient = null;
+  function getSupabaseClient(){
+    if(!__supabaseClient){
+      if(!window.supabase){ throw new Error('Biblioteca do Supabase ainda não carregou — tente de novo em instantes.'); }
+      __supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    }
+    return __supabaseClient;
+  }
 
   let __gatewaySenha = null;
   async function gatewayCall(body){
@@ -254,7 +263,7 @@
     });
   }
   async function uploadArquivoDrive(dataUrl, filename){
-    const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
+    const { data, error } = await getSupabaseClient().functions.invoke('upload-foto-drive', {
       body: { dataUrl, filename, pasta:'gravacoes', tratar:false }
     });
     if(error) throw error;
@@ -414,9 +423,7 @@
       if(ev.data.type === 'auth'){
         currentUser = ev.data.user;
         __gatewaySenha = ev.data.user ? ev.data.user.senha : null;
-        await carregarConfig();
-        await carregarRegistros();
-        enterApp();
+        await iniciarApp();
       }
     });
     parent.postMessage({ type:'ready', modulo:'gravacoes' }, '*');
@@ -431,9 +438,28 @@
     document.getElementById('loginError').classList.remove('show');
     __gatewaySenha = pass;
     currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass, lojas: Array.isArray(r.user.lojas) ? r.user.lojas : [] };
-    await carregarConfig();
-    await carregarRegistros();
-    enterApp();
+    await iniciarApp();
+  }
+  /* Abertura rápida: mostra a tela na hora (com "Carregando…") e busca config + gravações
+     em PARALELO, numa única rodada de rede. Antes eram três chamadas em sequência
+     (config → gravações → gravações de novo ao desenhar a lista). */
+  let carregamentoInicial = null;
+  let dadosFrescosAte = 0;
+  async function iniciarApp(){
+    config = { lojas:[] };
+    carregamentoInicial = Promise.all([carregarConfig(), carregarRegistros()]).then(()=>{
+      dadosFrescosAte = Date.now() + 3000; // a lista/relatório não refaz a busca logo em seguida
+      carregamentoInicial = null;
+    });
+    enterApp();               // tela aparece imediatamente
+    await carregamentoInicial; // ...e é redesenhada com permissões e dados reais
+    render();
+  }
+  // Recarrega do banco, exceto se os dados acabaram de chegar (evita chamada duplicada na abertura)
+  function recarregarSePreciso(){
+    if(carregamentoInicial) return carregamentoInicial;
+    if(Date.now() < dadosFrescosAte) return Promise.resolve();
+    return carregarRegistros();
   }
   document.getElementById('btnLogout').addEventListener('click', ()=>{ window.location.href = 'index.html'; });
 
@@ -661,7 +687,7 @@
     [fStatus,fBusca].forEach(el=> el.addEventListener('input', desenhar));
     // recarrega do banco ao abrir a lista: o cliente pode ter confirmado a leitura, ou outro
     // funcionário pode ter alterado algo em outro aparelho (mesmo padrão do Painel de O.S.)
-    carregarRegistros().then(desenhar);
+    recarregarSePreciso().then(desenhar);
   }
 
   /* ================= FORMULÁRIO (nova / editar) ================= */
@@ -1108,7 +1134,7 @@
     }
     document.getElementById('r_mes').addEventListener('input', desenhar);
     // recarrega do banco ao abrir o relatório (mesmo padrão da Lista)
-    carregarRegistros().then(desenhar);
+    recarregarSePreciso().then(desenhar);
   }
 
   if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'gravacoes', tabs: [], active: null }, '*');
