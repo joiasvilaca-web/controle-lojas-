@@ -660,6 +660,7 @@
       : [{ valor:'', nome:'', logoUrl:'', observacoes:'', orientacao:'', nomeAtivo:false, logoAtivo:false }];
     if(itensState.length===0) itensState = [{ valor:'', nome:'', logoUrl:'', observacoes:'', orientacao:'', nomeAtivo:false, logoAtivo:false }];
     let infoState = editando && Array.isArray(registroExistente.infoInterna) ? registroExistente.infoInterna.map(n=>({...n})) : [];
+    const pagIni = editando ? pagamentoValorSelect(registroExistente) : 'aberto';
 
     wrap.innerHTML = `
       <div class="card">
@@ -670,12 +671,28 @@
           <div class="field"><label>E-mail (opcional)</label><input id="n_email" type="email" value="${editando?escapeHtml(registroExistente.email||''):''}"></div>
         </div>
         <div class="grid-2">
-          <div class="field"><label>Funcionário</label><input id="n_funcionario" placeholder="Quem está atendendo" value="${editando?escapeHtml(registroExistente.funcionario||''):''}"></div>
+          <div class="field"><label>Funcionário que fez a via *</label><input id="n_funcionario" placeholder="Nome do funcionário" value="${escapeHtml(editando ? (registroExistente.funcionario||'') : (currentUser ? currentUser.nome : ''))}"></div>
           <div class="field"><label>Quantidade de itens *</label><input id="n_qtd" type="number" min="1" max="50" value="${editando?registroExistente.quantidadeItens:1}"></div>
         </div>
         <div class="section-label">Itens</div>
         <div id="areaItens"></div>
         ${infoInternaHtml({ infoInterna: infoState }, { id:'infoInternaForm', removivel:true })}
+        <div class="section-label">Pagamento</div>
+        <div class="grid-2">
+          <div class="field">
+            <label>Situação do pagamento</label>
+            <select id="n_pagamento">
+              <option value="aberto" ${pagIni==='aberto'?'selected':''}>Pendente (em aberto)</option>
+              <option value="pago:dinheiro" ${pagIni==='pago:dinheiro'?'selected':''}>Pago — Dinheiro</option>
+              <option value="pago:cartao" ${pagIni==='pago:cartao'?'selected':''}>Pago — Cartão</option>
+              <option value="pago:pix" ${pagIni==='pago:pix'?'selected':''}>Pago — Pix</option>
+            </select>
+          </div>
+          <div class="field" id="wrapPagDetalhes" style="display:${pagIni==='aberto'?'none':'block'};">
+            <label>Detalhes do recebimento</label>
+            <textarea id="n_pag_detalhes" placeholder="Ex.: quem recebeu, número do cupom, conta do Pix...">${escapeHtml(editando && registroExistente.pagamento ? (registroExistente.pagamento.detalhes||'') : '')}</textarea>
+          </div>
+        </div>
         <div class="card" style="background:var(--surface-2); box-shadow:none;">
           <div class="grid-2">
             <div><span class="muted">Quantidade de itens</span><div style="font-size:20px; font-weight:800;" id="resumoQtd">1</div></div>
@@ -783,6 +800,12 @@
       }, (i)=>{ infoState.splice(i,1); desenharInfoInterna(); });
     }
     desenharInfoInterna();
+    // ao escolher uma forma paga, abre o campo livre (quem recebeu / cupom / conta Pix)
+    document.getElementById('n_pagamento').addEventListener('change', ()=>{
+      const v = document.getElementById('n_pagamento').value;
+      document.getElementById('wrapPagDetalhes').style.display = v==='aberto' ? 'none' : 'block';
+      if(v!=='aberto') document.getElementById('n_pag_detalhes').focus();
+    });
     document.getElementById('n_qtd').addEventListener('input', ()=>{
       const qtd = Math.max(1, Math.min(50, parseInt(document.getElementById('n_qtd').value)||1));
       if(qtd > itensState.length){ while(itensState.length<qtd) itensState.push({ valor:'', nome:'', logoUrl:'', observacoes:'', orientacao:'', nomeAtivo:false, logoAtivo:false }); }
@@ -799,6 +822,21 @@
       const whatsapp = document.getElementById('n_whatsapp').value.trim();
       const email = document.getElementById('n_email').value.trim();
       const funcionario = document.getElementById('n_funcionario').value.trim();
+      if(!funcionario){ showToast('Informe o funcionário que fez a via.'); document.getElementById('n_funcionario').focus(); return; }
+      const pagSel = document.getElementById('n_pagamento').value;
+      const pagAnterior = editando && registroExistente.pagamento ? registroExistente.pagamento : null;
+      let pagamento;
+      if(pagSel==='aberto'){ pagamento = { status:'em_aberto', forma:null }; }
+      else {
+        const forma = pagSel.split(':')[1];
+        const jaPago = pagAnterior && pagAnterior.status==='pago';
+        pagamento = {
+          status:'pago', forma, detalhes: document.getElementById('n_pag_detalhes').value.trim(),
+          registradoPor: jaPago && pagAnterior.forma===forma ? (pagAnterior.registradoPor||(currentUser?currentUser.nome:'')) : (currentUser ? currentUser.nome : ''),
+          registradoEm: jaPago && pagAnterior.forma===forma ? (pagAnterior.registradoEm||new Date().toISOString()) : new Date().toISOString(),
+          dataPagamento: jaPago && pagAnterior.dataPagamento ? pagAnterior.dataPagamento : isoHoje(),
+        };
+      }
       if(!cliente){ showToast('Informe o nome do cliente.'); return; }
       if(!whatsapp){ showToast('Informe o WhatsApp do cliente.'); return; }
       if(itensState.some(it=>!it.valor)){ showToast('Selecione o valor de todos os itens.'); return; }
@@ -813,7 +851,7 @@
         Object.assign(registroExistente, {
           cliente, whatsapp, email, funcionario,
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
-          infoInterna: infoState,
+          infoInterna: infoState, pagamento,
         });
         const ok = await salvarRegistro(registroExistente);
         btn.disabled = false; btn.textContent = '💾 Salvar alterações';
@@ -833,7 +871,7 @@
           dataEntrega, horaEntrega,
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
           status: 'pedido',
-          pagamento: { status:'em_aberto', forma:null },
+          pagamento,
           infoInterna: infoState,
           criadoEm: Date.now(), criadoPor: currentUser.nome,
         };
