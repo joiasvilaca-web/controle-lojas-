@@ -264,11 +264,13 @@
 
   /* Regra fixa: O.S. aberta até meio-dia (11:59) entrega no MESMO dia às 18h.
      O.S. aberta a partir do meio-dia (12:00) entrega no dia SEGUINTE até meio-dia (12h). */
+  /* Domingo não conta: se a entrega cair num domingo, passa pra segunda-feira até meio-dia. */
   function calcularEntrega(agora){
     agora = agora || new Date();
     const entrega = new Date(agora);
     if(agora.getHours() < 12){ entrega.setHours(18,0,0,0); }
     else { entrega.setDate(entrega.getDate()+1); entrega.setHours(12,0,0,0); }
+    if(entrega.getDay() === 0){ entrega.setDate(entrega.getDate()+1); entrega.setHours(12,0,0,0); }
     return { dataEntrega: isoHoje(entrega), horaEntrega: horaAgora(entrega) };
   }
 
@@ -296,15 +298,26 @@
      e grava. Se não conseguir recarregar, cai no salvamento normal da lista em memória. */
   async function salvarRegistro(g){
     const r = await gatewayCall({ op:'kvGet', table:'gravacoes_kv', params:{ key:'registros' } });
-    if(r && !r.error && Array.isArray(r.value)){
-      const atuais = r.value;
-      // preserva as confirmações de leitura já gravadas pelo cliente nesse registro
-      const noBanco = atuais.find(x=>x.id===g.id);
-      if(noBanco && Array.isArray(noBanco.leituras) && !Array.isArray(g.leituras)) g.leituras = noBanco.leituras;
-      const idx = atuais.findIndex(x=>x.id===g.id);
-      if(idx>=0) atuais[idx] = g; else atuais.push(g);
-      registros = atuais;
+    // Se não conseguir ler o banco, NÃO grava por cima: a lista em memória pode estar
+    // desatualizada ou vazia, e gravar nessa condição apagaria registros de outros usuários.
+    if(!r || r.error || (r.value!=null && !Array.isArray(r.value))){
+      console.error('salvarRegistro: falha ao recarregar antes de salvar', r && r.error);
+      showToast('Sem conexão com o banco — nada foi salvo. Tente de novo.');
+      return false;
     }
+    const atuais = (r.value || []).map(normalizarStatus);
+    const noBanco = atuais.find(x=>x.id===g.id);
+    if(noBanco){
+      // une as confirmações de leitura: o cliente pode ter confirmado enquanto a via era editada
+      const doBanco = Array.isArray(noBanco.leituras) ? noBanco.leituras : [];
+      const locais = Array.isArray(g.leituras) ? g.leituras : [];
+      const uniao = [...doBanco];
+      locais.forEach(l=>{ if(!uniao.some(u=> u.status===l.status)) uniao.push(l); });
+      if(uniao.length) g.leituras = uniao;
+    }
+    const idx = atuais.findIndex(x=>x.id===g.id);
+    if(idx>=0) atuais[idx] = g; else atuais.push(g);
+    registros = atuais;
     return salvarRegistros();
   }
   function leituraStatusHtml(g){
@@ -665,10 +678,9 @@
     wrap.innerHTML = `
       <div class="card">
         <div class="section-label">Cliente</div>
-        <div class="grid-3">
+        <div class="grid-2">
           <div class="field"><label>Nome *</label><input id="n_cliente" value="${editando?escapeHtml(registroExistente.cliente):''}"></div>
           <div class="field"><label>WhatsApp *</label><input id="n_whatsapp" placeholder="(32) 90000-0000" value="${editando?escapeHtml(registroExistente.whatsapp):''}"></div>
-          <div class="field"><label>E-mail (opcional)</label><input id="n_email" type="email" value="${editando?escapeHtml(registroExistente.email||''):''}"></div>
         </div>
         <div class="grid-2">
           <div class="field"><label>Funcionário que fez a via *</label><input id="n_funcionario" placeholder="Nome do funcionário" value="${escapeHtml(editando ? (registroExistente.funcionario||'') : (currentUser ? currentUser.nome : ''))}"></div>
@@ -820,7 +832,6 @@
     document.getElementById('btnSalvarForm').addEventListener('click', async ()=>{
       const cliente = document.getElementById('n_cliente').value.trim();
       const whatsapp = document.getElementById('n_whatsapp').value.trim();
-      const email = document.getElementById('n_email').value.trim();
       const funcionario = document.getElementById('n_funcionario').value.trim();
       if(!funcionario){ showToast('Informe o funcionário que fez a via.'); document.getElementById('n_funcionario').focus(); return; }
       const pagSel = document.getElementById('n_pagamento').value;
@@ -840,6 +851,10 @@
       if(!cliente){ showToast('Informe o nome do cliente.'); return; }
       if(!whatsapp){ showToast('Informe o WhatsApp do cliente.'); return; }
       if(itensState.some(it=>!it.valor)){ showToast('Selecione o valor de todos os itens.'); return; }
+      const iNome = itensState.findIndex(it=> it.nomeAtivo && !(it.nome||'').trim());
+      if(iNome>=0){ showToast(`Item ${iNome+1}: escreva o nome/frase a gravar ou desmarque "Nome".`); return; }
+      const iLogo = itensState.findIndex(it=> it.logoAtivo && !it.logoUrl);
+      if(iLogo>=0){ showToast(`Item ${iLogo+1}: envie o arquivo do logo (aguarde o "Arquivo enviado") ou desmarque "Logo".`); return; }
 
       const btn = document.getElementById('btnSalvarForm');
       btn.disabled = true; btn.textContent = 'Salvando...';
@@ -849,7 +864,7 @@
       if(editando){
         const antes = JSON.parse(JSON.stringify(registroExistente));
         Object.assign(registroExistente, {
-          cliente, whatsapp, email, funcionario,
+          cliente, whatsapp, funcionario,
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
           infoInterna: infoState, pagamento,
         });
@@ -861,12 +876,18 @@
         if(aoSalvarComSucesso) aoSalvarComSucesso();
       }else{
         const rSeq = await gatewayCall({ op:'bumpViaSequence', params:{ loja: VIA_SEQ_KEY } });
-        const viaNumero = (rSeq && rSeq.proximo) || (registros.length+1);
+        if(!rSeq || rSeq.error || !rSeq.proximo){
+          // sem número de via não salva: um número improvisado poderia repetir uma via já existente
+          btn.disabled = false; btn.textContent = '💾 Salvar gravação';
+          showToast('Não foi possível gerar o número da via — ' + ((rSeq && rSeq.error) || 'tente de novo.'));
+          return;
+        }
+        const viaNumero = rSeq.proximo;
         const agora = new Date();
         const { dataEntrega, horaEntrega } = calcularEntrega(agora);
         const novoRegistro = {
           id: uid('grav'),
-          viaNumero, loja: nomeLojaUpCase(), cliente, whatsapp, email, funcionario,
+          viaNumero, loja: nomeLojaUpCase(), cliente, whatsapp, funcionario,
           dataEntrada: isoHoje(agora), horaEntrada: horaAgora(agora),
           dataEntrega, horaEntrega,
           quantidadeItens: itensFinal.length, itens: itensFinal, valorTotal,
@@ -900,7 +921,6 @@
         <div><div class="k">Pagamento</div><div class="v">${escapeHtml(pagamentoTexto(g))}${pago&&g.pagamento.detalhes?('<div class="muted" style="font-size:12px;">'+escapeHtml(g.pagamento.detalhes)+'</div>'):''}</div></div>
         <div><div class="k">Funcionário</div><div class="v">${escapeHtml(g.funcionario||'—')}</div></div>
         <div><div class="k">Valor total</div><div class="v">${fmtMoeda(g.valorTotal)} · ${escapeHtml(g.quantidadeItens)} item(ns)</div></div>
-        ${g.email?`<div><div class="k">E-mail</div><div class="v">${escapeHtml(g.email)}</div></div>`:''}
         ${g.criadoPor?`<div><div class="k">Registrado por</div><div class="v">${escapeHtml(g.criadoPor)}</div></div>`:''}
         ${g.status==='cancelado'&&g.cancelamento?`<div style="grid-column:1/-1;"><div class="k">Cancelamento</div><div class="v" style="color:var(--danger);">${g.cancelamento.motivo?escapeHtml(g.cancelamento.motivo)+' · ':''}por ${escapeHtml(g.cancelamento.por||'—')} em ${escapeHtml(fmtDataBr((g.cancelamento.em||'').slice(0,10)))}</div></div>`:''}
       </div>
@@ -1007,9 +1027,22 @@
   function enviarWhatsapp(g){
     if(!g) return;
     const link = `${APP_BASE_URL}/acompanhar-gravacao.html?id=${g.id}`;
-    const msg = `SUA O.S. FOI GERADA COM SUCESSO, ACOMPANHE NO LINK ABAIXO O ANDAMENTO DO SERVIÇO.\n\n${link}`;
-    const numero = somenteDigitos(g.whatsapp);
-    const numeroCom55 = numero.startsWith('55') ? numero : ('55'+numero);
+    const primeiroNome = (g.cliente||'').trim().split(/\s+/)[0] || '';
+    const saud = primeiroNome ? `Olá, ${primeiroNome}! ` : 'Olá! ';
+    const emAberto = !(g.pagamento && g.pagamento.status==='pago');
+    const textos = {
+      pedido:    `${saud}Sua O.S. de gravação (via ${g.viaNumero}) foi gerada com sucesso e em breve será enviada para a fábrica. Previsão de entrega: ${fmtDataBr(g.dataEntrega)} às ${g.horaEntrega}.`,
+      fabrica:   `${saud}Sua gravação (via ${g.viaNumero}) foi enviada para a fábrica e está em produção. Previsão de entrega: ${fmtDataBr(g.dataEntrega)} às ${g.horaEntrega}.`,
+      upcase:    `${saud}Sua gravação (via ${g.viaNumero}) foi liberada pela fábrica e chegará em breve na loja Up Case.`,
+      pronto:    `${saud}Sua gravação (via ${g.viaNumero}) está pronta! Já pode ser retirada na loja Up Case.${emAberto ? ` Valor a pagar na retirada: ${fmtMoeda(g.valorTotal)}.` : ''}`,
+      entregue:  `${saud}Sua gravação (via ${g.viaNumero}) foi entregue e conferida. Obrigado pela preferência!`,
+      cancelado: `${saud}Sua gravação (via ${g.viaNumero}) foi cancelada. Em caso de dúvida, fale com a loja.`,
+    };
+    const corpo = textos[g.status] || textos.pedido;
+    const msg = g.status==='cancelado' ? corpo : `${corpo}\n\nAcompanhe o andamento pelo link:\n${link}`;
+    const numero = somenteDigitos(g.whatsapp).replace(/^0+/, ''); // tira zero de operadora (032...)
+    if(numero.length < 10){ showToast('WhatsApp do cliente parece incompleto: ' + (g.whatsapp||'—')); return; }
+    const numeroCom55 = (numero.startsWith('55') && numero.length>=12) ? numero : ('55'+numero);
     window.open(`https://wa.me/${numeroCom55}?text=${encodeURIComponent(msg)}`, '_blank');
   }
 
@@ -1022,9 +1055,10 @@
         <input type="month" id="r_mes" value="${mesPadrao}">
         <span class="muted">Loja: Up Case (único vínculo deste módulo)</span>
       </div>
-      <div id="corpoRelatorio"></div>
+      <div id="corpoRelatorio"><div class="empty">Carregando…</div></div>
     `;
     function desenhar(){
+      if(!document.getElementById('corpoRelatorio')) return; // aba trocada enquanto carregava
       const mes = document.getElementById('r_mes').value;
       const todasDoMes = registros.filter(g=> g.dataEntrada && g.dataEntrada.startsWith(mes));
       // canceladas ficam totalmente fora do relatório (mesmo que constem como pagas)
@@ -1073,7 +1107,8 @@
       `;
     }
     document.getElementById('r_mes').addEventListener('input', desenhar);
-    desenhar();
+    // recarrega do banco ao abrir o relatório (mesmo padrão da Lista)
+    carregarRegistros().then(desenhar);
   }
 
   if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'gravacoes', tabs: [], active: null }, '*');
