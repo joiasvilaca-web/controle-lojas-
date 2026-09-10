@@ -1889,8 +1889,10 @@
     const vazio = lista.length===0 ? `<option value="" disabled>Nenhum produto cadastrado em Cadastro → Produtos</option>` : "";
     return `<option value="">— Não vincular ao catálogo —</option>${vazio}` + lista.map(p=>`<option value="${escapeHtml(p.id)}" ${p.id===selected?"selected":""}>${escapeHtml(p.nome)}</option>`).join("");
   }
-  /** lojaOrigem/lojaDestino são guardados como ABREVIAÇÃO (ex: "MC"); o estoque por loja
-   * é indexado pelo ID da loja — resolve de um pro outro usando a config carregada. */
+  /** lojaOrigem/lojaDestino são guardados como ABREVIAÇÃO (ex: "MC") por compatibilidade
+   * histórica — lojaOrigemId/lojaDestinoId já vêm resolvidos (preenchidos numa migração
+   * que tratou inclusive abreviações antigas, tipo "JB" antes de virar "JV"), então usamos
+   * esses direto. Mantido como fallback pra algum registro muito antigo que escapou disso. */
   function lojaIdPorAbreviacao(abrev){
     const lojas = (unificadoBruto && unificadoBruto.lojas) || [];
     const l = lojas.find(x=>x.abreviacao===abrev);
@@ -1898,12 +1900,14 @@
   }
   /** Move estoque de verdade quando uma transferência do tipo SAÍDA tem a baixa (na
    * origem) ou a entrada (no destino) confirmada — TROCA nunca mexe em estoque, porque
-   * é um empréstimo temporário que volta pra origem, não uma saída definitiva. */
+   * é um empréstimo temporário que volta pra origem, não uma saída definitiva.
+   * Passa pelo Kardex (registrarMovimentoEstoque), então fica registrado o histórico
+   * de cada movimento, não só o número final. */
   async function moverEstoqueTransferencia(r, tipoMovimento, sinal){
     if(r.tipoTransf !== "SAÍDA") return;
-    const lojaAbrev = tipoMovimento==="baixa" ? r.lojaOrigem : r.lojaDestino;
-    const lojaId = lojaIdPorAbreviacao(lojaAbrev);
-    if(!lojaId){ showToast(`Não achei a loja "${lojaAbrev}" no cadastro — o estoque não foi ajustado automaticamente. Confira manualmente.`); return; }
+    const lojaId = (tipoMovimento==="baixa" ? r.lojaOrigemId : r.lojaDestinoId)
+      || lojaIdPorAbreviacao(tipoMovimento==="baixa" ? r.lojaOrigem : r.lojaDestino);
+    if(!lojaId){ showToast(`Não achei a loja de "${tipoMovimento==="baixa"?r.lojaOrigem:r.lojaDestino}" no cadastro — o estoque não foi ajustado automaticamente. Confira manualmente.`); return; }
     for(const item of (r.transferItens||[])){
       if(!item.produtoEstoqueId) continue;
       const qtd = Number(item.quantidade)||0;
@@ -1911,8 +1915,17 @@
       const produto = produtosEstoqueCache.find(p=>p.id===item.produtoEstoqueId);
       if(!produto) continue;
       if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
-      produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) + sinal*qtd;
-      await salvarProdutoEstoque(produto);
+      const resp = await gatewayCall({ op:"registrarMovimentoEstoque", params:{
+        produtoId: item.produtoEstoqueId, lojaId,
+        tipoMovimento: tipoMovimento==="baixa" ? "TRANSF_SAIDA" : "TRANSF_ENTRADA",
+        quantidade: sinal*qtd, referenciaId: r.id
+      }});
+      if(resp && !resp.error && typeof resp.saldoNovo === "number"){
+        produto.estoquePorLoja[lojaId] = resp.saldoNovo;
+      }else{
+        console.error("erro ao mover estoque da transferência", item.produtoEstoqueId, resp && resp.error);
+        produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) + sinal*qtd;
+      }
     }
   }
   function showToast(msg){
@@ -3532,6 +3545,7 @@
             return;
           }
           r.lojaOrigem = el.value;
+          r.lojaOrigemId = lojaIdPorAbreviacao(el.value);
           rebuildBody(r);
         });
         return;
@@ -3544,6 +3558,7 @@
         el.addEventListener("change", ()=>{
           r.lojaSolicitante = el.value;
           r.lojaDestino = el.value;
+          r.lojaDestinoId = lojaIdPorAbreviacao(el.value);
           rebuildBody(r);
         });
         return;
@@ -3570,6 +3585,11 @@
       const evt = isCheck || el.tagName === "SELECT" ? "change" : "input";
       el.addEventListener(evt, ()=>{
         r[field] = isCheck ? el.checked : el.value;
+        if(field === "loja"){
+          // Reposição/Envio Diretoria guardam só uma loja (não origem+destino) — mesma
+          // lógica de resolver o id junto da abreviação, pro Kardex e relatórios usarem.
+          r.lojaId = lojaIdPorAbreviacao(el.value);
+        }
         if(REBUILD_ON_CHANGE.has(field)){
           rebuildBody(r);
         }else{
