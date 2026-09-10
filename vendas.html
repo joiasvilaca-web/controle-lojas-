@@ -312,6 +312,17 @@ async function vendasGet(){
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar vendas', e); return []; }
 }
+/** Gera o próximo código sequencial de via (formato "<número>-V" pra venda), usado
+ * como conteúdo do código de barras impresso na via. Chamado só ao salvar de verdade
+ * (não em rascunho/edição), pra não "queimar" números à toa. */
+async function bumpCodigoVia(tipo){
+  try{
+    const r = await gatewayCall({ op:'bumpCodigoViaSequence', params:{ tipo } });
+    if(r && r.ok && r.codigo) return r.codigo;
+    console.error('erro ao gerar código de via', r && r.error);
+    return null;
+  }catch(e){ console.error('erro ao gerar código de via', e); return null; }
+}
 async function vendaSalvar(venda){
   try{
     const { error } = await supabaseClient.from('vendas_pdv').upsert({ id: venda.id, payload: venda, updated_at: new Date().toISOString() });
@@ -1114,6 +1125,7 @@ function mountItens(container, holder, getLojaId){
    MODO EMBUTIDO — ver mesma explicação no painel-ordens.html.
    ============================================================ */
 const EMBEDDED = window.self !== window.top;
+let pendingAbrirId = null;
 function atualizarFaixaLoja(){
   const faixa = document.getElementById('lojaFaixa');
   if(!faixa) return;
@@ -1139,6 +1151,14 @@ if(EMBEDDED){
       currentTab = ev.data.tabId;
       renderTabs();
       renderView();
+    } else if(ev.data.type === 'abrirRegistro'){
+      // Veio do "Leitor de código" no menu — pede pra abrir uma venda específica assim
+      // que os dados estiverem carregados (se já estiverem, abre na hora).
+      pendingAbrirId = ev.data.id;
+      if(currentUser && Array.isArray(vendas) && vendas.length){
+        const alvo = vendas.find(v=>v.id===pendingAbrirId);
+        if(alvo){ abrirDetalheVenda(alvo); pendingAbrirId = null; }
+      }
     } else if(ev.data.type === 'clientesAtualizados'){
       // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
       // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
@@ -1197,6 +1217,11 @@ function enterApp(){
   }
   renderTabs();
   renderView();
+  if(pendingAbrirId){
+    const alvo = vendas.find(v=>v.id===pendingAbrirId);
+    if(alvo) abrirDetalheVenda(alvo);
+    pendingAbrirId = null;
+  }
 }
 
 /* ============================================================
@@ -1479,6 +1504,9 @@ function renderNovaVenda(main){
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
     };
+    // Código de barras da via, gerado só agora que a venda realmente vai ser salva
+    // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
+    venda.codigoVia = await bumpCodigoVia('venda');
     let clienteCadastro = null;
     if(pagsCredito.length>0 || pagsFiado.length>0){
       const telD = (venda.telefone||'').replace(/\D/g,'');
@@ -1934,6 +1962,7 @@ function renderVendas(main){
               <td style="${aReceber>0 && !cancelada?'color:var(--danger); font-weight:700;':''} white-space:nowrap;">R$ ${aReceber.toFixed(2)}</td>
               <td style="white-space:nowrap;">
                 <button class="icon-btn" data-view="${v.id}" title="Ver detalhes">👁</button>
+                <button class="icon-btn" data-print="${v.id}" title="Imprimir via">🖨️</button>
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-editar="${v.id}" title="Editar venda">✎</button>` : ''}
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-trocar="${v.id}" title="Registrar troca">🔁</button>` : ''}
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-cancelar="${v.id}" title="Cancelar venda">🚫</button>` : ''}
@@ -1944,6 +1973,7 @@ function renderVendas(main){
       </table>
     `;
     wrap.querySelectorAll('[data-view]').forEach(b=> b.addEventListener('click', ()=> abrirDetalheVenda(vendas.find(x=>x.id===b.dataset.view)) ));
+    wrap.querySelectorAll('[data-print]').forEach(b=> b.addEventListener('click', ()=> printVenda(vendas.find(x=>x.id===b.dataset.print)) ));
     wrap.querySelectorAll('[data-itens]').forEach(b=> b.addEventListener('click', ()=> abrirItensVenda(vendas.find(x=>x.id===b.dataset.itens)) ));
     wrap.querySelectorAll('[data-nota]').forEach(b=> b.addEventListener('click', ()=> abrirNotaVenda(vendas.find(x=>x.id===b.dataset.nota)) ));
     wrap.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditarVenda(vendas.find(x=>x.id===b.dataset.editar)) ));
@@ -2295,7 +2325,7 @@ function abrirDetalheVenda(v){
   const nomeLoja = (id)=> { const l = (config.lojas||[]).find(x=>x.id===id); return l ? l.nome : '—'; };
   openModal(`
     <h3>Venda — ${escapeHtml(v.cliente || 'cliente não identificado')}</h3>
-    <p class="muted">${fmtDate(v.data)} · ${escapeHtml(v.loja)} · Vendedora ${escapeHtml(v.vendedora)}</p>
+    <p class="muted">${fmtDate(v.data)} · ${escapeHtml(v.loja)} · Vendedora ${escapeHtml(v.vendedora)}${v.codigoVia?` · Via <b>${escapeHtml(v.codigoVia)}</b>`:''}</p>
     <div class="section-label" style="margin-top:14px;">Itens</div>
     <table>
       <thead><tr><th>Produto</th><th>Metal</th><th>Qtd.</th><th>Valor unit.</th></tr></thead>
@@ -2338,23 +2368,31 @@ function abrirDetalheVenda(v){
   document.getElementById('btnImprimirVenda').addEventListener('click', ()=> printVenda(v));
 }
 
-/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura configurada. */
+/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
+ * configurada. Se `codigoVia` for passado, imprime um código de barras nítido no
+ * rodapé, com o número do código escrito logo abaixo dele. */
 const ESCALA_BOBINA_PX = {
   pequena: { base:12, titulo:14, sub:11 },
   media:   { base:14, titulo:17, sub:12.5 },
   grande:  { base:16.5, titulo:20, sub:14.5 },
 };
-function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
+function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
   const impCfg = config.impressao || {};
   const px = ESCALA_BOBINA_PX[impCfg.escalaTexto] || ESCALA_BOBINA_PX.media;
   const peso = impCfg.negrito!==false ? 700 : 400;
   const reforcoCss = impCfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
   const rodape = (impCfg.mensagemRodape||'').trim();
+  const codigoHtml = codigoVia ? `
+    <div class="linha"></div>
+    <div class="barcode-wrap"><svg id="barcodeSvg"></svg></div>
+    <div class="sub" style="text-align:center; font-weight:800; letter-spacing:.04em; margin-top:2px;">${escapeHtml(codigoVia)}</div>
+  ` : '';
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <title>${escapeHtml(titulo)}</title>
+${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>` : ''}
 <style>
   @page{ size:${larguraMm}mm auto; margin:0; }
   *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
@@ -2364,11 +2402,14 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
   .linha{ border-top:1px dashed #000; margin:6px 0; }
   .rodape{ text-align:center; margin-top:10px; font-size:${px.sub}px; }
   b{ font-weight:800; }
+  .barcode-wrap{ text-align:center; margin-top:6px; }
+  .barcode-wrap svg{ max-width:100%; }
   @media print{ body{ padding:1mm 2mm; } }
 </style>
 </head>
 <body>
   ${conteudoHtml}
+  ${codigoHtml}
   ${rodape ? `<div class="linha"></div><div class="rodape">${escapeHtml(rodape)}</div>` : ''}
 </body>
 </html>`;
@@ -2378,7 +2419,19 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
   printWin.document.write(html);
   printWin.document.close();
   printWin.focus();
-  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  if(codigoVia){
+    const tentarGerarCodigo = ()=>{
+      try{
+        if(printWin.JsBarcode){
+          printWin.JsBarcode(printWin.document.getElementById('barcodeSvg'), codigoVia, { format:'CODE128', width:2, height:42, displayValue:false, margin:0 });
+        }
+      }catch(e){}
+      setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 250);
+    };
+    setTimeout(tentarGerarCodigo, 400);
+  } else {
+    setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  }
 }
 
 function printVenda(v){
@@ -2388,7 +2441,7 @@ function printVenda(v){
 
   const linhas = [];
   linhas.push(`<div class="titulo">VENDA</div>`);
-  linhas.push(`<div class="sub">${escapeHtml(v.loja)}</div>`);
+  linhas.push(`<div class="sub">${escapeHtml(v.loja)}${v.codigoVia?' · Via '+escapeHtml(v.codigoVia):''}</div>`);
   linhas.push(`<div class="sub">${fmtDate(v.data)}</div>`);
   linhas.push(`<div class="linha"></div>`);
 
@@ -2422,7 +2475,7 @@ function printVenda(v){
     });
   }
 
-  abrirImpressaoBobina('Venda', linhas.join(''), larguraMm);
+  abrirImpressaoBobina('Venda', linhas.join(''), larguraMm, v.codigoVia);
 }
 
 /* ============================================================

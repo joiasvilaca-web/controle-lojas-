@@ -1039,6 +1039,16 @@ async function saveConfig(){
  * elimina o risco de duas pessoas editando O.S. diferentes ao mesmo tempo, uma
  * apagando a alteração da outra ao salvar por cima.
  */
+/** Gera o próximo código sequencial de via (formato "<número>-P" pra pedido/O.S.), usado
+ * como conteúdo do código de barras impresso na via. */
+async function bumpCodigoVia(tipo){
+  try{
+    const r = await gatewayCall({ op:'bumpCodigoViaSequence', params:{ tipo } });
+    if(r && r.ok && r.codigo) return r.codigo;
+    console.error('erro ao gerar código de via', r && r.error);
+    return null;
+  }catch(e){ console.error('erro ao gerar código de via', e); return null; }
+}
 async function saveOrders(){
   for(const order of orders){
     if(!order || !order.id) continue;
@@ -1604,26 +1614,34 @@ function printOrder(order){
     linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
   }
 
-  abrirImpressaoBobina('Ordem de Serviço', linhas.join(''), larguraMm);
+  abrirImpressaoBobina('Ordem de Serviço', linhas.join(''), larguraMm, order.codigoVia);
 }
 
-/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura configurada. */
+/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
+ * configurada. Se `codigoVia` for passado, imprime um código de barras nítido no
+ * rodapé, com o número do código escrito logo abaixo dele. */
 const ESCALA_BOBINA_PX = {
   pequena: { base:12, titulo:14, sub:11 },
   media:   { base:14, titulo:17, sub:12.5 },
   grande:  { base:16.5, titulo:20, sub:14.5 },
 };
-function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
+function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
   const impCfg = config.impressao || {};
   const px = ESCALA_BOBINA_PX[impCfg.escalaTexto] || ESCALA_BOBINA_PX.media;
   const peso = impCfg.negrito!==false ? 700 : 400;
   const reforcoCss = impCfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
   const rodape = (impCfg.mensagemRodape||'').trim();
+  const codigoHtml = codigoVia ? `
+    <div class="linha"></div>
+    <div class="barcode-wrap"><svg id="barcodeSvg"></svg></div>
+    <div class="sub" style="text-align:center; font-weight:800; letter-spacing:.04em; margin-top:2px;">${escapeHtml(codigoVia)}</div>
+  ` : '';
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <title>${escapeHtml(titulo)}</title>
+${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>` : ''}
 <style>
   @page{ size:${larguraMm}mm auto; margin:0; }
   *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
@@ -1635,11 +1653,14 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
   .rodape{ text-align:center; margin-top:10px; font-size:${px.sub}px; }
   b{ font-weight:800; }
   .destaque{ font-weight:800; font-size:${Math.round(px.base*1.25)}px; }
+  .barcode-wrap{ text-align:center; margin-top:6px; }
+  .barcode-wrap svg{ max-width:100%; }
   @media print{ body{ padding:1mm 2mm; } }
 </style>
 </head>
 <body>
   ${conteudoHtml}
+  ${codigoHtml}
   ${rodape ? `<div class="linha"></div><div class="rodape">${escapeHtml(rodape)}</div>` : ''}
 </body>
 </html>`;
@@ -1649,7 +1670,19 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
   printWin.document.write(html);
   printWin.document.close();
   printWin.focus();
-  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  if(codigoVia){
+    const tentarGerarCodigo = ()=>{
+      try{
+        if(printWin.JsBarcode){
+          printWin.JsBarcode(printWin.document.getElementById('barcodeSvg'), codigoVia, { format:'CODE128', width:2, height:42, displayValue:false, margin:0 });
+        }
+      }catch(e){}
+      setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 250);
+    };
+    setTimeout(tentarGerarCodigo, 400);
+  } else {
+    setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  }
 }
 
 function sendWhatsApp(order){
@@ -2347,6 +2380,7 @@ function mountObservacoes(container, orderLike, persisted){
    (o shell já tem a barra lateral e as abas por cima).
    ============================================================ */
 const EMBEDDED = window.self !== window.top;
+let pendingAbrirId = null;
 function atualizarFaixaLoja(){
   const faixa = document.getElementById('lojaFaixa');
   if(!faixa) return;
@@ -2372,6 +2406,14 @@ if(EMBEDDED){
       currentTab = ev.data.tabId;
       renderTabs();
       renderView();
+    } else if(ev.data.type === 'abrirRegistro'){
+      // Veio do "Leitor de código" no menu — abre a O.S. assim que os dados estiverem
+      // carregados (se já estiverem, abre na hora).
+      pendingAbrirId = ev.data.id;
+      if(currentUser && Array.isArray(orders) && orders.length){
+        const alvo = orders.find(o=>o.id===pendingAbrirId);
+        if(alvo){ openEditModal(alvo.id, false); pendingAbrirId = null; }
+      }
     } else if(ev.data.type === 'clientesAtualizados'){
       // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
       // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
@@ -2423,6 +2465,11 @@ function enterApp(){
   renderTabs();
   renderView();
   renderAlerts();
+  if(pendingAbrirId){
+    const alvo = orders.find(o=>o.id===pendingAbrirId);
+    if(alvo) openEditModal(alvo.id, false);
+    pendingAbrirId = null;
+  }
 }
 
 document.getElementById('btnLogout').addEventListener('click', ()=>{
@@ -2922,6 +2969,9 @@ function renderNovaOrdem(main){
       fiadoDebitoId: novoFiadoDebitoIdOS,
       criadoEm: Date.now()
     };
+    // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
+    // (rascunho não gera código — só quando vira uma O.S. de verdade).
+    novaOrdem.codigoVia = await bumpCodigoVia('pedido');
     if(pagsCreditoOS.length>0 || pagsFiadoOS.length>0){
       const telD = onlyDigits(novaOrdem.telefone||'');
       const nomeL = (novaOrdem.cliente||'').trim().toLowerCase();
