@@ -417,10 +417,23 @@ async function loadAll(){
   if(!config){
     config = { lojas:[], funcionarios:[], users:[], formasPagamento:[], joiasProdutos:[], metais:[] };
   }
-  vendas = await vendasGet();
-  produtosEstoque = await produtosEstoqueGet();
-  clientes = await clientesGet();
-  orcamentos = await orcamentosGet();
+  // As 3 chamadas abaixo são rápidas (poucas dezenas de linhas cada) — rodam em
+  // paralelo, não uma esperando a outra, pra abrir a aba mais rápido.
+  const [vendasR, produtosR, orcamentosR] = await Promise.all([vendasGet(), produtosEstoqueGet(), orcamentosGet()]);
+  vendas = vendasR; produtosEstoque = produtosR; orcamentos = orcamentosR;
+  // O cadastro de clientes tem dezenas de milhares de linhas — baixar tudo isso
+  // ANTES de abrir a aba é o que fazia a demora. A busca de cliente (no modal de
+  // seleção) já não depende mais disso, já busca direto no servidor. Então aqui só
+  // carregamos em segundo plano, sem travar: por quando a pessoa realmente precisar
+  // (fechar uma venda com fiado/crédito, por exemplo) o cache já deve estar pronto.
+  if(!clientes) clientes = [];
+  carregarClientesEmSegundoPlano();
+}
+let __clientesCarregandoEmFundo = false;
+function carregarClientesEmSegundoPlano(){
+  if(__clientesCarregandoEmFundo) return;
+  __clientesCarregandoEmFundo = true;
+  clientesGet().then(lista=>{ clientes = lista; }).catch(e=>console.error('erro ao carregar clientes em segundo plano', e)).finally(()=>{ __clientesCarregandoEmFundo = false; });
 }
 async function orcamentosGet(){
   try{
@@ -1721,15 +1734,23 @@ function abrirTrocaVenda(venda){
         const p = produtosEstoque.find(x=>x.id===pid);
         if(!p) continue;
         if(!p.estoquePorLoja) p.estoquePorLoja = {};
-        p.estoquePorLoja[lojaEstoqueTroca] = (Number(p.estoquePorLoja[lojaEstoqueTroca])||0) + qtd;
-        await produtoEstoqueAtualizar(p);
+        const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+          produtoId:pid, lojaId:lojaEstoqueTroca, tipoMovimento:'CANCELAMENTO_VENDA', quantidade: qtd, referenciaId: venda.id
+        }});
+        if(r && !r.error && typeof r.saldoNovo === 'number'){ p.estoquePorLoja[lojaEstoqueTroca] = r.saldoNovo; }
+        else{ console.error('erro ao devolver item antigo (troca)', pid, r && r.error); p.estoquePorLoja[lojaEstoqueTroca] = (Number(p.estoquePorLoja[lojaEstoqueTroca])||0) + qtd; }
       }
     } else if(antigo.produtoEstoqueId){
       const p = produtosEstoque.find(x=>x.id===antigo.produtoEstoqueId);
       if(p){
         if(!p.estoquePorLoja) p.estoquePorLoja = {};
-        p.estoquePorLoja[lojaEstoqueTroca] = (Number(p.estoquePorLoja[lojaEstoqueTroca])||0) + Number(antigo.quantidade||0);
-        await produtoEstoqueAtualizar(p);
+        const qtdDevolver = Number(antigo.quantidade||0);
+        const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+          produtoId:antigo.produtoEstoqueId, lojaId:lojaEstoqueTroca, tipoMovimento:'CANCELAMENTO_VENDA', quantidade: qtdDevolver, referenciaId: venda.id,
+          observacao:'Devolução simples (venda anterior ao controle por item) — confira manualmente se tem composição.'
+        }});
+        if(r && !r.error && typeof r.saldoNovo === 'number'){ p.estoquePorLoja[lojaEstoqueTroca] = r.saldoNovo; }
+        else{ console.error('erro ao devolver item antigo simples (troca)', antigo.produtoEstoqueId, r && r.error); p.estoquePorLoja[lojaEstoqueTroca] = (Number(p.estoquePorLoja[lojaEstoqueTroca])||0) + qtdDevolver; }
         showToast('Item antigo devolvido ao estoque de forma simples (venda anterior a este controle) — confira manualmente se ele tem composição.');
       }
     }
@@ -2091,8 +2112,12 @@ function abrirFormularioEdicaoCompleta(v){
         const p = produtosEstoque.find(x=>x.id===produtoId);
         if(!p) continue;
         if(!p.estoquePorLoja) p.estoquePorLoja = {};
-        p.estoquePorLoja[v.estoqueLojaId] = (Number(p.estoquePorLoja[v.estoqueLojaId])||0) + qtd;
-        await produtoEstoqueAtualizar(p);
+        const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+          produtoId, lojaId:v.estoqueLojaId, tipoMovimento:'CANCELAMENTO_VENDA', quantidade: qtd, referenciaId: v.id,
+          observacao:'Desfeito pra reaplicar edição da venda.'
+        }});
+        if(r && !r.error && typeof r.saldoNovo === 'number'){ p.estoquePorLoja[v.estoqueLojaId] = r.saldoNovo; }
+        else{ console.error('erro ao desfazer consumo original (edição)', produtoId, r && r.error); p.estoquePorLoja[v.estoqueLojaId] = (Number(p.estoquePorLoja[v.estoqueLojaId])||0) + qtd; }
       }
     }
     const clienteAntigo = encontrarClienteDaVenda(v);

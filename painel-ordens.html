@@ -883,11 +883,22 @@ async function loadAll(){
   window.__configUnificadoBruto = unificado;
   config = montarConfigLegadoApartirDoUnificado(unificado);
   if(!config.lojas || config.lojas.length===0) config.lojas = lojasPadrao;
-  orders = await carregarOrdensDoBanco();
-  codes = await storageGet('codes', true) || [];
-  clientes = await clientesGet();
-  orcamentos = await orcamentosGet();
-  vendasParaHistorico = await vendasParaHistoricoGet();
+  // As 3 chamadas abaixo são rápidas — rodam em paralelo. O cadastro de clientes
+  // (dezenas de milhares de linhas) é o que fazia a aba demorar pra abrir — a busca
+  // de cliente já não depende dele (busca direto no servidor), então carrega em
+  // segundo plano sem travar a abertura.
+  const [ordersR, codesR, orcamentosR, vendasHistR] = await Promise.all([
+    carregarOrdensDoBanco(), storageGet('codes', true), orcamentosGet(), vendasParaHistoricoGet()
+  ]);
+  orders = ordersR; codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
+  if(!clientes) clientes = [];
+  carregarClientesEmSegundoPlano();
+}
+let __clientesCarregandoEmFundo = false;
+function carregarClientesEmSegundoPlano(){
+  if(__clientesCarregandoEmFundo) return;
+  __clientesCarregandoEmFundo = true;
+  clientesGet().then(lista=>{ clientes = lista; }).catch(e=>console.error('erro ao carregar clientes em segundo plano', e)).finally(()=>{ __clientesCarregandoEmFundo = false; });
 }
 let orcamentos = [];
 let vendasParaHistorico = [];
