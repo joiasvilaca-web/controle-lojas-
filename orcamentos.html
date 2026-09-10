@@ -492,17 +492,10 @@ async function clientesGet(){
 /** Busca sob demanda no banco (não pré-carrega os 20 mil+ clientes de uma vez).
  * Aceita nome (parcial) ou telefone/CPF (dígitos, casamento parcial). */
 async function buscarClientesRemoto(termo){
-  const termoDigits = onlyDigits(termo);
   try{
-    let query = supabaseClient.from('clientes_cadastro').select('id,payload').limit(8);
-    if(termoDigits.length>=4){
-      query = query.or(`payload->>nome.ilike.%${termo}%,payload->>telefone.ilike.%${termoDigits}%,payload->>cpf.ilike.%${termoDigits}%`);
-    } else {
-      query = query.ilike('payload->>nome', `%${termo}%`);
-    }
-    const { data, error } = await query;
-    if(error) throw error;
-    const achados = (data||[]).map(r=>r.payload);
+    const r = await gatewayCall({ op:'searchClients', params:{ termo } });
+    if(r && r.error) throw new Error(r.error);
+    const achados = (r && r.data) || [];
     // Guarda no cache local (pra o clique no resultado e o botão "editar cadastro" acharem na hora).
     achados.forEach(c=>{ if(!clientes.some(x=>x.id===c.id)) clientes.push(c); });
     return achados;
@@ -519,12 +512,12 @@ async function buscarClientePorTelefoneOuCpf(telefone, cpf){
   );
   if(cacheado) return cacheado;
   try{
-    const ors = [];
-    if(tel) ors.push(`payload->>telefone.ilike.%${tel}%`);
-    if(doc) ors.push(`payload->>cpf.ilike.%${doc}%`);
-    const { data, error } = await supabaseClient.from('clientes_cadastro').select('id,payload').or(ors.join(',')).limit(1);
-    if(error) throw error;
-    const achado = (data && data[0]) ? data[0].payload : null;
+    const r = await gatewayCall({ op:'searchClients', params:{ termo: doc || tel } });
+    if(r && r.error) throw new Error(r.error);
+    const achados = (r && r.data) || [];
+    const achado = achados.find(c=>
+      (tel && onlyDigits(c.telefone||'')===tel) || (doc && onlyDigitsCpf(c.cpf||'')===doc)
+    ) || null;
     if(achado) clientes.push(achado);
     return achado;
   }catch(e){ console.error('erro ao localizar cliente', e); return null; }
