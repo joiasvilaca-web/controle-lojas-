@@ -387,16 +387,25 @@ function planejarConsumoEstoque(produtoId, quantidadeNecessaria, reservas, lojaI
   return { ok: tudoOk, faltando: faltandoTotal };
 }
 
-/** Aplica os consumos planejados NA LOJA `lojaId` (debita do estoque dessa loja
- * especificamente, mesmo que fique negativo) e salva cada produto afetado. */
-async function aplicarConsumosEstoque(reservas, lojaId){
+/** Aplica os consumos planejados NA LOJA `lojaId` via o Kardex (registra o movimento
+ * e atualiza o saldo numa transação atômica no banco — evita duas vendas do mesmo
+ * produto/loja pisarem uma na outra, e deixa histórico de quem/quando/por quê). */
+async function aplicarConsumosEstoque(reservas, lojaId, referenciaId){
   const ids = Object.keys(reservas).filter(id=> reservas[id] > 0);
   for(const id of ids){
     const produto = produtosEstoque.find(p=>p.id===id);
     if(!produto) continue;
+    const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+      produtoId:id, lojaId, tipoMovimento:'VENDA', quantidade: -reservas[id], referenciaId: referenciaId||null
+    }});
     if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
-    produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) - reservas[id];
-    await produtoEstoqueAtualizar(produto);
+    if(r && !r.error && typeof r.saldoNovo === 'number'){
+      produto.estoquePorLoja[lojaId] = r.saldoNovo;
+    }else{
+      console.error('erro ao registrar movimento de estoque', id, r && r.error);
+      // fallback: pelo menos mantém a tela coerente, mesmo se o Kardex falhar
+      produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) - reservas[id];
+    }
   }
 }
 
@@ -1438,7 +1447,7 @@ function renderNovaVenda(main){
         }
         if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteCadastro);
       }
-      await aplicarConsumosEstoque(reservas, lojaEstoque);
+      await aplicarConsumosEstoque(reservas, lojaEstoque, venda.id);
       vendas.unshift(venda);
       showToast('Venda lançada com sucesso.');
       currentTab = 'vendas';
@@ -1496,8 +1505,15 @@ async function executarCancelamentoVenda(venda, motivo){
       const produto = produtosEstoque.find(p=>p.id===produtoId);
       if(!produto) continue;
       if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
-      produto.estoquePorLoja[venda.estoqueLojaId] = (Number(produto.estoquePorLoja[venda.estoqueLojaId])||0) + qtd;
-      await produtoEstoqueAtualizar(produto);
+      const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+        produtoId, lojaId:venda.estoqueLojaId, tipoMovimento:'CANCELAMENTO_VENDA', quantidade: qtd, referenciaId: venda.id
+      }});
+      if(r && !r.error && typeof r.saldoNovo === 'number'){
+        produto.estoquePorLoja[venda.estoqueLojaId] = r.saldoNovo;
+      }else{
+        console.error('erro ao devolver estoque no cancelamento', produtoId, r && r.error);
+        produto.estoquePorLoja[venda.estoqueLojaId] = (Number(produto.estoquePorLoja[venda.estoqueLojaId])||0) + qtd;
+      }
     }
   }
   // Reverte crédito/fiado do cliente
@@ -1717,7 +1733,7 @@ function abrirTrocaVenda(venda){
         showToast('Item antigo devolvido ao estoque de forma simples (venda anterior a este controle) — confira manualmente se ele tem composição.');
       }
     }
-    await aplicarConsumosEstoque(reservasNovo, lojaEstoqueTroca);
+    await aplicarConsumosEstoque(reservasNovo, lojaEstoqueTroca, venda.id);
 
     // Movimenta crédito/fiado do cliente se a diferença usar isso
     let clienteCadastro = null;
@@ -2144,7 +2160,7 @@ function abrirFormularioEdicaoCompleta(v){
     const novoFiadoDebitoId = totalFiado>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
 
     // ===== 4) Aplica tudo e regrava a venda =====
-    await aplicarConsumosEstoque(reservas, lojaEstoqueEdicao);
+    await aplicarConsumosEstoque(reservas, lojaEstoqueEdicao, v.id);
     if(clienteNovo){
       if(totalCredito>0){
         clienteNovo.credito = (Number(clienteNovo.credito)||0) - totalCredito;
