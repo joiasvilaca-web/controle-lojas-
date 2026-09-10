@@ -162,6 +162,37 @@ let vendas = [];
 let currentUser = null;
 let currentTab = 'vendas';
 let modoNovaVenda = false;
+
+/* Atalhos de teclado do balcão (PDV). Só age quando não tem modal aberto (senão
+ * atrapalharia digitar normalmente dentro do modal) e a tela já está montada. */
+document.addEventListener('keydown', (e)=>{
+  const modalAberto = document.getElementById('modalOverlay') && document.getElementById('modalOverlay').classList.contains('show');
+  if(modalAberto || !currentUser) return;
+  if(e.key === 'F2'){
+    e.preventDefault();
+    if(!modoNovaVenda){ modoNovaVenda = true; renderView(); }
+  } else if(e.key === 'F4' && modoNovaVenda){
+    e.preventDefault();
+    const btn = document.getElementById('btnSelecionarClienteVenda');
+    if(btn) btn.click();
+  } else if(e.key === 'F8' && modoNovaVenda){
+    e.preventDefault();
+    const pag = document.getElementById('pagamentoContainerNova');
+    if(pag){
+      pag.scrollIntoView({ behavior:'smooth', block:'center' });
+      const primeiroFoco = pag.querySelector('input, select, button');
+      if(primeiroFoco) primeiroFoco.focus();
+    }
+  } else if(e.key === 'Enter' && modoNovaVenda){
+    // Se o foco está num campo de produto dentro dos itens da venda, Enter adiciona
+    // a linha (equivalente a clicar "+ Adicionar item") em vez de submeter algo.
+    const dentroDosItens = e.target.closest && e.target.closest('#itensContainerNova');
+    if(dentroDosItens){
+      const btnAdd = document.getElementById('btnAddItem');
+      if(btnAdd){ e.preventDefault(); btnAdd.click(); }
+    }
+  }
+});
 let __gatewaySenha = null;
 
 async function gatewayCall(body){
@@ -506,6 +537,17 @@ function wireClienteFields(prefix){
  * `onConfirmar(cliente)` com o registro final. `permitirVazio` deixa cancelar
  * sem selecionar nada (usado em telas onde o cliente é opcional).
  */
+/* Busca clientes no SERVIDOR (até 10 resultados, por nome/telefone/CPF) em vez de
+ * filtrar a lista inteira carregada no navegador — com debounce de 300ms pra não
+ * disparar uma chamada a cada tecla digitada. */
+let __debounceClienteTimer = null;
+function buscarClientesComDebounce(termo, aoAchar){
+  clearTimeout(__debounceClienteTimer);
+  __debounceClienteTimer = setTimeout(async ()=>{
+    const r = await gatewayCall({ op:'searchClients', params:{ termo } });
+    aoAchar((r && r.data) || []);
+  }, 300);
+}
 function abrirSeletorCliente(onConfirmar, clienteAtual){
   let selecionado = clienteAtual ? { ...clienteAtual } : null;
   openModal(`
@@ -534,25 +576,22 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
   }
   function renderResultados(termo){
     const wrap = document.getElementById('resultados_cliente');
-    if(!termo){ wrap.innerHTML=''; return; }
-    const termoDigits = onlyDigits(termo);
-    const termoLower = termo.toLowerCase();
-    const achados = clientes.filter(c=>
-      (c.nome||'').toLowerCase().includes(termoLower) ||
-      (termoDigits.length>=4 && onlyDigits(c.telefone||'').includes(termoDigits)) ||
-      (termoDigits.length>=4 && onlyDigitsCpf(c.cpf||'').includes(termoDigits))
-    ).slice(0,8);
-    wrap.innerHTML = achados.length===0
-      ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
-      : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
-    wrap.querySelectorAll('[data-selcli]').forEach(el=>{
-      el.addEventListener('click', ()=>{
-        const c = clientes.find(x=>x.id===el.dataset.selcli);
-        if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+    if(!termo || termo.length<2){ wrap.innerHTML=''; return; }
+    wrap.innerHTML = `<div class="muted" style="padding:6px;">Buscando...</div>`;
+    buscarClientesComDebounce(termo, (achados)=>{
+      wrap.innerHTML = achados.length===0
+        ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
+        : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
+      wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+        el.addEventListener('click', ()=>{
+          const c = achados.find(x=>x.id===el.dataset.selcli);
+          if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+        });
       });
     });
   }
   document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
+  document.getElementById('busca_cliente').focus();
 
   document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
   document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
@@ -1246,6 +1285,15 @@ function renderNovaVenda(main){
   document.getElementById('v_loja').addEventListener('change', ()=> itensApi.refreshEstoque());
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder, ()=> document.getElementById('v_loja').value);
+  // Foco automático no primeiro campo de produto — agiliza quem já sabe o que vai
+  // vender (com o select nativo, dá pra digitar o começo do nome pra pular direto).
+  // Observação: hoje o produto é escolhido por uma lista suspensa (não por um campo
+  // de texto/código), então não tem como ler um leitor de código de barras de 1 bip
+  // ainda — isso exigiria cadastrar um código em cada produto, que não existe hoje.
+  setTimeout(()=>{
+    const primeiroSelectProduto = document.querySelector('#itensContainerNova select[data-itfield="produtoEstoqueId"]');
+    if(primeiroSelectProduto) primeiroSelectProduto.focus();
+  }, 50);
 
   // Guarda o registro completo do cliente escolhido, pra o ✎ conseguir abrir o
   // cadastro dele já preenchido (os campos da tela só guardam nome e telefone).

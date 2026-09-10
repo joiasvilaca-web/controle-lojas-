@@ -783,7 +783,7 @@ async function storageSet(key, value, shared){
  */
 async function uploadFotoParaDrive(dataUrl, filename){
   const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
-    body: { dataUrl, filename }
+    body: { dataUrl, filename, senha: __gatewaySenha }
   });
   if(error) throw error;
   if(!data || !data.url) throw new Error('Resposta inválida do upload para o Drive');
@@ -1114,6 +1114,14 @@ async function excluirCliente(id){
  * dele; ou preenche do zero pra cadastrar alguém novo. Ao confirmar, salva
  * (cria ou atualiza) e chama `onConfirmar(cliente)` com o registro final.
  */
+let __debounceClienteTimer = null;
+function buscarClientesComDebounce(termo, aoAchar){
+  clearTimeout(__debounceClienteTimer);
+  __debounceClienteTimer = setTimeout(async ()=>{
+    const r = await gatewayCall({ op:'searchClients', params:{ termo } });
+    aoAchar((r && r.data) || []);
+  }, 300);
+}
 function abrirSeletorCliente(onConfirmar, clienteAtual){
   let selecionado = clienteAtual ? { ...clienteAtual } : null;
   openModal(`
@@ -1143,25 +1151,22 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
 
   function renderResultados(termo){
     const wrap = document.getElementById('resultados_cliente');
-    if(!termo){ wrap.innerHTML=''; return; }
-    const termoDigits = onlyDigits(termo);
-    const termoLower = termo.toLowerCase();
-    const achados = clientes.filter(c=>
-      (c.nome||'').toLowerCase().includes(termoLower) ||
-      (termoDigits.length>=4 && onlyDigits(c.telefone||'').includes(termoDigits)) ||
-      (termoDigits.length>=4 && onlyDigitsCpf(c.cpf||'').includes(termoDigits))
-    ).slice(0,8);
-    wrap.innerHTML = achados.length===0
-      ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
-      : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
-    wrap.querySelectorAll('[data-selcli]').forEach(el=>{
-      el.addEventListener('click', ()=>{
-        const c = clientes.find(x=>x.id===el.dataset.selcli);
-        if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+    if(!termo || termo.length<2){ wrap.innerHTML=''; return; }
+    wrap.innerHTML = `<div class="muted" style="padding:6px;">Buscando...</div>`;
+    buscarClientesComDebounce(termo, (achados)=>{
+      wrap.innerHTML = achados.length===0
+        ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
+        : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
+      wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+        el.addEventListener('click', ()=>{
+          const c = achados.find(x=>x.id===el.dataset.selcli);
+          if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+        });
       });
     });
   }
   document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
+
 
   document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
   document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
@@ -1628,7 +1633,7 @@ function sendWhatsApp(order){
  */
 async function sendEmailViaGmail(to, subject, body){
   const { data, error } = await realSupabaseClient.functions.invoke('send-email-gmail', {
-    body: { to, subject, body }
+    body: { to, subject, body, senha: __gatewaySenha }
   });
   if(error) throw error;
   if(!data || !data.success) throw new Error((data && data.error) || 'Falha ao enviar e-mail');

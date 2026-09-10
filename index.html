@@ -511,7 +511,7 @@ function readFileAsDataUrl(file){
  */
 async function uploadFotoParaDrive(dataUrl, filename, pasta, tratar){
   const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
-    body: { dataUrl, filename, pasta, tratar }
+    body: { dataUrl, filename, pasta, tratar, senha: __gatewaySenha }
   });
   if(error) throw error;
   if(!data || !data.url) throw new Error('Resposta inválida do upload para o Drive');
@@ -610,6 +610,13 @@ async function loadConfig(){
   if(!config.produtosOtica.subcategorias) config.produtosOtica.subcategorias = [];
   if(!config.produtosOtica.produtos) config.produtosOtica.produtos = [];
   if(!config.mensagens) config.mensagens = { padrao:'', pronto:'', entregue:'', aniversario:'' };
+  // Cache só pra os MÓDULOS (iframes) reaproveitarem via postMessage, evitando cada um
+  // buscar a config de novo na rede ao abrir. O SHELL nunca lê desse cache pra montar
+  // o que vai salvar — sempre usa a config recém-buscada acima (__configCarregadaOk),
+  // então não reintroduz o risco de salvar por cima com dado velho.
+  try{
+    if(__configCarregadaOk) localStorage.setItem('vilaca_config_cache', JSON.stringify({ payload: config, ts: Date.now() }));
+  }catch(e){ /* localStorage pode estar cheio/bloqueado — cache é só otimização, não essencial */ }
 }
 
 /* ===================== LOGIN ÚNICO + SHELL (sidebar/abas/iframes) ===================== */
@@ -1087,7 +1094,7 @@ window.addEventListener('message', (ev)=>{
     const iframe = acharIframe(d.modulo);
     if(!iframe || !ev.source) return;
     const permMod = (currentPermissoes && currentPermissoes[d.modulo]) || {};
-    ev.source.postMessage({ type:'auth', user: currentUser, abas: permMod.abas || null }, '*');
+    ev.source.postMessage({ type:'auth', user: currentUser, abas: permMod.abas || null, configCache: config || null }, '*');
   } else if(d.type === 'tabs'){
     tabsCache[d.modulo] = { tabs: d.tabs, active: d.active };
     if(estaVisivel(d.modulo)) renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
