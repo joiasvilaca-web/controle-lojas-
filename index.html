@@ -3211,7 +3211,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       fornecedor: (d.fornecedor||'').trim(),
       fator: d.fator===null || d.fator==='' ? null : parseFloat(d.fator),
       gtin: (d.gtin||'').trim(),
-      estoquePorLoja: Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0])),
+      // O estoque em si NÃO é salvo aqui por cima — vai por movimento no Kardex logo
+      // abaixo (cada loja que mudou vira um movimento AJUSTE_INVENTARIO/CRIACAO_INICIAL),
+      // pra manter o histórico. Aqui só preserva o que já estava, como placeholder.
+      estoquePorLoja: editando ? {...(produto.estoquePorLoja||{})} : {},
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
       precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
       composicao: composicaoValida,
@@ -3225,6 +3228,25 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     }
     const ok = await produtoEstoqueSalvar(dados);
     if(ok){
+      // Estoque por loja: compara o que a pessoa digitou (d.estoquePorLoja, valor
+      // absoluto) com o que já estava (dados.estoquePorLoja, que preservamos acima) e
+      // registra só a DIFERENÇA de cada loja como um movimento no Kardex — assim o
+      // saldo final fica certo E fica guardado quem mudou, quando e por quanto.
+      const estoqueNovoDigitado = Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0]));
+      const estoqueAntigo = dados.estoquePorLoja||{};
+      const lojasEnvolvidas = new Set([...Object.keys(estoqueNovoDigitado), ...Object.keys(estoqueAntigo)]);
+      for(const lojaId of lojasEnvolvidas){
+        const antes = Number(estoqueAntigo[lojaId])||0;
+        const depois = Number(estoqueNovoDigitado[lojaId])||0;
+        const delta = depois - antes;
+        if(Math.abs(delta) < 1e-9) continue;
+        const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+          produtoId: dados.id, lojaId, tipoMovimento: editando ? 'AJUSTE_INVENTARIO' : 'CRIACAO_INICIAL',
+          quantidade: delta, referenciaId: dados.id, observacao: editando ? 'Ajuste manual no cadastro do produto.' : 'Estoque inicial no cadastro do produto.'
+        }});
+        if(r && !r.error && typeof r.saldoNovo === 'number'){ dados.estoquePorLoja[lojaId] = r.saldoNovo; }
+        else{ console.error('erro ao registrar ajuste de estoque', lojaId, r && r.error); dados.estoquePorLoja[lojaId] = depois; }
+      }
       const idx = produtosEstoque.findIndex(p=>p.id===dados.id);
       if(idx>=0) produtosEstoque[idx] = dados; else produtosEstoque.push(dados);
       closeModal();
