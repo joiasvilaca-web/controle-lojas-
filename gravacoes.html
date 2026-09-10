@@ -289,33 +289,31 @@
     config = (r && r.data) ? r.data : { lojas:[] };
   }
   async function carregarRegistros(){
-    const r = await gatewayCall({ op:'kvGet', table:'gravacoes_kv', params:{ key:'registros' } });
+    const r = await gatewayCall({ op:'selectAll', table:'gravacoes_pedidos' });
     if(r && r.error){ console.error('erro ao carregar gravações', r.error); registros = []; return; }
-    registros = ((r && r.value) || []).map(normalizarStatus);
+    registros = ((r && r.data) || []).map(row=>row.payload).map(normalizarStatus);
   }
   async function salvarRegistros(){
-    const r = await gatewayCall({ op:'kvSet', table:'gravacoes_kv', params:{ key:'registros', value: registros } });
-    if(!r || r.error){
-      console.error('erro ao salvar gravações', r && r.error);
-      showToast('Não foi possível salvar — ' + ((r && r.error) || 'tente de novo.'));
-      return false;
+    let ok = true;
+    for(const g of registros){
+      if(!g || !g.id) continue;
+      const r = await gatewayCall({ op:'upsert', table:'gravacoes_pedidos', params:{ row:{ id:g.id, payload:g, updated_at:new Date().toISOString() } } });
+      if(!r || r.error){ console.error('erro ao salvar gravações', g.id, r && r.error); ok = false; }
     }
-    return true;
+    if(!ok) showToast('Não foi possível salvar uma ou mais gravações — tente de novo.');
+    return ok;
   }
   /* Salva UM registro sem sobrescrever o que outros usuários (ou a confirmação de leitura do
-     cliente) gravaram nesse meio-tempo: recarrega a lista do banco, encaixa só este registro
-     e grava. Se não conseguir recarregar, cai no salvamento normal da lista em memória. */
+     cliente) gravaram nesse meio-tempo nessa MESMA gravação: recarrega só essa linha do banco,
+     une as confirmações de leitura, e grava só ela — nunca mexe nas outras gravações. */
   async function salvarRegistro(g){
-    const r = await gatewayCall({ op:'kvGet', table:'gravacoes_kv', params:{ key:'registros' } });
-    // Se não conseguir ler o banco, NÃO grava por cima: a lista em memória pode estar
-    // desatualizada ou vazia, e gravar nessa condição apagaria registros de outros usuários.
-    if(!r || r.error || (r.value!=null && !Array.isArray(r.value))){
-      console.error('salvarRegistro: falha ao recarregar antes de salvar', r && r.error);
+    const r = await gatewayCall({ op:'selectOne', table:'gravacoes_pedidos', params:{ column:'id', value:g.id } });
+    if(r && r.error){
+      console.error('salvarRegistro: falha ao recarregar antes de salvar', r.error);
       showToast('Sem conexão com o banco — nada foi salvo. Tente de novo.');
       return false;
     }
-    const atuais = (r.value || []).map(normalizarStatus);
-    const noBanco = atuais.find(x=>x.id===g.id);
+    const noBanco = (r && r.data) ? normalizarStatus(r.data.payload) : null;
     if(noBanco){
       // une as confirmações de leitura: o cliente pode ter confirmado enquanto a via era editada
       const doBanco = Array.isArray(noBanco.leituras) ? noBanco.leituras : [];
@@ -324,10 +322,15 @@
       locais.forEach(l=>{ if(!uniao.some(u=> u.status===l.status)) uniao.push(l); });
       if(uniao.length) g.leituras = uniao;
     }
-    const idx = atuais.findIndex(x=>x.id===g.id);
-    if(idx>=0) atuais[idx] = g; else atuais.push(g);
-    registros = atuais;
-    return salvarRegistros();
+    const idx = registros.findIndex(x=>x.id===g.id);
+    if(idx>=0) registros[idx] = g; else registros.push(g);
+    const rSalvar = await gatewayCall({ op:'upsert', table:'gravacoes_pedidos', params:{ row:{ id:g.id, payload:g, updated_at:new Date().toISOString() } } });
+    if(!rSalvar || rSalvar.error){
+      console.error('erro ao salvar gravação', g.id, rSalvar && rSalvar.error);
+      showToast('Não foi possível salvar — tente de novo.');
+      return false;
+    }
+    return true;
   }
   function leituraStatusHtml(g){
     const leituras = Array.isArray(g.leituras) ? g.leituras : [];

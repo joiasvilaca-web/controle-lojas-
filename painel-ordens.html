@@ -883,7 +883,7 @@ async function loadAll(){
   window.__configUnificadoBruto = unificado;
   config = montarConfigLegadoApartirDoUnificado(unificado);
   if(!config.lojas || config.lojas.length===0) config.lojas = lojasPadrao;
-  orders = await storageGet('orders', true) || [];
+  orders = await carregarOrdensDoBanco();
   codes = await storageGet('codes', true) || [];
   clientes = await clientesGet();
   orcamentos = await orcamentosGet();
@@ -1000,12 +1000,38 @@ function mostrarOrcamentosAbertosModal(cliente){
   draw();
   document.getElementById('btnFecharOrcAbertos').addEventListener('click', closeModal);
 }
+/**
+ * Carrega TODAS as O.S. da tabela `ordens_servico` (uma linha por O.S.), via o
+ * db-gateway (essa tabela só é acessível com a service role, não com a chave
+ * anônima — mesmo modelo que já usávamos em gravacoes_kv).
+ * v2: substitui o antigo storageGet('orders') contra painel_ordens_kv, que guardava
+ * TODAS as ordens dentro de um único registro (um "blob" JSON).
+ */
+async function carregarOrdensDoBanco(){
+  try{
+    const r = await gatewayCall({ op:'selectAll', table:'ordens_servico' });
+    if(r && r.error){ console.error('erro ao carregar ordens_servico', r.error); return []; }
+    return (r && Array.isArray(r.data)) ? r.data.map(row=>row.payload) : [];
+  }catch(e){ console.error('erro ao carregar ordens_servico', e); return []; }
+}
 async function saveConfig(){
   const unificado = montarUnificadoApartirDoConfigLegado(config);
   window.__configUnificadoBruto = unificado;
   await configSetUnificada(unificado);
 }
-async function saveOrders(){ await storageSet('orders', orders, true); }
+/**
+ * Grava cada O.S. na SUA PRÓPRIA linha em `ordens_servico`, em vez de sobrescrever
+ * um único registro com a lista inteira (como era com painel_ordens_kv) — isso
+ * elimina o risco de duas pessoas editando O.S. diferentes ao mesmo tempo, uma
+ * apagando a alteração da outra ao salvar por cima.
+ */
+async function saveOrders(){
+  for(const order of orders){
+    if(!order || !order.id) continue;
+    const r = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id: order.id, payload: order, updated_at: new Date().toISOString() } } });
+    if(r && r.error) console.error('erro ao salvar O.S.', order.id, r.error);
+  }
+}
 
 /* ============================================================
    CANCELAMENTO DE O.S.
@@ -2910,12 +2936,16 @@ function renderNovaOrdem(main){
    EDITAR ORDEM (modal)
    ============================================================ */
 async function openEditModal(orderId, somenteLeitura){
-  // Recarrega as ordens direto do banco: o cliente pode ter confirmado uma leitura
-  // (ou o status pode ter mudado em outra aba/sessão) depois que esta página carregou.
+  // Recarrega SÓ essa ordem direto do banco (uma linha, não a lista inteira): o
+  // cliente pode ter confirmado uma leitura (ou o status pode ter mudado em outra
+  // aba/sessão) depois que esta página carregou.
   try{
-    const freshOrders = await storageGet('orders', true);
-    if(Array.isArray(freshOrders)) orders = freshOrders;
-  }catch(e){ console.error('Não foi possível atualizar as ordens antes de abrir:', e); }
+    const r = await gatewayCall({ op:'selectOne', table:'ordens_servico', params:{ column:'id', value: orderId } });
+    if(r && r.data && r.data.payload){
+      const idx = orders.findIndex(o=>o.id===orderId);
+      if(idx>=0) orders[idx] = r.data.payload; else orders.push(r.data.payload);
+    }
+  }catch(e){ console.error('Não foi possível atualizar a ordem antes de abrir:', e); }
   const order = orders.find(o=>o.id===orderId);
   if(!order) return;
   if(currentUser.nivel==='oficina'){
