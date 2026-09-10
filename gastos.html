@@ -292,7 +292,17 @@ function preencherFiltros(){
   const cats=[...new Set([...gc.categorias,...gastos.map(g=>g.categoria).filter(Boolean)])].sort((a,b)=>a.localeCompare(b,'pt-BR',{sensitivity:'base'}));
   document.getElementById('gastoFiltroCategoria').innerHTML='<option value="">Todas as categorias</option>'+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
   const lojas=ordenarAlfa(config.lojas||[],'nome');
-  document.getElementById('gastoFiltroLoja').innerHTML='<option value="">Todas as lojas</option>'+lojas.map(l=>`<option value="${esc(l.nome)}">${esc(l.nome)}</option>`).join('');
+  document.getElementById('gastoFiltroLoja').innerHTML='<option value="">Todas as lojas</option>'+lojas.map(l=>`<option value="${esc(l.id)}">${esc(l.nome)}</option>`).join('');
+}
+/** Resolve o nome de exibição da loja de um gasto — pelo lojaId (padrão atual) ou,
+ * pra registros antigos que só tinham o nome gravado direto, cai pro nome salvo. */
+function nomeLojaGasto(g){
+  if(!g) return '';
+  if(g.lojaId){
+    const l=(config.lojas||[]).find(x=>x.id===g.lojaId);
+    if(l) return l.nome;
+  }
+  return g.loja||'';
 }
 
 /* ===== Recorrências mensais/anuais (instâncias) ===== */
@@ -309,7 +319,7 @@ async function gerarInstanciasFixos(){
       if(vc >= f.dataInicio){
         const jaExiste = gastos.some(g=>g.fixoId===f.id && g.vencimento===vc);
         if(!jaExiste && vc >= addMeses(hj,-1)){
-          const novo={ id:uid('g'), fixoId:f.id, nome:f.nome, categoria:f.categoria, valor:f.valor, loja:f.loja,
+          const novo={ id:uid('g'), fixoId:f.id, nome:f.nome, categoria:f.categoria, valor:f.valor, lojaId:f.lojaId,
             vencimento:vc, formaPagamento:f.formaPagamento, obs:f.obs, responsavel:f.responsavel,
             status:'apagar', pago:false, recorrencia:f.recorrencia, criadoEm:hj };
           await gw({op:'upsert',table:'gastos',params:{row:{id:novo.id,payload:novo}}});
@@ -387,7 +397,7 @@ function renderLancamentos(){
     if(st==='__vencido') l=l.filter(g=>estaVencido(g));
     else if(st) l=l.filter(g=>g.status===st);
     if(cat) l=l.filter(g=>g.categoria===cat);
-    if(loja) l=l.filter(g=>g.loja===loja);
+    if(loja) l=l.filter(g=>g.lojaId===loja);
     if(de) l=l.filter(g=>(g.vencimento||g.criadoEm||'') >= de);
     if(ate) l=l.filter(g=>(g.vencimento||g.criadoEm||'') <= ate);
     l.sort((a,b)=>(a.vencimento||a.criadoEm||'').localeCompare(b.vencimento||b.criadoEm||''));
@@ -419,7 +429,7 @@ function renderLancamentos(){
         return `<tr style="${venc?'background:rgba(196,39,43,.05)':''}">
           <td><b>${esc(g.nome)}</b>${rec?` <span class="recorrencia-chip">${rec}</span>`:''}</td>
           <td>${esc(g.categoria||'—')}</td>
-          <td>${esc(g.loja||'—')}</td>
+          <td>${esc(nomeLojaGasto(g)||'—')}</td>
           <td>${fmtDate(g.vencimento)}${venc?' <span style="color:var(--danger);font-weight:700;">⚠️</span>':''}</td>
           <td style="text-align:right;font-weight:700;">${fmtMoeda(g.valor)}</td>
           <td>${esc(g.formaPagamento||'—')}</td>
@@ -564,7 +574,7 @@ function abrirModalGasto(g,onSave){
     <h3 style="margin:0 0 16px;">${isEdit?'Editar lançamento':'Adicionar gasto'}</h3>
     <div class="grid-2">
       <div class="field"><label>Loja</label>
-        <select id="gLoja"><option value="">— Geral (todas) —</option>${lojas.map(l=>`<option value="${esc(l.nome)}"${g?.loja===l.nome?' selected':''}>${esc(l.nome)}</option>`).join('')}</select>
+        <select id="gLoja"><option value="">— Geral (todas) —</option>${lojas.map(l=>`<option value="${esc(l.id)}"${g?.lojaId===l.id?' selected':''}>${esc(l.nome)}</option>`).join('')}</select>
       </div>
       <div class="field"><label>Nome (identificação curta) *</label><input id="gNome" maxlength="60" value="${esc(g?.nome||'')}" placeholder="Ex: Aluguel MC"></div>
       <div class="field"><label>Categoria *</label>${comboHtml('gCat', categoriasOrdenadas, g?.categoria||categoriasOrdenadas[0], 'gCatAdd', 'gCatEdit')}</div>
@@ -676,7 +686,7 @@ function abrirModalGasto(g,onSave){
     btnSalvar.textContent='Salvando...';
     try{
       const base={
-        loja:document.getElementById('gLoja').value,
+        lojaId:document.getElementById('gLoja').value,
         nome, categoria:document.getElementById('gCat').value,
         valor, vencimento:venc,
         formaPagamento:document.getElementById('gFormaPg').value,
@@ -775,7 +785,7 @@ function renderAgenda(){
         <div><b>Valor:</b> ${fmtMoeda(g.valor)}</div>
         <div><b>Vencimento:</b> ${fmtDate(g.vencimento)}${estaVencido(g)?' <span style="color:var(--danger);font-weight:700;">⚠️ vencido</span>':''}</div>
         <div><b>Categoria:</b> ${esc(g.categoria||'—')}</div>
-        <div><b>Loja:</b> ${esc(g.loja||'—')}</div>
+        <div><b>Loja:</b> ${esc(nomeLojaGasto(g)||'—')}</div>
         <div><b>Forma pg.:</b> ${esc(g.formaPagamento||'—')}</div>
         <div><b>Status:</b> <span class="badge" style="background:${esc(s.cor)}22;color:${esc(s.cor)};border:1px solid ${esc(s.cor)}55;">${esc(s.nome)}</span></div>
         <div><b>Responsável:</b> ${esc(g.responsavel||'—')}</div>
