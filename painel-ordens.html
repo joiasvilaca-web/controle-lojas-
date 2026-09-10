@@ -551,9 +551,9 @@ let agendaYear, agendaMonth;
 
 const STATUS = { AGUARDANDO:'aguardando', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
 function lojaNomes(){ return (config.lojas||[]).map(l=>l.nome); }
-function lojaAbreviacao(nome){
-  const l = (config.lojas||[]).find(x=>x.nome===nome);
-  return l ? l.abreviacao : (nome||'').slice(0,2).toUpperCase();
+function lojaAbreviacao(lojaId){
+  const l = (config.lojas||[]).find(x=>x.id===lojaId);
+  return l ? l.abreviacao : (lojaId||'').slice(0,2).toUpperCase();
 }
 const COLOR_PALETTE = ['#C97A2B','#3D7DD8','#2E7D53','#B23A3A','#6E45A8','#1B8F9E','#C23B77','#7A8C1F'];
 
@@ -1519,7 +1519,7 @@ function buildMessage(order){
     .replaceAll('{via}', order.via || '')
     .replaceAll('{servico}', order.serviceTypeName || '')
     .replaceAll('{data}', fmtDate(order.data))
-    .replaceAll('{loja}', order.loja || '')
+    .replaceAll('{loja}', nomeLojaOrder(order) || '')
     .replaceAll('{vendedora}', order.vendedora || '')
     .replaceAll('{recebidoPor}', order.recebidoPor || '')
     .replaceAll('{nota}', order.numeroNota || '')
@@ -1544,7 +1544,7 @@ function printOrder(order){
 
   const linhas = [];
   linhas.push(`<div class="titulo">ORDEM DE SERVIÇO</div>`);
-  linhas.push(`<div class="sub">Loja ${escapeHtml(order.loja)} · Via ${escapeHtml(order.via||'—')}</div>`);
+  linhas.push(`<div class="sub">Loja ${escapeHtml(nomeLojaOrder(order))} · Via ${escapeHtml(order.via||'—')}</div>`);
   linhas.push(`<div class="sub">${fmtDate(order.data)}</div>`);
   linhas.push(`<div class="linha"></div>`);
 
@@ -2492,7 +2492,18 @@ function checkSlot(serviceTypeId, dateStr, excludeOrderId){
 }
 
 function lojaOptionsHtml(selected){
-  return lojaNomes().map(l=>`<option value="${l}" ${selected===l?'selected':''}>${l}</option>`).join('');
+  return (config.lojas||[]).map(l=>`<option value="${l.id}" ${selected===l.id?'selected':''}>${l.nome}</option>`).join('');
+}
+/** Resolve o nome de exibição da loja de uma O.S. — pelo lojaId (padrão atual) ou,
+ * pra registros antigos que só tinham o nome gravado direto no campo antigo "loja",
+ * cai pro que estiver lá. */
+function nomeLojaOrder(o){
+  if(!o) return '';
+  if(o.lojaId){
+    const l=(config.lojas||[]).find(x=>x.id===o.lojaId);
+    if(l) return l.nome;
+  }
+  return o.loja||'';
 }
 function servicoOptionsHtml(selected){
   return config.serviceTypes.map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
@@ -2792,7 +2803,7 @@ function renderNovaOrdem(main){
       numeroNota: tempPagHolder.numeroNota || '',
       vendedora: document.getElementById('f_vendedora').value.trim(),
       descricao: document.getElementById('f_descricao').value.trim(),
-      loja,
+      lojaId: loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
       data: dataInp.value,
@@ -2876,7 +2887,7 @@ function renderNovaOrdem(main){
     const novaOrdem = {
       id: uid('ord'),
       ...cli,
-      via, numeroNota, vendedora, descricao, loja,
+      via, numeroNota, vendedora, descricao, lojaId: loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
       data: dt,
@@ -2998,7 +3009,7 @@ function mountLocalizacao(container, order, somenteLeitura){
 function openEditModalOficina(order){
   openModal(`
     <h3>Ordem de ${escapeHtml(order.cliente)}</h3>
-    <p>${escapeHtml(order.serviceTypeName)} · ${fmtDate(order.data)} · Loja ${escapeHtml(order.loja)} · Status ${statusLabel(order.status)}</p>
+    <p>${escapeHtml(order.serviceTypeName)} · ${fmtDate(order.data)} · Loja ${escapeHtml(nomeLojaOrder(order))} · Status ${statusLabel(order.status)}</p>
     <div class="locked-note">🔒 Este acesso permite apenas incluir observações, dar ciência e atualizar a localização da peça. Para alterar os demais dados, fale com a vendedora ou a diretoria.</div>
     ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
     <div id="localContainerOficina"></div>
@@ -3032,7 +3043,7 @@ function openEditModalCompleto(order, opts){
       <div class="field"><label>Vendedora</label><select id="e_vendedora">${funcionarioOptionsHtml('vendedora', order.vendedora)}</select></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>Loja</label><select id="e_loja">${lojaOptionsHtml(order.loja)}</select></div>
+      <div class="field"><label>Loja</label><select id="e_loja">${lojaOptionsHtml(order.lojaId)}</select></div>
     </div>
     <div class="field"><label>Status</label>
       <select id="e_status">
@@ -3279,7 +3290,7 @@ function openEditModalCompleto(order, opts){
     const st = config.serviceTypes.find(s=>s.id===sid);
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
-      via, vendedora, descricao, loja, status,
+      via, vendedora, descricao, lojaId: loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
       encaixe, autorizadoPor, recebidoPor, recebidoEm,
     });
@@ -3346,7 +3357,7 @@ function renderPainel(main){
             <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:9px 12px; flex-wrap:wrap;">
               <div style="font-size:13px;">
                 <b>${escapeHtml(o.cliente)}</b>
-                <span class="muted"> · ${escapeHtml(o.serviceTypeName)} · ${escapeHtml(o.loja)} · agendado ${fmtDate(o.data)}</span>
+                <span class="muted"> · ${escapeHtml(o.serviceTypeName)} · ${escapeHtml(nomeLojaOrder(o))} · agendado ${fmtDate(o.data)}</span>
               </div>
               ${currentUser.nivel!=='oficina' ? `
               <div style="display:flex; gap:6px;">
@@ -3387,7 +3398,7 @@ function renderPainel(main){
       list = list.filter(o=>o.status!=='entregue' && o.status!=='rascunho');
     }
     if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
-    if(fLoja.value) list = list.filter(o=>o.loja===fLoja.value);
+    if(fLoja.value) list = list.filter(o=>o.lojaId===fLoja.value);
     if(fLocal.value) list = list.filter(o=>(o.localAtual||'loja')===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()) {
@@ -3485,7 +3496,7 @@ function renderPainel(main){
         <td>${escapeHtml(o.telefone)}</td>
         <td>${escapeHtml(o.via)}</td>
         <td>${escapeHtml(o.vendedora)}</td>
-        <td><span class="badge badge-loja">${escapeHtml(o.loja)}</span>${o.localAtual==='fabrica' ? `<div class="badge" style="margin-top:4px; background:var(--wait-soft); color:var(--wait);">🏭 Fábrica</div>` : ''}</td>
+        <td><span class="badge badge-loja">${escapeHtml(nomeLojaOrder(o))}</span>${o.localAtual==='fabrica' ? `<div class="badge" style="margin-top:4px; background:var(--wait-soft); color:var(--wait);">🏭 Fábrica</div>` : ''}</td>
         <td>${escapeHtml(o.serviceTypeName)}</td>
         <td>${fmtDate(o.data)}</td>
         <td style="color:var(--ok); white-space:nowrap;">R$ ${recebido.toFixed(2)}</td>
@@ -3655,7 +3666,7 @@ function openDayModal(iso){
           <b>${escapeHtml(o.cliente)}</b>
           <span class="badge" style="background:${serviceColor(o.serviceTypeId)}22; color:${serviceColor(o.serviceTypeId)};">${escapeHtml(o.serviceTypeName)}</span>
         </div>
-        <div class="muted" style="margin-top:2px;">Loja ${escapeHtml(o.loja)} · Vendedora ${escapeHtml(o.vendedora)} · Status ${statusLabel(o.status)}${o.encaixe?' · Encaixe':''}</div>
+        <div class="muted" style="margin-top:2px;">Loja ${escapeHtml(nomeLojaOrder(o))} · Vendedora ${escapeHtml(o.vendedora)} · Status ${statusLabel(o.status)}${o.encaixe?' · Encaixe':''}</div>
       </div>
     `).join('')}
     <div class="modal-actions">

@@ -288,6 +288,14 @@
   let gastosDash = [];
 
   function escapeHtml(s){ return (s===null||s===undefined?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  /** Resolve o nome de uma loja a partir do lojaId — usado pra O.S. (que agora só
+   * guarda lojaId), mantendo o resto do dashboard (Metas, filtro de Vendas) do jeito
+   * que já estava, indexado por nome. */
+  function nomeLojaDash(lojaId){
+    if(!lojaId) return "";
+    const l=(configCompleto&&configCompleto.lojas||[]).find(x=>x.id===lojaId);
+    return l?l.nome:lojaId;
+  }
   function fmtDate(s){ if(!s) return "—"; const p=s.split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
   function fmtMoeda(v){ return "R$ " + (Number(v)||0).toFixed(2).replace(".", ","); }
   function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
@@ -606,7 +614,7 @@
   /** Lista combinada de O.S. + Vendas com um formato comum, usada na seção de Pagamentos. */
   function itensPagamentoCombinados(){
     const dasOrdens = ordensVisiveis().map(o=>({
-      modulo:"O.S.", loja:o.loja, data:o.data, cliente:o.cliente,
+      modulo:"O.S.", loja:nomeLojaDash(o.lojaId), data:o.data, cliente:o.cliente,
       valorTotal:o.valorTotal, pagamentos:o.pagamentos, momentoPagamento:o.momentoPagamento
     }));
     const dasVendas = vendas.map(v=>({
@@ -633,7 +641,7 @@
 
   function filtrarOrdens(){
     return ordensVisiveis().filter(o=>{
-      if(filtrosOrdens.loja && o.loja!==filtrosOrdens.loja) return false;
+      if(filtrosOrdens.loja && o.lojaId!==filtrosOrdens.loja) return false;
       if(filtrosOrdens.status && o.status!==filtrosOrdens.status) return false;
       if(filtrosOrdens.servico && o.serviceTypeId!==filtrosOrdens.servico) return false;
       if(filtrosOrdens.dataIni && o.data < filtrosOrdens.dataIni) return false;
@@ -792,7 +800,8 @@
     const totais = {};
     orders.forEach(o=>{
       if((o.data||"").slice(0,7) !== mesRef) return;
-      totais[o.loja] = (totais[o.loja]||0) + valorRecebidoDe(o);
+      const nomeL = nomeLojaDash(o.lojaId);
+      totais[nomeL] = (totais[nomeL]||0) + valorRecebidoDe(o);
     });
     vendas.forEach(v=>{
       if((v.data||"").slice(0,7) !== mesRef) return;
@@ -1121,7 +1130,7 @@
       const cat = document.getElementById("gdCat").value;
       let lista = [...gastosDash];
       if(mes) lista = lista.filter(g=>(g.vencimento||g.criadoEm||"").startsWith(mes));
-      if(loja) lista = lista.filter(g=>g.loja===loja);
+      if(loja) lista = lista.filter(g=>g.lojaId===loja);
       if(cat) lista = lista.filter(g=>g.categoria===cat);
       const cancelId = "cancelado";
       if(met==="pagos") lista = lista.filter(g=>statusGastoPago(g));
@@ -1165,7 +1174,7 @@
     }
     (function initCardGastos(){
       const selLoja = document.getElementById("gdLoja");
-      ((configCompleto&&configCompleto.lojas)||[]).forEach(l=>{ const o=document.createElement("option");o.value=l.nome;o.textContent=l.nome;selLoja.appendChild(o); });
+      ((configCompleto&&configCompleto.lojas)||[]).forEach(l=>{ const o=document.createElement("option");o.value=l.id;o.textContent=l.nome;selLoja.appendChild(o); });
       const catsUnicas = [...new Set(gastosDash.map(g=>g.categoria).filter(Boolean))].sort();
       const selCat = document.getElementById("gdCat");
       catsUnicas.forEach(c=>{ const o=document.createElement("option");o.value=c;o.textContent=c;selCat.appendChild(o); });
@@ -1368,7 +1377,7 @@
       <p class="section-sub">Dados do Painel de Ordens. Rascunhos não entram nas contagens.</p>
       <div class="kpis" id="kpisOrdens"></div>
       <div class="filters">
-        <select id="fLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
+        <select id="fLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.nome)}</option>`).join("")}</select>
         <select id="fStatus">
           <option value="">Todos os status</option>
           <option value="aguardando">Aguardando</option>
@@ -1414,7 +1423,7 @@
             ${listaOrdenada.slice(0,200).map(o=>`
               <tr>
                 <td>${escapeHtml(o.cliente||"—")}</td>
-                <td>${escapeHtml(o.loja||"—")}</td>
+                <td>${escapeHtml(nomeLojaDash(o.lojaId)||"—")}</td>
                 <td>${escapeHtml(o.serviceTypeName||"—")}</td>
                 <td>${fmtDate(o.data)}</td>
                 <td><span class="badge ${escapeHtml(o.status)}">${escapeHtml(o.status)}</span></td>
@@ -1443,7 +1452,7 @@
       naoRascunho.forEach(o=>{ const s=o.status||"—"; porStatus[s]=(porStatus[s]||0)+1; });
       const itensStatus = Object.entries(porStatus).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
       const porLoja = {};
-      naoRascunho.forEach(o=>{ const l=o.loja||"—"; porLoja[l]=(porLoja[l]||0)+1; });
+      naoRascunho.forEach(o=>{ const l=nomeLojaDash(o.lojaId)||"—"; porLoja[l]=(porLoja[l]||0)+1; });
       const itensLoja = Object.entries(porLoja).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
       openModal(`
         <h3 style="margin:0 0 4px;">📊 Ordens de Serviço</h3>

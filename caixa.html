@@ -298,23 +298,23 @@
     vendas.forEach(v=> (v.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:v}); }));
 
     if(lojaId){
-      contasPagasBase = contasPagasBase.filter(g=> g.loja === lojaNomeFiltro);
+      contasPagasBase = contasPagasBase.filter(g=> g.lojaId === lojaId);
       vendasRecBase = vendasRecBase.filter(v=> v.lojaId === lojaId);
-      osRecBase = osRecBase.filter(o=> o.loja === lojaId);
+      osRecBase = osRecBase.filter(o=> o.lojaId === lojaId);
       aReceberVendasBase = aReceberVendasBase.filter(v=> v.lojaId === lojaId);
-      aReceberOSBase = aReceberOSBase.filter(o=> o.loja === lojaId);
+      aReceberOSBase = aReceberOSBase.filter(o=> o.lojaId === lojaId);
       canceladasVendasBase = canceladasVendasBase.filter(v=> v.lojaId === lojaId);
-      canceladasOSBase = canceladasOSBase.filter(o=> o.loja === lojaId);
+      canceladasOSBase = canceladasOSBase.filter(o=> o.lojaId === lojaId);
       trocasBase = trocasBase.filter(t=> t.venda.lojaId === lojaId);
     }
 
     const grupos = {};
     function grupo(nome){ if(!grupos[nome]) grupos[nome] = { nome, vendasRec:[], osRec:[], gastos:[], canceladasV:[], canceladasO:[], trocas:[] }; return grupos[nome]; }
     vendasRecBase.forEach(v=> grupo(v.loja||'—').vendasRec.push(v));
-    osRecBase.forEach(o=> grupo(nomeLojaCaixa(o.loja)||'—').osRec.push(o));
-    contasPagasBase.forEach(g=> grupo(g.loja || '__geral__').gastos.push(g));
+    osRecBase.forEach(o=> grupo(nomeLojaCaixa(o.lojaId)||'—').osRec.push(o));
+    contasPagasBase.forEach(g=> grupo(g.lojaId ? (nomeLojaCaixa(g.lojaId)||'—') : '__geral__').gastos.push(g));
     canceladasVendasBase.forEach(v=> grupo(v.loja||'—').canceladasV.push(v));
-    canceladasOSBase.forEach(o=> grupo(nomeLojaCaixa(o.loja)||'—').canceladasO.push(o));
+    canceladasOSBase.forEach(o=> grupo(nomeLojaCaixa(o.lojaId)||'—').canceladasO.push(o));
     trocasBase.forEach(t=> grupo(t.venda.loja||'—').trocas.push(t));
 
     function metricasGrupo(g){
@@ -369,7 +369,7 @@
     let html = '';
     if(tipos.includes('contasPagas')){
       html += detalheSecao('💸 Contas pagas', contasPagasBase, g=>`
-        <tr><td>${fmtDate(g.dataPagamento)}</td><td>${escapeHtml(g.loja||'Geral')}</td><td>${escapeHtml(g.nome)} <span class="muted">(${escapeHtml(g.categoria||'—')})</span></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(g.valor)}</td></tr>
+        <tr><td>${fmtDate(g.dataPagamento)}</td><td>${escapeHtml(g.lojaId?(nomeLojaCaixa(g.lojaId)||'Geral'):'Geral')}</td><td>${escapeHtml(g.nome)} <span class="muted">(${escapeHtml(g.categoria||'—')})</span></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(g.valor)}</td></tr>
       `, ['Data','Loja','Descrição','Valor']);
     }
     if(tipos.includes('vendasRecebidas')){
@@ -379,13 +379,13 @@
     }
     if(tipos.includes('osRecebidas')){
       html += detalheSecao('🧾 O.S. recebidas', osRecBase, o=>`
-        <tr${o.status==='cancelado'?' style="opacity:.6;"':''}><td>${fmtDate(o.data)}</td><td>${escapeHtml(nomeLojaCaixa(o.loja))}</td><td>${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' <span class="muted">(O.S. cancelada depois)</span>':''}</td><td style="color:var(--ok); font-weight:700;">${fmtMoeda(valorRecebidoDe(o))}</td></tr>
+        <tr${o.status==='cancelado'?' style="opacity:.6;"':''}><td>${fmtDate(o.data)}</td><td>${escapeHtml(nomeLojaCaixa(o.lojaId))}</td><td>${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' <span class="muted">(O.S. cancelada depois)</span>':''}</td><td style="color:var(--ok); font-weight:700;">${fmtMoeda(valorRecebidoDe(o))}</td></tr>
       `, ['Data','Loja','Cliente','Recebido']);
     }
     if(tipos.includes('aReceber')){
       const aReceberTodos = [
         ...aReceberVendasBase.map(v=>({origem:'Venda', data:v.data, loja:v.loja, cliente:v.cliente, valor:valorAReceberDe(v)})),
-        ...aReceberOSBase.map(o=>({origem:'O.S.', data:o.data, loja:nomeLojaCaixa(o.loja), cliente:o.cliente, valor:valorAReceberDe(o)})),
+        ...aReceberOSBase.map(o=>({origem:'O.S.', data:o.data, loja:nomeLojaCaixa(o.lojaId), cliente:o.cliente, valor:valorAReceberDe(o)})),
       ];
       html += detalheSecao('⏳ A receber em aberto (venda fechada / O.S. aberta)', aReceberTodos, x=>`
         <tr><td>${escapeHtml(x.origem)}</td><td>${fmtDate(x.data)}</td><td>${escapeHtml(x.loja)}</td><td>${escapeHtml(x.cliente||'—')}</td><td style="color:var(--danger); font-weight:700;">${fmtMoeda(x.valor)}</td></tr>
@@ -394,7 +394,7 @@
     if(tipos.includes('canceladas')){
       const canceladasTodas = [
         ...canceladasVendasBase.map(v=>({origem:'Venda', data:dataDeTimestamp(v.canceladoEm), loja:v.loja, cliente:v.cliente, motivo:v.motivoCancelamento, por:v.canceladoPor, valor:v.caixaSaidaCancelamento})),
-        ...canceladasOSBase.map(o=>({origem:'O.S.', data:dataDeTimestamp(o.canceladoEm), loja:nomeLojaCaixa(o.loja), cliente:o.cliente, motivo:o.motivoCancelamento, por:o.canceladoPor, valor:o.caixaSaidaCancelamento})),
+        ...canceladasOSBase.map(o=>({origem:'O.S.', data:dataDeTimestamp(o.canceladoEm), loja:nomeLojaCaixa(o.lojaId), cliente:o.cliente, motivo:o.motivoCancelamento, por:o.canceladoPor, valor:o.caixaSaidaCancelamento})),
       ];
       html += detalheSecao('🚫 Canceladas', canceladasTodas, x=>`
         <tr><td>${escapeHtml(x.origem)}</td><td>${fmtDate(x.data)}</td><td>${escapeHtml(x.loja)}</td><td>${escapeHtml(x.cliente||'—')}<div class="muted" style="font-size:11.5px;">${escapeHtml(x.motivo||'')} — por ${escapeHtml(x.por||'—')}</div></td><td style="color:var(--danger); font-weight:700;">- ${fmtMoeda(x.valor)}</td></tr>
