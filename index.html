@@ -740,9 +740,8 @@ const SIDEBAR_MODULES = [
   { id:'loja', label:'Loja', icon:'🏬', src:null },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'vendas', label:'Vendas', icon:'🛒', src:null },
-  { id:'caixa', label:'Caixa', icon:'💰', src:'caixa.html' },
+  { id:'caixa', label:'Caixa', icon:'💰', src:null },
   { id:'gravacoes', label:'Gravações', icon:'✍️', src:'gravacoes.html' },
-  { id:'gastos', label:'Gastos', icon:'💸', src:'gastos.html' },
   { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
   { id:'dp', label:'Departamento Pessoal', icon:'👤', src:'dp.html' },
   { id:'transferencias', label:'Transferências', icon:'🔁', src:'transferencias-reposicoes.html' },
@@ -761,6 +760,16 @@ const VENDAS_SUBMODULOS = {
 };
 let vendasSubAtual = null; // null = tela dos botões; 'pdv'/'os'/'orc' = dentro de uma sub-tela
 
+// Sub-telas do módulo Caixa: Resumo (relatório de movimentação) e Gastos (lançamentos/agenda
+// de despesas, absorvido pra dentro de Caixa). Vivem em iframes próprios (caixa.html e
+// gastos.html, ambos continuam existindo exatamente como antes), alternados por um botão
+// no topo — sem tela de escolha intermediária, abre direto no Resumo.
+const CAIXA_SUBMODULOS = {
+  resumo: { label:'Resumo do Caixa', icon:'💰', src:'caixa.html', permModulo:'caixa' },
+  gastos: { label:'Gastos', icon:'💸', src:'gastos.html', permModulo:'gastos' },
+};
+let caixaSubAtual = null; // null = ainda não decidido nesta sessão; 'resumo'/'gastos' = sub-tela ativa
+
 // O módulo "Vendas" (unificado) fica disponível se a pessoa puder acessar o PDV, a O.S.
 // ou o Orçamento.
 function podeVerModulo(m){
@@ -774,6 +783,10 @@ function podeVerModulo(m){
            (currentPermissoes['os'] && currentPermissoes['os'].ativo) ||
            (currentPermissoes['orcamentos'] && currentPermissoes['orcamentos'].ativo);
   }
+  if(m.id==='caixa'){
+    return (currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) ||
+           (currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo);
+  }
   return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
 }
 function subVendasPermitidos(){
@@ -781,6 +794,14 @@ function subVendasPermitidos(){
   if(currentPermissoes['vendas'] && currentPermissoes['vendas'].ativo) out.push('pdv');
   if(currentPermissoes['os'] && currentPermissoes['os'].ativo) out.push('os');
   if(currentPermissoes['orcamentos'] && currentPermissoes['orcamentos'].ativo) out.push('orc');
+  return out;
+}
+// Quais sub-telas do Caixa a pessoa pode ver — respeita as permissões 'caixa' e 'gastos'
+// independentemente (continuam sendo dois toggles separados em Perfis de Acesso).
+function subCaixaPermitidos(){
+  const out = [];
+  if(currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) out.push('resumo');
+  if(currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo) out.push('gastos');
   return out;
 }
 
@@ -884,7 +905,7 @@ async function verificarAlertaGastos(){
         </div>`:''}
       <div class="modal-actions">
         <button class="btn btn-ghost" onclick="closeModal()">Fechar</button>
-        <button class="btn btn-accent" onclick="closeModal();selecionarModulo('gastos')">📋 Ver Gastos</button>
+        <button class="btn btn-accent" onclick="closeModal();selecionarModulo('caixa','gastos')">📋 Ver Gastos</button>
       </div>
     `);
   }catch(e){ /* silencioso — não quebra o login */ }
@@ -965,6 +986,7 @@ function renderShellTabs(moduloId, tabs, active){
 function selecionarModulo(moduloId, subVendas){
   moduloAtual = moduloId;
   if(moduloId!=='vendas') vendasSubAtual = null;
+  if(moduloId!=='caixa') caixaSubAtual = null;
   if(__gatewaySenha) salvarSessao();
   fecharMenuMobile();
   const info = SIDEBAR_MODULES.find(m=>m.id===moduloId);
@@ -1019,6 +1041,32 @@ function selecionarModulo(moduloId, subVendas){
     // barra superior com botão Voltar + as abas internas da sub-tela
     const tc = tabsCache[sub.permModulo];
     renderShellTabsComVoltar(sub.permModulo, tc?tc.tabs:[], tc?tc.active:null, ()=>{ vendasSubAtual = null; selecionarModulo('vendas'); });
+    return;
+  }
+
+  // ---------- MÓDULO CAIXA (Resumo do Caixa + Gastos, abre direto no Resumo) ----------
+  if(moduloId==='caixa'){
+    if(subVendas) caixaSubAtual = subVendas; // reaproveita o 2º parâmetro (mesmo padrão do Vendas)
+    if(!caixaSubAtual){
+      const subsPermitidos = subCaixaPermitidos();
+      caixaSubAtual = subsPermitidos.includes('resumo') ? 'resumo' : (subsPermitidos[0] || 'resumo');
+    }
+    const subC = CAIXA_SUBMODULOS[caixaSubAtual];
+    document.getElementById('mobileTopbarTitle').textContent = subC.label;
+    const chaveIframeC = 'caixa_'+caixaSubAtual;
+    let iframeC = iframesCriados[chaveIframeC];
+    if(!iframeC){
+      iframeC = document.createElement('iframe');
+      iframeC.src = subC.src;
+      iframeC.className = 'module-iframe';
+      iframeC.dataset.modulo = subC.permModulo;
+      document.getElementById('moduleIframesWrap').appendChild(iframeC);
+      iframesCriados[chaveIframeC] = iframeC;
+      iframeC.addEventListener('load', ()=>{ if(lojaAtual) avisarLojaAtualizada(); });
+    }
+    iframeC.style.display = 'block';
+    const tcC = tabsCache[subC.permModulo];
+    renderShellTabsCaixa(tcC?tcC.tabs:[], tcC?tcC.active:null);
     return;
   }
 
@@ -1150,6 +1198,35 @@ function renderShellTabsComVoltar(moduloId, tabs, active, aoVoltar){
   });
 }
 
+/* Barra superior do módulo Caixa: botão Voltar + botões de troca Resumo/Gastos (só
+ * aparecem se a pessoa tiver as duas permissões) + as abas internas da sub-tela ativa
+ * (ex.: Lançamentos/Agenda quando está em Gastos). */
+function renderShellTabsCaixa(tabs, active){
+  const wrap = document.getElementById('shellTopTabs');
+  const subsPermitidos = subCaixaPermitidos();
+  const voltarHtml = `<button data-voltar-shell="1" style="margin-right:10px; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:13px; cursor:pointer;">← Voltar</button>`;
+  const switchHtml = subsPermitidos.length>1 ? subsPermitidos.map(s=>{
+    const info = CAIXA_SUBMODULOS[s];
+    return `<button data-caixa-sub="${s}" class="${s===caixaSubAtual?'active':''}">${info.icon} ${escapeHtml(info.label)}</button>`;
+  }).join('') : '';
+  const abasHtml = (tabs && tabs.length) ? tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===active?'active':''}">${t.icon?t.icon+' ':''}${escapeHtml(t.label)}</button>`).join('') : '';
+  wrap.style.display = '';
+  wrap.innerHTML = voltarHtml + switchHtml + abasHtml;
+  wrap.querySelector('button[data-voltar-shell]').addEventListener('click', voltarModulo);
+  wrap.querySelectorAll('button[data-caixa-sub]').forEach(b=>{
+    b.addEventListener('click', ()=> selecionarModulo('caixa', b.dataset.caixaSub));
+  });
+  wrap.querySelectorAll('button[data-tab]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      wrap.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('active', x===b));
+      const subC = CAIXA_SUBMODULOS[caixaSubAtual];
+      const iframe = iframesCriados['caixa_'+caixaSubAtual];
+      if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ type:'gotoTab', tabId:b.dataset.tab }, '*');
+      if(tabsCache[subC.permModulo]) tabsCache[subC.permModulo].active = b.dataset.tab;
+    });
+  });
+}
+
 /* Voltar pra tela anterior: se estava numa sub-tela de Vendas, volta pros 2 botões;
  * senão, volta pro módulo Vendas (tela inicial padrão). */
 function voltarModulo(){
@@ -1168,14 +1245,20 @@ window.addEventListener('message', (ev)=>{
     if(iframesCriados[mod]) return iframesCriados[mod];
     if(mod==='os' && iframesCriados['vendas_os']) return iframesCriados['vendas_os'];
     if(mod==='vendas' && iframesCriados['vendas_pdv']) return iframesCriados['vendas_pdv'];
+    if(mod==='caixa' && iframesCriados['caixa_resumo']) return iframesCriados['caixa_resumo'];
+    if(mod==='gastos' && iframesCriados['caixa_gastos']) return iframesCriados['caixa_gastos'];
     return null;
   }
-  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas)
+  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas / de caixa)
   function estaVisivel(mod){
     if(mod===moduloAtual) return true;
     if(moduloAtual==='vendas' && vendasSubAtual){
       const sub = VENDAS_SUBMODULOS[vendasSubAtual];
       return sub && sub.permModulo===mod;
+    }
+    if(moduloAtual==='caixa' && caixaSubAtual){
+      const subC = CAIXA_SUBMODULOS[caixaSubAtual];
+      return subC && subC.permModulo===mod;
     }
     return false;
   }
@@ -1192,7 +1275,10 @@ window.addEventListener('message', (ev)=>{
     }
   } else if(d.type === 'tabs'){
     tabsCache[d.modulo] = { tabs: d.tabs, active: d.active };
-    if(estaVisivel(d.modulo)) renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
+    if(estaVisivel(d.modulo)){
+      if(moduloAtual==='caixa') renderShellTabsCaixa(d.tabs, d.active);
+      else renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
+    }
   } else if(d.type === 'activeTab'){
     if(!tabsCache[d.modulo]) tabsCache[d.modulo] = { tabs:[], active:d.tabId };
     else tabsCache[d.modulo].active = d.tabId;
