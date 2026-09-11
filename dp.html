@@ -1439,8 +1439,11 @@ async function abrirFuncionarioCompletoModal(funcionario){
     } else if(abaAtiva==='Acesso' && podeEditarDP()){
       const usuarioLigado = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
       const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
-      const statusLabel = status==='ativo' ? 'Ativo — já tem senha' : status==='pendente' ? 'Convite enviado, aguardando preencher o cadastro' : 'Sem acesso ainda';
-      const statusBadge = status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      const bloqueado = !!(usuarioLigado && usuarioLigado.bloqueado);
+      const tentativas = usuarioLigado ? (Number(usuarioLigado.tentativasFalhas)||0) : 0;
+      const statusLabel = bloqueado ? 'BLOQUEADO — 6 tentativas erradas de senha' : status==='ativo' ? 'Ativo — já tem senha' : status==='pendente' ? 'Convite enviado, aguardando preencher o cadastro' : 'Sem acesso ainda';
+      const statusBadge = bloqueado ? 'badge-erro' : status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      const usuarioLogin = (d.apelido || funcionario.apelido || '').trim() || funcionario.nome;
       const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
       const souDiretoria = currentUser.nivel==='diretoria';
       body.innerHTML = `
@@ -1452,8 +1455,15 @@ async function abrirFuncionarioCompletoModal(funcionario){
         </div>
         ${souDiretoria ? `<button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>` : `<p class="muted">Só a diretoria pode alterar nível e lojas.</p>`}
         <hr style="margin:16px 0; border-color:var(--surface-2);">
-        <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span></p>
-        <div class="field"><label>Senha</label><input type="text" id="fc_senhaAcesso" value="${escapeHtml(usuarioLigado&&usuarioLigado.senha?usuarioLigado.senha:'')}" placeholder="Digite a nova senha"></div>
+        <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span>${(!bloqueado && tentativas>0) ? ` <span class="muted">(${tentativas} tentativa${tentativas===1?'':'s'} errada${tentativas===1?'':'s'} desde o último login)</span>` : ''}</p>
+        ${bloqueado ? (souDiretoria
+          ? `<div style="border:1px solid var(--danger); border-radius:10px; padding:12px 14px; margin:10px 0;">
+               <p class="muted" style="margin:0 0 8px;">O acesso foi bloqueado depois de 6 senhas erradas seguidas. A senha continua a mesma — desbloquear só libera o login de novo.</p>
+               <button type="button" class="btn btn-accent btn-sm" id="btnDesbloquearSenha">🔓 Desbloquear senha</button>
+             </div>`
+          : `<p class="muted" style="color:var(--danger);">Só a diretoria pode desbloquear este acesso.</p>`) : ''}
+        <p class="muted">Usuário de login: <b>${escapeHtml(usuarioLogin)}</b> (o apelido cadastrado; se não tiver apelido, o nome completo). A senha atual não é exibida — ela fica guardada de forma protegida no servidor.</p>
+        <div class="field"><label>Nova senha (mínimo 6 caracteres)</label><input type="text" id="fc_senhaAcesso" value="" placeholder="Digite a nova senha" autocomplete="off"></div>
         <button type="button" class="btn btn-accent btn-sm" id="btnSalvarSenha">💾 Salvar senha</button>
         ${souDiretoria ? `
         <hr style="margin:16px 0; border-color:var(--surface-2);">
@@ -1493,7 +1503,7 @@ async function abrirFuncionarioCompletoModal(funcionario){
       });
       document.getElementById('btnSalvarSenha').addEventListener('click', async ()=>{
         const novaSenha = document.getElementById('fc_senhaAcesso').value.trim();
-        if(!novaSenha || novaSenha.length<4){ showToast('A senha precisa ter pelo menos 4 caracteres.'); return; }
+        if(!novaSenha || novaSenha.length<6){ showToast('A senha precisa ter pelo menos 6 caracteres.'); return; }
         const btn = document.getElementById('btnSalvarSenha');
         btn.disabled = true; btn.textContent = 'Salvando...';
         const r = await chamarFuncionarioAcesso({ op:'definirSenhaManual', senha: __gatewaySenha, funcionarioId: funcionario.id, novaSenha });
@@ -1505,6 +1515,20 @@ async function abrirFuncionarioCompletoModal(funcionario){
           renderCorpo();
         } else {
           showToast((r && r.error) || 'Não foi possível salvar a senha.');
+        }
+      });
+      const btnDesbloquear = document.getElementById('btnDesbloquearSenha');
+      if(btnDesbloquear) btnDesbloquear.addEventListener('click', async ()=>{
+        btnDesbloquear.disabled = true; btnDesbloquear.textContent = 'Desbloqueando...';
+        const r = await chamarFuncionarioAcesso({ op:'desbloquearAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id });
+        btnDesbloquear.disabled = false; btnDesbloquear.textContent = '🔓 Desbloquear senha';
+        if(r && r.ok){
+          showToast('Acesso desbloqueado. O funcionário já pode entrar com a senha de sempre.');
+          const configAtualizada = await configGetUnificada();
+          if(configAtualizada) config.users = configAtualizada.users || [];
+          renderCorpo();
+        } else {
+          showToast((r && r.error) || 'Não foi possível desbloquear.');
         }
       });
       const btnEnviarConvite = document.getElementById('btnEnviarConvite');
