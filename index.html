@@ -739,9 +739,8 @@ const SIDEBAR_MODULES = [
   { id:'loja', label:'Loja', icon:'🏬', src:null },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'vendas', label:'CUPOM', icon:'🛒', src:null },
-  { id:'caixa', label:'Caixa', icon:'💰', src:'caixa.html' },
+  { id:'caixa', label:'Caixa', icon:'💰', src:null },
   { id:'gravacoes', label:'Gravações', icon:'✍️', src:'gravacoes.html' },
-  { id:'gastos', label:'Gastos', icon:'💸', src:'gastos.html' },
   { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
   { id:'dp', label:'Departamento Pessoal', icon:'👤', src:'dp.html' },
   { id:'ia', label:'Inteligência Artificial', icon:'🤖', src:'ia.html' },
@@ -759,6 +758,21 @@ const VENDAS_SUBMODULOS = {
 };
 let vendasSubAtual = null; // null = tela dos botões; 'pdv'/'os'/'orc'/'transf' = dentro de uma sub-tela
 
+// Módulo Caixa: Resumo (relatório de movimentação) e Gastos, absorvido pra dentro —
+// diferente de Vendas, aqui NÃO tem tela de escolha: entra direto no Resumo, com uma
+// aba "Gastos" no topo pra trocar (decisão do Felipe).
+const CAIXA_SUBMODULOS = {
+  resumo: { label:'Resumo', icon:'💰', src:'caixa.html', permModulo:'caixa' },
+  gastos: { label:'Gastos', icon:'💸', src:'gastos.html', permModulo:'gastos' },
+};
+let caixaSubAtual = null; // preenchido na primeira entrada, com a 1ª sub-tela permitida
+function subCaixaPermitidos(){
+  const out = [];
+  if(currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) out.push('resumo');
+  if(currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo) out.push('gastos');
+  return out;
+}
+
 // O módulo "CUPOM" (unificado) fica disponível se a pessoa puder acessar o PDV, a O.S.,
 // o Orçamento ou Transferências.
 function podeVerModulo(m){
@@ -772,6 +786,10 @@ function podeVerModulo(m){
            (currentPermissoes['os'] && currentPermissoes['os'].ativo) ||
            (currentPermissoes['orcamentos'] && currentPermissoes['orcamentos'].ativo) ||
            (currentPermissoes['transferencias'] && currentPermissoes['transferencias'].ativo);
+  }
+  if(m.id==='caixa'){
+    return (currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) ||
+           (currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo);
   }
   return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
 }
@@ -1022,6 +1040,30 @@ function selecionarModulo(moduloId, subVendas){
     return;
   }
 
+  // ---------- MÓDULO CAIXA (Resumo + Gastos, sem tela de escolha) ----------
+  if(moduloId==='caixa'){
+    if(!caixaSubAtual){
+      const permitidos = subCaixaPermitidos();
+      caixaSubAtual = permitidos[0] || 'resumo';
+    }
+    const sub = CAIXA_SUBMODULOS[caixaSubAtual];
+    document.getElementById('mobileTopbarTitle').textContent = sub.label;
+    const chaveIframe = 'caixa_'+caixaSubAtual;
+    let iframeC = iframesCriados[chaveIframe];
+    if(!iframeC){
+      iframeC = document.createElement('iframe');
+      iframeC.src = sub.src;
+      iframeC.className = 'module-iframe';
+      iframeC.dataset.modulo = sub.permModulo;
+      document.getElementById('moduleIframesWrap').appendChild(iframeC);
+      iframesCriados[chaveIframe] = iframeC;
+      iframeC.addEventListener('load', ()=>{ if(lojaAtual) avisarLojaAtualizada(); });
+    }
+    iframeC.style.display = 'block';
+    renderCaixaTabs();
+    return;
+  }
+
   let iframe = iframesCriados[moduloId];
   if(!iframe){
     iframe = document.createElement('iframe');
@@ -1151,6 +1193,27 @@ function renderShellTabsComVoltar(moduloId, tabs, active, aoVoltar){
   });
 }
 
+/* Barra do módulo Caixa: "Resumo" e "Gastos" como botões que trocam de iframe (são
+ * 2 arquivos diferentes, não abas internas de um só) + o botão Voltar padrão. */
+function renderCaixaTabs(){
+  const wrap = document.getElementById('shellTopTabs');
+  const permitidos = subCaixaPermitidos();
+  const botoesHtml = permitidos.map(id=>{
+    const s = CAIXA_SUBMODULOS[id];
+    return `<button data-caixa-sub="${id}" class="${id===caixaSubAtual?'active':''}">${s.icon} ${escapeHtml(s.label)}</button>`;
+  }).join('');
+  const voltarHtml = `<button data-voltar-shell="1" style="margin-right:10px; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:13px; cursor:pointer;">← Voltar</button>`;
+  wrap.style.display = '';
+  wrap.innerHTML = voltarHtml + botoesHtml;
+  wrap.querySelector('button[data-voltar-shell]').addEventListener('click', voltarModulo);
+  wrap.querySelectorAll('button[data-caixa-sub]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      caixaSubAtual = b.dataset.caixaSub;
+      selecionarModulo('caixa');
+    });
+  });
+}
+
 /* Voltar pra tela anterior: se estava numa sub-tela de Vendas, volta pros 2 botões;
  * senão, volta pro módulo Vendas (tela inicial padrão). */
 function voltarModulo(){
@@ -1171,13 +1234,19 @@ window.addEventListener('message', (ev)=>{
     if(mod==='vendas' && iframesCriados['vendas_pdv']) return iframesCriados['vendas_pdv'];
     if(mod==='orcamentos' && iframesCriados['vendas_orc']) return iframesCriados['vendas_orc'];
     if(mod==='transferencias' && iframesCriados['vendas_transf']) return iframesCriados['vendas_transf'];
+    if(mod==='caixa' && iframesCriados['caixa_resumo']) return iframesCriados['caixa_resumo'];
+    if(mod==='gastos' && iframesCriados['caixa_gastos']) return iframesCriados['caixa_gastos'];
     return null;
   }
-  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas)
+  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas/caixa)
   function estaVisivel(mod){
     if(mod===moduloAtual) return true;
     if(moduloAtual==='vendas' && vendasSubAtual){
       const sub = VENDAS_SUBMODULOS[vendasSubAtual];
+      return sub && sub.permModulo===mod;
+    }
+    if(moduloAtual==='caixa' && caixaSubAtual){
+      const sub = CAIXA_SUBMODULOS[caixaSubAtual];
       return sub && sub.permModulo===mod;
     }
     return false;
