@@ -737,13 +737,12 @@ const tabsCache = {};
 
 const SIDEBAR_MODULES = [
   { id:'loja', label:'Loja', icon:'🏬', src:null },
-  { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
+  { id:'dashboard', label:'Dashboard', icon:'📊', src:null },
   { id:'vendas', label:'CUPOM', icon:'🛒', src:null },
   { id:'caixa', label:'Caixa', icon:'💰', src:null },
   { id:'gravacoes', label:'Gravações', icon:'✍️', src:'gravacoes.html' },
   { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
   { id:'dp', label:'Departamento Pessoal', icon:'👤', src:'dp.html' },
-  { id:'ia', label:'Inteligência Artificial', icon:'🤖', src:'ia.html' },
   { id:'conciliacao', label:'Conciliação de Cartão', icon:'🔄', src:'conciliacao.html' },
   { id:'config', label:'Cadastro', icon:'⚙️', src:null },
 ];
@@ -773,6 +772,21 @@ function subCaixaPermitidos(){
   return out;
 }
 
+// Módulo Dashboard: Painel (relatórios) e Inteligência Artificial, absorvido pra
+// dentro — mesmo padrão do Caixa: sem tela de escolha, entra direto no Painel, com
+// uma aba "IA" no topo pra trocar.
+const DASHBOARD_SUBMODULOS = {
+  painel: { label:'Dashboard', icon:'📊', src:'dashboard.html', permModulo:'dashboard' },
+  ia:     { label:'IA', icon:'🤖', src:'ia.html', permModulo:'ia' },
+};
+let dashboardSubAtual = null;
+function subDashboardPermitidos(){
+  const out = [];
+  if(currentPermissoes['dashboard'] && currentPermissoes['dashboard'].ativo) out.push('painel');
+  if(currentPermissoes['ia'] && currentPermissoes['ia'].ativo) out.push('ia');
+  return out;
+}
+
 // O módulo "CUPOM" (unificado) fica disponível se a pessoa puder acessar o PDV, a O.S.,
 // o Orçamento ou Transferências.
 function podeVerModulo(m){
@@ -790,6 +804,10 @@ function podeVerModulo(m){
   if(m.id==='caixa'){
     return (currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) ||
            (currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo);
+  }
+  if(m.id==='dashboard'){
+    return (currentPermissoes['dashboard'] && currentPermissoes['dashboard'].ativo) ||
+           (currentPermissoes['ia'] && currentPermissoes['ia'].ativo);
   }
   return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
 }
@@ -1064,6 +1082,30 @@ function selecionarModulo(moduloId, subVendas){
     return;
   }
 
+  // ---------- MÓDULO DASHBOARD (Painel + IA, sem tela de escolha) ----------
+  if(moduloId==='dashboard'){
+    if(!dashboardSubAtual){
+      const permitidos = subDashboardPermitidos();
+      dashboardSubAtual = permitidos[0] || 'painel';
+    }
+    const sub = DASHBOARD_SUBMODULOS[dashboardSubAtual];
+    document.getElementById('mobileTopbarTitle').textContent = sub.label;
+    const chaveIframe = 'dashboard_'+dashboardSubAtual;
+    let iframeD = iframesCriados[chaveIframe];
+    if(!iframeD){
+      iframeD = document.createElement('iframe');
+      iframeD.src = sub.src;
+      iframeD.className = 'module-iframe';
+      iframeD.dataset.modulo = sub.permModulo;
+      document.getElementById('moduleIframesWrap').appendChild(iframeD);
+      iframesCriados[chaveIframe] = iframeD;
+      iframeD.addEventListener('load', ()=>{ if(lojaAtual) avisarLojaAtualizada(); });
+    }
+    iframeD.style.display = 'block';
+    renderDashboardTabs();
+    return;
+  }
+
   let iframe = iframesCriados[moduloId];
   if(!iframe){
     iframe = document.createElement('iframe');
@@ -1214,6 +1256,28 @@ function renderCaixaTabs(){
   });
 }
 
+/* Barra do módulo Dashboard: "Dashboard" e "IA" como botões que trocam de iframe.
+ * Aqui "Voltar" não faz sentido ir pro Dashboard (já é ele) — reseta pro Painel,
+ * que é o ponto de partida do grupo. */
+function renderDashboardTabs(){
+  const wrap = document.getElementById('shellTopTabs');
+  const permitidos = subDashboardPermitidos();
+  const botoesHtml = permitidos.map(id=>{
+    const s = DASHBOARD_SUBMODULOS[id];
+    return `<button data-dashboard-sub="${id}" class="${id===dashboardSubAtual?'active':''}">${s.icon} ${escapeHtml(s.label)}</button>`;
+  }).join('');
+  const voltarHtml = `<button data-voltar-shell="1" style="margin-right:10px; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:13px; cursor:pointer;">← Voltar</button>`;
+  wrap.style.display = '';
+  wrap.innerHTML = voltarHtml + botoesHtml;
+  wrap.querySelector('button[data-voltar-shell]').addEventListener('click', ()=>{ dashboardSubAtual = null; selecionarModulo('dashboard'); });
+  wrap.querySelectorAll('button[data-dashboard-sub]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      dashboardSubAtual = b.dataset.dashboardSub;
+      selecionarModulo('dashboard');
+    });
+  });
+}
+
 /* Voltar pra tela anterior: se estava numa sub-tela de Vendas, volta pros 2 botões;
  * senão, volta pro módulo Vendas (tela inicial padrão). */
 function voltarModulo(){
@@ -1236,9 +1300,11 @@ window.addEventListener('message', (ev)=>{
     if(mod==='transferencias' && iframesCriados['vendas_transf']) return iframesCriados['vendas_transf'];
     if(mod==='caixa' && iframesCriados['caixa_resumo']) return iframesCriados['caixa_resumo'];
     if(mod==='gastos' && iframesCriados['caixa_gastos']) return iframesCriados['caixa_gastos'];
+    if(mod==='dashboard' && iframesCriados['dashboard_painel']) return iframesCriados['dashboard_painel'];
+    if(mod==='ia' && iframesCriados['dashboard_ia']) return iframesCriados['dashboard_ia'];
     return null;
   }
-  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas/caixa)
+  // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas/caixa/dashboard)
   function estaVisivel(mod){
     if(mod===moduloAtual) return true;
     if(moduloAtual==='vendas' && vendasSubAtual){
@@ -1247,6 +1313,10 @@ window.addEventListener('message', (ev)=>{
     }
     if(moduloAtual==='caixa' && caixaSubAtual){
       const sub = CAIXA_SUBMODULOS[caixaSubAtual];
+      return sub && sub.permModulo===mod;
+    }
+    if(moduloAtual==='dashboard' && dashboardSubAtual){
+      const sub = DASHBOARD_SUBMODULOS[dashboardSubAtual];
       return sub && sub.permModulo===mod;
     }
     return false;
