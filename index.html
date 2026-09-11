@@ -329,7 +329,7 @@
       <div id="configPanelShell" style="display:none;">
         <div class="cfg-head">
           <h1>Cadastro</h1>
-          <p>Esses cadastros são únicos e compartilhados: qualquer alteração aqui vale imediatamente para os demais módulos.</p>
+          <p>Esses cadastros são únicos e compartilhados: qualquer alteração aqui vale imediatamente para os demais módulos. Funcionários e acessos ficam na aba Departamento Pessoal.</p>
         </div>
         <div class="cfg-tabs" id="cfgTabs"></div>
         <div id="cfgBody"></div>
@@ -734,8 +734,7 @@ const SIDEBAR_MODULES = [
   { id:'vendas', label:'CUPOM', icon:'🛒', src:null },
   { id:'caixa', label:'Caixa', icon:'💰', src:null },
   { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
-  { id:'dp', label:'Departamento Pessoal', icon:'👤', src:'dp.html' },
-  { id:'config', label:'Cadastro', icon:'⚙️', src:null },
+  { id:'config', label:'Administração', icon:'⚙️', src:null },
 ];
 // Sub-telas do módulo CUPOM (antigo "Vendas"): PDV (lançar venda), O.S. (lançar
 // pedido), Orçamento, Transferências e Gravações — todas absorvidas como sub-telas,
@@ -774,6 +773,21 @@ const DASHBOARD_SUBMODULOS = {
   ia:     { label:'IA', icon:'🤖', src:'ia.html', permModulo:'ia' },
 };
 let dashboardSubAtual = null;
+
+// Sub-telas do módulo ADMINISTRAÇÃO (antigo item "Cadastro"): o painel interno de
+// cadastros compartilhados (não é iframe) + o Departamento Pessoal (dp.html), que era
+// item próprio do menu. Abas no topo, sem tela de escolha, abre na primeira permitida.
+const CONFIG_SUBMODULOS = {
+  cadastro: { label:'Cadastro', icon:'📇', src:null, permModulo:'config' },
+  dp:       { label:'Departamento Pessoal', icon:'👤', src:'dp.html', permModulo:'dp' },
+};
+let configSubAtual = null;
+function subConfigPermitidos(){
+  const out = [];
+  if(currentPermissoes['config'] && currentPermissoes['config'].ativo) out.push('cadastro');
+  if(currentPermissoes['dp'] && currentPermissoes['dp'].ativo) out.push('dp');
+  return out;
+}
 function subDashboardPermitidos(){
   const out = [];
   if(currentPermissoes['dashboard'] && currentPermissoes['dashboard'].ativo) out.push('painel');
@@ -799,6 +813,10 @@ function podeVerModulo(m){
   if(m.id==='dashboard'){
     return (currentPermissoes['dashboard'] && currentPermissoes['dashboard'].ativo) ||
            (currentPermissoes['ia'] && currentPermissoes['ia'].ativo);
+  }
+  if(m.id==='config'){
+    return (currentPermissoes['config'] && currentPermissoes['config'].ativo) ||
+           (currentPermissoes['dp'] && currentPermissoes['dp'].ativo);
   }
   return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
 }
@@ -949,7 +967,8 @@ function enterShell(moduloInicial){
     alvo = permitidos.find(m=>m.id===moduloInicial) || null;
   }
   if(!alvo){
-    // nunca cai em "Loja" ou "Cadastro" como tela inicial — vai pro primeiro módulo de trabalho liberado
+    // Administração (Cadastro/DP) só como tela inicial se for a única coisa liberada —
+    // senão vai pro Dashboard ou pro primeiro módulo de trabalho
     alvo = permitidos.find(m=>m.id==='dashboard') || permitidos.find(m=>m.id!=='config' && m.id!=='loja') || permitidos[0];
   }
   selecionarModulo(alvo.id);
@@ -1003,6 +1022,7 @@ const MODULOS_ABSORVIDOS = {
   transferencias:['vendas','transf'], gravacoes:['vendas','grav'],
   gastos:['caixa','gastos'], conciliacao:['caixa','conciliacao'],
   ia:['dashboard','ia'],
+  dp:['config','dp'],
 };
 function selecionarModulo(moduloId, subVendas){
   const absorvido = MODULOS_ABSORVIDOS[moduloId];
@@ -1011,6 +1031,7 @@ function selecionarModulo(moduloId, subVendas){
     if(grupo==='vendas') return selecionarModulo('vendas', subVendasPermitidos().includes(sub) ? sub : undefined);
     if(grupo==='caixa' && subCaixaPermitidos().includes(sub)) caixaSubAtual = sub;
     if(grupo==='dashboard' && subDashboardPermitidos().includes(sub)) dashboardSubAtual = sub;
+    if(grupo==='config' && subConfigPermitidos().includes(sub)) configSubAtual = sub;
     return selecionarModulo(grupo);
   }
   if(!SIDEBAR_MODULES.find(m=>m.id===moduloId)){
@@ -1031,11 +1052,34 @@ function selecionarModulo(moduloId, subVendas){
   document.getElementById('vendasHome').style.display = 'none';
   Object.values(iframesCriados).forEach(f=> f.style.display = 'none');
 
+  // ---------- MÓDULO ADMINISTRAÇÃO (Cadastro + Departamento Pessoal, sem tela de escolha) ----------
   if(moduloId==='config'){
-    document.getElementById('shellTopTabs').innerHTML = ''; document.getElementById('shellTopTabs').style.display = 'none';
-    document.getElementById('configPanelShell').style.display = 'block';
-    buildCfgTabs();
-    renderCfgTab(currentCfgTab);
+    if(!configSubAtual || !subConfigPermitidos().includes(configSubAtual)){
+      const permitidos = subConfigPermitidos();
+      configSubAtual = permitidos[0] || 'cadastro';
+    }
+    const sub = CONFIG_SUBMODULOS[configSubAtual];
+    document.getElementById('mobileTopbarTitle').textContent = sub.label;
+    if(configSubAtual==='cadastro'){
+      document.getElementById('configPanelShell').style.display = 'block';
+      buildCfgTabs();
+      renderCfgTab(currentCfgTab);
+      renderConfigTabs();
+      return;
+    }
+    const chaveIframe = 'config_'+configSubAtual;
+    let iframeA = iframesCriados[chaveIframe];
+    if(!iframeA){
+      iframeA = document.createElement('iframe');
+      iframeA.src = sub.src;
+      iframeA.className = 'module-iframe';
+      iframeA.dataset.modulo = sub.permModulo;
+      document.getElementById('moduleIframesWrap').appendChild(iframeA);
+      iframesCriados[chaveIframe] = iframeA;
+      iframeA.addEventListener('load', ()=>{ if(lojaAtual) avisarLojaAtualizada(); });
+    }
+    iframeA.style.display = 'block';
+    renderConfigTabs();
     return;
   }
 
@@ -1297,6 +1341,44 @@ function renderDashboardTabs(){
   });
 }
 
+/* Barra do módulo Administração: "Cadastro" e "Departamento Pessoal" como botões que
+ * trocam de tela + Voltar padrão. Quando o DP está aberto, as abas internas dele
+ * (vindas pela mensagem 'tabs') ficam ao lado dos botões do grupo, em vez de
+ * substituí-los — senão o usuário perdia o caminho de volta pro Cadastro. */
+function renderConfigTabs(){
+  const wrap = document.getElementById('shellTopTabs');
+  const permitidos = subConfigPermitidos();
+  const botoesHtml = permitidos.map(id=>{
+    const s = CONFIG_SUBMODULOS[id];
+    return `<button data-config-sub="${id}" class="${id===configSubAtual?'active':''}">${s.icon} ${escapeHtml(s.label)}</button>`;
+  }).join('');
+  let abasHtml = '';
+  const sub = CONFIG_SUBMODULOS[configSubAtual];
+  const tc = sub && sub.src ? tabsCache[sub.permModulo] : null;
+  if(tc && tc.tabs && tc.tabs.length){
+    abasHtml = `<span style="display:inline-block; width:1px; height:22px; background:var(--line); margin:0 10px; vertical-align:middle;"></span>` +
+      tc.tabs.map(t=>`<button data-tab="${t.id}" class="${t.id===tc.active?'active':''}">${t.icon?t.icon+' ':''}${escapeHtml(t.label)}</button>`).join('');
+  }
+  const voltarHtml = `<button data-voltar-shell="1" style="margin-right:10px; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:13px; cursor:pointer;">← Voltar</button>`;
+  wrap.style.display = '';
+  wrap.innerHTML = voltarHtml + botoesHtml + abasHtml;
+  wrap.querySelector('button[data-voltar-shell]').addEventListener('click', voltarModulo);
+  wrap.querySelectorAll('button[data-config-sub]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      configSubAtual = b.dataset.configSub;
+      selecionarModulo('config');
+    });
+  });
+  wrap.querySelectorAll('button[data-tab]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      wrap.querySelectorAll('button[data-tab]').forEach(x=>x.classList.toggle('active', x===b));
+      const iframe = iframesCriados['config_'+configSubAtual];
+      if(iframe && iframe.contentWindow) iframe.contentWindow.postMessage({ type:'gotoTab', tabId:b.dataset.tab }, '*');
+      if(tc) tc.active = b.dataset.tab;
+    });
+  });
+}
+
 /* Voltar pra tela anterior: se estava numa sub-tela de Vendas, volta pros 2 botões;
  * senão, volta pro módulo Vendas (tela inicial padrão). */
 function voltarModulo(){
@@ -1323,6 +1405,7 @@ window.addEventListener('message', (ev)=>{
     if(mod==='conciliacao' && iframesCriados['caixa_conciliacao']) return iframesCriados['caixa_conciliacao'];
     if(mod==='dashboard' && iframesCriados['dashboard_painel']) return iframesCriados['dashboard_painel'];
     if(mod==='ia' && iframesCriados['dashboard_ia']) return iframesCriados['dashboard_ia'];
+    if(mod==='dp' && iframesCriados['config_dp']) return iframesCriados['config_dp'];
     return null;
   }
   // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas/caixa/dashboard)
@@ -1340,6 +1423,10 @@ window.addEventListener('message', (ev)=>{
       const sub = DASHBOARD_SUBMODULOS[dashboardSubAtual];
       return sub && sub.permModulo===mod;
     }
+    if(moduloAtual==='config' && configSubAtual){
+      const sub = CONFIG_SUBMODULOS[configSubAtual];
+      return sub && sub.permModulo===mod;
+    }
     return false;
   }
   if(d.type === 'irParaModulo'){
@@ -1355,7 +1442,10 @@ window.addEventListener('message', (ev)=>{
     }
   } else if(d.type === 'tabs'){
     tabsCache[d.modulo] = { tabs: d.tabs, active: d.active };
-    if(estaVisivel(d.modulo)) renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
+    if(estaVisivel(d.modulo)){
+      if(moduloAtual==='config') renderConfigTabs();
+      else renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
+    }
   } else if(d.type === 'activeTab'){
     if(!tabsCache[d.modulo]) tabsCache[d.modulo] = { tabs:[], active:d.tabId };
     else tabsCache[d.modulo].active = d.tabId;
