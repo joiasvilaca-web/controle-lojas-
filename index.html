@@ -1055,8 +1055,8 @@ let pendingAbrirRegistro = null;
 function abrirLeitorCodigo(){
   openModal(`
     <h3>Leitor de código</h3>
-    <p class="muted">Digite o código impresso na via, ou use o leitor de código de barras (ele escreve sozinho e aperta Enter).</p>
-    <div class="field"><label>Código</label><input id="lc_codigo" placeholder="Ex: 42-V" autocomplete="off" style="font-size:16px; letter-spacing:.03em;"></div>
+    <p class="muted">Digite o código impresso na via, ou use o leitor de código de barras (ele escreve sozinho e aperta Enter). Assim que o código for reconhecido, a via abre automaticamente.</p>
+    <div class="field"><label>Código</label><input id="lc_codigo" placeholder="Ex: MC1V" autocomplete="off" style="font-size:16px; letter-spacing:.03em;"></div>
     <div id="lc_resultado" style="margin-top:10px;"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="lc_fechar">Fechar</button>
@@ -1066,6 +1066,25 @@ function abrirLeitorCodigo(){
   const inp = document.getElementById('lc_codigo');
   const resultadoWrap = document.getElementById('lc_resultado');
   document.getElementById('lc_fechar').addEventListener('click', closeModal);
+  /** Abre a via encontrada direto — sem exigir mais nenhum clique. */
+  function abrirRegistroEncontrado(tipo, registro){
+    closeModal();
+    const subAlvo = tipo==='venda' ? 'pdv' : 'os';
+    const chaveIframe = 'vendas_'+subAlvo;
+    const permModuloAlvo = tipo==='venda' ? 'vendas' : 'os';
+    const iframeJaExistia = !!iframesCriados[chaveIframe];
+    selecionarModulo('vendas', subAlvo);
+    if(iframeJaExistia){
+      // O iframe já estava carregado e autenticado — não vai mandar 'ready' de novo,
+      // então manda a instrução direto.
+      const iframeAtual = iframesCriados[chaveIframe];
+      if(iframeAtual && iframeAtual.contentWindow) iframeAtual.contentWindow.postMessage({ type:'abrirRegistro', id: registro.id }, '*');
+    } else {
+      // Iframe novo: vai mandar 'ready' em instantes — a instrução é entregue
+      // assim que isso acontecer (ver handler de 'ready').
+      pendingAbrirRegistro = { permModulo: permModuloAlvo, id: registro.id };
+    }
+  }
   async function buscar(){
     const codigo = inp.value.trim();
     if(!codigo) return;
@@ -1077,32 +1096,8 @@ function abrirLeitorCodigo(){
     }
     const { tipo, registro } = r.data;
     const nomeTipo = tipo==='venda' ? 'Venda' : 'Pedido (O.S.)';
-    const valor = registro.valorTotal!=null ? `R$ ${Number(registro.valorTotal).toFixed(2)}` : '';
-    resultadoWrap.innerHTML = `
-      <button type="button" id="lc_abrirResultado" style="display:block; width:100%; text-align:left; background:var(--surface-2,#f5f5f5); border:1px solid var(--line,#ddd); border-radius:10px; padding:12px 14px; cursor:pointer; font-family:inherit;">
-        <div style="font-weight:800; font-size:14px;">${nomeTipo} — ${escapeHtml(registro.codigoVia||codigo)}</div>
-        <div class="muted" style="font-size:13px; margin-top:2px;">${escapeHtml(registro.cliente||'cliente não identificado')}${valor?' · '+valor:''}</div>
-        <div class="muted" style="font-size:12px; margin-top:4px;">Clique para abrir</div>
-      </button>
-    `;
-    document.getElementById('lc_abrirResultado').addEventListener('click', ()=>{
-      closeModal();
-      const subAlvo = tipo==='venda' ? 'pdv' : 'os';
-      const chaveIframe = 'vendas_'+subAlvo;
-      const permModuloAlvo = tipo==='venda' ? 'vendas' : 'os';
-      const iframeJaExistia = !!iframesCriados[chaveIframe];
-      selecionarModulo('vendas', subAlvo);
-      if(iframeJaExistia){
-        // O iframe já estava carregado e autenticado — não vai mandar 'ready' de novo,
-        // então manda a instrução direto.
-        const iframeAtual = iframesCriados[chaveIframe];
-        if(iframeAtual && iframeAtual.contentWindow) iframeAtual.contentWindow.postMessage({ type:'abrirRegistro', id: registro.id }, '*');
-      } else {
-        // Iframe novo: vai mandar 'ready' em instantes — a instrução é entregue
-        // assim que isso acontecer (ver handler de 'ready' abaixo).
-        pendingAbrirRegistro = { permModulo: permModuloAlvo, id: registro.id };
-      }
-    });
+    resultadoWrap.innerHTML = `<p style="color:var(--ok,#188a54); font-weight:700;">${nomeTipo} ${escapeHtml(registro.codigoVia||codigo)} encontrada — abrindo…</p>`;
+    abrirRegistroEncontrado(tipo, registro);
   }
   document.getElementById('lc_buscar').addEventListener('click', buscar);
   inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); buscar(); } });
