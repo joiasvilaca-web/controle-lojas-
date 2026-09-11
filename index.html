@@ -339,6 +339,13 @@
         <div class="cfg-tabs" id="cfgTabs"></div>
         <div id="cfgBody"></div>
       </div>
+      <div id="lojaPanelShell" style="display:none; max-width:640px; margin:0 auto; padding:24px 20px;">
+        <div style="text-align:center; margin-bottom:26px;">
+          <h1 style="font-family:'Cormorant Garamond',serif; font-size:30px; font-weight:700; margin:0 0 6px; color:var(--ink);">Escolha a loja</h1>
+          <p style="color:var(--muted); font-size:14px; margin:0;">Você pode trocar de loja a qualquer momento pelo menu, ou clicando ao lado da logo.</p>
+        </div>
+        <div id="lojaPanelBotoes"></div>
+      </div>
       <div id="vendasHome" style="display:none; max-width:900px; margin:0 auto; padding:24px 20px;">
         <div style="text-align:center; margin-bottom:26px;">
           <h1 style="font-family:'Cormorant Garamond',serif; font-size:30px; font-weight:700; margin:0 0 6px; color:var(--ink);">Vendas</h1>
@@ -687,6 +694,33 @@ function avisarLojaAtualizada(){
 }
 
 /* Renderiza a tela de seleção de loja com um botão colorido por loja liberada. */
+/* Versão de página cheia (módulo "Loja" na barra lateral) — mesma lista de botões
+ * do popover, só que navega pro módulo atual/Dashboard depois de escolher, em vez
+ * de só fechar um popover. */
+function renderLojaPainelCompleto(){
+  const lojasPermitidas = (config.lojas||[]).filter(l=>lojasPermitidasParaUsuario().includes(l.id));
+  const wrap = document.getElementById('lojaPanelBotoes');
+  if(lojasPermitidas.length===0){
+    wrap.innerHTML = '<p class="muted">Nenhuma loja liberada pro seu acesso. Fale com a diretoria.</p>';
+    return;
+  }
+  wrap.innerHTML = lojasPermitidas.map(l=>`
+    <button type="button" class="loja-btn" data-lojaid="${l.id}" style="background:${l.cor||'#7a1f3d'};">
+      <span class="loja-btn-abrev">${escapeHtml(l.abreviacao||'')}</span>
+      <span>${escapeHtml(l.nome)}</span>
+      ${lojaAtual===l.id?'<span style="margin-left:auto; font-size:12px;">✓ atual</span>':''}
+    </button>
+  `).join('');
+  wrap.querySelectorAll('[data-lojaid]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      const escolhida = b.dataset.lojaid;
+      salvarLojaAtual(escolhida);
+      showToast('Loja alterada: ' + (lojaInfo(escolhida)?lojaInfo(escolhida).nome:''));
+      const proximo = 'dashboard';
+      selecionarModulo(proximo);
+    });
+  });
+}
 function renderLojaPanel(){
   const lojasPermitidas = (config.lojas||[]).filter(l=>lojasPermitidasParaUsuario().includes(l.id));
   const wrap = document.getElementById('lojaSeletorPopover');
@@ -758,6 +792,7 @@ function avisarClientesAtualizados(){
 const tabsCache = {};
 
 const SIDEBAR_MODULES = [
+  { id:'loja', label:'Loja', icon:'🏬', src:null },
   { id:'dashboard', label:'Dashboard', icon:'📊', src:null },
   { id:'vendas', label:'CUPOM', icon:'🛒', src:null },
   { id:'caixa', label:'Caixa', icon:'💰', src:null },
@@ -812,6 +847,11 @@ function subDashboardPermitidos(){
 // O módulo "CUPOM" (unificado) fica disponível se a pessoa puder acessar o PDV, a O.S.,
 // o Orçamento ou Transferências.
 function podeVerModulo(m){
+  if(m.id==='loja'){
+    // o item "Loja" só faz sentido quando há mais de uma loja pra escolher;
+    // com uma única loja liberada ela já entra selecionada e o menu fica limpo
+    return lojasPermitidasParaUsuario().length>1;
+  }
   if(m.id==='vendas'){
     return (currentPermissoes['vendas'] && currentPermissoes['vendas'].ativo) ||
            (currentPermissoes['os'] && currentPermissoes['os'].ativo) ||
@@ -955,9 +995,7 @@ function enterShell(moduloInicial){
   verificarAlertaGastos();
   const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
   if(decisaoLoja==='PRECISA_ESCOLHER'){
-    toggleSeletorLoja(true);
-    document.getElementById('shellEmptyState').style.display = 'block';
-    document.getElementById('shellEmptyState').textContent = 'Escolha uma loja pra começar (ao lado do seu nome, no canto inferior esquerdo).';
+    selecionarModulo('loja');
     return;
   }
   if(permitidos.length===0){
@@ -1029,6 +1067,7 @@ function selecionarModulo(moduloId, subVendas){
   document.getElementById('shellEmptyState').style.display = 'none';
   document.querySelectorAll('.side-item').forEach(b=> b.classList.toggle('active', b.dataset.modulo===moduloId));
   document.getElementById('configPanelShell').style.display = 'none';
+  document.getElementById('lojaPanelShell').style.display = 'none';
   document.getElementById('vendasHome').style.display = 'none';
   Object.values(iframesCriados).forEach(f=> f.style.display = 'none');
 
@@ -1037,6 +1076,13 @@ function selecionarModulo(moduloId, subVendas){
     document.getElementById('configPanelShell').style.display = 'block';
     buildCfgTabs();
     renderCfgTab(currentCfgTab);
+    return;
+  }
+
+  if(moduloId==='loja'){
+    document.getElementById('shellTopTabs').innerHTML = ''; document.getElementById('shellTopTabs').style.display = 'none';
+    document.getElementById('lojaPanelShell').style.display = 'block';
+    renderLojaPainelCompleto();
     return;
   }
 
