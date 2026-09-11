@@ -641,6 +641,41 @@ async function copyToClipboard(text){
   }
 }
 function onlyDigits(s){ return (s||'').replace(/\D/g,''); }
+/** Separa um telefone já salvo (qualquer formato) em {ddd, numero}, pra preencher os
+ * dois campos separados na edição. Aceita tanto o novo padrão (11 dígitos, celular)
+ * quanto números antigos de 10 (fixo, salvos antes dessa mudança). */
+function separarTelefone(str){
+  const digitos = onlyDigits(str||'');
+  if(digitos.length===11 || digitos.length===10) return { ddd: digitos.slice(0,2), numero: digitos.slice(2) };
+  return { ddd:'', numero:'' };
+}
+/** Formata os dígitos do número conforme a pessoa digita — XXXXX-XXXX (celular) ou
+ * XXXX-XXXX se for um fixo antigo de 8 dígitos, mantido por compatibilidade. */
+function formatarNumeroTelefone(digitos){
+  digitos = digitos.slice(0,9);
+  if(digitos.length<=4) return digitos;
+  if(digitos.length<=8) return digitos.slice(0,digitos.length-4)+'-'+digitos.slice(-4);
+  return digitos.slice(0,5)+'-'+digitos.slice(5);
+}
+function wireTelefoneMask(prefix){
+  const dddInp = document.getElementById(prefix+'_telefoneDDD');
+  const numInp = document.getElementById(prefix+'_telefoneNum');
+  if(dddInp) dddInp.addEventListener('input', ()=>{ dddInp.value = onlyDigits(dddInp.value).slice(0,2); });
+  if(numInp) numInp.addEventListener('input', ()=>{ numInp.value = formatarNumeroTelefone(onlyDigits(numInp.value)); });
+}
+/** Junta DDD+número num telefone só, no formato "(XX) XXXXX-XXXX", pra continuar
+ * gravando como sempre. Os dois em branco = válido, salva vazio. Só um preenchido
+ * ou número incompleto = erro — avisa e retorna null. */
+function combinarTelefoneValidado(prefix){
+  const ddd = onlyDigits((document.getElementById(prefix+'_telefoneDDD')||{}).value);
+  const numero = onlyDigits((document.getElementById(prefix+'_telefoneNum')||{}).value);
+  if(!ddd && !numero) return '';
+  if(ddd.length!==2 || numero.length!==9){
+    showToast('Telefone incompleto — preencha o DDD (2 dígitos) e o número (9 dígitos), ou deixe os dois em branco.');
+    return null;
+  }
+  return `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}`;
+}
 /** Ícone do WhatsApp de verdade (SVG), pra usar nos botões de envio em vez do emoji genérico. */
 function waIconSvg(tamanho){
   tamanho = tamanho || 15;
@@ -1190,12 +1225,17 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
   wireClienteFields('sel', {});
 
   function preencherFormulario(c){
-    const map = { cpf:c.cpf, cliente:c.nome, telefone:c.telefone, email:c.email, nascimento:c.dataNascimento,
+    const map = { cpf:c.cpf, cliente:c.nome, email:c.email, nascimento:c.dataNascimento,
       cep:c.cep, endereco:c.endereco, numero:c.numero, complemento:c.complemento, bairro:c.bairro, cidade:c.cidade, estado:c.estado };
     Object.keys(map).forEach(campo=>{
       const el = document.getElementById('sel_'+campo);
       if(el) el.value = map[campo] || '';
     });
+    const tel = separarTelefone(c.telefone||'');
+    const dddEl = document.getElementById('sel_telefoneDDD');
+    const numEl = document.getElementById('sel_telefoneNum');
+    if(dddEl) dddEl.value = tel.ddd;
+    if(numEl) numEl.value = formatarNumeroTelefone(tel.numero);
     selecionado = c;
   }
 
@@ -1222,9 +1262,11 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
   document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
     const nome = maiusc(document.getElementById('sel_cliente').value);
     if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    const telefoneCombinado = combinarTelefoneValidado('sel');
+    if(telefoneCombinado === null) return;
     const patch = {
       nome,
-      telefone: document.getElementById('sel_telefone').value.trim(),
+      telefone: telefoneCombinado,
       email: document.getElementById('sel_email').value.trim(),
       cpf: document.getElementById('sel_cpf').value.trim(),
       dataNascimento: document.getElementById('sel_nascimento').value,
@@ -1445,11 +1487,15 @@ function enderecoCompleto(c){
 function clienteFieldsHtml(prefix, c){
   c = c || {};
   const nome = c.cliente !== undefined ? c.cliente : (c.nome || '');
+  const tel = separarTelefone(c.telefone||'');
   return `
     <div class="grid-2">
       <div class="field"><label>CPF</label><input id="${prefix}_cpf" placeholder="000.000.000-00" value="${escapeHtml(c.cpf||'')}"></div>
       <div class="field"><label>Nome do cliente</label><input id="${prefix}_cliente" placeholder="Nome completo" value="${escapeHtml(nome)}"></div>
-      <div class="field"><label>Telefone</label><input id="${prefix}_telefone" placeholder="(00) 00000-0000" value="${escapeHtml(c.telefone||'')}"></div>
+      <div class="field"><label>Telefone / WhatsApp</label><div style="display:flex; gap:6px;">
+        <input id="${prefix}_telefoneDDD" placeholder="DDD" maxlength="2" inputmode="numeric" style="width:56px; flex-shrink:0;" value="${escapeHtml(tel.ddd)}">
+        <input id="${prefix}_telefoneNum" placeholder="00000-0000" maxlength="10" inputmode="numeric" value="${escapeHtml(tel.numero.length>=8 ? formatarNumeroTelefone(tel.numero) : tel.numero)}">
+      </div></div>
       <div class="field"><label>E-mail do cliente</label><input type="email" id="${prefix}_email" placeholder="cliente@email.com" value="${escapeHtml(c.email||'')}"></div>
       <div class="field"><label>Data de nascimento</label><input type="date" id="${prefix}_nascimento" value="${c.dataNascimento||''}"></div>
       <div class="field"><label>CEP</label><input id="${prefix}_cep" placeholder="00000-000" value="${escapeHtml(c.cep||'')}"></div>
@@ -1483,6 +1529,7 @@ async function buscarEnderecoPorCep(cep){
  */
 function wireClienteFields(prefix, opts){
   opts = opts || {};
+  wireTelefoneMask(prefix);
   const cepInp = document.getElementById(prefix+'_cep');
   if(cepInp){
     cepInp.addEventListener('blur', async ()=>{
@@ -3155,7 +3202,9 @@ function openEditModalCompleto(order, opts){
   if(btnEditarCadCliEdit){
     btnEditarCadCliEdit.addEventListener('click', ()=>{
       // Acha o cliente no cadastro central pelo telefone/CPF que estão na ordem.
-      const telAtual = (document.getElementById('e_telefone')||{}).value || order.telefone || '';
+      const ddd = onlyDigits((document.getElementById('e_telefoneDDD')||{}).value);
+      const numero = onlyDigits((document.getElementById('e_telefoneNum')||{}).value);
+      const telAtual = (ddd && numero) ? `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}` : (order.telefone || '');
       const cpfAtual = (document.getElementById('e_cpf')||{}).value || order.cpf || '';
       const idx = findClienteIndex(telAtual, cpfAtual);
       if(idx === -1){
@@ -3264,7 +3313,8 @@ function openEditModalCompleto(order, opts){
   document.getElementById('editCancel').addEventListener('click', closeModal);
   document.getElementById('editSave').addEventListener('click', async ()=>{
     const cliente = maiusc(document.getElementById('e_cliente').value);
-    const telefone = document.getElementById('e_telefone').value.trim();
+    const telefone = combinarTelefoneValidado('e');
+    if(telefone === null) return;
     const email = document.getElementById('e_email').value.trim();
     const cpf = document.getElementById('e_cpf').value.trim();
     const dataNascimento = document.getElementById('e_nascimento').value;
