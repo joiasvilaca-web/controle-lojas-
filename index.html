@@ -227,7 +227,7 @@
   .loja-badge{display:none; font-size:10.5px; font-weight:800; padding:2px 8px; border-radius:999px; color:#fff; margin-left:6px; letter-spacing:.4px;}
   #configPanelShell{max-width:900px; margin:0 auto; color:var(--ink);}
   #moduleIframesWrap{position:absolute; inset:0; pointer-events:none;}
-  .vendas-home-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:18px;}
+  .vendas-home-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
   @media(max-width:640px){ .vendas-home-grid{grid-template-columns:1fr;} }
   .vendas-home-btn{
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px;
@@ -729,6 +729,7 @@ const SIDEBAR_MODULES = [
   { id:'dashboard', label:'Dashboard', icon:'📊', src:'dashboard.html' },
   { id:'vendas', label:'Vendas', icon:'🛒', src:null },
   { id:'caixa', label:'Caixa', icon:'💰', src:'caixa.html' },
+  { id:'orcamentos', label:'Orçamentos', icon:'📝', src:'orcamentos.html' },
   { id:'gravacoes', label:'Gravações', icon:'✍️', src:'gravacoes.html' },
   { id:'gastos', label:'Gastos', icon:'💸', src:'gastos.html' },
   { id:'marketing', label:'Marketing', icon:'📣', src:'marketing.html' },
@@ -739,12 +740,11 @@ const SIDEBAR_MODULES = [
   { id:'vendapg', label:'Venda PG', icon:'📊', src:'venda-pg.html' },
   { id:'config', label:'Cadastro', icon:'⚙️', src:null },
 ];
-// Sub-telas do módulo Vendas: o PDV (lançar venda), a O.S. (lançar pedido) e
-// Orçamentos. Vivem em iframes próprios, alternados pela tela inicial dos botões.
+// Sub-telas do módulo Vendas: o PDV (lançar venda) e a O.S. (lançar pedido).
+// Vivem em iframes próprios, alternados pela tela inicial dos 2 botões.
 const VENDAS_SUBMODULOS = {
   pdv: { label:'Vendas', icon:'🛒', src:'vendas.html', permModulo:'vendas' },
   os:  { label:'Pedido', icon:'🧾', src:'painel-ordens.html', permModulo:'os' },
-  orc: { label:'Orçamentos', icon:'📝', src:'orcamentos.html', permModulo:'orcamentos' },
 };
 let vendasSubAtual = null; // null = tela dos 2 botões; 'pdv' ou 'os' = dentro de uma sub-tela
 
@@ -765,7 +765,6 @@ function subVendasPermitidos(){
   const out = [];
   if(currentPermissoes['vendas'] && currentPermissoes['vendas'].ativo) out.push('pdv');
   if(currentPermissoes['os'] && currentPermissoes['os'].ativo) out.push('os');
-  if(currentPermissoes['orcamentos'] && currentPermissoes['orcamentos'].ativo) out.push('orc');
   return out;
 }
 
@@ -1029,17 +1028,80 @@ function selecionarModulo(moduloId, subVendas){
 function renderVendasHome(){
   const subs = subVendasPermitidos();
   const wrap = document.getElementById('vendasHomeBotoes');
-  const labelSub = { pdv:{icon:'🛒', label:'Vendas', sub:'Registrar e consultar vendas do PDV'}, os:{icon:'🧾', label:'Pedido', sub:'Abrir e acompanhar ordens de serviço'}, orc:{icon:'📝', label:'Orçamentos', sub:'Montar e consultar orçamentos'} };
+  const labelSub = { pdv:{icon:'🛒', label:'Vendas', sub:'Registrar e consultar vendas do PDV'}, os:{icon:'🧾', label:'Pedido', sub:'Abrir e acompanhar ordens de serviço'} };
   wrap.innerHTML = subs.map(s=>`
     <button class="vendas-home-btn" data-sub="${s}">
       <span class="vh-icon">${labelSub[s].icon}</span>
       <span class="vh-label">${labelSub[s].label}</span>
       <span class="vh-sub">${labelSub[s].sub}</span>
     </button>
-  `).join('');
+  `).join('') + (subs.length>0 ? `
+    <button class="vendas-home-btn" id="btnLeitorCodigo">
+      <span class="vh-icon">🔍</span>
+      <span class="vh-label">Leitor de código</span>
+      <span class="vh-sub">Digite ou leia o código de barras de uma via</span>
+    </button>
+  ` : '');
   wrap.querySelectorAll('[data-sub]').forEach(b=>{
     b.addEventListener('click', ()=> selecionarModulo('vendas', b.dataset.sub));
   });
+  const btnLeitor = document.getElementById('btnLeitorCodigo');
+  if(btnLeitor) btnLeitor.addEventListener('click', abrirLeitorCodigo);
+}
+
+/** Registro pendente de abertura: setado quando a pessoa clica num resultado do
+ * leitor de código, e consumido assim que o iframe do submódulo avisa 'ready'. */
+let pendingAbrirRegistro = null;
+function abrirLeitorCodigo(){
+  openModal(`
+    <h3>Leitor de código</h3>
+    <p class="muted">Digite o código impresso na via, ou use o leitor de código de barras (ele escreve sozinho e aperta Enter). Assim que o código for reconhecido, a via abre automaticamente.</p>
+    <div class="field"><label>Código</label><input id="lc_codigo" placeholder="Ex: MC1V" autocomplete="off" style="font-size:16px; letter-spacing:.03em;"></div>
+    <div id="lc_resultado" style="margin-top:10px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="lc_fechar">Fechar</button>
+      <button class="btn btn-accent" id="lc_buscar">Buscar</button>
+    </div>
+  `);
+  const inp = document.getElementById('lc_codigo');
+  const resultadoWrap = document.getElementById('lc_resultado');
+  document.getElementById('lc_fechar').addEventListener('click', closeModal);
+  /** Abre a via encontrada direto — sem exigir mais nenhum clique. */
+  function abrirRegistroEncontrado(tipo, registro){
+    closeModal();
+    const subAlvo = tipo==='venda' ? 'pdv' : 'os';
+    const chaveIframe = 'vendas_'+subAlvo;
+    const permModuloAlvo = tipo==='venda' ? 'vendas' : 'os';
+    const iframeJaExistia = !!iframesCriados[chaveIframe];
+    selecionarModulo('vendas', subAlvo);
+    if(iframeJaExistia){
+      // O iframe já estava carregado e autenticado — não vai mandar 'ready' de novo,
+      // então manda a instrução direto.
+      const iframeAtual = iframesCriados[chaveIframe];
+      if(iframeAtual && iframeAtual.contentWindow) iframeAtual.contentWindow.postMessage({ type:'abrirRegistro', id: registro.id }, '*');
+    } else {
+      // Iframe novo: vai mandar 'ready' em instantes — a instrução é entregue
+      // assim que isso acontecer (ver handler de 'ready').
+      pendingAbrirRegistro = { permModulo: permModuloAlvo, id: registro.id };
+    }
+  }
+  async function buscar(){
+    const codigo = inp.value.trim();
+    if(!codigo) return;
+    resultadoWrap.innerHTML = `<p class="muted">Buscando…</p>`;
+    const r = await gatewayCall({ op:'buscarPorCodigoVia', params:{ codigo } });
+    if(!r || r.error || !r.data){
+      resultadoWrap.innerHTML = `<p style="color:var(--danger,#b3261e); font-weight:700;">Nenhuma venda ou O.S. encontrada com esse código.</p>`;
+      return;
+    }
+    const { tipo, registro } = r.data;
+    const nomeTipo = tipo==='venda' ? 'Venda' : 'Pedido (O.S.)';
+    resultadoWrap.innerHTML = `<p style="color:var(--ok,#188a54); font-weight:700;">${nomeTipo} ${escapeHtml(registro.codigoVia||codigo)} encontrada — abrindo…</p>`;
+    abrirRegistroEncontrado(tipo, registro);
+  }
+  document.getElementById('lc_buscar').addEventListener('click', buscar);
+  inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); buscar(); } });
+  setTimeout(()=> inp.focus(), 50);
 }
 
 /* Barra superior só com as abas internas do módulo (o botão "← Voltar" foi retirado
@@ -1081,7 +1143,6 @@ window.addEventListener('message', (ev)=>{
     if(iframesCriados[mod]) return iframesCriados[mod];
     if(mod==='os' && iframesCriados['vendas_os']) return iframesCriados['vendas_os'];
     if(mod==='vendas' && iframesCriados['vendas_pdv']) return iframesCriados['vendas_pdv'];
-    if(mod==='orcamentos' && iframesCriados['vendas_orc']) return iframesCriados['vendas_orc'];
     return null;
   }
   // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas)
@@ -1100,6 +1161,10 @@ window.addEventListener('message', (ev)=>{
     if(!iframe || !ev.source) return;
     const permMod = (currentPermissoes && currentPermissoes[d.modulo]) || {};
     ev.source.postMessage({ type:'auth', user: currentUser, abas: permMod.abas || null, configCache: config || null }, '*');
+    if(pendingAbrirRegistro && pendingAbrirRegistro.permModulo === d.modulo){
+      ev.source.postMessage({ type:'abrirRegistro', id: pendingAbrirRegistro.id }, '*');
+      pendingAbrirRegistro = null;
+    }
   } else if(d.type === 'tabs'){
     tabsCache[d.modulo] = { tabs: d.tabs, active: d.active };
     if(estaVisivel(d.modulo)) renderShellTabsComVoltar(d.modulo, d.tabs, d.active, moduloAtual==='vendas'? (()=>{ vendasSubAtual = null; selecionarModulo('vendas'); }) : voltarModulo);
