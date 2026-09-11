@@ -42,20 +42,27 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const params = new URLSearchParams(window.location.search);
 const id = params.get('id');
 
-async function buscarRegistro(id){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/dp_registros?id=eq.${encodeURIComponent(id)}&select=id,payload`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer '+SUPABASE_ANON_KEY },
-  });
-  const rows = await res.json();
-  return rows && rows[0] ? rows[0].payload : null;
-}
-async function confirmarLeitura(id){
+// Tudo passa pela Edge Function confirmar-leitura-dp (v6+): as tabelas não têm mais
+// acesso direto pela chave anon (auditoria de segurança), então a página não lê
+// dp_registros — pede à função só os campos que precisa mostrar.
+async function chamarFuncao(body){
   const res = await fetch(`${SUPABASE_URL}/functions/v1/confirmar-leitura-dp`, {
     method: 'POST',
-    headers: { 'Content-Type':'application/json' },
-    body: JSON.stringify({ id }),
+    headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer '+SUPABASE_ANON_KEY },
+    body: JSON.stringify(body),
   });
   return await res.json();
+}
+async function buscarRegistro(id){
+  try{
+    const r = await chamarFuncao({ id, acao:'buscar' });
+    return r && r.registro ? r.registro : null;
+  }catch(e){ console.error('Falha ao buscar', e); return null; }
+}
+async function confirmarLeitura(id){
+  const r = await chamarFuncao({ id, acao:'confirmar' });
+  if(r && r.error) throw new Error(r.error);
+  return r;
 }
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 
