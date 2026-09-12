@@ -1008,6 +1008,7 @@ function renderNovo(main, orcamentoEditando){
       data: dataOrcamento, cliente, telefone, email, itens: itensValidos, valorTotal,
       observacoes: maiusc(document.getElementById('o_obs').value),
       status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
+      codigoVia: await bumpCodigoVia('orcamento'),
       rascunho: false,
     };
     const ok = await orcamentoSalvar(orcamento);
@@ -1448,17 +1449,28 @@ const ESCALA_BOBINA_PX = {
   media:   { base:14, titulo:17, sub:12.5 },
   grande:  { base:16.5, titulo:20, sub:14.5 },
 };
-function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
+async function bumpCodigoVia(tipo){
+  try{
+    const r = await gatewayCall({ op:'bumpCodigoViaSequence', params:{ tipo } });
+    if(r && r.ok) return r.codigo;
+  }catch(e){}
+  return null;
+}
+
+function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
   const impCfg = config.impressao || {};
   const px = ESCALA_BOBINA_PX[impCfg.escalaTexto] || ESCALA_BOBINA_PX.media;
   const peso = impCfg.negrito!==false ? 700 : 400;
   const reforcoCss = impCfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
   const rodape = (impCfg.mensagemRodape||'').trim();
+  const codigoHtml = codigoVia ? `<div style='text-align:center;margin-bottom:4px;'><svg id='barcodeSvgOrc'></svg><div style='text-align:center;font-weight:800;letter-spacing:.04em;margin-top:2px;'>${codigoVia}</div></div><hr style='border:1px solid #000;margin:4px 0;'>` : '';
+  const barcodeScript = codigoVia ? `<script src=\"https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js\"><\/script>` : '';
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <title>${escapeHtml(titulo)}</title>
+${barcodeScript}
 <style>
   @page{ size:${larguraMm}mm auto; margin:0; }
   *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
@@ -1479,10 +1491,18 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm){
   const printWin = window.open('', '_blank', 'width=420,height=700');
   if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
   printWin.document.open();
-  printWin.document.write(html);
+  const htmlFinal = codigoVia ? html.replace('<body>', '<body>' + codigoHtml) : html;
+  printWin.document.write(htmlFinal);
   printWin.document.close();
   printWin.focus();
-  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  if(codigoVia){
+    setTimeout(()=>{
+      try{ if(printWin.JsBarcode) printWin.JsBarcode(printWin.document.getElementById('barcodeSvgOrc'), codigoVia, { format:'CODE128', width:2, height:42, displayValue:false, margin:0 }); }catch(e){}
+      setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 150);
+    }, 400);
+  } else {
+    setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  }
 }
 
 function printOrcamento(o){
@@ -1524,7 +1544,7 @@ function printOrcamento(o){
     linhas.push(`<div>${escapeHtml(o.observacoes)}</div>`);
   }
 
-  abrirImpressaoBobina('Orçamento', linhas.join(''), larguraMm);
+  abrirImpressaoBobina('Orçamento', linhas.join(''), larguraMm, o.codigoVia||null);
 }
 
 (async function init(){
