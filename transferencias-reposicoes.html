@@ -1615,18 +1615,29 @@
   }
 
   /* ================= NÚMERO SEQUENCIAL DA TRANSAÇÃO (T-/S-/R-) ================= */
+  function getLojaAbrevTR(lojaId){
+    const l = (config.lojas||[]).find(x=>x.id===lojaId);
+    return l && l.abreviacao ? String(l.abreviacao).toUpperCase().trim() : 'XX';
+  }
+  function sufixoTipoTransf(tab, r){
+    if(tab === "transferencias") return r.tipoTransf === "TROCA DIFERENTE" ? "TFD" : "TFI";
+    if(tab === "envio") return "TDI";
+    return "TRE";
+  }
   function prefixoTransacao(tab, r){
-    if(tab === "transferencias") return r.tipoTransf === "SAÍDA" ? "S" : r.tipoTransf === "TROCA DIFERENTE" ? "D" : "T";
-    if(tab === "envio") return "E";
-    return "R";
+    const loja = tab === "transferencias" ? (r.lojaOrigemId||r.loja||'') : (r.lojaId||r.loja||'');
+    return getLojaAbrevTR(loja) + sufixoTipoTransf(tab, r);
   }
   // Extrai só o número de um "número da via" tipo "T-15" -> 15 (usado pra ordenar as
   // listas por ordem de lançamento, do mais recente pro mais antigo). Registros sem
   // número ainda (bem raros — só entre o instante da criação e o 1º salvamento) vão
   // pro fim da lista.
   function numeroDoRegistro(r){
-    const m = /-(\d+)$/.exec(r.numero || "");
-    return m ? parseInt(m[1], 10) : -1;
+    const m = /([0-9]+)(?:TFI|TFD|TRE|TDI)$/.exec(r.numero || "");
+    if(m) return parseInt(m[1], 10);
+    // fallback para formato antigo S-1, T-2 etc.
+    const m2 = /-(\d+)$/.exec(r.numero || "");
+    return m2 ? parseInt(m2[1], 10) : -1;
   }
   function sortPorNumeroDesc(a, b){ return numeroDoRegistro(b) - numeroDoRegistro(a); }
   // Ordena uma lista de registros conforme a direção escolhida pra aquela coluna
@@ -1656,13 +1667,14 @@
     const prefixo = prefixoTransacao(tab, r);
     const arr = tab === "transferencias" ? state.transferencias : tab === "envio" ? state.envio : state.reposicao;
     let maxN = 0;
+    const sufixo = sufixoTipoTransf(tab, r);
     arr.forEach(x=>{
-      if(x.numero && x.numero.indexOf(prefixo + "-") === 0){
-        const n = parseInt(x.numero.slice(prefixo.length + 1), 10);
-        if(!isNaN(n) && n > maxN) maxN = n;
-      }
+      if(!x.numero) return;
+      // formato: SIGLAnumTIPO ex.: MC3TFI
+      const m = new RegExp('^[A-Z]{2}(\\d+)' + sufixo + '$').exec(x.numero);
+      if(m){ const n = parseInt(m[1],10); if(!isNaN(n) && n > maxN) maxN = n; }
     });
-    return prefixo + "-" + (maxN + 1);
+    return prefixo + (maxN + 1);
   }
   // Dá número sequencial pros registros já existentes (que ainda não têm), respeitando
   // a ordem de criação (created_at) já usada em loadData(). Roda uma vez a cada carregamento;
@@ -1671,13 +1683,14 @@
     let contT = 0, contS = 0, contR = 0, contE = 0, contD = 0;
     state.transferencias.forEach(r=>{
       if(r.numero){
-        const m = /^([TSD])-(\d+)$/.exec(r.numero);
-        if(m){
-          const n = parseInt(m[2],10);
-          if(m[1]==="T" && n>contT) contT=n;
-          if(m[1]==="S" && n>contS) contS=n;
-          if(m[1]==="D" && n>contD) contD=n;
+        const mNovo = /^[A-Z]{2}(\d+)(TFI|TFD)$/.exec(r.numero);
+        if(mNovo){
+          const n = parseInt(mNovo[1],10);
+          if(mNovo[2]==="TFD"){ if(n>contD) contD=n; } else { if(n>contT) contT=n; }
         }
+        // fallback formato antigo
+        const mAnt = /^([TSD])-(\d+)$/.exec(r.numero);
+        if(mAnt){ const n=parseInt(mAnt[2],10); if(mAnt[1]==="T"&&n>contT)contT=n; if(mAnt[1]==="S"&&n>contS)contS=n; if(mAnt[1]==="D"&&n>contD)contD=n; }
       }
     });
     state.reposicao.forEach(r=>{
