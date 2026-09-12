@@ -179,7 +179,17 @@ function statusLabel(c){ return c.status==='aguardando' ? 'Na fila' : c.status==
 /* ================= LISTA ================= */
 async function carregarLista(silencioso){
   const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca });
-  if(!r || r.error){ if(!silencioso) showToast(r && r.error || 'Erro ao carregar'); return; }
+  if(!r){ if(!silencioso) showToast('Erro ao carregar'); return; }
+  if(r.error){
+    // Sessão expirada: parar polling e pedir novo login
+    if(r.error === 'não autorizado' || String(r.error).includes('autorizado')){
+      if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+      if(EMBEDDED) parent.postMessage({ type:'sessaoExpirada', modulo:'atendimento' }, '*');
+      return;
+    }
+    if(!silencioso) showToast(r.error || 'Erro ao carregar');
+    return;
+  }
   estado.conversas = r.data || [];
   renderLista();
   contadores();
@@ -281,6 +291,10 @@ async function atualizarMensagens(){
   estado.atual = r.conversa;
   if(mudouStatus) renderHead();
   const novas = (r.data||[]).filter(m=> !estado.mensagens.some(x=>x.id===m.id));
+  if(novas.length && novas.some(m=>m.direcao==='in')){
+    // Vibrar e piscar título no celular
+    try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
+  }
   if(novas.length){
     const wrap = document.getElementById('msgs'); const noFim = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
     estado.mensagens.push(...novas); renderMsgs(noFim);
@@ -400,7 +414,22 @@ async function carregarStatus(){
 }
 
 /* ================= INIT ================= */
-function iniciarPolling(){ clearInterval(pollTimer); pollTimer = setInterval(async ()=>{ await carregarLista(true); await atualizarMensagens(); }, 5000); }
+function iniciarPolling(){
+  if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+  async function tick(){
+    try{ await carregarLista(true); await atualizarMensagens(); }catch(e){ console.error('poll',e); }
+    finally{ pollTimer = setTimeout(tick, 5000); }
+  }
+  pollTimer = setTimeout(tick, 5000);
+}
+// Reativar polling quando a aba volta ao foco (celular minimizou e voltou)
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden && __gatewaySenha){
+    if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+    carregarLista(true); atualizarMensagens();
+    iniciarPolling();
+  }
+});
 document.getElementById('filtros').querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=>{ estado.filtro=b.dataset.f; document.querySelectorAll('#filtros button').forEach(x=>x.classList.toggle('active',x===b)); carregarLista(); }));
 let tb; document.getElementById('busca').addEventListener('input', e=>{ clearTimeout(tb); tb=setTimeout(()=>{ estado.busca=e.target.value.trim(); carregarLista(); }, 350); });
 document.getElementById('btnNova').addEventListener('click', modalNova);
