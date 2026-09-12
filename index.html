@@ -303,6 +303,7 @@
   </div>
 </div>
 
+<input id="scannerInput" autocomplete="off" style="position:fixed;opacity:0;width:1px;height:1px;top:0;left:0;pointer-events:none;" tabindex="-1" aria-hidden="true">
 <div id="shellView">
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
   <aside class="sidebar" id="sidebarEl">
@@ -986,6 +987,7 @@ function enterShell(moduloInicial){
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('shellView').style.display = 'flex';
   preaquecerModulos();
+  initScannerGlobal();
   document.getElementById('shellWhoName').textContent = currentUser.nome;
   document.getElementById('shellWhoLevel').textContent = levelLabel(currentUser.nivel);
   buildSidebar();
@@ -1288,52 +1290,93 @@ function renderVendasHome(){
 /** Registro pendente de abertura: setado quando a pessoa clica num resultado do
  * leitor de código, e consumido assim que o iframe do submódulo avisa 'ready'. */
 let pendingAbrirRegistro = null;
-function abrirLeitorCodigo(){
-  openModal(`
-    <h3>Leitor de código</h3>
-    <p class="muted">Digite o código impresso na via, ou use o leitor de código de barras (ele escreve sozinho e aperta Enter). Assim que o código for reconhecido, a via abre automaticamente.</p>
-    <div class="field"><label>Código</label><input id="lc_codigo" placeholder="Ex: MC1V" autocomplete="off" style="font-size:16px; letter-spacing:.03em;"></div>
-    <div id="lc_resultado" style="margin-top:10px;"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="lc_fechar">Fechar</button>
-      <button class="btn btn-accent" id="lc_buscar">Buscar</button>
-    </div>
-  `);
-  const inp = document.getElementById('lc_codigo');
-  const resultadoWrap = document.getElementById('lc_resultado');
-  document.getElementById('lc_fechar').addEventListener('click', closeModal);
-  /** Abre a via encontrada direto — sem exigir mais nenhum clique. */
-  function abrirRegistroEncontrado(tipo, registro){
-    closeModal();
-    const subAlvo = tipo==='venda' ? 'pdv' : 'os';
-    const chaveIframe = 'vendas_'+subAlvo;
-    const permModuloAlvo = tipo==='venda' ? 'vendas' : 'os';
-    const iframeJaExistia = !!iframesCriados[chaveIframe];
-    selecionarModulo('vendas', subAlvo);
-    if(iframeJaExistia){
-      // O iframe já estava carregado e autenticado — não vai mandar 'ready' de novo,
-      // então manda a instrução direto.
-      const iframeAtual = iframesCriados[chaveIframe];
-      if(iframeAtual && iframeAtual.contentWindow) iframeAtual.contentWindow.postMessage({ type:'abrirRegistro', id: registro.id }, '*');
-    } else {
-      // Iframe novo: vai mandar 'ready' em instantes — a instrução é entregue
-      // assim que isso acontecer (ver handler de 'ready').
-      pendingAbrirRegistro = { permModulo: permModuloAlvo, id: registro.id };
+/* ── LEITOR DE CÓDIGO DE BARRAS GLOBAL ──────────────────────────────────────
+   Scanner USB/Bluetooth ativo em qualquer tela. Antes de navegar, pede ao
+   módulo ativo que salve rascunho se houver formulário aberto.
+   ─────────────────────────────────────────────────────────────────────────── */
+function initScannerGlobal(){
+  const scanEl = document.getElementById('scannerInput');
+  if(!scanEl) return;
+  let buf = '', bufTimer = null;
+  scanEl.addEventListener('input', ()=>{
+    clearTimeout(bufTimer);
+    buf = scanEl.value;
+    bufTimer = setTimeout(()=>{ scanEl.value = ''; buf = ''; }, 300);
+  });
+  scanEl.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){
+      e.preventDefault();
+      const codigo = (buf || scanEl.value).trim().toUpperCase();
+      scanEl.value = ''; buf = '';
+      if(codigo.length >= 3) navegarParaCodigoVia(codigo);
     }
+  });
+}
+
+async function navegarParaCodigoVia(codigo){
+  if(!codigo || !currentUser) return;
+  // Pede ao módulo ativo que salve rascunho antes de navegar
+  const iframeAtivo = Object.values(iframesCriados).find(f=> f && f.style && f.style.display !== 'none');
+  if(iframeAtivo && iframeAtivo.contentWindow){
+    iframeAtivo.contentWindow.postMessage({ type:'pedirRascunho' }, '*');
+    await new Promise(res=>{
+      const t = setTimeout(res, 800);
+      function h(ev){ if(ev.data && (ev.data.type==='rascunhoSalvo'||ev.data.type==='semRascunho')){ clearTimeout(t); window.removeEventListener('message',h); res(); } }
+      window.addEventListener('message', h);
+    });
   }
+  const r = await gatewayCall({ op:'buscarPorCodigoVia', params:{ codigo } });
+  if(!r || r.error || !r.data){ showToast('Código não encontrado: '+codigo); return; }
+  abrirRegistroEncontrado(r.data.tipo, r.data.registro);
+}
+
+function abrirRegistroEncontrado(tipo, registro){
+  let subAlvo = null, permModuloAlvo = 'vendas';
+  if(tipo==='venda')         { subAlvo='pdv';   permModuloAlvo='vendas'; }
+  else if(tipo==='pedido')   { subAlvo='os';    permModuloAlvo='os'; }
+  else if(tipo==='orcamento'){ subAlvo='orc';   permModuloAlvo='orcamentos'; }
+  else if(tipo==='transferencia'){ subAlvo='transf'; permModuloAlvo='transferencias'; }
+  const chaveIframe = subAlvo ? 'vendas_'+subAlvo : tipo;
+  const jaExistia = !!iframesCriados[chaveIframe];
+  selecionarModulo('vendas', subAlvo);
+  const iframe = iframesCriados[chaveIframe];
+  if(jaExistia && iframe && iframe.contentWindow){
+    iframe.contentWindow.postMessage({ type:'abrirRegistro', id: registro.id }, '*');
+  } else {
+    pendingAbrirRegistro = { permModulo: permModuloAlvo, id: registro.id, tab: null };
+  }
+}
+
+// Foco no scannerInput ao clicar fora de inputs
+document.addEventListener('click', (e)=>{
+  if(!currentUser) return;
+  const tag = (e.target.tagName||'').toUpperCase();
+  if(['INPUT','TEXTAREA','SELECT','BUTTON','A','LABEL'].includes(tag)) return;
+  const scanEl = document.getElementById('scannerInput');
+  if(scanEl && document.activeElement !== scanEl) scanEl.focus();
+}, true);
+
+function abrirLeitorCodigo(){
+  openModal(
+    '<h3>🔍 Leitor de código</h3>' +
+    '<p class="muted">Digite o código da via. O scanner de barras também funciona em qualquer tela sem precisar abrir este leitor.</p>' +
+    '<div class="field"><input id="lc_codigo" placeholder="Ex: MC1V, JV3P…" autocomplete="off" style="font-size:16px;letter-spacing:.04em;text-transform:uppercase;"></div>' +
+    '<div id="lc_resultado" style="margin-top:8px;min-height:20px;"></div>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="lc_fechar">Fechar</button><button class="btn btn-accent" id="lc_buscar">Abrir via</button></div>'
+  );
+  const inp = document.getElementById('lc_codigo');
+  document.getElementById('lc_fechar').addEventListener('click', closeModal);
   async function buscar(){
-    const codigo = inp.value.trim();
+    const codigo = inp.value.trim().toUpperCase();
     if(!codigo) return;
-    resultadoWrap.innerHTML = `<p class="muted">Buscando…</p>`;
+    document.getElementById('lc_resultado').innerHTML = '<p class="muted">Buscando…</p>';
     const r = await gatewayCall({ op:'buscarPorCodigoVia', params:{ codigo } });
     if(!r || r.error || !r.data){
-      resultadoWrap.innerHTML = `<p style="color:var(--danger,#b3261e); font-weight:700;">Nenhuma venda ou O.S. encontrada com esse código.</p>`;
+      document.getElementById('lc_resultado').innerHTML = '<p style="color:var(--danger,#b3261e);font-weight:700;">Código não encontrado.</p>';
       return;
     }
-    const { tipo, registro } = r.data;
-    const nomeTipo = tipo==='venda' ? 'Venda' : 'Pedido (O.S.)';
-    resultadoWrap.innerHTML = `<p style="color:var(--ok,#188a54); font-weight:700;">${nomeTipo} ${escapeHtml(registro.codigoVia||codigo)} encontrada — abrindo…</p>`;
-    abrirRegistroEncontrado(tipo, registro);
+    closeModal();
+    abrirRegistroEncontrado(r.data.tipo, r.data.registro);
   }
   document.getElementById('lc_buscar').addEventListener('click', buscar);
   inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); buscar(); } });
@@ -1504,6 +1547,8 @@ window.addEventListener('message', (ev)=>{
       if(jaExistia && iframeAlvo && iframeAlvo.contentWindow) iframeAlvo.contentWindow.postMessage(msg, '*');
       else pendingAbrirRegistro = { permModulo:d.alvo, id:d.registroId||null, tab:d.tab||null };
     }
+  } else if(d.type === 'rascunhoSalvo' || d.type === 'semRascunho'){
+    /* tratado via Promise em navegarParaCodigoVia */
   } else if(d.type === 'avisosTotal'){
     atualizarBadgeAvisos(Number(d.total)||0);
   } else if(d.type === 'atendimentoTotal'){
