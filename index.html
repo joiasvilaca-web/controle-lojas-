@@ -1357,29 +1357,111 @@ document.addEventListener('click', (e)=>{
 }, true);
 
 function abrirLeitorCodigo(){
+  const temCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  const botaoCamera = temCamera
+    ? '<button class="btn" id="lc_camera" style="display:flex;align-items:center;gap:6px;"><span style="font-size:18px;">&#x1F4F7;</span> C\u00e2mera</button>'
+    : '';
   openModal(
-    '<h3>🔍 Leitor de código</h3>' +
-    '<p class="muted">Digite o código da via. O scanner de barras também funciona em qualquer tela sem precisar abrir este leitor.</p>' +
-    '<div class="field"><input id="lc_codigo" placeholder="Ex: MC1V, JV3P…" autocomplete="off" style="font-size:16px;letter-spacing:.04em;text-transform:uppercase;"></div>' +
+    '<h3>&#x1F50D; Leitor de c\u00f3digo</h3>' +
+    '<p class="muted">Use a c\u00e2mera do celular ou digite o c\u00f3digo manualmente.</p>' +
+    '<div id="lc_video_wrap" style="display:none;position:relative;margin-bottom:10px;">' +
+      '<video id="lc_video" autoplay playsinline muted style="width:100%;max-height:260px;border-radius:10px;background:#000;display:block;"></video>' +
+      '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">' +
+        '<div style="width:200px;height:120px;border:2px solid rgba(255,255,255,.6);border-radius:8px;"></div>' +
+      '</div>' +
+      '<button id="lc_parar_camera" style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;">\u2715 Fechar c\u00e2mera</button>' +
+    '</div>' +
+    '<div class="field"><input id="lc_codigo" placeholder="Ex: MC1V, JV3P\u2026" autocomplete="off" style="font-size:16px;letter-spacing:.04em;text-transform:uppercase;"></div>' +
     '<div id="lc_resultado" style="margin-top:8px;min-height:20px;"></div>' +
-    '<div class="modal-actions"><button class="btn btn-ghost" id="lc_fechar">Fechar</button><button class="btn btn-accent" id="lc_buscar">Abrir via</button></div>'
+    '<div class="modal-actions" style="flex-wrap:wrap;gap:8px;">' +
+      '<button class="btn btn-ghost" id="lc_fechar">Fechar</button>' +
+      botaoCamera +
+      '<button class="btn btn-accent" id="lc_buscar">Abrir via</button>' +
+    '</div>'
   );
   const inp = document.getElementById('lc_codigo');
-  document.getElementById('lc_fechar').addEventListener('click', closeModal);
-  async function buscar(){
-    const codigo = inp.value.trim().toUpperCase();
+  document.getElementById('lc_fechar').addEventListener('click', ()=>{ pararCamera(); closeModal(); });
+
+  let streamAtivo = null, scanLoop = null, barcodeDetector = null;
+
+  async function iniciarCamera(){
+    const wrap = document.getElementById('lc_video_wrap');
+    const video = document.getElementById('lc_video');
+    const resultado = document.getElementById('lc_resultado');
+    wrap.style.display = 'block';
+    if(resultado) resultado.innerHTML = '<p class="muted">Iniciando c\u00e2mera\u2026</p>';
+    try {
+      streamAtivo = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' }, audio:false });
+      video.srcObject = streamAtivo;
+      await video.play();
+      if(resultado) resultado.innerHTML = '<p class="muted">Aponte para o c\u00f3digo de barras\u2026</p>';
+      if(window.BarcodeDetector){
+        barcodeDetector = new window.BarcodeDetector({ formats:['code_128','qr_code','ean_13','code_39','data_matrix'] });
+      } else {
+        // Polyfill para Safari/Firefox
+        if(!window.__zcPoly){
+          await new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src='https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.9.15/dist/index.js'; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); });
+          await new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src='https://cdn.jsdelivr.net/npm/@undecaf/barcode-detector-polyfill@0.9.21/dist/index.js'; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); });
+          window.__zcPoly = true;
+        }
+        if(window.barcodeDetectorPolyfill) window.BarcodeDetector = window.barcodeDetectorPolyfill.BarcodeDetectorPolyfill;
+        barcodeDetector = new window.BarcodeDetector({ formats:['code_128','qr_code','ean_13','code_39','data_matrix'] });
+      }
+      let lastScan = 0;
+      async function scan(){
+        if(!streamAtivo) return;
+        const agora = Date.now();
+        if(agora - lastScan > 250 && video.readyState === 4){
+          lastScan = agora;
+          try {
+            const barcodes = await barcodeDetector.detect(video);
+            if(barcodes && barcodes.length > 0){
+              const val = barcodes[0].rawValue.trim().toUpperCase();
+              if(val.length >= 3){ pararCamera(); await buscar(val); return; }
+            }
+          }catch(e){ /* continua */ }
+        }
+        scanLoop = requestAnimationFrame(scan);
+      }
+      scanLoop = requestAnimationFrame(scan);
+    } catch(e){
+      if(resultado) resultado.innerHTML = '<p style="color:var(--danger,#b3261e);">C\u00e2mera n\u00e3o dispon\u00edvel: '+(e.message||'permiss\u00e3o negada')+'</p>';
+      wrap.style.display = 'none';
+    }
+  }
+
+  function pararCamera(){
+    if(scanLoop){ cancelAnimationFrame(scanLoop); scanLoop=null; }
+    if(streamAtivo){ streamAtivo.getTracks().forEach(t=>t.stop()); streamAtivo=null; }
+    const wrap = document.getElementById('lc_video_wrap');
+    if(wrap) wrap.style.display = 'none';
+  }
+
+  async function buscar(codigoForce){
+    const codigo = (codigoForce || inp.value.trim()).toUpperCase();
     if(!codigo) return;
-    document.getElementById('lc_resultado').innerHTML = '<p class="muted">Buscando…</p>';
+    const res = document.getElementById('lc_resultado');
+    if(res) res.innerHTML = '<p class="muted">Buscando\u2026</p>';
     const r = await gatewayCall({ op:'buscarPorCodigoVia', params:{ codigo } });
     if(!r || r.error || !r.data){
-      document.getElementById('lc_resultado').innerHTML = '<p style="color:var(--danger,#b3261e);font-weight:700;">Código não encontrado.</p>';
+      if(res) res.innerHTML = '<p style="color:var(--danger,#b3261e);font-weight:700;">C\u00f3digo n\u00e3o encontrado.</p>';
       return;
     }
     closeModal();
     abrirRegistroEncontrado(r.data.tipo, r.data.registro);
   }
-  document.getElementById('lc_buscar').addEventListener('click', buscar);
+
+  if(temCamera){ document.getElementById('lc_camera').addEventListener('click', iniciarCamera); }
+  document.getElementById('lc_parar_camera').addEventListener('click', pararCamera);
+  document.getElementById('lc_buscar').addEventListener('click', ()=>buscar());
   inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); buscar(); } });
+
+  // Limpar câmera ao fechar modal
+  const observer = new MutationObserver(()=>{
+    if(!document.getElementById('lc_video')){ pararCamera(); observer.disconnect(); }
+  });
+  observer.observe(document.body, { childList:true, subtree:true });
+
   setTimeout(()=> inp.focus(), 50);
 }
 
