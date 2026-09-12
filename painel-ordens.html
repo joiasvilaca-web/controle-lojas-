@@ -759,7 +759,7 @@ async function gatewayLogin(senhaTentativa){
 async function gatewaySelectTudo(table){
   const linhas = [];
   for(let pagina=0; pagina<500; pagina++){
-    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 1000 } });
+    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 5000 } });
     if(!r || r.error){ console.error('erro lendo '+table, r && r.error); return { data: linhas, error: r && r.error }; }
     const lote = r.data || [];
     linhas.push(...lote);
@@ -930,7 +930,8 @@ async function loadAll(){
   ]);
   orders = ordersR; codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
   if(!clientes) clientes = [];
-  carregarClientesEmSegundoPlano();
+  // Clientes NÃO são mais baixados aqui, nem em segundo plano (22 mil+ linhas, ~7,5 MB
+  // em 23 viagens a cada abertura). Busca e checagem de duplicidade consultam o servidor.
 }
 let __clientesCarregandoEmFundo = false;
 function carregarClientesEmSegundoPlano(){
@@ -1104,7 +1105,15 @@ function podeCancelarOrdem(){
 async function reverterFiadoECreditoOrdem(order){
   const telD = onlyDigits(order.telefone||'');
   const nomeL = (order.cliente||'').trim().toLowerCase();
-  const cliCad = clientes.find(c=> (telD && onlyDigits(c.telefone||'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+  // Procura o cliente no servidor (telefone; se não achar, nome) — sem lista completa em memória.
+  let cliCad = clientes.find(c=> (telD && onlyDigits(c.telefone||'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL)) || null;
+  if(!cliCad && telD) cliCad = await buscarClientePorTelefoneOuCpf(order.telefone, '');
+  if(!cliCad && nomeL){
+    try{
+      const r = await gatewayCall({ op:'searchClients', params:{ termo: (order.cliente||'').trim() } });
+      cliCad = ((r && r.data) || []).find(c=> (c.nome||'').trim().toLowerCase()===nomeL) || null;
+    }catch(e){ cliCad = null; }
+  }
   if(!cliCad) return;
   let mudou = false;
   if(order.creditoUsado > 0){
@@ -1284,10 +1293,12 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
       const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
       if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
     } else {
-      const idxExistente = findClienteIndex(patch.telefone, patch.cpf);
-      if(idxExistente >= 0){
-        clienteFinal = { ...clientes[idxExistente], ...patch };
-        clientes[idxExistente] = clienteFinal;
+      // Evita duplicar: procura no servidor alguém com o mesmo telefone/CPF.
+      const existente = await buscarClientePorTelefoneOuCpf(patch.telefone, patch.cpf);
+      if(existente){
+        clienteFinal = { ...existente, ...patch };
+        const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+        if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
       } else {
         clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
         clientes.unshift(clienteFinal);
@@ -1304,14 +1315,28 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
    ============================================================ */
 function onlyDigitsCpf(s){ return (s||'').replace(/\D/g,''); }
 
-function findClienteIndex(telefone, cpf){
+/** Localiza no banco um cliente por telefone ou CPF (usado pra evitar duplicar cadastro).
+ * Consulta o servidor sob demanda — não precisa (nem tem) o cadastro inteiro em memória. */
+async function buscarClientePorTelefoneOuCpf(telefone, cpf){
   const tel = onlyDigits(telefone);
   const doc = onlyDigitsCpf(cpf);
-  return clientes.findIndex(c=>
-    (tel && onlyDigits(c.telefone) === tel) ||
-    (doc && onlyDigitsCpf(c.cpf) === doc)
+  if(!tel && !doc) return null;
+  const cacheado = clientes.find(c=>
+    (tel && onlyDigits(c.telefone||'')===tel) || (doc && onlyDigitsCpf(c.cpf||'')===doc)
   );
+  if(cacheado) return cacheado;
+  try{
+    const r = await gatewayCall({ op:'searchClients', params:{ termo: doc || tel } });
+    if(r && r.error) throw new Error(r.error);
+    const achados = (r && r.data) || [];
+    const achado = achados.find(c=>
+      (tel && onlyDigits(c.telefone||'')===tel) || (doc && onlyDigitsCpf(c.cpf||'')===doc)
+    ) || null;
+    if(achado && !clientes.some(x=>x.id===achado.id)) clientes.push(achado);
+    return achado;
+  }catch(e){ console.error('erro ao localizar cliente', e); return null; }
 }
+
 
 /**
  * Creates/updates a lightweight client record whenever an order is saved with client data.
@@ -2464,7 +2489,7 @@ if(EMBEDDED){
     } else if(ev.data.type === 'clientesAtualizados'){
       // O módulo Cadastro mexeu no cadastro de clientes. Como este módulo fica
       // vivo no iframe, a lista em memória ficaria velha — recarrega na hora.
-      if(__gatewaySenha){ clientes = await clientesGet(); }
+      clientes = []; // sem lista completa em memória: só limpa o cache local
     } else if(ev.data.type === 'lojaAtual'){
       window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
       atualizarFaixaLoja();
