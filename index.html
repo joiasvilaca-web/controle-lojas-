@@ -741,6 +741,7 @@ function avisarClientesAtualizados(){
 const tabsCache = {};
 
 const SIDEBAR_MODULES = [
+  { id:'avisos', label:'Avisos', icon:'🔔', src:'avisos.html' }, // tela inicial de todo mundo: pendências por módulo/aba
   { id:'dashboard', label:'Dashboard', icon:'📊', src:null },
   { id:'vendas', label:'CUPOM', icon:'🛒', src:null },
   { id:'caixa', label:'Caixa', icon:'💰', src:null },
@@ -829,6 +830,7 @@ function podeVerModulo(m){
     return (currentPermissoes['config'] && currentPermissoes['config'].ativo) ||
            (currentPermissoes['dp'] && currentPermissoes['dp'].ativo);
   }
+  if(m.id==='avisos') return true;
   return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
 }
 function subVendasPermitidos(){
@@ -1013,7 +1015,7 @@ function enterShell(moduloInicial){
   if(!alvo){
     // Administração (Cadastro/DP) só como tela inicial se for a única coisa liberada —
     // senão vai pro Dashboard ou pro primeiro módulo de trabalho
-    alvo = permitidos.find(m=>m.id==='dashboard') || permitidos.find(m=>m.id!=='config' && m.id!=='loja') || permitidos[0];
+    alvo = permitidos.find(m=>m.id==='avisos') || permitidos.find(m=>m.id==='dashboard') || permitidos.find(m=>m.id!=='config' && m.id!=='loja') || permitidos[0];
   }
   selecionarModulo(alvo.id);
 }
@@ -1029,6 +1031,19 @@ function fecharMenuMobile(){
 document.getElementById('btnToggleSidebar').addEventListener('click', abrirMenuMobile);
 document.getElementById('sidebarOverlay').addEventListener('click', fecharMenuMobile);
 
+/* Bolinha com a quantidade de pendências no item "Avisos" do menu. */
+function atualizarBadgeAvisos(total){
+  const item = document.querySelector('.side-item[data-modulo="avisos"]');
+  if(!item) return;
+  let badge = item.querySelector('.side-badge');
+  if(!total){ if(badge) badge.remove(); return; }
+  if(!badge){
+    badge = document.createElement('span'); badge.className = 'side-badge';
+    badge.style.cssText = 'margin-left:auto; background:#B91C1C; color:#fff; font-size:11px; font-weight:800; border-radius:999px; padding:1px 7px; min-width:20px; text-align:center;';
+    item.appendChild(badge);
+  }
+  badge.textContent = total > 99 ? '99+' : String(total);
+}
 function buildSidebar(){
   const wrap = document.getElementById('sidebarModules');
   const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
@@ -1213,6 +1228,8 @@ function selecionarModulo(moduloId, subVendas){
   }
 
   let iframe = iframesCriados[moduloId];
+  // Avisos: ao voltar pra ele, recalcula (algo pode ter sido resolvido em outro módulo)
+  if(moduloId==='avisos' && iframe && iframe.contentWindow){ try{ iframe.contentWindow.postMessage({ type:'recarregarAvisos' }, '*'); }catch(e){} }
   if(!iframe){
     iframe = document.createElement('iframe');
     iframe.src = info.src;
@@ -1427,9 +1444,9 @@ function renderConfigTabs(){
  * senão, volta pro módulo Vendas (tela inicial padrão). */
 function voltarModulo(){
   if(moduloAtual==='vendas' && vendasSubAtual){ vendasSubAtual = null; selecionarModulo('vendas'); return; }
-  // dos outros módulos, "voltar" leva pra tela inicial (Dashboard)
+  // dos outros módulos, "voltar" leva pra tela inicial (Avisos); de dentro dos Avisos, Dashboard
   vendasSubAtual = null;
-  selecionarModulo('dashboard');
+  selecionarModulo(moduloAtual==='avisos' ? 'dashboard' : 'avisos');
 }
 
 window.addEventListener('message', (ev)=>{
@@ -1474,15 +1491,28 @@ window.addEventListener('message', (ev)=>{
     return false;
   }
   if(d.type === 'irParaModulo'){
-    if(d.alvo) selecionarModulo(d.alvo);
+    if(!d.alvo) return;
+    // Se veio registroId/tab, entrega a instrução ao módulo de destino: direto (se o
+    // iframe já existe e está autenticado) ou assim que ele mandar 'ready'.
+    const jaExistia = !!acharIframe(d.alvo);
+    selecionarModulo(d.alvo);
+    if(d.registroId || d.tab){
+      const msg = d.registroId ? { type:'abrirRegistro', id:d.registroId } : { type:'gotoTab', tabId:d.tab };
+      const iframeAlvo = acharIframe(d.alvo);
+      if(jaExistia && iframeAlvo && iframeAlvo.contentWindow) iframeAlvo.contentWindow.postMessage(msg, '*');
+      else pendingAbrirRegistro = { permModulo:d.alvo, id:d.registroId||null, tab:d.tab||null };
+    }
+  } else if(d.type === 'avisosTotal'){
+    atualizarBadgeAvisos(Number(d.total)||0);
   } else if(d.type === 'ready'){
     const iframe = acharIframe(d.modulo);
     if(!iframe || !ev.source) return;
     const permMod = (currentPermissoes && currentPermissoes[d.modulo]) || {};
     ev.source.postMessage({ type:'auth', user: currentUser, abas: permMod.abas || null, configCache: config || null }, '*');
     if(pendingAbrirRegistro && pendingAbrirRegistro.permModulo === d.modulo){
-      ev.source.postMessage({ type:'abrirRegistro', id: pendingAbrirRegistro.id }, '*');
-      pendingAbrirRegistro = null;
+      if(pendingAbrirRegistro.id) ev.source.postMessage({ type:'abrirRegistro', id: pendingAbrirRegistro.id }, '*');
+      else if(pendingAbrirRegistro.tab) setTimeout(()=>{ try{ ev.source.postMessage({ type:'gotoTab', tabId: pendingAbrirRegistro && pendingAbrirRegistro.tab }, '*'); }catch(e){} pendingAbrirRegistro = null; }, 600);
+      if(pendingAbrirRegistro && pendingAbrirRegistro.id) pendingAbrirRegistro = null;
     }
   } else if(d.type === 'tabs'){
     tabsCache[d.modulo] = { tabs: d.tabs, active: d.active };
