@@ -1259,6 +1259,10 @@ function tabsForLevel(){
   const t = [
     { id:'vendas', label:'Vendas', icon:'📋' },
   ];
+  // Relatório fiscal: só diretoria e gerente
+  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')){
+    t.push({ id:'semnota', label:'Sem nota', icon:'⚠️' });
+  }
   if(window.__permissoesAbasOverride){
     return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
   }
@@ -1295,6 +1299,151 @@ function renderView(){
   main.innerHTML = '';
   if(modoNovaVenda) renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
+  else if(currentTab==='semnota') renderSemNota(main);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   RELATÓRIO — VENDAS SEM NOTA FISCAL
+   Lista as vendas gravadas com "Nota fiscal: Não" para regularização posterior:
+   emitir a nota depois ou corrigir o lançamento. Só diretoria/gerente acessam.
+   ══════════════════════════════════════════════════════════════════════════════ */
+function renderSemNota(main){
+  const lojaNome = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l?l.nome:'—'; };
+  const hojeStr = hoje();
+  const diasEmAberto = (dataStr)=>{
+    if(!dataStr) return 0;
+    const d = new Date(dataStr+'T00:00:00'), h = new Date(hojeStr+'T00:00:00');
+    return Math.max(0, Math.round((h-d)/86400000));
+  };
+  // Filtra vendas sem nota, não canceladas
+  let lista = (vendas||[]).filter(v=> v.emissaoNota !== 'sim' && v.status !== 'cancelada');
+  // Vendedora só vê da própria loja; gestão vê todas (com filtro)
+  const fLojaSalvo = window.__semNotaFiltroLoja || '';
+  if(fLojaSalvo) lista = lista.filter(v=> v.lojaId === fLojaSalvo);
+  const fDe = window.__semNotaDe || '', fAte = window.__semNotaAte || '';
+  if(fDe) lista = lista.filter(v=> (v.data||'') >= fDe);
+  if(fAte) lista = lista.filter(v=> (v.data||'') <= fAte);
+  lista.sort((a,b)=> (b.data||'').localeCompare(a.data||''));
+
+  const total = lista.reduce((s,v)=> s + Number(v.valorTotal||0), 0);
+  const antigas = lista.filter(v=> diasEmAberto(v.data) > 30).length;
+
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">⚠️ Vendas sem nota fiscal</h1>
+        <p class="page-sub">Vendas registradas com "Nota fiscal: Não". Use esta lista para emitir a nota depois ou corrigir o lançamento.</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="grid-2" style="align-items:end;">
+        <div class="field"><label>Loja</label>
+          <select id="sn_loja"><option value="">Todas</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${fLojaSalvo===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Período</label>
+          <div style="display:flex;gap:6px;">
+            <input type="date" id="sn_de" value="${escapeHtml(fDe)}" style="flex:1;">
+            <input type="date" id="sn_ate" value="${escapeHtml(fAte)}" style="flex:1;">
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;padding:10px;background:var(--surface-2);border-radius:8px;">
+        <span><b>${lista.length}</b> venda(s)</span>
+        <span>Total: <b>R$ ${total.toFixed(2)}</b></span>
+        ${antigas>0?`<span style="color:var(--danger,#b3261e);"><b>${antigas}</b> há mais de 30 dias</span>`:''}
+        <button class="btn btn-ghost btn-sm" id="sn_excel" style="margin-left:auto;">📊 Exportar Excel</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px;">
+      ${lista.length===0 ? '<p class="muted">Nenhuma venda sem nota no período. 👍</p>' : `
+      <table>
+        <thead><tr><th>Data</th><th>Dias</th><th>Via</th><th>Loja</th><th>Cliente</th><th>Vendedora</th><th>Valor</th><th></th></tr></thead>
+        <tbody>
+          ${lista.map(v=>{
+            const dias = diasEmAberto(v.data);
+            return `<tr>
+              <td>${fmtDate(v.data)}</td>
+              <td${dias>30?' style="color:var(--danger,#b3261e);font-weight:700;"':''}>${dias}</td>
+              <td>${escapeHtml(v.codigoVia||'—')}</td>
+              <td>${escapeHtml(lojaNome(v.lojaId))}</td>
+              <td>${escapeHtml(v.cliente||'não identificado')}</td>
+              <td>${escapeHtml(v.vendedora||'—')}</td>
+              <td>R$ ${Number(v.valorTotal||0).toFixed(2)}</td>
+              <td style="white-space:nowrap;">
+                <button class="btn btn-ghost btn-sm" data-ver="${v.id}">👁️</button>
+                <button class="btn btn-accent btn-sm" data-marcar="${v.id}">✓ Nota emitida</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`}
+    </div>
+  `;
+  // Filtros
+  const aplicar = ()=>{
+    window.__semNotaFiltroLoja = document.getElementById('sn_loja').value;
+    window.__semNotaDe = document.getElementById('sn_de').value;
+    window.__semNotaAte = document.getElementById('sn_ate').value;
+    renderView();
+  };
+  document.getElementById('sn_loja').addEventListener('change', aplicar);
+  document.getElementById('sn_de').addEventListener('change', aplicar);
+  document.getElementById('sn_ate').addEventListener('change', aplicar);
+  // Ver detalhe
+  main.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=>{
+    const v = vendas.find(x=>x.id===b.dataset.ver); if(v) abrirDetalheVenda(v);
+  }));
+  // Marcar nota emitida
+  main.querySelectorAll('[data-marcar]').forEach(b=> b.addEventListener('click', ()=>{
+    const v = vendas.find(x=>x.id===b.dataset.marcar); if(v) marcarNotaEmitida(v);
+  }));
+  // Exportar
+  const btnX = document.getElementById('sn_excel');
+  if(btnX) btnX.addEventListener('click', ()=> exportarSemNota(lista));
+}
+
+/** Registra que a nota desta venda foi emitida (informando o número), tirando-a do relatório. */
+function marcarNotaEmitida(v){
+  openModal(`
+    <h3>Registrar nota emitida</h3>
+    <p class="muted">Venda ${escapeHtml(v.codigoVia||'')} · ${fmtDate(v.data)} · R$ ${Number(v.valorTotal||0).toFixed(2)}</p>
+    <div class="field"><label>Número da nota fiscal</label><input id="mn_numero" placeholder="Ex: 12345" autocomplete="off"></div>
+    <div class="field"><label>Empresa que emitiu</label><select id="mn_loja">${(config.lojas||[]).map(l=>`<option value="${l.id}" ${v.lojaId===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="mn_cancel">Cancelar</button>
+      <button class="btn btn-accent" id="mn_ok">Confirmar</button>
+    </div>
+  `);
+  document.getElementById('mn_cancel').addEventListener('click', closeModal);
+  document.getElementById('mn_ok').addEventListener('click', async ()=>{
+    const numero = document.getElementById('mn_numero').value.trim();
+    if(!numero){ showToast('Informe o número da nota.'); return; }
+    v.emissaoNota = 'sim';
+    v.numeroNota = numero;
+    v.lojaNotaId = document.getElementById('mn_loja').value;
+    v.notaRegularizadaEm = new Date().toISOString();
+    v.notaRegularizadaPor = currentUser ? currentUser.nome : '';
+    const ok = await vendaSalvar(v);
+    if(ok){ closeModal(); showToast('Nota registrada.'); renderView(); }
+    else showToast('Não foi possível salvar.');
+  });
+}
+
+/** Exporta o relatório em CSV (abre no Excel). */
+function exportarSemNota(lista){
+  const lojaNome = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l?l.nome:''; };
+  const linhas = [['Data','Via','Loja','Cliente','Vendedora','Valor','Forma de pagamento']];
+  lista.forEach(v=>{
+    const formas = (v.pagamentos||[]).map(p=>p.tipoNome||p.tipo||'').filter(Boolean).join(' + ');
+    linhas.push([ v.data||'', v.codigoVia||'', lojaNome(v.lojaId), v.cliente||'', v.vendedora||'', Number(v.valorTotal||0).toFixed(2).replace('.',','), formas ]);
+  });
+  const csv = linhas.map(l=> l.map(c=> '"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+  const blob = new Blob(['\ufeff'+csv], { type:'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'vendas-sem-nota-'+hoje()+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=> URL.revokeObjectURL(url), 1000);
 }
 
 /**
