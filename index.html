@@ -303,6 +303,10 @@
   </div>
 </div>
 
+<div id="avisoInatividade" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#b45309;color:#fff;padding:10px 16px;align-items:center;justify-content:center;gap:14px;font-size:14px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.25);">
+  <span>⏱️ Sua sessão vai encerrar em 1 minuto por inatividade.</span>
+  <button id="btnContinuarSessao" style="background:#fff;color:#b45309;border:none;border-radius:6px;padding:6px 14px;font-weight:700;cursor:pointer;">Continuar conectado</button>
+</div>
 <input id="scannerInput" autocomplete="off" style="position:fixed;opacity:0;width:1px;height:1px;top:0;left:0;pointer-events:none;" tabindex="-1" aria-hidden="true">
 <div id="shellView">
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -909,7 +913,11 @@ if('serviceWorker' in navigator && navigator.serviceWorker && typeof navigator.s
   });
 }
 
-document.getElementById('btnLogoutShell').addEventListener('click', ()=>{
+/* ── ENCERRAMENTO DE SESSÃO ──────────────────────────────────────────────────
+   Usado pelo botão Sair e pelo encerramento automático por inatividade.
+   ──────────────────────────────────────────────────────────────────────────── */
+function encerrarSessao(motivo){
+  pararVigiaInatividade();
   if(__gatewaySenha){ try{ gatewayCall({ op:'logout', senha: __gatewaySenha }); }catch(e){} }
   limparSessao();
   document.getElementById('loginUser').value = '';
@@ -920,6 +928,50 @@ document.getElementById('btnLogoutShell').addEventListener('click', ()=>{
   document.getElementById('loginPass').value = '';
   document.getElementById('shellView').style.display = 'none';
   document.getElementById('loginView').style.display = 'flex';
+  if(motivo) setTimeout(()=> showToast(motivo), 200);
+}
+document.getElementById('btnLogoutShell').addEventListener('click', ()=> encerrarSessao());
+
+/* ── BLOQUEIO POR INATIVIDADE ────────────────────────────────────────────────
+   Depois de 10 minutos sem nenhuma interação (mouse, teclado, toque, scanner),
+   a sessão é encerrada e é preciso autenticar de novo. Um aviso aparece 1 min
+   antes, dando chance de continuar. Como os módulos rodam em iframes, eles
+   avisam o shell de atividade pela mensagem 'atividade'.
+   ──────────────────────────────────────────────────────────────────────────── */
+const INATIVIDADE_MS = 10 * 60 * 1000;   // 10 minutos
+const AVISO_ANTES_MS = 60 * 1000;        // avisa 1 minuto antes
+let __idleTimer = null, __idleAviso = null, __avisoVisivel = false;
+
+function pararVigiaInatividade(){
+  if(__idleTimer){ clearTimeout(__idleTimer); __idleTimer = null; }
+  if(__idleAviso){ clearTimeout(__idleAviso); __idleAviso = null; }
+  const b = document.getElementById('avisoInatividade');
+  if(b) b.style.display = 'none';
+  __avisoVisivel = false;
+}
+function registrarAtividade(){
+  if(!currentUser) return;
+  const b = document.getElementById('avisoInatividade');
+  if(b) b.style.display = 'none';
+  __avisoVisivel = false;
+  if(__idleTimer) clearTimeout(__idleTimer);
+  if(__idleAviso) clearTimeout(__idleAviso);
+  __idleAviso = setTimeout(()=>{
+    if(!currentUser) return;
+    const bar = document.getElementById('avisoInatividade');
+    if(bar){ bar.style.display = 'flex'; __avisoVisivel = true; }
+  }, INATIVIDADE_MS - AVISO_ANTES_MS);
+  __idleTimer = setTimeout(()=>{
+    if(!currentUser) return;
+    encerrarSessao('Sessão encerrada por inatividade. Entre novamente.');
+  }, INATIVIDADE_MS);
+}
+document.addEventListener('DOMContentLoaded', ()=>{
+  const btn = document.getElementById('btnContinuarSessao');
+  if(btn) btn.addEventListener('click', ()=> registrarAtividade());
+});
+['click','keydown','mousemove','touchstart','scroll','wheel'].forEach(ev=>{
+  document.addEventListener(ev, ()=>{ if(currentUser) registrarAtividade(); }, { passive:true, capture:true });
 });
 
 /* Alerta de gastos ao abrir o sistema — mostra popup com contas vencendo hoje e vencidas */
@@ -988,6 +1040,7 @@ function enterShell(moduloInicial){
   document.getElementById('shellView').style.display = 'flex';
   preaquecerModulos();
   initScannerGlobal();
+  registrarAtividade();
   document.getElementById('shellWhoName').textContent = currentUser.nome;
   document.getElementById('shellWhoLevel').textContent = levelLabel(currentUser.nivel);
   buildSidebar();
@@ -1629,6 +1682,8 @@ window.addEventListener('message', (ev)=>{
       if(jaExistia && iframeAlvo && iframeAlvo.contentWindow) iframeAlvo.contentWindow.postMessage(msg, '*');
       else pendingAbrirRegistro = { permModulo:d.alvo, id:d.registroId||null, tab:d.tab||null };
     }
+  } else if(d.type === 'atividade'){
+    registrarAtividade();
   } else if(d.type === 'rascunhoSalvo' || d.type === 'semRascunho'){
     /* tratado via Promise em navegarParaCodigoVia */
   } else if(d.type === 'avisosTotal'){

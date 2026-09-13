@@ -677,6 +677,7 @@
       ${currentUser.nivel==="vendedora" ? `<div class="locked-note">🔒 Seu acesso não inclui o total financeiro (faturamento).</div>` : ""}
 
       ${mostraFinanceiro ? `<div id="secAlertasRH"></div>` : ""}
+      ${mostraFinanceiro ? `<div class="section" id="secComparativoLojas"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secInteligencia"></div>` : ""}
       ${mostraFinanceiro ? `<div class="section" id="secPagamentos"></div>` : ""}
       <div class="section" id="secOrdens"></div>
@@ -686,6 +687,7 @@
 
     if(mostraFinanceiro) renderContasHoje();
     if(mostraFinanceiro) renderAlertasRH();
+    if(mostraFinanceiro) renderComparativoLojas();
     if(mostraFinanceiro) renderSecaoInteligencia();
     if(mostraFinanceiro) renderSecaoPagamentos();
     renderSecaoOrdens(mostraFinanceiro);
@@ -808,6 +810,87 @@
       totais[v.loja] = (totais[v.loja]||0) + valorRecebidoDe(v);
     });
     return totais;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     COMPARATIVO POR LOJA — visão de rede para a diretoria
+     Cada loja é um CNPJ próprio: mostra lado a lado faturamento, nº de vendas,
+     ticket médio, O.S. abertas e orçamentos em aberto no mês corrente.
+     ══════════════════════════════════════════════════════════════════════════ */
+  function renderComparativoLojas(){
+    const box = document.getElementById("secComparativoLojas");
+    if(!box) return;
+    const hojeD = new Date();
+    const mesIni = `${hojeD.getFullYear()}-${String(hojeD.getMonth()+1).padStart(2,"0")}-01`;
+    const mesFim = `${hojeD.getFullYear()}-${String(hojeD.getMonth()+1).padStart(2,"0")}-31`;
+    const lojas = (configCompleto && configCompleto.lojas) || [];
+    if(lojas.length === 0){ box.innerHTML = ""; return; }
+
+    const dados = lojas.map(l=>{
+      const vLoja = (vendas||[]).filter(v=>
+        v.status !== "cancelada" &&
+        (v.lojaId === l.id || v.loja === l.nome) &&
+        (v.data||"") >= mesIni && (v.data||"") <= mesFim
+      );
+      const fat = vLoja.reduce((s,v)=> s + (Number(v.valorTotal)||0), 0);
+      const qtd = vLoja.length;
+      const osAbertas = (orders||[]).filter(o=>
+        (o.lojaId === l.id) && o.status !== "entregue" && o.status !== "cancelado"
+      ).length;
+      const orcAbertos = (orcamentos||[]).filter(o=>
+        (o.lojaId === l.id) && o.status && !["aprovado","recusado"].includes(o.status)
+      ).length;
+      const semNota = vLoja.filter(v=> v.emissaoNota !== "sim").length;
+      return { loja:l, fat, qtd, ticket: qtd ? fat/qtd : 0, osAbertas, orcAbertos, semNota };
+    }).filter(d=> d.fat>0 || d.qtd>0 || d.osAbertas>0 || d.orcAbertos>0);
+
+    if(dados.length === 0){ box.innerHTML = ""; return; }
+    dados.sort((a,b)=> b.fat - a.fat);
+    const maxFat = Math.max(...dados.map(d=>d.fat), 1);
+    const totalRede = dados.reduce((s,d)=> s + d.fat, 0);
+    const totalVendas = dados.reduce((s,d)=> s + d.qtd, 0);
+
+    box.innerHTML = `
+      <span class="card-title">Comparativo por loja <span style="color:var(--ink-faint);font-size:12px;text-transform:none;letter-spacing:0;font-weight:600;">(mês corrente)</span></span>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:var(--surface-2,#f1f4f7);border-radius:8px;font-size:13px;">
+        <span>Rede: <b>${fmtMoeda(totalRede)}</b></span>
+        <span><b>${totalVendas}</b> venda(s)</span>
+        <span>Ticket médio: <b>${fmtMoeda(totalVendas ? totalRede/totalVendas : 0)}</b></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;border-bottom:2px solid var(--line,#e1e5ea);">
+              <th style="padding:8px 6px;">Loja</th>
+              <th style="padding:8px 6px;">Faturamento</th>
+              <th style="padding:8px 6px;">Vendas</th>
+              <th style="padding:8px 6px;">Ticket médio</th>
+              <th style="padding:8px 6px;">O.S. abertas</th>
+              <th style="padding:8px 6px;">Orç. abertos</th>
+              <th style="padding:8px 6px;">Sem nota</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${dados.map(d=>`
+            <tr style="border-bottom:1px solid var(--line,#e1e5ea);">
+              <td style="padding:9px 6px;">
+                <b>${escapeHtml(d.loja.abreviacao||"")}</b>
+                <span style="color:var(--ink-faint);font-size:12px;"> ${escapeHtml(d.loja.nome)}</span>
+                <div style="margin-top:4px;height:5px;background:var(--surface-2,#f1f4f7);border-radius:3px;overflow:hidden;max-width:180px;">
+                  <div style="height:100%;width:${Math.round((d.fat/maxFat)*100)}%;background:${escapeHtml(d.loja.cor||"#7a5230")};"></div>
+                </div>
+              </td>
+              <td style="padding:9px 6px;font-weight:700;">${fmtMoeda(d.fat)}</td>
+              <td style="padding:9px 6px;">${d.qtd}</td>
+              <td style="padding:9px 6px;">${fmtMoeda(d.ticket)}</td>
+              <td style="padding:9px 6px;">${d.osAbertas || "—"}</td>
+              <td style="padding:9px 6px;">${d.orcAbertos || "—"}</td>
+              <td style="padding:9px 6px;">${d.semNota ? `<span style="color:var(--danger,#b3261e);font-weight:700;">${d.semNota}</span>` : "—"}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
   }
 
   function renderSecaoInteligencia(){
@@ -1645,6 +1728,21 @@
 
     atualizar();
   }
+})();
+
+/* Avisa o shell que houve atividade aqui dentro, para o contador de inatividade
+   de 10 minutos não encerrar a sessão de quem está trabalhando dentro do módulo. */
+(function(){
+  var ultimoAviso = 0;
+  function avisar(){
+    var agora = Date.now();
+    if(agora - ultimoAviso < 5000) return;   // no máximo 1 aviso a cada 5s
+    ultimoAviso = agora;
+    try{ if(window.parent !== window) window.parent.postMessage({ type:'atividade' }, '*'); }catch(e){}
+  }
+  ['click','keydown','mousemove','touchstart','scroll','wheel'].forEach(function(ev){
+    document.addEventListener(ev, avisar, { passive:true, capture:true });
+  });
 })();
 </script>
 </body>
