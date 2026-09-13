@@ -3175,12 +3175,36 @@ function openEditModalOficina(order){
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
 }
 
+/* ── PERMISSÃO POR LOJA ──────────────────────────────────────────────────────
+   Diretoria e gerente editam qualquer ordem. Demais perfis editam apenas
+   ordens da loja ativa; ordens de outra loja abrem em modo somente leitura.
+   ──────────────────────────────────────────────────────────────────────────── */
+function ehGestaoLoja(){
+  return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+}
+function podeEditarRegistro(reg){
+  if(!currentUser || !reg) return false;
+  if(ehGestaoLoja()) return true;
+  const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
+  if(!lojaAtiva) return false;
+  return (reg.lojaId||null) === lojaAtiva;
+}
+function motivoSemEdicao(reg){
+  if(ehGestaoLoja()) return '';
+  const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
+  if(!lojaAtiva) return 'Selecione uma loja no topo para editar.';
+  const l = (config.lojas||[]).find(x=>x.id===(reg&&reg.lojaId));
+  return 'Esta ordem é da loja ' + (l ? l.nome : 'outra') + ' — você pode visualizar e imprimir, mas não editar.';
+}
+
 function openEditModalCompleto(order, opts){
   opts = opts || {};
-  const somenteLeitura = !!opts.somenteLeitura;
+  // Ordem de outra loja: força somente leitura
+  const bloqueadoPorLoja = !podeEditarRegistro(order);
+  const somenteLeitura = !!opts.somenteLeitura || bloqueadoPorLoja;
   openModal(`
     <h3>${somenteLeitura ? 'Detalhes da ordem de serviço' : 'Editar ordem de serviço'}</h3>
-    <p>${somenteLeitura ? 'Visualização somente — clique em "Editar" na tabela para alterar algo.' : 'Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.'}</p>
+    <p>${bloqueadoPorLoja ? '🔒 ' + escapeHtml(motivoSemEdicao(order)) : (somenteLeitura ? 'Visualização somente — clique em "Editar" na tabela para alterar algo.' : 'Ajuste os dados abaixo. Se a nova data/serviço sair do padrão configurado, será solicitado um código de autorização.')}</p>
     <div style="margin-bottom:8px;">
       <button type="button" class="btn btn-ghost btn-sm" id="btnTrocarClienteEdit" ${somenteLeitura?'disabled':''}>🔍 Trocar cliente (buscar outro)</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btnEditarCadastroClienteEdit" ${somenteLeitura?'disabled':''} title="Editar o cadastro deste cliente (vale para todos os módulos)">✎ Editar cadastro do cliente</button>

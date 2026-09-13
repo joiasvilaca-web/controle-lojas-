@@ -1589,12 +1589,38 @@ function renderNovaVenda(main){
    - Não mexe no valor de itens/soma: só marca a venda como cancelada e registra
      quanto dinheiro efetivamente recebido "sai do caixa" (usado depois na aba Caixa).
    ============================================================ */
+/* ── PERMISSÃO POR LOJA ──────────────────────────────────────────────────────
+   Regra: diretoria e gerente editam qualquer registro. Demais perfis editam
+   apenas registros da loja ativa no momento (contexto do shell). Registros de
+   outra loja ficam disponíveis para visualizar e imprimir, mas não editar.
+   ──────────────────────────────────────────────────────────────────────────── */
+function ehGestaoLoja(){
+  return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+}
+function podeEditarRegistro(reg){
+  if(!currentUser || !reg) return false;
+  if(ehGestaoLoja()) return true;
+  const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
+  if(!lojaAtiva) return false;
+  const lojaDoReg = reg.lojaId || reg.lojaOrigemId || null;
+  return lojaDoReg === lojaAtiva;
+}
+function motivoSemEdicao(reg){
+  if(ehGestaoLoja()) return '';
+  const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
+  if(!lojaAtiva) return 'Selecione uma loja no topo para editar.';
+  const lojaDoReg = reg && (reg.lojaId || reg.lojaOrigemId);
+  const l = (config.lojas||[]).find(x=>x.id===lojaDoReg);
+  return 'Este registro é da loja ' + (l ? l.nome : 'outra') + ' — você pode visualizar e imprimir, mas não editar.';
+}
+
 function podeCancelarVenda(){
   return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
 }
 function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
   if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem cancelar uma venda.'); return; }
+  if(!podeEditarRegistro(venda)){ showToast(motivoSemEdicao(venda)); return; }
   if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
   const recebido = valorRecebidoDe(venda);
   openModal(`
@@ -2120,6 +2146,7 @@ function abrirEditarVenda(v){
   document.getElementById('ev_nao').addEventListener('click', ()=> abrirFormularioEdicaoVenda(v));
 }
 function abrirFormularioEdicaoVenda(v){
+  if(!podeEditarRegistro(v)){ showToast(motivoSemEdicao(v)); return; }
   const podeEditarTudo = v.data === hoje() && (!v.trocas || v.trocas.length===0);
   if(podeEditarTudo) abrirFormularioEdicaoCompleta(v);
   else abrirFormularioEdicaoRestrita(v, v.data!==hoje() ? null : 'Esta venda já teve troca registrada, então itens e pagamento não dá pra editar aqui — só os dados abaixo.');
@@ -2393,6 +2420,7 @@ function abrirDetalheVenda(v){
         ${v.lojaBaixaEstoqueId ? `<tr><td class="muted">Baixa estoque</td><td>${escapeHtml(nomeLoja(v.lojaBaixaEstoqueId))}</td></tr>` : ''}
       ` : '')}
     </table>
+    ${!podeEditarRegistro(v) ? `<p class="muted" style="margin-top:10px;font-size:12px;">🔒 ${escapeHtml(motivoSemEdicao(v))}</p>` : ''}
     <div class="modal-actions">
       <button class="btn btn-accent" id="btnImprimirVenda">🖨️ Imprimir</button>
       <button class="btn btn-ghost" id="fecharDetalheVenda">Fechar</button>
