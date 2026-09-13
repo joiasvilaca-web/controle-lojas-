@@ -1262,6 +1262,7 @@ function tabsForLevel(){
   // Relatório fiscal: só diretoria e gerente
   if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')){
     t.push({ id:'semnota', label:'Sem nota', icon:'⚠️' });
+    t.push({ id:'interloja', label:'Entre lojas', icon:'🔄' });
   }
   if(window.__permissoesAbasOverride){
     return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
@@ -1300,6 +1301,7 @@ function renderView(){
   if(modoNovaVenda) renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
   else if(currentTab==='semnota') renderSemNota(main);
+  else if(currentTab==='interloja') renderInterloja(main);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -1426,6 +1428,115 @@ function marcarNotaEmitida(v){
     const ok = await vendaSalvar(v);
     if(ok){ closeModal(); showToast('Nota registrada.'); renderView(); }
     else showToast('Não foi possível salvar.');
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   RELATÓRIO — VENDAS ENTRE LOJAS (peça de um CNPJ vendida por outro)
+   Lista as vendas em que a joia saiu de uma empresa diferente da que fez a venda
+   ou da que emitiu a nota. Cada linha precisa de acerto fiscal entre os CNPJs
+   (venda à ordem ou consignação) — o relatório é o que o contador usa pra isso.
+   ══════════════════════════════════════════════════════════════════════════════ */
+function renderInterloja(main){
+  const lojaNome = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l?l.nome:'—'; };
+  const lojaAbrev = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l?(l.abreviacao||l.nome):'—'; };
+
+  // Venda interloja = a joia saiu de empresa diferente da loja da venda,
+  // OU a nota foi emitida por empresa diferente de onde a joia saiu.
+  let lista = (vendas||[]).filter(v=>{
+    if(v.status === 'cancelada') return false;
+    const saida = v.lojaSaidaId || '';
+    if(saida && saida !== v.lojaId) return true;
+    if(v.emissaoNota==='sim' && v.lojaNotaId && saida && v.lojaNotaId !== saida) return true;
+    return false;
+  });
+
+  const fDe = window.__ilDe || '', fAte = window.__ilAte || '';
+  if(fDe) lista = lista.filter(v=> (v.data||'') >= fDe);
+  if(fAte) lista = lista.filter(v=> (v.data||'') <= fAte);
+  lista.sort((a,b)=> (b.data||'').localeCompare(a.data||''));
+
+  const total = lista.reduce((s,v)=> s + Number(v.valorTotal||0), 0);
+  const semBaixa = lista.filter(v=> !v.baixaEstoqueConfirmada).length;
+
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">🔄 Vendas entre lojas</h1>
+        <p class="page-sub">Vendas em que a joia saiu de uma empresa e a venda/nota foi de outra. Cada uma precisa de acerto fiscal entre os CNPJs.</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="field"><label>Período</label>
+        <div style="display:flex;gap:6px;max-width:340px;">
+          <input type="date" id="il_de" value="${escapeHtml(fDe)}" style="flex:1;">
+          <input type="date" id="il_ate" value="${escapeHtml(fAte)}" style="flex:1;">
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;padding:10px;background:var(--surface-2);border-radius:8px;">
+        <span><b>${lista.length}</b> venda(s)</span>
+        <span>Total: <b>R$ ${total.toFixed(2)}</b></span>
+        ${semBaixa>0?`<span style="color:var(--wait,#b45309);"><b>${semBaixa}</b> aguardando baixa manual</span>`:''}
+        <button class="btn btn-ghost btn-sm" id="il_excel" style="margin-left:auto;">📊 Exportar Excel</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px;">
+      ${lista.length===0 ? '<p class="muted">Nenhuma venda entre lojas no período.</p>' : `
+      <table>
+        <thead><tr><th>Data</th><th>Via</th><th>Joia saiu de</th><th>Vendida por</th><th>Nota por</th><th>Baixa em</th><th>Valor</th><th></th></tr></thead>
+        <tbody>
+          ${lista.map(v=>`<tr>
+            <td>${fmtDate(v.data)}</td>
+            <td>${escapeHtml(v.codigoVia||'—')}</td>
+            <td><b>${escapeHtml(lojaAbrev(v.lojaSaidaId))}</b></td>
+            <td>${escapeHtml(lojaAbrev(v.lojaId))}</td>
+            <td>${v.emissaoNota==='sim' ? escapeHtml(lojaAbrev(v.lojaNotaId)) : '<span class="muted">sem nota</span>'}</td>
+            <td>${v.lojaBaixaEstoqueId ? escapeHtml(lojaAbrev(v.lojaBaixaEstoqueId)) : '—'}${v.baixaEstoqueConfirmada?' ✓':''}</td>
+            <td>R$ ${Number(v.valorTotal||0).toFixed(2)}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-ghost btn-sm" data-ilver="${v.id}">👁️</button>
+              ${!v.baixaEstoqueConfirmada?`<button class="btn btn-accent btn-sm" data-ilbaixa="${v.id}">✓ Baixa feita</button>`:''}
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`}
+    </div>
+  `;
+  const aplicar = ()=>{
+    window.__ilDe = document.getElementById('il_de').value;
+    window.__ilAte = document.getElementById('il_ate').value;
+    renderView();
+  };
+  document.getElementById('il_de').addEventListener('change', aplicar);
+  document.getElementById('il_ate').addEventListener('change', aplicar);
+  main.querySelectorAll('[data-ilver]').forEach(b=> b.addEventListener('click', ()=>{
+    const v = vendas.find(x=>x.id===b.dataset.ilver); if(v) abrirDetalheVenda(v);
+  }));
+  main.querySelectorAll('[data-ilbaixa]').forEach(b=> b.addEventListener('click', async ()=>{
+    const v = vendas.find(x=>x.id===b.dataset.ilbaixa); if(!v) return;
+    if(!confirm('Confirmar que a baixa de estoque foi feita manualmente na empresa ' + lojaNome(v.lojaBaixaEstoqueId||v.lojaSaidaId) + '?')) return;
+    v.baixaEstoqueConfirmada = true;
+    v.baixaConfirmadaEm = new Date().toISOString();
+    v.baixaConfirmadaPor = currentUser ? currentUser.nome : '';
+    const ok = await vendaSalvar(v);
+    if(ok){ showToast('Baixa confirmada.'); renderView(); } else showToast('Não foi possível salvar.');
+  }));
+  const btnX = document.getElementById('il_excel');
+  if(btnX) btnX.addEventListener('click', ()=>{
+    const linhas = [['Data','Via','Joia saiu de','Vendida por','Nota por','Baixa em','Cliente','Valor']];
+    lista.forEach(v=> linhas.push([
+      v.data||'', v.codigoVia||'', lojaNome(v.lojaSaidaId), lojaNome(v.lojaId),
+      v.emissaoNota==='sim'?lojaNome(v.lojaNotaId):'sem nota',
+      v.lojaBaixaEstoqueId?lojaNome(v.lojaBaixaEstoqueId):'',
+      v.cliente||'', Number(v.valorTotal||0).toFixed(2).replace('.',',')
+    ]));
+    const csv = linhas.map(l=> l.map(c=> '"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+    const blob = new Blob(['\ufeff'+csv], { type:'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'vendas-entre-lojas-'+hoje()+'.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=> URL.revokeObjectURL(url), 1000);
   });
 }
 
