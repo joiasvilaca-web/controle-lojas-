@@ -119,14 +119,26 @@
 <!-- ===== ANIVERSÁRIO ===== -->
 <div class="tab-content active" id="tab-aniversario">
   <div class="page-head">
-    <div><h1 class="page-title">🎂 Aniversário</h1><p class="page-sub">Clientes que fazem aniversário hoje e nos próximos dias.</p></div>
+    <div><h1 class="page-title">🎂 Aniversário</h1><p class="page-sub">Escolha o que quer ver e clique em buscar.</p></div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-accent" id="btnAnivHoje">🎂 Aniversariantes de hoje</button>
+      <button class="btn btn-ghost" id="btnAnivOutra">📅 Outra data ou mês</button>
+    </div>
+    <div id="anivFiltroBox" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
+      <div class="filters">
+        <select id="anivMes"><option value="">Escolha o mês</option></select>
+        <select id="anivDia"><option value="">Mês inteiro</option></select>
+        <button class="btn btn-accent" id="btnAnivBuscar">🔍 Buscar</button>
+      </div>
+    </div>
   </div>
   <div id="anivAlertaHoje"></div>
-  <div class="card" style="margin-bottom:14px;">
-    <div class="section-label">Próximos 30 dias</div>
+  <div class="card" style="margin-bottom:14px;display:none;" id="anivResultadoBox">
+    <div class="section-label" id="anivResultadoTitulo">Resultado</div>
     <div class="filters">
-      <input type="text" id="anivBusca" placeholder="Buscar cliente...">
-      <select id="anivMes"><option value="">Todos os meses</option></select>
+      <input type="text" id="anivBusca" placeholder="Filtrar por nome nesta lista...">
     </div>
     <div id="anivTabela"></div>
   </div>
@@ -195,6 +207,23 @@ let __gatewaySenha = null;
 let currentUser = null;
 let config = null;
 let clientes = [];
+let clientesCarregados = false;   // a Mala Direta baixa sob demanda
+
+/** Acha um cliente entre os resultados da busca atual ou no cache já baixado. */
+function acharCliente(id){
+  return (anivResultado||[]).find(x=>x && x.id===id)
+      || (clientes||[]).find(x=>x && x.id===id)
+      || null;
+}
+
+/** Baixa o cadastro de clientes só quando realmente precisa (Mala Direta). */
+async function carregarClientesSeNecessario(){
+  if(clientesCarregados) return clientes;
+  const linhas = await gatewaySelectTudo('clientes_cadastro');
+  clientes = linhas.map(r=>r.payload).filter(Boolean);
+  clientesCarregados = true;
+  return clientes;
+}
 let orcamentos = [];
 let mensagensSalvas = [];
 
@@ -309,21 +338,19 @@ async function gatewaySelectTudo(table){
   return linhas;
 }
 async function loadAll(){
-  const [rConfig, linhasClientes, rOrc, rMsgs] = await Promise.all([
+  // O cadastro de clientes NÃO é mais baixado aqui: eram dezenas de milhares de
+  // linhas carregadas só pra abrir o módulo. Aniversários buscam no servidor, e a
+  // Mala Direta baixa a lista só quando a aba é aberta (carregarClientesSeNecessario).
+  const [rConfig, rOrc, rMsgs] = await Promise.all([
     gatewayCall({ op:'getConfig' }),
-    gatewaySelectTudo('clientes_cadastro'),
     gatewayCall({ op:'selectAll', table:'orcamentos' }),
     gatewayCall({ op:'selectAll', table:'marketing_mensagens' }).catch(()=>({ data:[] })),
   ]);
   config = rConfig.data || {};
-  clientes = linhasClientes.map(r=>r.payload).filter(Boolean);
   orcamentos = (rOrc.data||[]).map(r=>r.payload).filter(Boolean);
   mensagensSalvas = (rMsgs.data||[]).map(r=>r.payload).filter(Boolean);
 
-  // Preencher filtros de meses
-  const selMes = document.getElementById('anivMes');
-  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-  meses.forEach((m,i)=>{ const o=document.createElement('option'); o.value=i+1; o.textContent=m; selMes.appendChild(o); });
+  // (os meses da aba Aniversário são preenchidos em renderAniversario, sob demanda)
 
   // Filtros de orçamentos
   const lojas = (config.lojas||[]);
@@ -352,98 +379,138 @@ function posicaoStatus(id){ return statusList().findIndex(s=>s.id===id); }
 // ============================================================
 //  ABA ANIVERSÁRIO
 // ============================================================
+/* ══════════════════════════════════════════════════════════════════════════════
+   ANIVERSÁRIOS — nada carrega sozinho.
+   A busca é feita NO SERVIDOR (op "aniversariantes"), por dia ou por mês, então o
+   módulo não precisa mais baixar o cadastro inteiro de clientes só pra montar
+   esta aba. Abre instantâneo; o usuário escolhe o que quer ver.
+   ══════════════════════════════════════════════════════════════════════════════ */
+let anivResultado = [];   // o que a última busca trouxe
+
 function renderAniversario(){
-  const hoje = new Date();
-  const mes = hoje.getMonth()+1;
-  const dia = hoje.getDate();
+  // Só liga os botões — não busca nada até clicar.
+  const btnHoje = document.getElementById('btnAnivHoje');
+  const btnOutra = document.getElementById('btnAnivOutra');
+  const btnBuscar = document.getElementById('btnAnivBuscar');
+  const filtroBox = document.getElementById('anivFiltroBox');
+  if(!btnHoje || btnHoje.dataset.ligado) return;   // evita ligar duas vezes
+  btnHoje.dataset.ligado = '1';
 
-  const anivHoje = clientes.filter(c=>{
-    if(!c.dataNascimento) return false;
-    const [,m,d] = c.dataNascimento.split('-').map(Number);
-    return m===mes && d===dia;
+  // Preenche os selects uma vez
+  const selMes = document.getElementById('anivMes');
+  if(selMes && selMes.options.length <= 1){
+    const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    meses.forEach((m,i)=>{ const o=document.createElement('option'); o.value=i+1; o.textContent=m; selMes.appendChild(o); });
+    selMes.value = String(new Date().getMonth()+1);
+  }
+  const selDia = document.getElementById('anivDia');
+  if(selDia && selDia.options.length <= 1){
+    for(let d=1; d<=31; d++){ const o=document.createElement('option'); o.value=d; o.textContent='Dia '+d; selDia.appendChild(o); }
+  }
+
+  btnHoje.addEventListener('click', ()=>{
+    const h = new Date();
+    buscarAniversariantes(h.getMonth()+1, h.getDate(), 'Aniversariantes de hoje');
   });
+  btnOutra.addEventListener('click', ()=>{
+    filtroBox.style.display = filtroBox.style.display==='none' ? 'block' : 'none';
+  });
+  btnBuscar.addEventListener('click', ()=>{
+    const mes = parseInt(selMes.value)||0;
+    if(!mes){ showToast('Escolha o mês.'); return; }
+    const dia = parseInt(selDia.value)||null;
+    const meses = ['','Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+    const titulo = dia ? `Aniversariantes de ${dia} de ${meses[mes]}` : `Aniversariantes de ${meses[mes]}`;
+    buscarAniversariantes(mes, dia, titulo);
+  });
+  const busca = document.getElementById('anivBusca');
+  if(busca) busca.oninput = ()=> desenharTabelaAniv();
+}
 
-  const alertaEl = document.getElementById('anivAlertaHoje');
-  if(anivHoje.length>0){
-    alertaEl.innerHTML = `
-      <div class="alert-box alert-ok" style="border-radius:12px; padding:16px;">
-        <div style="font-weight:700;font-size:14px;margin-bottom:10px;">🎂 ${anivHoje.length} aniversariante(s) hoje!</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${anivHoje.map(c=>{
-            const jaEnviado = c.ultimoAniversarioEnviado === hoje.getFullYear();
-            return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;background:#fff;border:1px solid var(--ok);border-radius:8px;padding:9px 12px;">
-              <div><b>${escapeHtml(c.nome)}</b> <span class="muted">· ${escapeHtml(c.telefone||'sem telefone')} · ${escapeHtml(c.email||'sem e-mail')}</span></div>
-              <div style="display:flex;gap:6px;align-items:center;">
-                ${jaEnviado?`<span class="badge" style="background:var(--ok-soft);color:var(--ok);">✓ Enviado</span>`:''}
-                <button class="icon-btn icon-btn-wa" data-anivwa="${escapeHtml(c.id)}" title="WhatsApp">${waIconSvg()}</button>
-                <button class="icon-btn" data-anivmail="${escapeHtml(c.id)}" title="E-mail">✉️</button>
-              </div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>`;
-    alertaEl.querySelectorAll('[data-anivwa]').forEach(b=>b.addEventListener('click',()=>sendWhatsAppAniversario(b.dataset.anivwa)));
-    alertaEl.querySelectorAll('[data-anivmail]').forEach(b=>b.addEventListener('click',()=>sendEmailAniversario(b.dataset.anivmail)));
-  } else {
-    alertaEl.innerHTML = `<div class="card muted" style="margin-bottom:14px;">🎂 Nenhum aniversariante hoje.</div>`;
+async function buscarAniversariantes(mes, dia, titulo){
+  const box = document.getElementById('anivResultadoBox');
+  const el = document.getElementById('anivTabela');
+  box.style.display = 'block';
+  el.innerHTML = '<div class="muted" style="padding:12px;">Buscando…</div>';
+  document.getElementById('anivResultadoTitulo').textContent = titulo;
+  try{
+    let r = await gatewayCall({ op:'aniversariantes', params:{ mes, dia } });
+    // Se o servidor ainda não tiver a busca nova, cai pro método antigo (baixa a
+    // lista) só nesta busca — assim a tela nunca fica quebrada.
+    if(r.error){
+      await carregarClientesSeNecessario();
+      const mm = String(mes).padStart(2,'0');
+      r = { data: (clientes||[]).filter(c=>{
+        const dn = c && c.dataNascimento ? String(c.dataNascimento) : '';
+        if(!dn) return false;
+        const partes = dn.split('-');
+        if(partes.length < 3) return false;
+        if(Number(partes[1]) !== mes) return false;
+        return dia ? Number(partes[2]) === dia : true;
+      }) };
+    }
+    anivResultado = r.data || [];
+    desenharTabelaAniv();
+  }catch(e){
+    el.innerHTML = '<div class="empty">Não foi possível buscar. Tente de novo.</div>';
   }
+}
 
-  // Tabela geral
-  function atualizar(){
-    const q = (document.getElementById('anivBusca').value||'').toLowerCase();
-    const mesSel = parseInt(document.getElementById('anivMes').value)||0;
-    let lista = clientes.filter(c=>c.dataNascimento);
-    if(mesSel) lista = lista.filter(c=>{ const [,m]=c.dataNascimento.split('-').map(Number); return m===mesSel; });
-    if(q) lista = lista.filter(c=>(c.nome||'').toLowerCase().includes(q)||(c.telefone||'').includes(q));
-    lista.sort((a,b)=>{ const [,ma,da]=a.dataNascimento.split('-').map(Number); const [,mb,db]=b.dataNascimento.split('-').map(Number); return ma!==mb?ma-mb:da-db; });
-    const el = document.getElementById('anivTabela');
-    if(lista.length===0){ el.innerHTML='<div class="empty">Nenhum cliente com data de nascimento cadastrada.</div>'; return; }
-    const mesNome = ['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-    el.innerHTML = `<table><thead><tr><th>Nome</th><th>Nascimento</th><th>Telefone</th><th>E-mail</th><th>Enviado</th><th>Ações</th></tr></thead><tbody>
-      ${lista.map(c=>{
-        const [,m,d]=c.dataNascimento.split('-').map(Number);
-        const isHoje = m===mes && d===dia;
-        const jaEnv = c.ultimoAniversarioEnviado===hoje.getFullYear();
-        return `<tr${isHoje?' style="background:var(--ok-soft);"':''}>
-          <td><b>${escapeHtml(c.nome)}</b></td>
-          <td>${d} ${mesNome[m]}</td>
-          <td>${escapeHtml(c.telefone||'—')}</td>
-          <td>${escapeHtml(c.email||'—')}</td>
-          <td>${jaEnv?`<span class="badge" style="background:var(--ok-soft);color:var(--ok);">✓ ${hoje.getFullYear()}</span>`:'<span class="muted">—</span>'}</td>
-          <td style="white-space:nowrap;">
-            <button class="icon-btn icon-btn-wa" data-anivwa="${escapeHtml(c.id)}" title="WhatsApp">${waIconSvg()}</button>
-            <button class="icon-btn" data-anivmail="${escapeHtml(c.id)}" title="E-mail">✉️</button>
-          </td>
-        </tr>`;
-      }).join('')}
-    </tbody></table>`;
-    el.querySelectorAll('[data-anivwa]').forEach(b=>b.addEventListener('click',()=>sendWhatsAppAniversario(b.dataset.anivwa)));
-    el.querySelectorAll('[data-anivmail]').forEach(b=>b.addEventListener('click',()=>sendEmailAniversario(b.dataset.anivmail)));
-  }
-  document.getElementById('anivBusca').oninput = atualizar;
-  document.getElementById('anivMes').onchange = atualizar;
-  atualizar();
+function desenharTabelaAniv(){
+  const el = document.getElementById('anivTabela');
+  const q = (document.getElementById('anivBusca').value||'').toLowerCase();
+  const hoje = new Date();
+  const mesHoje = hoje.getMonth()+1, diaHoje = hoje.getDate();
+  let lista = (anivResultado||[]).filter(c=>c && c.dataNascimento);
+  if(q) lista = lista.filter(c=>(c.nome||'').toLowerCase().includes(q)||(c.telefone||'').includes(q));
+  lista.sort((a,b)=>{
+    const [,ma,da]=a.dataNascimento.split('-').map(Number);
+    const [,mb,db]=b.dataNascimento.split('-').map(Number);
+    return ma!==mb?ma-mb:da-db;
+  });
+  if(lista.length===0){ el.innerHTML='<div class="empty">Nenhum aniversariante nesta data.</div>'; return; }
+  const mesNome = ['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  el.innerHTML = `<table><thead><tr><th>Nome</th><th>Nascimento</th><th>Telefone</th><th>E-mail</th><th>Enviado</th><th>Ações</th></tr></thead><tbody>
+    ${lista.map(c=>{
+      const [,m,d]=c.dataNascimento.split('-').map(Number);
+      const isHoje = m===mesHoje && d===diaHoje;
+      const jaEnv = c.ultimoAniversarioEnviado===hoje.getFullYear();
+      return `<tr${isHoje?' style="background:var(--ok-soft);"':''}>
+        <td><b>${escapeHtml(c.nome)}</b></td>
+        <td>${d} ${mesNome[m]}</td>
+        <td>${escapeHtml(c.telefone||'—')}</td>
+        <td>${escapeHtml(c.email||'—')}</td>
+        <td>${jaEnv?`<span class="badge" style="background:var(--ok-soft);color:var(--ok);">✓ ${hoje.getFullYear()}</span>`:'<span class="muted">—</span>'}</td>
+        <td style="white-space:nowrap;">
+          <button class="icon-btn icon-btn-wa" data-anivwa="${escapeHtml(c.id)}" title="WhatsApp">${waIconSvg()}</button>
+          <button class="icon-btn" data-anivmail="${escapeHtml(c.id)}" title="E-mail">✉️</button>
+        </td>
+      </tr>`;
+    }).join('')}
+  </tbody></table>`;
+  el.querySelectorAll('[data-anivwa]').forEach(b=>b.addEventListener('click',()=>sendWhatsAppAniversario(b.dataset.anivwa)));
+  el.querySelectorAll('[data-anivmail]').forEach(b=>b.addEventListener('click',()=>sendEmailAniversario(b.dataset.anivmail)));
 }
 
 function buildAniversarioMsg(nome){
   return ((config.mensagens&&config.mensagens.aniversario)||'Feliz aniversário, {cliente}! A Vilaça Joias deseja a você um dia especial! 🎂💍').replaceAll('{cliente}', nome||'');
 }
 async function marcarAniversarioEnviado(clienteId){
-  const c = clientes.find(x=>x.id===clienteId);
+  const c = acharCliente(clienteId);
   if(!c) return;
   c.ultimoAniversarioEnviado = new Date().getFullYear();
   await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:c.id, payload:c } } });
 }
 async function sendWhatsAppAniversario(clienteId){
-  const c = clientes.find(x=>x.id===clienteId);
+  const c = acharCliente(clienteId);
   if(!c || !c.telefone){ showToast('Este cliente não tem telefone.'); return; }
   const msg = encodeURIComponent(buildAniversarioMsg(c.nome));
   window.open(`https://wa.me/55${onlyDigits(c.telefone)}?text=${msg}`, '_blank');
   await marcarAniversarioEnviado(clienteId);
-  renderAniversario();
+  desenharTabelaAniv();
 }
 async function sendEmailAniversario(clienteId){
-  const c = clientes.find(x=>x.id===clienteId);
+  const c = acharCliente(clienteId);
   if(!c || !c.email){ showToast('Este cliente não tem e-mail.'); return; }
   const assunto = `Feliz Aniversário, ${c.nome}!`;
   const corpo = buildAniversarioMsg(c.nome);
@@ -726,7 +793,9 @@ function abrirComposer(msgExistente){
   }
 
   // Preview destinatários
-  document.getElementById('btnPreviewDestinatarios').addEventListener('click', ()=>{
+  document.getElementById('btnPreviewDestinatarios').addEventListener('click', async ()=>{
+    showToast('Carregando clientes…', 1500);
+    await carregarClientesSeNecessario();
     const lista = filtrarDestinatarios();
     if(lista.length===0){ showToast('Nenhum cliente com esse filtro.'); return; }
     openModal(`
@@ -843,7 +912,8 @@ function filtrarDestinatarios(){
   return lista;
 }
 
-function confirmarEnvioMalaDireta(){
+async function confirmarEnvioMalaDireta(){
+  await carregarClientesSeNecessario();
   const lista = filtrarDestinatarios();
   const texto = (document.getElementById('mdTexto')||{}).value||'';
   const viaWa = document.getElementById('envWhats')?.checked;
