@@ -1690,18 +1690,24 @@ function ajudaPonto(texto){
       });
     });
   }
+  /* Monta o número no padrão SIGLA + NÚMERO + TIPO (ex.: JV4TFD).
+     Cuidados que já custaram bug antes:
+     - o número vai NO MEIO, não no fim (antes saía "JVTFD4");
+     - a sequência é por loja E por tipo, senão duas lojas repetem o mesmo número;
+     - se a loja ainda não foi escolhida, getLojaAbrevTR devolve "XX" — nesse caso
+       NÃO congelamos o número (ver chamada em concluirEdicao). */
   function proximoNumeroTransacao(tab, r){
-    const prefixo = prefixoTransacao(tab, r);
+    const sigla = getLojaAbrevTR(tab === "transferencias" ? (r.lojaOrigemId||r.loja||'') : (r.lojaId||r.loja||''));
+    const sufixo = sufixoTipoTransf(tab, r);
     const arr = tab === "transferencias" ? state.transferencias : tab === "envio" ? state.envio : state.reposicao;
     let maxN = 0;
-    const sufixo = sufixoTipoTransf(tab, r);
     arr.forEach(x=>{
       if(!x.numero) return;
-      // formato: SIGLAnumTIPO ex.: MC3TFI
-      const m = new RegExp('^[A-Z]{2}(\\d+)' + sufixo + '$').exec(x.numero);
+      // Conta só os da MESMA loja e do MESMO tipo
+      const m = new RegExp('^' + sigla + '(\\d+)' + sufixo + '$').exec(x.numero);
       if(m){ const n = parseInt(m[1],10); if(!isNaN(n) && n > maxN) maxN = n; }
     });
-    return prefixo + (maxN + 1);
+    return sigla + (maxN + 1) + sufixo;
   }
   // Dá número sequencial pros registros já existentes (que ainda não têm), respeitando
   // a ordem de criação (created_at) já usada em loadData(). Roda uma vez a cada carregamento;
@@ -3805,7 +3811,11 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
           // Gera o número sequencial da transação na primeira vez que for concluída
           // (T-/S- para transferência conforme o tipo, R- para reposição). Uma vez
           // gerado, não muda mais em edições seguintes.
-          if(!r.numero){
+          // Só gera o número quando a loja já está definida: se ainda estiver vazia,
+          // getLojaAbrevTR devolveria "XX" e esse "XX" ficaria gravado pra sempre.
+          // Também regeneramos um número antigo que tenha nascido com XX.
+          const lojaDefinida = getLojaAbrevTR(state.tab === "transferencias" ? (r.lojaOrigemId||r.loja||'') : (r.lojaId||r.loja||'')) !== 'XX';
+          if(lojaDefinida && (!r.numero || /^XX/.test(r.numero))){
             r.numero = proximoNumeroTransacao(state.tab, r);
           }
           const salvouOk = await saveRecord(state.tab, r); // só salva ao clicar em "Concluir edição"
