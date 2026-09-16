@@ -65,7 +65,7 @@ a{color:inherit;}
 .empty{color:var(--ink-faint); font-size:13px; padding:14px 0;}
 .field{margin-bottom:10px;}
 .field label{display:block; font-size:11.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-faint); margin-bottom:5px;}
-.field input, .field select, .field textarea{width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink); font-size:14px;}
+.field input, .field select, .field textarea{width:100%; padding:9px 10px; border:1.5px solid var(--line); border-radius:8px; background:#f8f6ff; color:var(--ink); font-size:14px; box-shadow:inset 0 1px 3px rgba(0,0,0,.07);}
 input[type=text], input[type=number], input[type=password], input[type=date], select{padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink); font-size:14px;}
 .grid-2{display:grid; grid-template-columns:repeat(2,1fr); gap:10px;}
 .grid-3{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
@@ -1025,7 +1025,7 @@ function lojaAbrevOptionsHtml(selected){
 function mountPagamentos(container, holder, getLojaVendaId){
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = 'na_encomenda';
-  if(!holder.emissaoNota) holder.emissaoNota = 'nao';
+  if(!holder.emissaoNota) holder.emissaoNota = ''; // sem pré-seleção — usuário deve escolher
   getLojaVendaId = getLojaVendaId || (()=>'');
 
   // desconto/acréscimo sobre o total no bloco de pagamento
@@ -1091,9 +1091,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
 
       <div class="grid-2">
         <div class="field">
-          <label>Valor total (R$)</label>
-          <input type="number" step="0.01" min="0" id="pagValorTotal" placeholder="0,00"
-            value="${holder.valorTotal!==undefined && holder.valorTotal!==null ? holder.valorTotal : totalFinal > 0 ? totalFinal.toFixed(2) : ''}">
+          <label>Valor total (R$) <span class="muted" style="font-size:11px;font-weight:400;">ajuste via Desc./Acrésc. acima</span></label>
+          <div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:15px;font-weight:800;color:var(--ink);" id="pagValorTotalDisplay">
+            R$ ${(totalFinal>0?totalFinal:0).toFixed(2)}
+          </div>
+          <input type="hidden" id="pagValorTotal" value="${totalFinal>0?totalFinal.toFixed(2):''}">
         </div>
       </div>
       <div id="pagRows"></div>
@@ -1120,11 +1122,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
       r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; });
     });
+    // pagValorTotal agora é hidden — valor vem dos itens + desconto/acréscimo
     const inpTotal = container.querySelector('#pagValorTotal');
-    if(inpTotal) inpTotal.addEventListener('input', (e)=>{
-      holder.valorTotal = e.target.value === '' ? null : parseFloat(e.target.value);
-      updateHint();
-    });
+    if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
     container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
       const primeiraForma = (config.formasPagamento && config.formasPagamento[0]) ? config.formasPagamento[0].id : '';
       holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
@@ -1149,11 +1149,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const dpR=container.querySelector('#pagDescR');
     if(btnDesc) btnDesc.addEventListener('click',()=>{
       holder.descTotalTipo=holder.descTotalTipo==='desconto'?'nenhum':'desconto';
-      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw();
+      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw(); updateHint();
     });
     if(btnAcr) btnAcr.addEventListener('click',()=>{
       holder.descTotalTipo=holder.descTotalTipo==='acrescimo'?'nenhum':'acrescimo';
-      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw();
+      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw(); updateHint();
     });
     if(dpPerc) dpPerc.addEventListener('input',()=>{
       holder.descTotalPerc=dpPerc.value; holder.descTotalR=''; holder.descTotalModo='percentual';
@@ -1204,13 +1204,22 @@ function mountPagamentos(container, holder, getLojaVendaId){
   function updateHint(){
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
-    if(holder.pagamentos.length === 0){ hint.textContent = ''; return; }
     const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
-    const total = Number(holder.valorTotal)||0;
-    if(Math.abs(soma - total) > 0.009){
-      hint.innerHTML = `<span style="color:var(--danger);">Soma dos pagamentos (R$ ${soma.toFixed(2)}) diferente do valor total (R$ ${total.toFixed(2)}).</span>`;
-    }else{
-      hint.innerHTML = `<span style="color:var(--ok);">Soma dos pagamentos confere com o valor total (R$ ${total.toFixed(2)}).</span>`;
+    const total = Number(holder.valorTotal)||calcTotalItens();
+    if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
+    const saldo = total - soma;
+    if(saldo > 0.009){
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:13px;font-weight:700;color:var(--wait,#b45309);">
+        💰 Falta cobrir: <b>R$ ${saldo.toFixed(2)}</b> <span style="font-weight:500;">(total R$ ${total.toFixed(2)} — pago R$ ${soma.toFixed(2)})</span>
+      </div>`;
+    } else if(saldo < -0.009){
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:#fbeaea;border:1px solid #b91c1c;border-radius:8px;font-size:13px;font-weight:700;color:#b91c1c;">
+        ⚠️ Excede o total em R$ ${Math.abs(saldo).toFixed(2)}
+      </div>`;
+    } else {
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:var(--ok-soft,#e3f5ea);border:1px solid var(--ok,#17794a);border-radius:8px;font-size:13px;font-weight:700;color:var(--ok,#17794a);">
+        ✅ Pagamento completo — R$ ${total.toFixed(2)}
+      </div>`;
     }
   }
 
@@ -2150,6 +2159,12 @@ function renderNovaVenda(main){
 
     if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item vendido.'); return; }
+    if(!cliente){ showToast('Informe o cliente antes de lançar a venda.'); return; }
+    if(!tempPagHolder.emissaoNota){ showToast('Informe se haverá nota fiscal (Sim ou Não).'); return; }
+    if(!tempPagHolder.pagamentos || tempPagHolder.pagamentos.length===0){ showToast('Adicione ao menos uma forma de pagamento.'); return; }
+    const totalPago = tempPagHolder.pagamentos.reduce((acc,p)=>acc+(Number(p.valor)||0),0);
+    const totalVenda = Number(tempPagHolder.valorTotal)||0;
+    if(totalVenda>0 && Math.abs(totalPago-totalVenda)>0.009){ showToast(`Pagamento incompleto — falta R$ ${(totalVenda-totalPago).toFixed(2)}.`); return; }
     const erroNota = notaEmpresasErro(tempPagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
 
