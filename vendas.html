@@ -70,13 +70,18 @@ input[type=text], input[type=number], input[type=password], input[type=date], se
 .grid-2{display:grid; grid-template-columns:repeat(2,1fr); gap:10px;}
 .grid-3{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
 @media (max-width:640px){ .grid-3{grid-template-columns:1fr;} .grid-2{grid-template-columns:1fr;} }
-.btn{border:none; border-radius:9px; padding:10px 18px; font-size:13.5px; font-weight:700;}
-.btn-primary, .btn-accent{background:var(--gold); color:#fff;}
-.btn-accent:hover, .btn-primary:hover{background:#4A1830;}
-.btn-ghost{background:var(--surface-2); color:var(--ink-soft);}
-.btn-ghost:hover{background:var(--line);}
+.btn{border:none;border-radius:9px;padding:10px 18px;font-size:13.5px;font-weight:700;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;
+  box-shadow:0 4px 0 rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.14);
+  position:relative;top:0;transition:top .08s,box-shadow .08s;}
+.btn:active{top:3px;box-shadow:0 1px 0 rgba(0,0,0,.18);}
+.btn-primary,.btn-accent{background:linear-gradient(180deg,#7f2a52 0%,#5c1d3b 100%);color:#fff;border-bottom:4px solid #3d1025;}
+.btn-accent:hover,.btn-primary:hover{background:linear-gradient(180deg,#8e3260 0%,#6a2248 100%);}
+.btn-ghost{background:linear-gradient(180deg,#f5f5f5 0%,#e0e0e0 100%);color:var(--ink-soft);border:1px solid #c8c8c8;border-bottom:4px solid #b0b0b0;}
+.btn-ghost:hover{background:linear-gradient(180deg,#fafafa 0%,#ececec 100%);}
 .btn-block{width:100%;}
-.btn-sm{padding:7px 13px; font-size:12.5px;}
+.btn-sm{padding:6px 12px;font-size:12.5px;box-shadow:0 3px 0 rgba(0,0,0,.2),0 1px 4px rgba(0,0,0,.12);}
+.btn-sm:active{top:2px;box-shadow:0 1px 0 rgba(0,0,0,.15);}
 .badge{display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:700;}
 .badge-loja{background:var(--surface-2); color:var(--ink-soft);}
 .filters{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; align-items:center;}
@@ -273,7 +278,7 @@ document.addEventListener('keydown', (e)=>{
     // a linha (equivalente a clicar "+ Adicionar item") em vez de submeter algo.
     const dentroDosItens = e.target.closest && e.target.closest('#itensContainerNova');
     if(dentroDosItens){
-      // confirma via Enter: clica no ＋ da primeira linha em edição
+      // confirma via Enter: clica em 'Adicionar' da primeira linha em edição
       const btnPlus = document.querySelector('[data-itadd]');
       if(btnPlus){ e.preventDefault(); btnPlus.click(); }
     }
@@ -1030,9 +1035,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
   if(holder.descTotalR===undefined) holder.descTotalR='';
 
   function calcTotalItens(){
-    // total dos itens já com desconto individual aplicado
+    // Só conta itens confirmados (_modo==='ok') — a linha em edição não entra no total
+    // até o usuário clicar em "Adicionar". Isso garante que o pagamento mostra o valor
+    // real dos itens já lançados, não o que ainda está sendo digitado.
     if(window.__itensHolder) return window.__itensHolder.itens
-      .filter(it=>it._modo==='ok'||it.valorUnitario)
+      .filter(it=>it._modo==='ok')
       .reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
     return 0;
   }
@@ -1208,6 +1215,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   draw();
+  // Expõe redraw globalmente para os itens chamarem quando mudam
+  window.__pagRedraw = ()=>{ holder.valorTotal=null; draw(); };
+  return { redraw: window.__pagRedraw };
 }
 function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado e crédito não movimentam o caixa na venda: fiado só entra quando as parcelas
@@ -1321,7 +1331,7 @@ function recalcularValorAjustado(it){
                 return '';
               })()}</span>
             </div>
-            <button type="button" class="btn-add-item" data-itadd="${i}" title="Confirmar e adicionar outro">＋</button>
+            <button type="button" class="btn-add-item" data-itadd="${i}" title="Confirmar este item e adicionar outro">Adicionar</button>
             <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
           </div>
           ${produtoAtual?`
@@ -1531,8 +1541,9 @@ function recalcularValorAjustado(it){
   }
   function updateTotalHint(){
     const hint = container.querySelector('#itensTotalHint');
-    if(!hint) return;
-    hint.innerHTML = `Total dos itens: <b>R$ ${totalItens().toFixed(2)}</b> <span class="muted">(você pode ajustar o valor total do pagamento manualmente se houver desconto/acréscimo)</span>`;
+    if(hint) hint.innerHTML = `Total dos itens: <b>R$ ${totalItens().toFixed(2)}</b> <span class="muted">(você pode ajustar o valor total do pagamento manualmente se houver desconto/acréscimo)</span>`;
+    // Avisa o bloco de pagamento para recalcular o total
+    if(typeof window.__pagRedraw==='function') window.__pagRedraw();
   }
   draw();
   return { totalItens, refreshEstoque: drawRows };
