@@ -86,6 +86,19 @@ th{text-align:left; font-size:11px; font-weight:800; letter-spacing:.04em; text-
 td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
 .item-row{border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:8px;}
 .item-row-topo{display:grid; grid-template-columns:1.4fr 1fr 70px 100px 34px; gap:8px; align-items:center;}
+.prod-ac-wrap{position:relative;}
+.prod-ac-input{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);outline:none;box-sizing:border-box;min-width:0;}
+.prod-ac-input:focus{border-color:var(--accent,#662344);box-shadow:0 0 0 2px rgba(102,35,68,.1);}
+.prod-ac-drop{position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;z-index:1300;}
+.prod-ac-item{padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line);}
+.prod-ac-item:last-child{border-bottom:none;}
+.prod-ac-item:hover,.prod-ac-item.pf{background:var(--surface-2);}
+.prod-ac-item b{display:block;font-size:13px;}
+.prod-ac-item span{font-size:11.5px;color:var(--ink-faint);}
+.prod-ac-sel{display:flex;align-items:center;gap:6px;background:var(--ok-soft,#e3f5ea);border:1px solid var(--ok,#17794a);border-radius:8px;padding:7px 10px;font-size:13px;min-width:0;}
+.prod-ac-sel b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ok,#17794a);}
+.prod-ac-sel .pa-clr{background:none;border:none;cursor:pointer;font-size:15px;color:var(--ok,#17794a);padding:0 2px;font-weight:700;flex-shrink:0;}
+.prod-ac-fator{font-size:11.5px;color:var(--ink-faint);margin-top:4px;}
 .item-row-estoque{margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
 @media (max-width:640px){ .item-row-topo{grid-template-columns:1fr 1fr; grid-template-areas:"produto metal" "qtd valor" "del del";} }
 .toast{position:fixed; left:50%; bottom:26px; transform:translate(-50%,20px); background:#24101B; color:#fff; padding:11px 18px; border-radius:10px; font-size:13.5px; box-shadow:0 12px 30px rgba(0,0,0,0.3); opacity:0; pointer-events:none; transition:all .2s ease; z-index:50;}
@@ -1096,10 +1109,17 @@ function mountItens(container, holder, getLojaId){
       return `
       <div class="item-row" data-idx="${i}">
         <div class="item-row-topo">
-          <select data-itfield="produtoEstoqueId">
-            <option value="">Selecione um produto</option>
-            ${vendaveis.map(p=>`<option value="${p.id}" ${it.produtoEstoqueId===p.id?'selected':''}>${escapeHtml(p.nome)}</option>`).join('')}
-          </select>
+          <div class="prod-ac-wrap" id="pacWrap_${i}">
+            ${produtoAtual
+              ? `<div class="prod-ac-sel">
+                   <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
+                   <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
+                 </div>
+                 ${produtoAtual.fator!=null && produtoAtual.fator!=='' ? `<div class="prod-ac-fator">Fator: <b>${produtoAtual.fator}</b></div>` : ''}`
+              : `<input class="prod-ac-input" id="pacInp_${i}" placeholder="Digite o nome do produto..." autocomplete="off" spellcheck="false" data-pac="${i}">
+                 <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`
+            }
+          </div>
           <select data-itfield="metal">${metalOptionsHtml(it.metal)}</select>
           <input type="number" min="1" step="1" data-itfield="quantidade" value="${it.quantidade!==undefined?it.quantidade:1}">
           <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00" value="${it.valorUnitario!==undefined && it.valorUnitario!=='' ? it.valorUnitario : ''}">
@@ -1134,43 +1154,87 @@ function mountItens(container, holder, getLojaId){
       </div>
     `;
     }).join('');
+
+    // ── Autocomplete de produto ──
+    wrap.querySelectorAll('[data-pac]').forEach(inp=>{
+      const i = Number(inp.dataset.pac);
+      const drop = document.getElementById('pacDrop_'+i);
+      let pacTimer=null, pacFocus=-1, pacAchados=[];
+      function fecharDrop(){ drop.style.display='none'; pacFocus=-1; }
+      function renderDrop(lista){
+        pacAchados=lista;
+        if(!lista.length){ drop.innerHTML='<div class="prod-ac-item" style="color:var(--ink-faint);">Nenhum produto encontrado.</div>'; drop.style.display='block'; return; }
+        drop.innerHTML=lista.map((p,k)=>`<div class="prod-ac-item" data-pk="${k}"><b>${escapeHtml(p.nome)}</b><span>${p.fator!=null&&p.fator!==''?'Fator '+p.fator+' · ':''}${p.precoVenda!=null?'R$ '+Number(p.precoVenda).toFixed(2):''}</span></div>`).join('');
+        drop.style.display='block';
+        drop.querySelectorAll('.prod-ac-item[data-pk]').forEach(el=>{
+          el.addEventListener('mouseover',()=>{ pacFocus=Number(el.dataset.pk); drop.querySelectorAll('.prod-ac-item').forEach((e,k)=>e.classList.toggle('pf',k===pacFocus)); });
+          el.addEventListener('mousedown',e=>{ e.preventDefault(); selecionarProduto(i,pacAchados[Number(el.dataset.pk)]); });
+        });
+      }
+      inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
+        const t=inp.value.toLowerCase().trim();
+        if(!t){ fecharDrop(); return; }
+        renderDrop(vendaveis.filter(p=>p.nome&&p.nome.toLowerCase().includes(t)).slice(0,15));
+      },120); });
+      inp.addEventListener('keydown',e=>{
+        const items=drop.querySelectorAll('.prod-ac-item[data-pk]');
+        if(!items.length) return;
+        if(e.key==='ArrowDown'){ e.preventDefault(); pacFocus=Math.min(pacFocus+1,items.length-1); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
+        else if(e.key==='ArrowUp'){ e.preventDefault(); pacFocus=Math.max(pacFocus-1,0); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
+        else if(e.key==='Enter'&&pacFocus>=0){ e.preventDefault(); selecionarProduto(i,pacAchados[pacFocus]); }
+        else if(e.key==='Escape'){ fecharDrop(); }
+      });
+      inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
+      inp.focus();
+    });
+    // Botão × limpa produto
+    wrap.querySelectorAll('[data-paclear]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const i=Number(btn.dataset.paclear);
+        const it=holder.itens[i];
+        it.produtoEstoqueId=''; it.produto=''; it.precoOriginal=''; it.valorUnitario=''; it.ajusteTipo='nenhum'; it.ajusteQtd='';
+        drawRows(); updateTotalHint();
+      });
+    });
+
+    // ── Outros campos (metal, qtd, valor, ajuste) ──
     wrap.querySelectorAll('[data-itfield]').forEach(el=>{
-      el.addEventListener('input', ()=>{
-        const row = el.closest('[data-idx]');
-        const idx = Number(row.dataset.idx);
-        const field = el.dataset.itfield;
-        const it = holder.itens[idx];
-        if(field==='produtoEstoqueId'){
-          const produto = vendaveis.find(p=>p.id===el.value);
-          it.produtoEstoqueId = el.value;
-          it.produto = produto ? produto.nome : '';
-          it.precoOriginal = produto && produto.precoVenda!=null ? produto.precoVenda : '';
-          if(it.valorUnitario==='' || it.valorUnitario==null) it.valorUnitario = it.precoOriginal || '';
-          drawRows();
-          return;
-        }
-        if(field==='ajusteTipo'){
-          it.ajusteTipo = el.value;
-          if(el.value==='nenhum'){ it.ajusteQtd = ''; } else { recalcularValorAjustado(it); }
-          drawRows();
-          return;
-        }
-        if(field==='ajusteModo'){ it.ajusteModo = el.value; recalcularValorAjustado(it); drawRows(); return; }
-        if(field==='ajusteQtd'){ it.ajusteQtd = el.value===''?'':parseFloat(el.value); recalcularValorAjustado(it); const inp=row.querySelector('[data-itfield="valorUnitario"]'); if(inp) inp.value=it.valorUnitario; updateTotalHint(); return; }
-        it[field] = (field==='quantidade'||field==='valorUnitario') ? (el.value===''?'':parseFloat(el.value)) : el.value;
+      el.addEventListener('input',()=>{
+        const row=el.closest('[data-idx]');
+        const idx=Number(row.dataset.idx);
+        const field=el.dataset.itfield;
+        const it=holder.itens[idx];
+        if(field==='ajusteTipo'){ it.ajusteTipo=el.value; if(el.value==='nenhum'){ it.ajusteQtd=''; } else { recalcularValorAjustado(it); } drawRows(); return; }
+        if(field==='ajusteModo'){ it.ajusteModo=el.value; recalcularValorAjustado(it); drawRows(); return; }
+        if(field==='ajusteQtd'){ it.ajusteQtd=el.value===''?'':parseFloat(el.value); recalcularValorAjustado(it); const inp=row.querySelector('[data-itfield="valorUnitario"]'); if(inp) inp.value=it.valorUnitario; updateTotalHint(); return; }
+        it[field]=(field==='quantidade'||field==='valorUnitario')?(el.value===''?'':parseFloat(el.value)):el.value;
         updateTotalHint();
       });
-      el.addEventListener('change', ()=>{
-        const row = el.closest('[data-idx]');
-        const idx = Number(row.dataset.idx);
-        const field = el.dataset.itfield;
-        if(field==='produtoEstoqueId' || field==='ajusteTipo' || field==='ajusteModo' || field==='ajusteQtd') return; // já tratado no 'input' acima
-        holder.itens[idx][field] = (field==='quantidade'||field==='valorUnitario') ? (el.value===''?'':parseFloat(el.value)) : el.value;
+      el.addEventListener('change',()=>{
+        const row=el.closest('[data-idx]');
+        const idx=Number(row.dataset.idx);
+        const field=el.dataset.itfield;
+        if(field==='ajusteTipo'||field==='ajusteModo'||field==='ajusteQtd') return;
+        holder.itens[idx][field]=(field==='quantidade'||field==='valorUnitario')?(el.value===''?'':parseFloat(el.value)):el.value;
       });
     });
     wrap.querySelectorAll('[data-itdel]').forEach(b=>{
-      b.addEventListener('click', ()=>{ holder.itens.splice(Number(b.dataset.itdel),1); drawRows(); updateTotalHint(); });
+      b.addEventListener('click',()=>{ holder.itens.splice(Number(b.dataset.itdel),1); drawRows(); updateTotalHint(); });
     });
+    updateTotalHint();
+  }
+
+  // Seleciona produto pelo autocomplete
+  function selecionarProduto(idx, produto){
+    const it=holder.itens[idx];
+    it.produtoEstoqueId=produto.id; it.produto=produto.nome;
+    it.precoOriginal=produto.precoVenda!=null?produto.precoVenda:'';
+    if(it.valorUnitario===''||it.valorUnitario==null) it.valorUnitario=it.precoOriginal||'';
+    drawRows();
+    setTimeout(()=>{
+      const row=container.querySelector('[data-idx="'+idx+'"]');
+      if(row){ const m=row.querySelector('[data-itfield="metal"]'); if(m) m.focus(); }
+    },50);
     updateTotalHint();
   }
   function updateTotalHint(){
