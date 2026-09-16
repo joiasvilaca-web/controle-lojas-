@@ -128,6 +128,22 @@ html.embedded .mobile-tabbar{display:none !important;}
 .ajuda-ponto .balao::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);
   border:6px solid transparent;border-top-color:#1A1D24;}
 @media(max-width:600px){ .ajuda-ponto .balao{width:200px;} }
+/* ── Autocomplete inline de cliente ── */
+.cli-ac-wrap{position:relative;}
+.cli-ac-input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;background:var(--surface);color:var(--ink);outline:none;box-sizing:border-box;}
+.cli-ac-input:focus{border-color:var(--accent,#662344);box-shadow:0 0 0 2px rgba(102,35,68,.12);}
+.cli-ac-dropdown{position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;z-index:1200;}
+.cli-ac-item{padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:2px;}
+.cli-ac-item:last-child{border-bottom:none;}
+.cli-ac-item:hover,.cli-ac-item.focused{background:var(--surface-2);}
+.cli-ac-item b{font-size:13.5px;}
+.cli-ac-item span{font-size:12px;color:var(--muted);}
+.cli-ac-msg{padding:10px 12px;font-size:12.5px;color:var(--muted);}
+.cli-ac-selecionado{display:flex;align-items:center;gap:8px;background:var(--ok-soft,#e3f5ea);border:1px solid var(--ok,#17794a);border-radius:8px;padding:8px 10px;font-size:13.5px;}
+.cli-ac-selecionado b{color:var(--ok,#17794a);flex:1;}
+.cli-ac-selecionado .cli-ac-clear{background:none;border:none;cursor:pointer;font-size:16px;color:var(--ok,#17794a);padding:0 2px;line-height:1;font-weight:700;}
+.cli-ac-selecionado .cli-ac-edit{background:none;border:none;cursor:pointer;font-size:12px;color:var(--ok,#17794a);text-decoration:underline;padding:0;font-weight:600;}
+
 </style>
 </head>
 <body>
@@ -664,6 +680,102 @@ function wireClienteFields(prefix){
     });
   }
 }
+/**
+ * Widget de autocomplete de cliente inline.
+ * Substitui o padrão antigo (div resumo + botão "Selecionar/cadastrar").
+ *
+ * @param {HTMLElement} wrap       — elemento container onde o widget é montado
+ * @param {Function}    onSel      — callback(clienteFinal) ao selecionar/cadastrar
+ * @param {Object|null} inicial    — cliente já selecionado (ao editar um registro)
+ */
+function montarClienteAutocomplete(wrap, onSel, inicial){
+  let clienteSel = inicial || null;
+  let timer = null;
+  let focusIdx = -1;
+
+  function renderWrap(){
+    if(clienteSel){
+      wrap.innerHTML = `
+        <div class="cli-ac-selecionado">
+          <b>${escapeHtml(clienteSel.nome)}</b>
+          ${clienteSel.telefone ? `<span style="color:var(--ink-soft);font-size:12.5px;">${escapeHtml(clienteSel.telefone)}</span>` : ''}
+          <button type="button" class="cli-ac-edit" id="cliAcEdit">✎ Editar</button>
+          <button type="button" class="cli-ac-clear" id="cliAcClear" title="Remover cliente">×</button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="cliAcCadastrar" style="margin-top:6px;">+ Cadastrar cliente novo</button>`;
+      wrap.querySelector('#cliAcClear').addEventListener('click', ()=>{ clienteSel=null; onSel(null); renderWrap(); });
+      wrap.querySelector('#cliAcEdit').addEventListener('click', ()=>{ abrirSeletorCliente(c=>{ clienteSel=c; onSel(c); renderWrap(); }, clienteSel); });
+      wrap.querySelector('#cliAcCadastrar').addEventListener('click', ()=>{ abrirSeletorCliente(c=>{ clienteSel=c; onSel(c); renderWrap(); }); });
+    } else {
+      wrap.innerHTML = `
+        <div class="cli-ac-wrap" id="cliAcWrap">
+          <input class="cli-ac-input" id="cliAcInput" placeholder="Digite nome, telefone ou CPF..." autocomplete="off" spellcheck="false">
+          <div class="cli-ac-dropdown" id="cliAcDrop" style="display:none;"></div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="cliAcCadastrar" style="margin-top:6px;">+ Cadastrar cliente novo</button>`;
+      const inp = wrap.querySelector('#cliAcInput');
+      const drop = wrap.querySelector('#cliAcDrop');
+
+      function fecharDrop(){ drop.style.display='none'; focusIdx=-1; }
+      function mostrarMsg(txt){ drop.innerHTML=`<div class="cli-ac-msg">${txt}</div>`; drop.style.display='block'; }
+
+      function renderResultados(achados){
+        if(!achados.length){ mostrarMsg('Nenhum cliente encontrado.'); return; }
+        drop.innerHTML = achados.map((c,i)=>`
+          <div class="cli-ac-item" data-idx="${i}" tabindex="-1">
+            <b>${escapeHtml(c.nome)}</b>
+            <span>${escapeHtml(c.telefone||'')}${c.cpf?' · '+escapeHtml(c.cpf):''}</span>
+          </div>`).join('');
+        drop.style.display='block';
+        drop.querySelectorAll('.cli-ac-item').forEach((el,i)=>{
+          el.addEventListener('mousedown', e=>{ e.preventDefault(); selecionar(achados[i]); });
+          el.addEventListener('mouseover', ()=>{ focarItem(i); });
+        });
+      }
+
+      function focarItem(idx){
+        focusIdx=idx;
+        drop.querySelectorAll('.cli-ac-item').forEach((el,i)=>el.classList.toggle('focused',i===idx));
+      }
+
+      function selecionar(c){ clienteSel=c; onSel(c); fecharDrop(); renderWrap(); }
+
+      inp.addEventListener('input', ()=>{
+        const t = inp.value.trim();
+        focusIdx = -1;
+        if(t.length < 2){ fecharDrop(); return; }
+        mostrarMsg('Buscando...');
+        clearTimeout(timer);
+        timer = setTimeout(async ()=>{
+          const r = await gatewayCall({ op:'searchClients', params:{ termo:t } });
+          const achados = (r && r.data) || [];
+          if(inp.value.trim() !== t) return; // digitou outra coisa
+          renderResultados(achados);
+        }, 280);
+      });
+
+      inp.addEventListener('keydown', e=>{
+        const items = drop.querySelectorAll('.cli-ac-item');
+        if(!items.length) return;
+        if(e.key==='ArrowDown'){ e.preventDefault(); focarItem(Math.min(focusIdx+1,items.length-1)); }
+        else if(e.key==='ArrowUp'){ e.preventDefault(); focarItem(Math.max(focusIdx-1,0)); }
+        else if(e.key==='Enter' && focusIdx>=0){ e.preventDefault(); items[focusIdx].dispatchEvent(new MouseEvent('mousedown')); }
+        else if(e.key==='Escape'){ fecharDrop(); }
+      });
+
+      document.addEventListener('mousedown', function handler(e){
+        if(!wrap.contains(e.target)){ fecharDrop(); document.removeEventListener('mousedown',handler); }
+      });
+
+      wrap.querySelector('#cliAcCadastrar').addEventListener('click', ()=>{ abrirSeletorCliente(c=>{ clienteSel=c; onSel(c); renderWrap(); }); });
+      inp.focus();
+    }
+  }
+  renderWrap();
+  return { getCliente: ()=>clienteSel };
+}
+
+
 function abrirSeletorCliente(onConfirmar, clienteAtual){
   let selecionado = clienteAtual ? { ...clienteAtual } : null;
   openModal(`
@@ -911,10 +1023,7 @@ function renderNovo(main, orcamentoEditando){
       </div>
       <div class="field" style="margin-top:10px;">
         <label>Cliente</label>
-        <div id="o_clienteResumo" style="padding:9px 10px; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; font-size:13.5px; margin-bottom:6px;">
-          <span class="muted">Nenhum cliente selecionado.</span>
-        </div>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnSelecionarClienteOrc">🔍 Selecionar / cadastrar cliente</button>
+        <div id="o_clienteAcWrap"></div>
       </div>
       <input type="hidden" id="o_cliente" value="${editando ? escapeHtml(orcamentoEditando.cliente||'') : ''}">
       <input type="hidden" id="o_telefone" value="${editando ? escapeHtml(orcamentoEditando.telefone||'') : ''}">
@@ -1000,50 +1109,32 @@ function renderNovo(main, orcamentoEditando){
   drawItens();
   document.getElementById('btnAddItem').addEventListener('click', ()=>{ itens.push({produto:'', quantidade:1, valorUnitario:''}); drawItens(); });
 
-  // Guarda o registro completo do cliente escolhido, pra o ✎ abrir o cadastro preenchido.
-  // Começa com o que já sabemos (do próprio orçamento) e, em segundo plano, tenta achar
-  // o cadastro completo no banco pelo telefone — sem bloquear a tela esperando isso.
-  let clienteSelecionadoOrc = editando
+  // Autocomplete inline de cliente (orçamento)
+  // Ao editar, começa com os dados do orçamento; tenta enriquecer com o cadastro completo em bg
+  const _clienteInicialOrc = editando
     ? { nome:orcamentoEditando.cliente, telefone:orcamentoEditando.telefone, email:orcamentoEditando.email }
     : null;
+  const _acOrc = montarClienteAutocomplete(
+    document.getElementById('o_clienteAcWrap'),
+    (clienteFinal)=>{
+      if(clienteFinal){
+        document.getElementById('o_cliente').value = clienteFinal.nome || '';
+        document.getElementById('o_telefone').value = clienteFinal.telefone || '';
+        document.getElementById('o_email').value = clienteFinal.email || '';
+      } else {
+        document.getElementById('o_cliente').value = '';
+        document.getElementById('o_telefone').value = '';
+        document.getElementById('o_email').value = '';
+      }
+    },
+    _clienteInicialOrc
+  );
+  // Enriquecer cliente inicial ao editar (busca cadastro completo pelo telefone em bg)
   if(editando && orcamentoEditando.telefone){
     buscarClientePorTelefoneOuCpf(orcamentoEditando.telefone, null).then(achado=>{
-      if(achado){ clienteSelecionadoOrc = achado; atualizarResumoClienteOrc(); }
+      if(achado) _acOrc.setCliente && _acOrc.setCliente(achado);
     });
   }
-  function atualizarResumoClienteOrc(){
-    const nome = document.getElementById('o_cliente').value;
-    const tel = document.getElementById('o_telefone').value;
-    const email = document.getElementById('o_email').value;
-    const resumo = document.getElementById('o_clienteResumo');
-    resumo.innerHTML = nome
-      ? `<div style="display:flex; align-items:center; gap:8px; justify-content:space-between; flex-wrap:wrap;">
-           <div><b>${escapeHtml(nome)}</b>${tel ? ' — '+escapeHtml(tel) : ''}${email ? ' — '+escapeHtml(email) : ''}</div>
-           ${clienteSelecionadoOrc && clienteSelecionadoOrc.id ? `<button type="button" class="btn btn-ghost btn-sm" id="btnEditarClienteOrc" title="Editar cadastro deste cliente">✎ Editar cadastro</button>` : ''}
-         </div>`
-      : `<span class="muted">Nenhum cliente selecionado.</span>`;
-    const btnEd = document.getElementById('btnEditarClienteOrc');
-    if(btnEd) btnEd.addEventListener('click', abrirEdicaoClienteOrc);
-  }
-  function aplicarClienteOrc(clienteFinal){
-    clienteSelecionadoOrc = clienteFinal;
-    document.getElementById('o_cliente').value = clienteFinal.nome || '';
-    document.getElementById('o_telefone').value = clienteFinal.telefone || '';
-    document.getElementById('o_email').value = clienteFinal.email || '';
-    atualizarResumoClienteOrc();
-  }
-  /** O que for alterado aqui vale pro cadastro central, ou seja, pra todos os módulos. */
-  function abrirEdicaoClienteOrc(){
-    if(!clienteSelecionadoOrc) return;
-    abrirSeletorCliente((clienteFinal)=>{
-      aplicarClienteOrc(clienteFinal);
-      showToast('Cadastro do cliente atualizado.');
-    }, clienteSelecionadoOrc);
-  }
-  document.getElementById('btnSelecionarClienteOrc').addEventListener('click', ()=>{
-    abrirSeletorCliente((clienteFinal)=>{ aplicarClienteOrc(clienteFinal); });
-  });
-  if(editando) atualizarResumoClienteOrc();
 
   document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
     const dataOrcamento = document.getElementById('o_data').value || todayStr();
