@@ -1074,10 +1074,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
             <span class="desc-sep">ou</span>
             <input type="number" min="0" step="0.01" class="campo-val" id="pagDescR" placeholder="R$" value="${escapeHtml(String(holder.descTotalR||''))}">
           </div>
-          ${holder.descTotalTipo!=='nenhum'?`
-          <div style="font-size:15px;font-weight:800;color:${holder.descTotalTipo==='desconto'?'#b91c1c':'#17794a'};">
-            = R$ ${totalFinal.toFixed(2)}
-          </div>`:''}
+          ${(()=>{
+            if(holder.descTotalTipo!=='nenhum') return `<div style="margin-top:4px;font-size:15px;font-weight:800;color:${holder.descTotalTipo==='desconto'?'#b91c1c':'#17794a'};">= R$ ${totalFinal.toFixed(2)}</div>`;
+            if(subtotal>0) return `<div style="margin-top:4px;font-size:14px;font-weight:700;color:var(--ink);">Total: <b>R$ ${subtotal.toFixed(2)}</b></div>`;
+            return '';
+          })()}
         </div>
       </div>
 
@@ -1281,7 +1282,7 @@ function recalcularValorAjustado(it){
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
           <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?'R$ '+Number(it.valorUnitario).toFixed(2):''}${escapeHtml(descInfo)}</span>
           <div class="venda-compact-icones">
-            <button class="venda-compact-btn ${temObs?'tem-obs':''}" data-itobstoggle="${i}" title="${temObs?escapeHtml(it.observacaoItem):'Observação'}">💬</button>
+            ${temObs?`<button class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="${escapeHtml(it.observacaoItem)}">💬</button>`:''}
             <button class="venda-compact-btn" data-iteditar="${i}" title="Editar">✏️</button>
             <button class="venda-compact-btn" data-itdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
           </div>
@@ -1300,7 +1301,7 @@ function recalcularValorAjustado(it){
                      ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>`:''}
                      <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
                    </div>`
-                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Digite o nome do produto..." autocomplete="off" spellcheck="false" data-pac="${i}">
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Nome, código, tipo, fornecedor ou bipe o código de barras..." autocomplete="off" spellcheck="false" data-pac="${i}">
                    <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
             </div>
             <div class="item-row-valor">
@@ -1352,7 +1353,7 @@ function recalcularValorAjustado(it){
       function renderDrop(lista){
         pacAchados=lista;
         if(!lista.length){ drop.innerHTML='<div class="prod-ac-item" style="color:var(--ink-faint);">Nenhum produto encontrado.</div>'; drop.style.display='block'; return; }
-        drop.innerHTML=lista.map((p,k)=>`<div class="prod-ac-item" data-pk="${k}"><b>${escapeHtml(p.nome)}</b><span>${p.fator!=null&&p.fator!==''?'Fator '+p.fator+' · ':''}${p.precoVenda!=null?'R$ '+Number(p.precoVenda).toFixed(2):''}</span></div>`).join('');
+        drop.innerHTML=lista.map((p,k)=>`<div class="prod-ac-item" data-pk="${k}"><b>${escapeHtml(p.nome)}</b><span>${[p.codigo?'Cód. '+p.codigo:null,p.fator!=null&&p.fator!==''?'Fator '+p.fator:null,p.tipo||null,p.fornecedor||null,p.precoVenda!=null?'R$ '+Number(p.precoVenda).toFixed(2):null].filter(Boolean).join(' · ')}</span></div>`).join('');
         drop.style.display='block';
         drop.querySelectorAll('.prod-ac-item[data-pk]').forEach(el=>{
           el.addEventListener('mouseover',()=>{ pacFocus=Number(el.dataset.pk); drop.querySelectorAll('.prod-ac-item').forEach((e,k)=>e.classList.toggle('pf',k===pacFocus)); });
@@ -1362,14 +1363,25 @@ function recalcularValorAjustado(it){
       inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
         const t=inp.value.toLowerCase().trim();
         if(!t){ fecharDrop(); return; }
-        renderDrop(vendaveis.filter(p=>p.nome&&p.nome.toLowerCase().includes(t)).slice(0,15));
+        const codigoExato=/^\d{6,}$/.test(inp.value.trim());
+        if(codigoExato){
+          const porCod=vendaveis.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
+          if(porCod){ selecionarProduto(i,porCod); fecharDrop(); return; }
+        }
+        renderDrop(vendaveis.filter(p=>{
+          const campos=[p.nome,p.codigo,p.codigoBarras,String(p.fator||''),p.tipo,p.fornecedor];
+          return campos.some(c=>c&&String(c).toLowerCase().includes(t));
+        }).slice(0,15));
       },120); });
       inp.addEventListener('keydown',e=>{
         const items=drop.querySelectorAll('.prod-ac-item[data-pk]');
         if(!items.length) return;
         if(e.key==='ArrowDown'){ e.preventDefault(); pacFocus=Math.min(pacFocus+1,items.length-1); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
         else if(e.key==='ArrowUp'){ e.preventDefault(); pacFocus=Math.max(pacFocus-1,0); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
-        else if(e.key==='Enter'&&pacFocus>=0){ e.preventDefault(); selecionarProduto(i,pacAchados[pacFocus]); }
+        else if(e.key==='Enter'){ e.preventDefault();
+          if(pacFocus>=0) selecionarProduto(i,pacAchados[pacFocus]);
+          else if(pacAchados.length===1) selecionarProduto(i,pacAchados[0]);
+        }
         else if(e.key==='Escape'){ fecharDrop(); }
       });
       inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
