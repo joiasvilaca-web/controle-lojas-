@@ -102,6 +102,14 @@ td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
 .item-row-obs{margin-top:6px;}
 .btn-add-item{padding:5px 11px;border:1px solid var(--accent,#662344);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--accent,#662344);color:#fff;height:34px;white-space:nowrap;flex-shrink:0;}
 .btn-add-item:hover{opacity:.88;}
+.venda-item-compact{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--surface);font-size:13px;}
+.venda-compact-nome{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.venda-compact-val{font-size:13px;font-weight:700;color:var(--accent,#662344);flex-shrink:0;}
+.venda-compact-obs{font-size:12px;color:var(--ink-faint);margin-top:3px;padding:4px 8px;background:var(--surface-2);border-radius:6px;display:none;}
+.venda-compact-icones{display:flex;gap:4px;flex-shrink:0;}
+.venda-compact-btn{background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px;color:var(--ink-faint);border-radius:6px;line-height:1;}
+.venda-compact-btn:hover{background:var(--surface-2);color:var(--ink);}
+.venda-compact-btn.tem-obs{color:var(--accent,#662344);}
 .obs-geral-box{padding:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-top:10px;}
 .obs-geral-box textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;min-height:60px;box-sizing:border-box;background:var(--surface);color:var(--ink);font-family:inherit;}
 .obs-geral-box textarea:focus{border-color:var(--accent,#662344);outline:none;}
@@ -250,8 +258,9 @@ document.addEventListener('keydown', (e)=>{
     // a linha (equivalente a clicar "+ Adicionar item") em vez de submeter algo.
     const dentroDosItens = e.target.closest && e.target.closest('#itensContainerNova');
     if(dentroDosItens){
-      const btnAdd = document.getElementById('btnAddItem');
-      if(btnAdd){ e.preventDefault(); btnAdd.click(); }
+      // confirma via Enter: clica no ＋ da primeira linha em edição
+      const btnPlus = document.querySelector('[data-itadd]');
+      if(btnPlus){ e.preventDefault(); btnPlus.click(); }
     }
   }
 });
@@ -1121,18 +1130,10 @@ function recalcularValorAjustado(it){
   function draw(){
     container.innerHTML = `
       <div class="section-label">Itens vendidos</div>
-      <div class="item-row" style="border-bottom:none; padding-top:0;">
-        <div class="muted">Produto</div><div class="muted">Metal</div><div class="muted">Qtd.</div><div class="muted">Valor unit. (R$)</div><div></div>
-      </div>
       <div id="itensRows"></div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnAddItem" style="margin-top:6px;">+ Adicionar item</button>
       <div class="muted" id="itensTotalHint" style="margin-top:8px;"></div>
     `;
     drawRows();
-    container.querySelector('#btnAddItem').addEventListener('click', ()=>{
-      holder.itens.push({ id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'' });
-      drawRows();
-    });
   }
   function drawRows(){
     const wrap = container.querySelector('#itensRows');
@@ -1142,63 +1143,77 @@ function recalcularValorAjustado(it){
       wrap.innerHTML = `<div class="empty" style="padding:16px;">Nenhum produto cadastrado ainda — cadastre em <b>Cadastro → Produtos</b> antes de lançar uma venda.</div>`;
       return;
     }
-    wrap.innerHTML = holder.itens.map((it,i)=>{
-      const produtoAtual = it.produtoEstoqueId ? vendaveis.find(p=>p.id===it.produtoEstoqueId) : null;
-      const estoqueAqui = produtoAtual ? (Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0) : null;
-      const outras = produtoAtual ? outrasLojasComEstoque(produtoAtual, lojaAtual) : [];
-      return `
-      <div class="item-row" data-idx="${i}">
-        <div class="item-row-topo">
-          <div class="prod-ac-wrap" id="pacWrap_${i}">
-            ${produtoAtual
-              ? `<div class="prod-ac-sel">
-                   <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
-                   ${produtoAtual.fator!=null && produtoAtual.fator!=='' ? `<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>` : ''}
-                   <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
-                 </div>`
-              : `<input class="prod-ac-input" id="pacInp_${i}" placeholder="Digite o nome do produto..." autocomplete="off" spellcheck="false" data-pac="${i}">
-                 <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`
-            }
+    let __html='';
+    holder.itens.forEach((it,i)=>{
+      if(it._modo==='ok'){
+        const temObs=!!(it.observacaoItem||'').trim();
+        const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
+          ?` (${it.ajusteTipo==='desconto'?'−':'+'}${it.ajustePerc?it.ajustePerc+'%':('R$ '+it.ajusteValR)})`:'';
+        __html+=`<div class="venda-item-compact" data-idx="${i}">
+          <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?'R$ '+Number(it.valorUnitario).toFixed(2):''}${escapeHtml(descInfo)}</span>
+          <div class="venda-compact-icones">
+            <button class="venda-compact-btn ${temObs?'tem-obs':''}" data-itobstoggle="${i}" title="${temObs?escapeHtml(it.observacaoItem):'Observação'}">💬</button>
+            <button class="venda-compact-btn" data-iteditar="${i}" title="Editar">✏️</button>
+            <button class="venda-compact-btn" data-itdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
           </div>
-          <div class="item-row-valor">
-            <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00"
-              value="${it.valorUnitario!==undefined && it.valorUnitario!=='' ? it.valorUnitario : ''}">
+        </div>
+        <div class="venda-compact-obs" id="vendaObs_${i}">${temObs?escapeHtml(it.observacaoItem):''}</div>`;
+      } else {
+        const produtoAtual=it.produtoEstoqueId?vendaveis.find(p=>p.id===it.produtoEstoqueId):null;
+        const estoqueAqui=produtoAtual?(Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0):null;
+        const outras=produtoAtual?outrasLojasComEstoque(produtoAtual,lojaAtual):[];
+        __html+=`<div class="item-row" data-idx="${i}">
+          <div class="item-row-topo">
+            <div class="prod-ac-wrap item-row-produto" id="pacWrap_${i}">
+              ${produtoAtual
+                ?`<div class="prod-ac-sel">
+                     <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
+                     ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>`:''}
+                     <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
+                   </div>`
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Digite o nome do produto..." autocomplete="off" spellcheck="false" data-pac="${i}">
+                   <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
+            </div>
+            <div class="item-row-valor">
+              <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00"
+                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+            </div>
+            <div class="item-row-desc">
+              <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}">Desc.</button>
+              <button type="button" class="btn-ajuste ${it.ajusteTipo==='acrescimo'?'ativo-acr':''}" data-aidbtn="acrescimo" data-idx2="${i}">Acrés.</button>
+              <input type="number" min="0" step="0.01" class="campo-perc" data-itfield="ajustePerc" placeholder="%" title="Percentual"
+                value="${it.ajustePerc!==undefined&&it.ajustePerc!==''?it.ajustePerc:''}">
+              <span class="desc-sep">ou</span>
+              <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
+                value="${it.ajusteValR!==undefined&&it.ajusteValR!==''?it.ajusteValR:''}">
+              <span class="desc-total" id="descTotal_${i}">${(()=>{
+                if(it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null) return '= R$ '+Number(it.valorUnitario).toFixed(2);
+                return '';
+              })()}</span>
+            </div>
+            <button type="button" class="btn-add-item" data-itadd="${i}" title="Confirmar e adicionar outro">＋</button>
+            <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
           </div>
-          <div class="item-row-desc">
-            <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}">Desc.</button>
-            <button type="button" class="btn-ajuste ${it.ajusteTipo==='acrescimo'?'ativo-acr':''}" data-aidbtn="acrescimo" data-idx2="${i}">Acrés.</button>
-            <input type="number" min="0" step="0.01" class="campo-perc" data-itfield="ajustePerc" placeholder="%" title="Percentual"
-              value="${it.ajustePerc!==undefined && it.ajustePerc!=='' ? it.ajustePerc : ''}">
-            <span class="desc-sep">ou</span>
-            <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
-              value="${it.ajusteValR!==undefined && it.ajusteValR!=='' ? it.ajusteValR : ''}">
-            <span class="desc-total" id="descTotal_${i}">${(()=>{
-              if(it.ajusteTipo!=='nenhum' && it.valorUnitario!=='' && it.valorUnitario!=null){
-                return '= R$ '+Number(it.valorUnitario).toFixed(2);
-              } return '';
-            })()}</span>
+          ${produtoAtual?`
+          <div class="item-row-estoque">
+            <span class="muted" style="font-size:12px;">📦 <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} nesta loja</span>
+            ${outras.length>0?`<span class="muted" style="font-size:12px;">· também tem em: ${outras.join(', ')}</span>`:`<span class="muted" style="font-size:12px;">· sem estoque em outras lojas</span>`}
           </div>
-          <button type="button" class="btn-add-item" data-itadd="${i}" title="Adicionar este item e abrir novo">＋</button>
-          <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
-        </div>
-        ${produtoAtual ? `
-        <div class="item-row-estoque">
-          <span class="muted" style="font-size:12px;">📦 <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} nesta loja</span>
-          ${outras.length>0 ? `<span class="muted" style="font-size:12px;">· também tem em: ${outras.join(', ')}</span>` : `<span class="muted" style="font-size:12px;">· sem estoque em outras lojas</span>`}
-        </div>
-        ${estoqueAqui<=0 && outras.length>0 ? `
-        <div style="margin-top:6px;padding:8px 10px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:12.5px;color:var(--wait,#b45309);font-weight:600;">
-          ⚠️ Sem estoque nesta loja, mas <b>tem em ${outras.join(', ')}</b>.
-          <div style="font-weight:500;margin-top:3px;">A peça é de outro CNPJ — no pagamento, informe a <b>Empresa joia</b> correta e confirme onde a baixa de estoque será feita.</div>
-        </div>` : ''}
-        ` : ''}
-        <div class="item-row-obs">
-          <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)"
-            value="${escapeHtml(it.observacaoItem||'')}">
-        </div>
-      </div>
-    `;
-    }).join('');
+          ${estoqueAqui<=0&&outras.length>0?`
+          <div style="margin-top:6px;padding:8px 10px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:12.5px;color:var(--wait,#b45309);font-weight:600;">
+            ⚠️ Sem estoque nesta loja, mas <b>tem em ${outras.join(', ')}</b>.
+            <div style="font-weight:500;margin-top:3px;">A peça é de outro CNPJ — no pagamento, informe a <b>Empresa joia</b> correta e confirme onde a baixa de estoque será feita.</div>
+          </div>`:''}
+          `:''}
+          <div class="item-row-obs">
+            <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)"
+              value="${escapeHtml(it.observacaoItem||'')}">
+          </div>
+        </div>`;
+      }
+    });
+    wrap.innerHTML=__html;
 
     // ── Autocomplete de produto ──
     wrap.querySelectorAll('[data-pac]').forEach(inp=>{
@@ -1232,16 +1247,29 @@ function recalcularValorAjustado(it){
       inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
       inp.focus();
     });
-    // Botão ＋ — confirma o item atual e abre linha nova acima (vazio)
+    // ＋ confirma → compacto + nova linha vazia
     wrap.querySelectorAll('[data-itadd]').forEach(btn=>{
       btn.addEventListener('click',()=>{
         const idx=Number(btn.dataset.itadd);
         const it=holder.itens[idx];
-        if(!it.produtoEstoqueId && !it.valorUnitario){ return; } // nada preenchido, ignora
-        // adiciona nova linha vazia no início (acima dos já lançados)
-        holder.itens.splice(0,0,{ id:uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'' });
-        drawRows();
-        updateTotalHint();
+        if(!it.produtoEstoqueId&&!it.valorUnitario) return;
+        it._modo='ok';
+        holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
+        drawRows(); updateTotalHint();
+      });
+    });
+    // ✏️ volta ao modo editar
+    wrap.querySelectorAll('[data-iteditar]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        holder.itens[Number(btn.dataset.iteditar)]._modo='editar';
+        drawRows(); updateTotalHint();
+      });
+    });
+    // 💬 toggle obs
+    wrap.querySelectorAll('[data-itobstoggle]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const box=document.getElementById('vendaObs_'+btn.dataset.itobstoggle);
+        if(box) box.style.display=box.style.display==='block'?'none':'block';
       });
     });
 
