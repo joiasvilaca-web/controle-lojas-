@@ -100,6 +100,15 @@ td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
 .item-row-desc .desc-total{font-size:12.5px; font-weight:700; color:var(--ok,#17794a); white-space:nowrap; min-width:70px;}
 .prod-ac-fator-inline{font-size:11.5px;color:var(--ok,#17794a);margin-left:6px;white-space:nowrap;flex-shrink:0;}
 .item-row-obs{margin-top:6px;}
+.btn-add-item{padding:5px 11px;border:1px solid var(--accent,#662344);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--accent,#662344);color:#fff;height:34px;white-space:nowrap;flex-shrink:0;}
+.btn-add-item:hover{opacity:.88;}
+.obs-geral-box{padding:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-top:10px;}
+.obs-geral-box textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;resize:vertical;min-height:60px;box-sizing:border-box;background:var(--surface);color:var(--ink);font-family:inherit;}
+.obs-geral-box textarea:focus{border-color:var(--accent,#662344);outline:none;}
+.info-interna-box{margin-top:8px;}
+.info-interna-box textarea{width:100%;padding:8px 10px;border:1px dashed var(--wait,#b45309);border-radius:8px;font-size:13px;resize:vertical;min-height:50px;box-sizing:border-box;background:#fffbf5;color:var(--ink);font-family:inherit;}
+.info-interna-box textarea:focus{border-color:var(--wait,#b45309);outline:none;}
+.info-interna-badge{display:inline-block;padding:2px 8px;background:var(--wait-soft,#fceedc);color:var(--wait,#b45309);border-radius:6px;font-size:11px;font-weight:800;letter-spacing:.04em;margin-bottom:4px;}
 .item-row-obs input{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);box-sizing:border-box;}
 .item-row-obs input:focus{border-color:var(--accent,#662344);outline:none;}
 .prod-ac-wrap{position:relative;}
@@ -1169,6 +1178,7 @@ function recalcularValorAjustado(it){
               } return '';
             })()}</span>
           </div>
+          <button type="button" class="btn-add-item" data-itadd="${i}" title="Adicionar este item e abrir novo">＋</button>
           <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
         </div>
         ${produtoAtual ? `
@@ -1222,6 +1232,19 @@ function recalcularValorAjustado(it){
       inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
       inp.focus();
     });
+    // Botão ＋ — confirma o item atual e abre linha nova acima (vazio)
+    wrap.querySelectorAll('[data-itadd]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.itadd);
+        const it=holder.itens[idx];
+        if(!it.produtoEstoqueId && !it.valorUnitario){ return; } // nada preenchido, ignora
+        // adiciona nova linha vazia no início (acima dos já lançados)
+        holder.itens.splice(0,0,{ id:uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'' });
+        drawRows();
+        updateTotalHint();
+      });
+    });
+
     // Botão × limpa produto
     wrap.querySelectorAll('[data-paclear]').forEach(btn=>{
       btn.addEventListener('click',()=>{
@@ -1856,6 +1879,17 @@ function renderNovaVenda(main){
       <input type="hidden" id="v_cliente"><input type="hidden" id="v_telefone">
     </div>
     <div class="card"><div id="itensContainerNova"></div></div>
+    <div class="card">
+      <div class="obs-geral-box">
+        <label style="font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);">Observação da venda</label>
+        <textarea id="v_observacaoGeral" placeholder="Observação geral desta venda (aparece na via impressa)..." style="margin-top:6px;"></textarea>
+      </div>
+      <div class="info-interna-box" id="infoInternaBox" style="display:none;">
+        <div class="info-interna-badge">🔒 Informação interna — visível só para usuários do sistema</div>
+        <textarea id="v_infoInterna" placeholder="Anotações internas (não aparece na via do cliente)..."></textarea>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInterna" style="margin-top:8px;font-size:12px;">🔒 + Adicionar informação interna</button>
+    </div>
     <div class="card"><div id="pagamentoContainerNova"></div></div>
     <div style="display:flex; gap:10px; flex-wrap:wrap;">
       <button class="btn btn-accent" id="btnSalvarVenda">Lançar venda</button>
@@ -1926,10 +1960,20 @@ function renderNovaVenda(main){
   });
 
   document.getElementById('btnLimparVenda').addEventListener('click', ()=> renderNovaVenda(main) );
+  document.getElementById('btnToggleInfoInterna').addEventListener('click', ()=>{
+    const box = document.getElementById('infoInternaBox');
+    const btn = document.getElementById('btnToggleInfoInterna');
+    const visivel = box.style.display !== 'none';
+    box.style.display = visivel ? 'none' : 'block';
+    btn.textContent = visivel ? '🔒 + Adicionar informação interna' : '🔒 − Ocultar informação interna';
+    if(!visivel) document.getElementById('v_infoInterna').focus();
+  });
 
   document.getElementById('btnSalvarVenda').addEventListener('click', async ()=>{
     const lojaId = document.getElementById('v_loja').value;
     if(!lojaId){ showToast('Selecione a loja no topo da tela antes de lançar a venda.'); return; }
+    const observacaoGeral = (document.getElementById('v_observacaoGeral')?.value||'').trim();
+    const infoInterna = (document.getElementById('v_infoInterna')?.value||'').trim();
     const vendedora = document.getElementById('v_vendedora').value.trim();
     const data = document.getElementById('v_data').value;
     const cliente = document.getElementById('v_cliente').value.trim();
@@ -2002,6 +2046,8 @@ function renderNovaVenda(main){
       fiadoDebitoId: novoFiadoDebitoId,
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
+      observacaoGeral: observacaoGeral || '',
+      infoInterna: infoInterna || '',
     };
     // Código de barras da via, gerado só agora que a venda realmente vai ser salva
     // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
