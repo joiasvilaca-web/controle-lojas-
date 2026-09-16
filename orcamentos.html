@@ -302,6 +302,15 @@ _orcCss.textContent = `
 .orc-item-valor input{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px;height:34px;box-sizing:border-box;}
 .orc-item-valor input:focus{border-color:var(--accent,#662344);outline:none;}
 .orc-item-add{padding:5px 11px;border:1px solid var(--accent,#662344);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--accent,#662344);color:#fff;height:34px;white-space:nowrap;flex-shrink:0;}
+/* Linha compacta (item já adicionado) */
+.orc-item-compact{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--surface);font-size:13px;}
+.orc-item-compact .orc-compact-nome{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.orc-item-compact .orc-compact-val{font-size:13px;font-weight:700;color:var(--accent,#662344);flex-shrink:0;}
+.orc-item-compact .orc-compact-obs{font-size:12px;color:var(--ink-faint);margin-top:3px;padding:4px 8px;background:var(--surface-2);border-radius:6px;display:none;}
+.orc-compact-icones{display:flex;gap:4px;flex-shrink:0;}
+.orc-compact-btn{background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px;color:var(--ink-faint);border-radius:6px;line-height:1;}
+.orc-compact-btn:hover{background:var(--surface-2);color:var(--ink);}
+.orc-compact-btn.tem-obs{color:var(--accent,#662344);}
 .orc-item-obs{margin-top:6px;}
 .orc-item-obs input{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);box-sizing:border-box;}
 .orc-item-fotos{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
@@ -971,7 +980,6 @@ function renderNovo(main, orcamentoEditando){
       <input type="hidden" id="o_email" value="${editando ? escapeHtml(orcamentoEditando.email||'') : ''}">
       <div class="section-label" style="margin-top:14px;">Itens do orçamento</div>
       <div id="itensRows"></div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnAddItem" style="margin-top:6px;">+ Adicionar item</button>
       <div id="totalHint" style="margin-top:10px;"></div>
       <div class="obs-geral-box" style="margin-top:10px;">
         <label style="font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);">Observação geral</label>
@@ -1084,41 +1092,69 @@ function renderNovo(main, orcamentoEditando){
     inp.focus();
   }
 
+  /* Cada item tem dois modos:
+     - editando (it._modo==='editar' ou undefined): linha completa com autocomplete, valor, ＋
+     - compacto (it._modo==='ok'): linha fina com produto · valor · 💬 · ✏️
+     O ＋ confirma o item (vira compacto) e abre uma nova linha vazia no topo.
+     O ✏️ na linha compacta volta ao modo editar. */
   function drawItens(){
     const wrap = document.getElementById('itensRows');
-    wrap.innerHTML = itens.map((it,i)=>{
-      const prod = it.produtoId ? (produtosEstoque||[]).find(p=>p.id===it.produtoId) : null;
-      return `
-      <div class="orc-item-row" data-orcidx="${i}">
-        <div class="orc-item-topo">
-          <div class="orc-prod-wrap" style="flex:1;min-width:160px;" id="orcPacWrap_${i}">
-            ${prod
-              ? `<div class="orc-prod-sel"><b>${escapeHtml(prod.nome)}</b>${prod.fator?`<span class="orc-prod-fator">· Fator ${prod.fator}</span>`:''}<button type="button" class="pa-clr" data-orcpaclear="${i}">×</button></div>`
-              : `<input class="orc-prod-input" id="orcPacInp_${i}" placeholder="Digite o produto..." autocomplete="off" data-orcpac="${i}" value="${escapeHtml(it.produto||'')}"><div class="orc-prod-drop" id="orcPacDrop_${i}" style="display:none;"></div>`}
+    let html = '';
+    itens.forEach((it,i)=>{
+      if(it._modo==='ok'){
+        // ── LINHA COMPACTA ──
+        const temObs = !!(it.observacaoItem||'').trim();
+        const nFotos = (it.fotos||[]).length;
+        html += `
+        <div class="orc-item-compact" data-orcidx="${i}">
+          <span class="orc-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
+          <span class="orc-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(Number(it.valorUnitario)):''}</span>
+          ${nFotos?`<span style="font-size:12px;color:var(--ink-faint);">📷${nFotos}</span>`:''}
+          <div class="orc-compact-icones">
+            <button class="orc-compact-btn ${temObs?'tem-obs':''}" data-obsToggle="${i}" title="${temObs?it.observacaoItem:'Observação'}">💬</button>
+            <button class="orc-compact-btn" data-orceditar="${i}" title="Editar item">✏️</button>
+            <button class="orc-compact-btn" data-orcitdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
           </div>
-          <div class="orc-item-valor">
-            <input type="number" min="0" step="0.01" placeholder="Valor" data-ival="${i}"
-              value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+        </div>
+        ${temObs?`<div class="orc-compact-obs" id="orcObs_${i}">${escapeHtml(it.observacaoItem)}</div>`:'<div class="orc-compact-obs" id="orcObs_'+i+'"></div>'}`;
+      } else {
+        // ── LINHA COMPLETA (editando) ──
+        const prod = it.produtoId ? (produtosEstoque||[]).find(p=>p.id===it.produtoId) : null;
+        html += `
+        <div class="orc-item-row" data-orcidx="${i}">
+          <div class="orc-item-topo">
+            <div class="orc-prod-wrap" style="flex:1;min-width:160px;" id="orcPacWrap_${i}">
+              ${prod
+                ? `<div class="orc-prod-sel"><b>${escapeHtml(prod.nome)}</b>${prod.fator?`<span class="orc-prod-fator">· Fator ${prod.fator}</span>`:''}<button type="button" class="pa-clr" data-orcpaclear="${i}">×</button></div>`
+                : `<input class="orc-prod-input" id="orcPacInp_${i}" placeholder="Digite o produto..." autocomplete="off" data-orcpac="${i}" value="${escapeHtml(it.produto||'')}"><div class="orc-prod-drop" id="orcPacDrop_${i}" style="display:none;"></div>`}
+            </div>
+            <div class="orc-item-valor">
+              <input type="number" min="0" step="0.01" placeholder="Valor" data-ival="${i}"
+                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+            </div>
+            <button type="button" class="orc-item-add" data-orcadd="${i}" title="Confirmar e adicionar outro">＋</button>
+            <button type="button" class="icon-btn" data-orcitdel="${i}">✕</button>
           </div>
-          <button type="button" class="orc-item-add" data-orcadd="${i}">＋</button>
-          <button type="button" class="icon-btn" data-orcitdel="${i}">✕</button>
-        </div>
-        <div class="orc-item-obs">
-          <input type="text" placeholder="Observação do item (opcional)" data-iobs="${i}"
-            value="${escapeHtml(it.observacaoItem||'')}">
-        </div>
-        <div class="orc-item-fotos" id="orcFotos_${i}">
-          ${(it.fotos||[]).map(f=>`<img class="orc-thumb" src="${escapeHtml(f.url)}" title="${escapeHtml(f.nome||'')}" onclick="window.open('${escapeHtml(f.url)}','_blank')">`).join('')}
-          <label style="cursor:pointer;padding:5px 10px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--accent,#662344);">
-            📷 Foto/vídeo
-            <input type="file" accept="image/*,video/*" multiple capture="environment" style="display:none;" data-orcfoto="${i}">
-          </label>
-        </div>
-      </div>`;
-    }).join('');
-    // Autocomplete: ligar nos campos sem produto selecionado
+          <div class="orc-item-obs">
+            <input type="text" placeholder="Observação do item (opcional)" data-iobs="${i}"
+              value="${escapeHtml(it.observacaoItem||'')}">
+          </div>
+          <div class="orc-item-fotos" id="orcFotos_${i}">
+            ${(it.fotos||[]).map(f=>`<img class="orc-thumb" src="${escapeHtml(f.url)}" title="${escapeHtml(f.nome||'')}" onclick="window.open('${escapeHtml(f.url)}','_blank')">`).join('')}
+            <label style="cursor:pointer;padding:5px 10px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--accent,#662344);">
+              📷 Foto/vídeo
+              <input type="file" accept="image/*,video/*" multiple capture="environment" style="display:none;" data-orcfoto="${i}">
+            </label>
+          </div>
+        </div>`;
+      }
+    });
+    wrap.innerHTML = html;
+
+    // ── WIRING ──
+    // Autocomplete
     wrap.querySelectorAll('[data-orcpac]').forEach(inp=>ligarAutocompleteProd(Number(inp.dataset.orcpac)));
-    // Botão × limpa produto
+    // × limpa produto
     wrap.querySelectorAll('[data-orcpaclear]').forEach(btn=>{
       btn.addEventListener('click',()=>{
         const i=Number(btn.dataset.orcpaclear);
@@ -1126,40 +1162,60 @@ function renderNovo(main, orcamentoEditando){
         drawItens(); updateTotal();
       });
     });
-    // Campo valor
+    // Valor
     wrap.querySelectorAll('[data-ival]').forEach(inp=>{
       inp.addEventListener('input',()=>{ itens[Number(inp.dataset.ival)].valorUnitario=inp.value===''?'':parseFloat(inp.value); updateTotal(); });
     });
-    // Campo obs item
+    // Obs item (linha completa)
     wrap.querySelectorAll('[data-iobs]').forEach(inp=>{
       inp.addEventListener('input',()=>{ itens[Number(inp.dataset.iobs)].observacaoItem=inp.value; });
     });
-    // Botão ＋ (confirma item e abre novo acima)
+    // ＋ confirma → vira compacto + novo vazio no topo
     wrap.querySelectorAll('[data-orcadd]').forEach(btn=>{
       btn.addEventListener('click',()=>{
         const i=Number(btn.dataset.orcadd);
         if(!itens[i].produto&&!itens[i].valorUnitario) return;
-        itens.splice(0,0,{ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[] });
+        itens[i]._modo='ok';
+        itens.splice(0,0,{ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[], _modo:'editar' });
         drawItens(); updateTotal();
       });
     });
-    // Botão ✕ remove
-    wrap.querySelectorAll('[data-orcitdel]').forEach(b=>{
-      b.addEventListener('click',()=>{ itens.splice(Number(b.dataset.orcitdel),1); if(!itens.length) itens.push({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[] }); drawItens(); updateTotal(); });
+    // ✏️ volta ao modo editar
+    wrap.querySelectorAll('[data-orceditar]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const i=Number(btn.dataset.orceditar);
+        itens[i]._modo='editar';
+        drawItens(); updateTotal();
+      });
     });
-    // Upload de fotos/vídeos
+    // 💬 toggle observação
+    wrap.querySelectorAll('[data-obsToggle]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const i=Number(btn.dataset.obsToggle);
+        const box=document.getElementById('orcObs_'+i);
+        if(box){ box.style.display=box.style.display==='block'?'none':'block'; }
+      });
+    });
+    // ✕ remove
+    wrap.querySelectorAll('[data-orcitdel]').forEach(b=>{
+      b.addEventListener('click',()=>{
+        itens.splice(Number(b.dataset.orcitdel),1);
+        if(!itens.length) itens.push({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[] });
+        drawItens(); updateTotal();
+      });
+    });
+    // Upload fotos
     wrap.querySelectorAll('[data-orcfoto]').forEach(inp=>{
       inp.addEventListener('change',async()=>{
         const i=Number(inp.dataset.orcfoto);
         if(!inp.files||!inp.files.length) return;
         const thumb=document.getElementById('orcFotos_'+i);
-        if(thumb){ const prog=document.createElement('span'); prog.textContent='⏳ Enviando...'; prog.id='orcProgresso_'+i; thumb.appendChild(prog); }
+        if(thumb){ const prog=document.createElement('span'); prog.textContent='⏳ Enviando...'; thumb.appendChild(prog); }
         for(const file of inp.files){
           try{
             const b64=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
             const resp=await fetch(SUPABASE_URL+'/functions/v1/upload-foto-drive',{
-              method:'POST',
-              headers:{'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY},
+              method:'POST', headers:{'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY},
               body:JSON.stringify({ senha:__gatewaySenha, base64:b64, mimeType:file.type, fileName:'orc_'+Date.now()+'_'+file.name, folder:'orcamentos' })
             });
             const rj=await resp.json();
@@ -1221,10 +1277,7 @@ function renderNovo(main, orcamentoEditando){
     if(dr) dr.addEventListener('input',()=>{ ajusteTotal.rVal=dr.value; ajusteTotal.percVal=''; ajusteTotal.modo='valor'; if(dp) dp.value=''; updateTotal(); });
   }
   drawItens();
-  document.getElementById('btnAddItem').addEventListener('click', ()=>{
-    itens.push({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[] });
-    drawItens();
-  });
+  // item adicionado pelo botão ＋ na linha (sem botão separado)
 
   // Guarda o registro completo do cliente escolhido, pra o ✎ abrir o cadastro preenchido.
   // Começa com o que já sabemos (do próprio orçamento) e, em segundo plano, tenta achar
