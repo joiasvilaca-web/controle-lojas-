@@ -90,11 +90,15 @@ td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
 .item-row-valor{width:110px; flex-shrink:0;}
 .item-row-valor input{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px;height:36px;box-sizing:border-box;}
 .item-row-valor input:focus{border-color:var(--accent,#662344);outline:none;}
-.item-row-desc{display:flex; gap:4px; align-items:center; flex-shrink:0;}
-.item-row-desc .desc-label{font-size:12px; font-weight:700; color:var(--ink-faint); white-space:nowrap;}
-.item-row-desc select{padding:6px 5px; border:1px solid var(--line); border-radius:8px; font-size:12px; background:var(--surface); color:var(--ink); height:36px;}
-.item-row-desc input[data-itfield="ajusteQtd"]{width:68px; padding:7px 6px; border:1px solid var(--line); border-radius:8px; font-size:12.5px; height:36px; box-sizing:border-box;}
+.item-row-desc{display:flex; gap:5px; align-items:center; flex-shrink:0; flex-wrap:wrap;}
+.btn-ajuste{padding:5px 9px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--surface);color:var(--ink-soft);height:34px;white-space:nowrap;transition:background .12s,color .12s,border-color .12s;}
+.btn-ajuste.ativo-desc{background:#fbeaea;color:#b91c1c;border-color:#b91c1c;}
+.btn-ajuste.ativo-acr{background:#e3f5ea;color:#17794a;border-color:#17794a;}
+.item-row-desc .campo-perc,.item-row-desc .campo-val{width:72px;padding:6px 7px;border:1px solid var(--line);border-radius:8px;font-size:12.5px;height:34px;box-sizing:border-box;background:var(--surface);color:var(--ink);}
+.item-row-desc .campo-perc:focus,.item-row-desc .campo-val:focus{border-color:var(--accent,#662344);outline:none;}
+.item-row-desc .desc-sep{font-size:11px;color:var(--ink-faint);font-weight:700;}
 .item-row-desc .desc-total{font-size:12.5px; font-weight:700; color:var(--ok,#17794a); white-space:nowrap; min-width:70px;}
+.prod-ac-fator-inline{font-size:11.5px;color:var(--ok,#17794a);margin-left:6px;white-space:nowrap;flex-shrink:0;}
 .item-row-obs{margin-top:6px;}
 .item-row-obs input{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);box-sizing:border-box;}
 .item-row-obs input:focus{border-color:var(--accent,#662344);outline:none;}
@@ -1076,7 +1080,22 @@ function mountItens(container, holder, getLojaId){
   /** Recalcula valorUnitario a partir do preço original + desconto/acréscimo (se algum
    * ajuste estiver configurado). Se não houver ajuste, não mexe no que já está lá — a
    * pessoa ainda pode digitar o valor unitário na mão, direto. */
-  function recalcularValorAjustado(it){
+  /* Recalcula o valor final após um ajuste de desconto/acréscimo via botões.
+   Atualiza o campo de valor e o span de total inline sem redesenhar a linha. */
+function recalcularAjusteNovo(it, idx, row){
+  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ return; }
+  const base = Number(it.precoOriginal)||0;
+  if(!base) return;
+  const qtd = Number(it.ajusteQtd)||0;
+  const delta = it.ajusteModo==='percentual' ? base*qtd/100 : qtd;
+  it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
+  const inpVal=row ? row.querySelector('[data-itfield="valorUnitario"]') : null;
+  if(inpVal) inpVal.value=Number(it.valorUnitario).toFixed(2);
+  const span=document.getElementById('descTotal_'+idx);
+  if(span) span.textContent='= R$ '+Number(it.valorUnitario).toFixed(2);
+  updateTotalHint();
+}
+function recalcularValorAjustado(it){
     if(it.ajusteTipo==='desconto' || it.ajusteTipo==='acrescimo'){
       const base = Number(it.precoOriginal)||0;
       const qtdAjuste = Number(it.ajusteQtd)||0;
@@ -1125,9 +1144,9 @@ function mountItens(container, holder, getLojaId){
             ${produtoAtual
               ? `<div class="prod-ac-sel">
                    <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
+                   ${produtoAtual.fator!=null && produtoAtual.fator!=='' ? `<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>` : ''}
                    <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
-                 </div>
-                 ${produtoAtual.fator!=null && produtoAtual.fator!=='' ? `<div class="prod-ac-fator">Fator: <b>${produtoAtual.fator}</b></div>` : ''}`
+                 </div>`
               : `<input class="prod-ac-input" id="pacInp_${i}" placeholder="Digite o nome do produto..." autocomplete="off" spellcheck="false" data-pac="${i}">
                  <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`
             }
@@ -1137,20 +1156,15 @@ function mountItens(container, holder, getLojaId){
               value="${it.valorUnitario!==undefined && it.valorUnitario!=='' ? it.valorUnitario : ''}">
           </div>
           <div class="item-row-desc">
-            <span class="desc-label">Desc.</span>
-            <select data-itfield="ajusteTipo">
-              <option value="nenhum" ${it.ajusteTipo==='nenhum'?'selected':''}>—</option>
-              <option value="desconto" ${it.ajusteTipo==='desconto'?'selected':''}>Desconto</option>
-              <option value="acrescimo" ${it.ajusteTipo==='acrescimo'?'selected':''}>Acrésc.</option>
-            </select>
-            <select data-itfield="ajusteModo">
-              <option value="percentual" ${it.ajusteModo==='percentual'?'selected':''}>%</option>
-              <option value="valor" ${it.ajusteModo==='valor'?'selected':''}>R$</option>
-            </select>
-            <input type="number" min="0" step="0.01" data-itfield="ajusteQtd" placeholder="0"
-              value="${it.ajusteQtd!==undefined && it.ajusteQtd!=='' ? it.ajusteQtd : ''}">
+            <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}">Desc.</button>
+            <button type="button" class="btn-ajuste ${it.ajusteTipo==='acrescimo'?'ativo-acr':''}" data-aidbtn="acrescimo" data-idx2="${i}">Acrés.</button>
+            <input type="number" min="0" step="0.01" class="campo-perc" data-itfield="ajustePerc" placeholder="%" title="Percentual"
+              value="${it.ajustePerc!==undefined && it.ajustePerc!=='' ? it.ajustePerc : ''}">
+            <span class="desc-sep">ou</span>
+            <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
+              value="${it.ajusteValR!==undefined && it.ajusteValR!=='' ? it.ajusteValR : ''}">
             <span class="desc-total" id="descTotal_${i}">${(()=>{
-              if(it.ajusteTipo!=='nenhum' && it.ajusteQtd!=='' && it.ajusteQtd!=null && it.valorUnitario!=='' && it.valorUnitario!=null){
+              if(it.ajusteTipo!=='nenhum' && it.valorUnitario!=='' && it.valorUnitario!=null){
                 return '= R$ '+Number(it.valorUnitario).toFixed(2);
               } return '';
             })()}</span>
@@ -1218,47 +1232,76 @@ function mountItens(container, holder, getLojaId){
       });
     });
 
-    // ── Campos: valor, desconto inline sem redesenhar, observação ──
+    // ── Botões Desconto / Acréscimo ──
+    wrap.querySelectorAll('[data-aidbtn]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.idx2);
+        const it=holder.itens[idx];
+        const tipo=btn.dataset.aidbtn;
+        // toggle: clicar no mesmo botão ativo desativa
+        it.ajusteTipo = it.ajusteTipo===tipo ? 'nenhum' : tipo;
+        // atualiza aparência dos botões sem redesenhar a linha inteira
+        const row=wrap.querySelector('[data-idx="'+idx+'"]');
+        row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+          b.classList.remove('ativo-desc','ativo-acr');
+          if(it.ajusteTipo==='desconto'&&b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+          if(it.ajusteTipo==='acrescimo'&&b.dataset.aidbtn==='acrescimo') b.classList.add('ativo-acr');
+        });
+        if(it.ajusteTipo==='nenhum'){
+          it.ajustePerc=''; it.ajusteValR='';
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          // restaura valor original
+          if(it.precoOriginal!==''&&it.precoOriginal!=null){
+            it.valorUnitario=it.precoOriginal;
+            const inpVal=row.querySelector('[data-itfield="valorUnitario"]');
+            if(inpVal) inpVal.value=Number(it.precoOriginal).toFixed(2);
+          }
+          updateTotalHint();
+        } else {
+          recalcularAjusteNovo(it, idx, row);
+        }
+      });
+    });
+
+    // ── Campos de valor e desconto ──
     wrap.querySelectorAll('[data-itfield]').forEach(el=>{
       el.addEventListener('input',()=>{
         const row=el.closest('[data-idx]');
         const idx=Number(row.dataset.idx);
         const field=el.dataset.itfield;
         const it=holder.itens[idx];
-        function sincronizarDesconto(){
-          recalcularValorAjustado(it);
-          const inpVal=row.querySelector('[data-itfield="valorUnitario"]');
-          if(inpVal) inpVal.value=it.valorUnitario!==''&&it.valorUnitario!=null?Number(it.valorUnitario).toFixed(2):'';
-          const span=document.getElementById('descTotal_'+idx);
-          if(span) span.textContent=(it.ajusteTipo!=='nenhum'&&it.ajusteQtd!==''&&it.ajusteQtd!=null&&it.valorUnitario!==''&&it.valorUnitario!=null)
-            ?'= R$ '+Number(it.valorUnitario).toFixed(2):'';
-          updateTotalHint();
-        }
-        if(field==='ajusteTipo'){
-          it.ajusteTipo=el.value;
-          if(el.value==='nenhum'){ it.ajusteQtd=''; const inpQtd=row.querySelector('[data-itfield="ajusteQtd"]'); if(inpQtd) inpQtd.value=''; }
-          sincronizarDesconto(); return;
-        }
-        if(field==='ajusteModo'){ it.ajusteModo=el.value; sincronizarDesconto(); return; }
-        if(field==='ajusteQtd'){ it.ajusteQtd=el.value===''?'':parseFloat(el.value); sincronizarDesconto(); return; }
+
         if(field==='valorUnitario'){
           it.valorUnitario=el.value===''?'':parseFloat(el.value);
           it.precoOriginal=it.valorUnitario;
-          it.ajusteQtd=''; it.ajusteTipo='nenhum';
-          const selTipo=row.querySelector('[data-itfield="ajusteTipo"]'); if(selTipo) selTipo.value='nenhum';
-          const inpQtd=row.querySelector('[data-itfield="ajusteQtd"]'); if(inpQtd) inpQtd.value='';
+          // limpa desconto ao editar valor manualmente
+          it.ajustePerc=''; it.ajusteValR=''; it.ajusteTipo='nenhum';
+          row.querySelectorAll('[data-aidbtn]').forEach(b=>b.classList.remove('ativo-desc','ativo-acr'));
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
           const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
           updateTotalHint(); return;
         }
+        if(field==='ajustePerc'){
+          // usuário digitou %, apaga o campo R$ para não conflitar
+          it.ajustePerc=el.value===''?'':parseFloat(el.value);
+          it.ajusteValR='';
+          it.ajusteModo='percentual'; it.ajusteQtd=it.ajustePerc;
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          recalcularAjusteNovo(it, idx, row); return;
+        }
+        if(field==='ajusteValR'){
+          // usuário digitou R$, apaga o campo % para não conflitar
+          it.ajusteValR=el.value===''?'':parseFloat(el.value);
+          it.ajustePerc='';
+          it.ajusteModo='valor'; it.ajusteQtd=it.ajusteValR;
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          recalcularAjusteNovo(it, idx, row); return;
+        }
         if(field==='observacaoItem'){ it.observacaoItem=el.value; return; }
         it[field]=el.value; updateTotalHint();
-      });
-      el.addEventListener('change',()=>{
-        const row=el.closest('[data-idx]');
-        const idx=Number(row.dataset.idx);
-        const field=el.dataset.itfield;
-        if(['ajusteTipo','ajusteModo','ajusteQtd','valorUnitario','observacaoItem'].includes(field)) return;
-        holder.itens[idx][field]=el.value;
       });
     });
     wrap.querySelectorAll('[data-itdel]').forEach(b=>{
