@@ -145,6 +145,16 @@ html.embedded .mobile-tabbar{display:none !important;}
 .cli-ac-selecionado .cli-ac-edit{background:none;border:none;cursor:pointer;font-size:12px;color:var(--ok,#17794a);text-decoration:underline;padding:0;font-weight:600;}
 .field input:not([readonly]):not([type=hidden]),.field select,.field textarea{background:#f8f6ff!important;box-shadow:inset 0 1px 3px rgba(0,0,0,.07);}
 
+
+/* Cards de resultado de busca de cliente */
+.cli-result-card{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--line);transition:background .1s;}
+.cli-result-card:last-child{border-bottom:none;}
+.cli-result-card:hover,.cli-result-card.focused{background:var(--surface-2);}
+.cli-result-avatar{width:34px;height:34px;border-radius:50%;background:var(--accent,#662344);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;letter-spacing:.01em;}
+.cli-result-info{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;}
+.cli-result-nome{font-size:13.5px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cli-result-sub{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.cli-result-tag{font-size:11.5px;color:var(--ink-faint);}
 </style>
 </head>
 <body>
@@ -788,6 +798,25 @@ function wireClienteFields(prefix){
     });
   }
 }
+// Gera o HTML de um card de resultado de busca de cliente
+function clienteCardHtml(c, idx){
+  const partes = (c.nome||'').trim().split(/\s+/);
+  const iniciais = partes.length>=2 ? partes[0][0]+partes[partes.length-1][0] : (partes[0]||'?')[0];
+  const cpfFmt = c.cpf ? String(c.cpf).replace(/[^\d]/g,'').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4') : '';
+  const tags = [
+    c.telefone ? `<span class="cli-result-tag">📞 ${escapeHtml(c.telefone)}</span>` : '',
+    cpfFmt     ? `<span class="cli-result-tag">· ${escapeHtml(cpfFmt)}</span>` : '',
+    c.cidade   ? `<span class="cli-result-tag">· 📍 ${escapeHtml(c.cidade)}</span>` : '',
+  ].filter(Boolean).join('');
+  return `<div class="cli-result-card" data-idx="${idx}">
+    <div class="cli-result-avatar">${escapeHtml(iniciais.toUpperCase())}</div>
+    <div class="cli-result-info">
+      <div class="cli-result-nome">${escapeHtml(c.nome||'')}</div>
+      ${tags ? `<div class="cli-result-sub">${tags}</div>` : ''}
+    </div>
+  </div>`;
+}
+
 function montarClienteAutocomplete(wrap, onSel, inicial){
   let clienteSel=inicial||null, timer=null, focusIdx=-1;
   function renderWrap(){
@@ -810,11 +839,11 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
       function msg(t){drop.innerHTML=`<div class="cli-ac-msg">${t}</div>`;drop.style.display='block';}
       function renderRes(ach){
         if(ach.length){
-          drop.innerHTML=ach.map((c,i)=>`<div class="cli-ac-item" data-idx="${i}"><b>${escapeHtml(c.nome)}</b><span>${escapeHtml(c.telefone||'')}${c.cpf?' · '+escapeHtml(c.cpf):''}</span></div>`).join('');
+          drop.innerHTML=ach.map((c,i)=>clienteCardHtml(c,i)).join('');
           drop.style.display='block';
-          drop.querySelectorAll('.cli-ac-item').forEach((el,i)=>{
+          drop.querySelectorAll('.cli-result-card').forEach((el,i)=>{
             el.addEventListener('mousedown',e=>{e.preventDefault();clienteSel=ach[i];onSel(ach[i]);fechar();renderWrap();});
-            el.addEventListener('mouseover',()=>{focusIdx=i;drop.querySelectorAll('.cli-ac-item').forEach((e,k)=>e.classList.toggle('focused',k===i));});
+            el.addEventListener('mouseover',()=>{focusIdx=i;drop.querySelectorAll('.cli-result-card').forEach((e,k)=>e.classList.toggle('focused',k===i));});
           });
         } else {
           const t=inp.value.trim();
@@ -915,365 +944,29 @@ function renderResultados(termo){
     wrap.innerHTML = `<div class="muted" style="padding:6px;">Buscando...</div>`;
     buscarClientesComDebounce(termo, (achados)=>{
       if(achados.length > 0){
-        wrap.innerHTML = achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}">
-          <div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span>${c.cpf?` <span class="muted">· ${escapeHtml(c.cpf)}</span>`:''}</div>
-        </div>`).join('');
+        wrap.innerHTML = achados.map((c,i)=>{
+          const card = clienteCardHtml(c,i);
+          return card.replace('data-idx="'+i+'"','data-selcli="'+(c.id||'')+'"');
+        }).join('');
         wrap.querySelectorAll('[data-selcli]').forEach(el=>{
           el.addEventListener('click', ()=>{
             const c = achados.find(x=>x.id===el.dataset.selcli);
             if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
           });
         });
-      } else {
-        // Verificar se o termo parece um CPF (11 dígitos, com ou sem pontos/traço)
-        const digits = onlyDigits(termo);
-        const parece_cpf = digits.length === 11;
-        wrap.innerHTML = `
-          <div class="empty" style="padding:10px 0 6px;">
-            Nenhum cliente encontrado no cadastro.
-            ${parece_cpf ? `
-            <div style="margin-top:8px;">
-              <button type="button" class="btn btn-ghost btn-sm" id="btnBuscarCpfReceita" style="width:100%;">
-                🔎 Buscar CPF na Receita Federal
-              </button>
-              <div id="receitaResult" style="margin-top:6px;font-size:12.5px;"></div>
-            </div>` : ''}
-            <div class="muted" style="margin-top:8px;font-size:12px;">Preencha os dados abaixo para cadastrar.</div>
-          </div>`;
-        if(parece_cpf){
-          document.getElementById('btnBuscarCpfReceita')?.addEventListener('click', async ()=>{
-            const btn = document.getElementById('btnBuscarCpfReceita');
-            const div = document.getElementById('receitaResult');
-            btn.disabled = true; btn.textContent = '⏳ Consultando Receita Federal...';
-            const resultado = await buscarCpfReceita(termo);
-            btn.disabled = false; btn.textContent = '🔎 Buscar CPF na Receita Federal';
-            if(!resultado){
-              div.innerHTML = '<span style="color:var(--danger);">CPF não encontrado ou serviço indisponível.</span>';
-            } else {
-              div.innerHTML = `<span style="color:var(--ok);font-weight:700;">✅ ${escapeHtml(resultado.nome)}</span>
-                ${resultado.situacao?`<span class="muted"> — ${escapeHtml(resultado.situacao)}</span>`:''}
-                <button type="button" class="btn btn-ghost btn-sm" id="btnUsarNomeReceita" style="margin-left:8px;">Usar este nome</button>`;
-              document.getElementById('btnUsarNomeReceita')?.addEventListener('click', ()=>{
-                const nomeInp = document.getElementById('sel_cliente');
-                const cpfInp = document.getElementById('sel_cpf');
-                if(nomeInp) nomeInp.value = resultado.nome;
-                if(cpfInp) cpfInp.value = termo; // preenche o CPF digitado também
-                div.innerHTML = '<span class="muted">Nome e CPF preenchidos abaixo ↓</span>';
-              });
-            }
-          });
-        }
       }
     });
-  }
-  document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
-
-  document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
-  document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
-    const nome = maiusc(document.getElementById('sel_cliente').value);
-    if(!nome){ showToast('Informe o nome do cliente.'); return; }
-    const telefoneCombinado = combinarTelefoneValidado('sel');
-    if(telefoneCombinado === null) return;
-    const patch = {
-      nome,
-      telefone: telefoneCombinado,
-      email: document.getElementById('sel_email').value.trim(),
-      cpf: document.getElementById('sel_cpf').value.trim(),
-      dataNascimento: document.getElementById('sel_nascimento').value,
-      cep: document.getElementById('sel_cep').value.trim(),
-      endereco: maiusc(document.getElementById('sel_endereco').value),
-      numero: maiusc(document.getElementById('sel_numero').value),
-      complemento: maiusc(document.getElementById('sel_complemento').value),
-      bairro: maiusc(document.getElementById('sel_bairro').value),
-      cidade: maiusc(document.getElementById('sel_cidade').value),
-      estado: maiusc(document.getElementById('sel_estado').value),
-    };
-    let clienteFinal;
-    if(selecionado && selecionado.id){
-      clienteFinal = { ...selecionado, ...patch };
-      const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
-      if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
-    } else {
-      const existente = await buscarClientePorTelefoneOuCpf(patch.telefone, patch.cpf);
-      if(existente){
-        clienteFinal = { ...existente, ...patch };
-        const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
-        if(idx>=0) clientes[idx] = clienteFinal;
-      } else {
-        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
-        clientes.unshift(clienteFinal);
-      }
-    }
-    await salvarUmCliente(clienteFinal);
-    closeModal();
-    onConfirmar(clienteFinal);
-  });
-}
-
-const EMBEDDED = window.self !== window.top;
-if(EMBEDDED){
-  document.documentElement.classList.add('embedded');
-  window.addEventListener('message', async (ev)=>{
-    if(!mensagemConfiavel(ev)) return;
-    if(!ev.data || !ev.data.type) return;
-    if(ev.data.type === 'auth'){
-      currentUser = ev.data.user;
-      __gatewaySenha = ev.data.user.senha;
-      window.__permissoesAbasOverride = ev.data.abas || null;
-      await loadAll();
-      enterApp();
-    } else if(ev.data.type === 'pedirRascunho'){
-      if(currentTab === 'novo' && typeof window.__salvarRascunho === 'function'){
-        try{ await window.__salvarRascunho(); }catch(e){}
-        if(EMBEDDED) parent.postMessage({ type:'rascunhoSalvo', modulo:'orcamentos' }, '*');
-      } else {
-        if(EMBEDDED) parent.postMessage({ type:'semRascunho', modulo:'orcamentos' }, '*');
-      }
-    } else if(ev.data.type === 'gotoTab'){
-      currentTab = ev.data.tabId;
-      renderTabs();
-      renderView();
-    } else if(ev.data.type === 'clientesAtualizados'){
-      // O módulo Cadastro mexeu no cadastro de clientes. Como a busca agora é sob demanda
-      // (sem pré-carregar todo mundo), só precisa limpar o cache local pra próxima busca
-      // trazer os dados atualizados do banco.
-      clientes = [];
-    } else if(ev.data.type === 'lojaAtual'){
-      window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
-      if(currentUser) renderView();
-    }
-  });
-}
-
-document.getElementById('btnLogin').addEventListener('click', doLogin);
-document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
-async function doLogin(){
-  const pass = document.getElementById('loginPass').value.trim();
-  const err = document.getElementById('loginError');
-  const btn = document.getElementById('btnLogin');
-  if(!pass) return;
-  err.classList.remove('show');
-  btn.disabled = true;
-  const r = await gatewayLogin(pass);
-  btn.disabled = false;
-  if(!r || !r.ok){ err.classList.add('show'); return; }
-  __gatewaySenha = pass;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
-  await loadAll();
-  enterApp();
-}
-document.getElementById('btnLogout').addEventListener('click', ()=>{
-  currentUser = null; __gatewaySenha = null;
-  document.getElementById('loginPass').value = '';
-  document.getElementById('view-app').style.display = 'none';
-  document.getElementById('view-login').style.display = 'flex';
-});
-function enterApp(){
-  document.getElementById('view-login').style.display = 'none';
-  document.getElementById('view-app').style.display = 'block';
-  document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
-  document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
-  buildTabs();
-  currentTab = 'lista';
-  if(EMBEDDED){
-    const permitido = tabsForLevel();
-    if(!permitido.some(t=>t.id===currentTab)) currentTab = permitido[0] ? permitido[0].id : (podeCriarOrcamento() ? 'novo' : 'lista');
-    parent.postMessage({ type:'tabs', modulo:'orcamentos', tabs: permitido, active: currentTab }, '*');
-  }
-  renderTabs();
-  renderView();
-}
-
-/* "Novo orçamento" deixou de ser aba própria (agora é um botão dentro de "Orçamentos"),
- * mas a permissão por perfil (Cadastro → Perfis de Acesso) continua sendo respeitada aqui. */
-function podeCriarOrcamento(){
-  if(!window.__permissoesAbasOverride) return true;
-  return window.__permissoesAbasOverride.novo !== false;
-}
-function tabsForLevel(){
-  const t = [
-    { id:'lista', label:'Orçamentos', icon:'📋' },
-  ];
-  if(window.__permissoesAbasOverride) return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
-  return t;
-}
-function buildTabs(){
-  const tabs = tabsForLevel();
-  const nav = document.getElementById('tabs');
-  nav.innerHTML = '';
-  tabs.forEach(t=>{
-    const b = document.createElement('button');
-    b.textContent = t.label; b.dataset.tab = t.id;
-    b.addEventListener('click', ()=>{ currentTab = t.id; renderTabs(); renderView(); });
-    nav.appendChild(b);
-  });
-  const mobileNav = document.getElementById('mobileTabbar');
-  mobileNav.innerHTML = '';
-  tabs.forEach(t=>{
-    const b = document.createElement('button');
-    b.dataset.tab = t.id;
-    b.innerHTML = `<span class="mt-icon">${t.icon}</span><span>${t.label}</span>`;
-    b.addEventListener('click', ()=>{ currentTab = t.id; renderTabs(); renderView(); });
-    mobileNav.appendChild(b);
-  });
-}
-function renderTabs(){
-  document.querySelectorAll('nav.tabs button, .mobile-tabbar button').forEach(b=>{
-    b.classList.toggle('active', b.dataset.tab === currentTab);
-  });
-  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'orcamentos', tabId: currentTab }, '*');
-}
-function renderView(){
-  const main = document.getElementById('mainContent');
-  main.innerHTML = '';
-  if(currentTab==='novo') renderNovo(main, orcamentoEmEdicao);
-  else if(currentTab==='lista') renderLista(main);
-}
-
-/* ============================================================
-   NOVO ORÇAMENTO
-   ============================================================ */
-function produtoOptionsHtml(selected){
-  const lista = config.joiasProdutos || [];
-  return `<option value="">Selecione</option>` + lista.map(p=>`<option value="${escapeHtml(p)}" ${selected===p?'selected':''}>${escapeHtml(p)}</option>`).join('');
-}
-function renderNovo(main, orcamentoEditando){
-  const editando = !!orcamentoEditando;
-  const dataOrc = editando ? (orcamentoEditando.data || todayStr()) : todayStr();
-  const validadePadrao = new Date(dataOrc+'T00:00:00'); validadePadrao.setDate(validadePadrao.getDate()+3); // padrão 3 dias
-  main.innerHTML = `
-    <div class="page-head">
-      <button type="button" class="btn btn-ghost btn-sm" id="btnVoltarOrcLista" style="margin-bottom:12px;">← Voltar</button>
-      <h1 class="page-title">${editando ? 'Editar orçamento' : 'Novo orçamento'}</h1>
-      <p class="page-sub">${editando ? 'Altere os dados do orçamento e salve as alterações.' : 'Como uma pré-venda: fica pendente até você aprovar (e virar venda/O.S. de verdade) ou recusar.'}</p>
-    </div>
-    <div class="card">
-      <div class="grid-3" style="grid-template-columns:repeat(4,1fr);">
-        <div class="field"><label>Data do orçamento</label><input type="date" id="o_data" value="${dataOrc}"></div>
-        <div class="field"><label>Loja</label>
-          <div style="padding:9px 10px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:13.5px;font-weight:700;">
-            ${escapeHtml(editando ? ((config.lojas||[]).find(l=>l.id===orcamentoEditando.lojaId)||{}).nome || '—' : (window.__lojaAtual && window.__lojaAtual.nome ? window.__lojaAtual.nome : 'Selecione a loja no topo'))}
-          </div>
-          <input type="hidden" id="o_loja" value="${editando ? escapeHtml(orcamentoEditando.lojaId||'') : (window.__lojaAtual ? escapeHtml(window.__lojaAtual.id) : '')}">
-        </div>
-        <div class="field"><label>Vendedora</label><select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora')).map(f=>`<option value="${escapeHtml(nomeExibicaoFuncionario(f))}" ${editando && orcamentoEditando.vendedora===nomeExibicaoFuncionario(f)?'selected':''}>${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select></div>
-        <div class="field"><label>Validade</label><input type="date" id="o_validade" value="${editando ? (orcamentoEditando.validade||'') : validadePadrao.toISOString().slice(0,10)}"></div>
-      </div>
-      <div class="field" style="margin-top:10px;">
-        <label>Cliente</label>
-        <div id="o_clienteAcWrap"></div>
-      </div>
-      <input type="hidden" id="o_cliente" value="${editando ? escapeHtml(orcamentoEditando.cliente||'') : ''}">
-      <input type="hidden" id="o_telefone" value="${editando ? escapeHtml(orcamentoEditando.telefone||'') : ''}">
-      <input type="hidden" id="o_email" value="${editando ? escapeHtml(orcamentoEditando.email||'') : ''}">
-      <div class="section-label" style="margin-top:14px;">Itens do orçamento</div>
-      <div id="itensRows"></div>
-      <div id="totalHint" style="margin-top:10px;"></div>
-      <div class="obs-geral-box" style="margin-top:10px;">
-        <label style="font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);">Observação geral</label>
-        <textarea id="o_obs" rows="2" style="margin-top:6px;">${editando ? escapeHtml(orcamentoEditando.observacoes||'') : ''}</textarea>
-      </div>
-      <div class="info-interna-box" id="orcInfoInternaBox" style="display:none;">
-        <div class="info-interna-badge">🔒 Informação interna — visível só para usuários do sistema</div>
-        <textarea id="o_infoInterna" placeholder="Anotações internas (não aparece para o cliente)...">${editando ? escapeHtml(orcamentoEditando.infoInterna||'') : ''}</textarea>
-      </div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInternaOrc" style="margin-top:8px;font-size:12px;">🔒 + Adicionar informação interna</button>
-      <button class="btn btn-accent" id="btnSalvarOrcamento" style="margin-top:10px;">${editando ? 'Salvar alterações' : 'Salvar orçamento'}</button>
-    </div>
-  `;
-  document.getElementById('btnToggleInfoInternaOrc').addEventListener('click',()=>{
-    const box=document.getElementById('orcInfoInternaBox');
-    const btn=document.getElementById('btnToggleInfoInternaOrc');
-    const vis=box.style.display!=='none';
-    box.style.display=vis?'none':'block';
-    btn.textContent=vis?'🔒 + Adicionar informação interna':'🔒 − Ocultar informação interna';
-    if(!vis) document.getElementById('o_infoInterna').focus();
-  });
-  document.getElementById('btnVoltarOrcLista').addEventListener('click', async ()=>{
-    if(!editando && formOrcTemDados()){
-      await salvarComoRascunho();
-    }
-    orcamentoEmEdicao = null;
-    currentTab = 'lista'; renderTabs(); renderView();
-  });
-  /* Considera "preenchimento iniciado" quando já tem cliente, observação ou algum item com produto/qtd. */
-  function formOrcTemDados(){
-    const cliente = (document.getElementById('o_cliente').value||'').trim();
-    const obs = (document.getElementById('o_obs').value||'').trim();
-    const itensPreenchidos = itens.some(it=>it.produto && Number(it.quantidade)>0);
-    return !!(cliente || obs || itensPreenchidos);
-  }
-  window.__salvarRascunho = async function salvarComoRascunho_(){
-    return salvarComoRascunho();
-  };
-  async function salvarComoRascunho(){
-    const lojaId = document.getElementById('o_loja').value;
-    const loja = (config.lojas||[]).find(l=>l.id===lojaId);
-    const vendedora = document.getElementById('o_vendedora').value;
-    const validade = document.getElementById('o_validade').value;
-    const cliente = maiusc(document.getElementById('o_cliente').value);
-    const telefone = document.getElementById('o_telefone').value.trim();
-    const email = document.getElementById('o_email').value.trim();
-    const itensValidos = itens.filter(it=>it.produto||it.valorUnitario);
-    const valorTotal = itensValidos.reduce((acc,it)=> acc + (Number(it.valorUnitario)||0), 0);
-    const orcamento = {
-      id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
-      data: document.getElementById('o_data').value || todayStr(), cliente: cliente || '(rascunho sem nome)', telefone, email,
-      itens: itensValidos, valorTotal, ajusteTotal,
-      observacoes: maiusc(document.getElementById('o_obs').value),
-      infoInterna: (document.getElementById('o_infoInterna')?.value||'').trim(),
-      status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
-      rascunho: true,
-    };
-    const ok = await orcamentoSalvar(orcamento);
-    if(ok){
-      orcamentos.unshift(orcamento);
-      showToast('Orçamento não finalizado — salvo como rascunho.');
-    }
-  }
-  let itens = editando ? JSON.parse(JSON.stringify(orcamentoEditando.itens||[])) : [];
-  if(!itens.length) itens.push({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[] });
-
-  /* ── Autocomplete de produto (igual Vendas) ── */
-  function orcSelecionarProduto(idx, prod){
-    const it=itens[idx];
-    it.produtoId=prod.id; it.produto=prod.nome; it.fator=prod.fator||'';
-    it.valorBase=prod.precoVenda!=null?prod.precoVenda:'';
-    if(!it.valorUnitario) it.valorUnitario=it.valorBase||'';
-    drawItens();
-    setTimeout(()=>{
-      const row=document.querySelector('[data-orcidx="'+idx+'"]');
-      if(row){ const v=row.querySelector('[data-ival]'); if(v) v.focus(); }
-    },50);
-    updateTotal();
-  }
-  function ligarAutocompleteProd(idx){
-    const inp=document.getElementById('orcPacInp_'+idx);
-    const drop=document.getElementById('orcPacDrop_'+idx);
-    if(!inp||!drop) return;
-    let timer=null,focus=-1,achados=[];
-    function fechar(){ drop.style.display='none'; focus=-1; }
-    function renderDrop(lista){
-      achados=lista;
-      if(!lista.length){ drop.innerHTML='<div class="orc-prod-item" style="color:var(--ink-faint);">Nenhum produto.</div>'; drop.style.display='block'; return; }
-      drop.innerHTML=lista.map((p,k)=>`<div class="orc-prod-item" data-pk="${k}"><b>${escapeHtml(p.nome)}</b><span>${p.fator?'Fator '+p.fator+' · ':''}${p.precoVenda!=null?'R$ '+Number(p.precoVenda).toFixed(2):''}</span></div>`).join('');
-      drop.style.display='block';
-      drop.querySelectorAll('[data-pk]').forEach(el=>{
-        el.addEventListener('mouseover',()=>{ focus=Number(el.dataset.pk); drop.querySelectorAll('.orc-prod-item').forEach((e,k)=>e.classList.toggle('pf',k===focus)); });
-        el.addEventListener('mousedown',e=>{ e.preventDefault(); orcSelecionarProduto(idx,achados[Number(el.dataset.pk)]); });
-      });
-    }
     inp.addEventListener('input',()=>{ clearTimeout(timer); timer=setTimeout(()=>{
       const t=inp.value.toLowerCase().trim();
       if(!t){ fechar(); return; }
-      renderDrop((produtosEstoque||[]).filter(p=>p.vendavel!==false&&p.nome&&p.nome.toLowerCase().includes(t)).slice(0,15));
+      const __lista=(produtosEstoque||[]).filter(p=>p.vendavel!==false&&p.nome&&p.nome.toLowerCase().includes(t)).slice(0,15); window.__orcListaProd=__lista; renderDrop(__lista);
     },120); });
     inp.addEventListener('keydown',e=>{
       const items=drop.querySelectorAll('[data-pk]');
       if(!items.length) return;
       if(e.key==='ArrowDown'){ e.preventDefault(); focus=Math.min(focus+1,items.length-1); items.forEach((el,k)=>el.classList.toggle('pf',k===focus)); }
       else if(e.key==='ArrowUp'){ e.preventDefault(); focus=Math.max(focus-1,0); items.forEach((el,k)=>el.classList.toggle('pf',k===focus)); }
-      else if(e.key==='Enter'&&focus>=0){ e.preventDefault(); orcSelecionarProduto(idx,achados[focus]); }
+      else if(e.key==='Enter'&&focus>=0){ e.preventDefault(); if(window.__orcListaProd && window.__orcListaProd[focus]) orcSelecionarProduto(idx,window.__orcListaProd[focus]); }
       else if(e.key==='Escape'){ fechar(); }
     });
     inp.addEventListener('blur',()=>setTimeout(fechar,150));

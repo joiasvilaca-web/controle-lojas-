@@ -183,6 +183,17 @@ html.embedded .mobile-tabbar{display:none !important;}
 .cli-ac-selecionado b{color:var(--ok,#17794a);flex:1;}
 .cli-ac-selecionado .cli-ac-clear{background:none;border:none;cursor:pointer;font-size:16px;color:var(--ok,#17794a);padding:0 2px;line-height:1;font-weight:700;}
 .cli-ac-selecionado .cli-ac-edit{background:none;border:none;cursor:pointer;font-size:12px;color:var(--ok,#17794a);text-decoration:underline;padding:0;font-weight:600;}
+
+/* Cards de resultado de busca de cliente */
+.cli-result-card{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--line);transition:background .1s;}
+.cli-result-card:last-child{border-bottom:none;}
+.cli-result-card:hover,.cli-result-card.focused{background:var(--surface-2);}
+.cli-result-avatar{width:34px;height:34px;border-radius:50%;background:var(--accent,#662344);color:#fff;font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;letter-spacing:.01em;}
+.cli-result-info{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;}
+.cli-result-nome{font-size:13.5px;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cli-result-sub{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.cli-result-tag{font-size:11.5px;color:var(--ink-faint);}
+
 </style>
 </head>
 <body>
@@ -786,6 +797,25 @@ function wireClienteFields(prefix){
 /* Busca clientes no SERVIDOR (até 10 resultados, por nome/telefone/CPF) em vez de
  * filtrar a lista inteira carregada no navegador — com debounce de 300ms pra não
  * disparar uma chamada a cada tecla digitada. */
+// Gera o HTML de um card de resultado de busca de cliente
+function clienteCardHtml(c, idx){
+  const partes = (c.nome||'').trim().split(/\s+/);
+  const iniciais = partes.length>=2 ? partes[0][0]+partes[partes.length-1][0] : (partes[0]||'?')[0];
+  const cpfFmt = c.cpf ? String(c.cpf).replace(/[^\d]/g,'').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4') : '';
+  const tags = [
+    c.telefone ? `<span class="cli-result-tag">📞 ${escapeHtml(c.telefone)}</span>` : '',
+    cpfFmt     ? `<span class="cli-result-tag">· ${escapeHtml(cpfFmt)}</span>` : '',
+    c.cidade   ? `<span class="cli-result-tag">· 📍 ${escapeHtml(c.cidade)}</span>` : '',
+  ].filter(Boolean).join('');
+  return `<div class="cli-result-card" data-idx="${idx}">
+    <div class="cli-result-avatar">${escapeHtml(iniciais.toUpperCase())}</div>
+    <div class="cli-result-info">
+      <div class="cli-result-nome">${escapeHtml(c.nome||'')}</div>
+      ${tags ? `<div class="cli-result-sub">${tags}</div>` : ''}
+    </div>
+  </div>`;
+}
+
 let __debounceClienteTimer = null;
 function buscarClientesComDebounce(termo, aoAchar){
   clearTimeout(__debounceClienteTimer);
@@ -963,9 +993,10 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
     wrap.innerHTML = `<div class="muted" style="padding:6px;">Buscando...</div>`;
     buscarClientesComDebounce(termo, (achados)=>{
       if(achados.length > 0){
-        wrap.innerHTML = achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}">
-          <div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span>${c.cpf?` <span class="muted">· ${escapeHtml(c.cpf)}</span>`:''}</div>
-        </div>`).join('');
+        wrap.innerHTML = achados.map((c,i)=>{
+          const card = clienteCardHtml(c,i);
+          return card.replace('data-idx="'+i+'"','data-selcli="'+escapeHtml(c.id)+'"');
+        }).join('');
         wrap.querySelectorAll('[data-selcli]').forEach(el=>{
           el.addEventListener('click', ()=>{
             const c = achados.find(x=>x.id===el.dataset.selcli);
