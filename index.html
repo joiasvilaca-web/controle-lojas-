@@ -1755,6 +1755,7 @@ const CFG_TABS = [
   { id:'fornecedor', label:'Fornecedor' },
   { id:'lojas', label:'Lojas' },
   { id:'pagamento', label:'Formas de Pagamento' },
+  { id:'tiposOrdem', label:'Tipos de Ordem' },
   { id:'impressao', label:'Impressão & Etiquetas' },
   { id:'statusOrcamento', label:'Status de Orçamento' },
   { id:'mensagens', label:'Mensagens' },
@@ -1787,6 +1788,7 @@ function renderCfgTab(tab){
   if(tab==='joias') return renderJoiasTab(body);
   if(tab==='estoque') return renderEstoqueTab(body);
   if(tab==='pagamento') return renderPagamentoTab(body);
+  if(tab==='tiposOrdem') return renderTiposOrdemTab(body);
   if(tab==='impressao') return renderImpressaoTab(body);
   if(tab==='statusOrcamento') return renderStatusOrcamentoTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
@@ -4437,6 +4439,106 @@ function imprimirEtiquetaProduto(produto){
 /* ---------- TIPOS DE SERVIÇO: ver abrirGerenciarTiposServicoModal(), agora dentro da aba Produtos ---------- */
 
 /* ---------- FORMAS DE PAGAMENTO ---------- */
+/* ---------- TIPOS DE ORDEM (usado no agendamento da O.S.) ---------- */
+function garantirConfigTiposOrdem(){
+  if(!Array.isArray(config.tiposServico)) config.tiposServico = [];
+  config.tiposServico.forEach(t=>{
+    if(t.prazoMinimoDias==null || isNaN(Number(t.prazoMinimoDias))) t.prazoMinimoDias = 1;
+    if(t.maxPorDia==null || isNaN(Number(t.maxPorDia))) t.maxPorDia = 1;
+  });
+}
+function renderTiposOrdemTab(main){
+  garantirConfigTiposOrdem();
+  main.innerHTML = `
+    <div class="card">
+      <div class="section-label">Tipos de ordem</div>
+      <div class="muted" style="margin-bottom:10px;">
+        Cada tipo define o prazo mínimo de entrega e quantas ordens desse tipo podem
+        ser agendadas no mesmo dia. Usado no agendamento do Pedido (O.S.).
+      </div>
+      <div id="tordRows"></div>
+      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="field" style="flex:2; min-width:160px; margin-bottom:0;">
+          <label style="font-size:11px;">Nome</label>
+          <input id="tord_nome" placeholder="Ex: Conserto, Aliança, Gravação...">
+        </div>
+        <div class="field" style="flex:1; min-width:120px; margin-bottom:0;">
+          <label style="font-size:11px;">Prazo p/ entrega (dias)</label>
+          <input id="tord_prazo" type="number" min="0" step="1" placeholder="Ex: 7">
+        </div>
+        <div class="field" style="flex:1; min-width:120px; margin-bottom:0;">
+          <label style="font-size:11px;">Qtd. máxima por dia</label>
+          <input id="tord_max" type="number" min="1" step="1" placeholder="Ex: 5">
+        </div>
+        <button class="btn btn-accent btn-sm" id="btnAddTord">+ Adicionar</button>
+      </div>
+    </div>
+  `;
+  function renderRows(){
+    const wrap = document.getElementById('tordRows');
+    wrap.innerHTML = config.tiposServico.length===0
+      ? `<div class="empty">Nenhum tipo de ordem cadastrado.</div>`
+      : config.tiposServico.map((t,i)=>`
+        <div class="code-list-item" style="flex-wrap:wrap; gap:8px;">
+          <input data-tordnome="${i}" value="${escapeHtml(t.nome)}" placeholder="Nome"
+            style="flex:2; min-width:140px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+          <input data-tordprazo="${i}" type="number" min="0" step="1" value="${Number(t.prazoMinimoDias)||0}"
+            title="Prazo para entrega (dias)"
+            style="width:90px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+          <span class="muted" style="font-size:11px;">dias</span>
+          <input data-tordmax="${i}" type="number" min="1" step="1" value="${Number(t.maxPorDia)||1}"
+            title="Quantidade máxima por dia"
+            style="width:80px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+          <span class="muted" style="font-size:11px;">máx/dia</span>
+          <button class="icon-btn" data-deltord="${i}" title="Remover">✕</button>
+        </div>
+      `).join('');
+    wrap.querySelectorAll('[data-tordnome]').forEach(inp=> inp.addEventListener('change', async ()=>{
+      const idx = Number(inp.dataset.tordnome);
+      const nome = inp.value.trim();
+      if(!nome){ showToast('O nome não pode ficar vazio.'); inp.value = config.tiposServico[idx].nome; return; }
+      config.tiposServico[idx].nome = nome;
+      const ok = await configSave();
+      if(ok) showToast('Tipo de ordem atualizado.');
+    }));
+    wrap.querySelectorAll('[data-tordprazo]').forEach(inp=> inp.addEventListener('change', async ()=>{
+      const idx = Number(inp.dataset.tordprazo);
+      const v = Math.max(0, parseInt(inp.value,10)||0);
+      inp.value = v;
+      config.tiposServico[idx].prazoMinimoDias = v;
+      const ok = await configSave();
+      if(ok) showToast('Prazo atualizado.');
+    }));
+    wrap.querySelectorAll('[data-tordmax]').forEach(inp=> inp.addEventListener('change', async ()=>{
+      const idx = Number(inp.dataset.tordmax);
+      const v = Math.max(1, parseInt(inp.value,10)||1);
+      inp.value = v;
+      config.tiposServico[idx].maxPorDia = v;
+      const ok = await configSave();
+      if(ok) showToast('Quantidade máxima atualizada.');
+    }));
+    wrap.querySelectorAll('[data-deltord]').forEach(b=> b.addEventListener('click', async ()=>{
+      if(!confirm('Remover este tipo de ordem? Ordens já lançadas com ele não serão afetadas.')) return;
+      config.tiposServico.splice(Number(b.dataset.deltord),1);
+      await configSave(); renderRows(); showToast('Tipo de ordem removido.');
+    }));
+  }
+  renderRows();
+  document.getElementById('btnAddTord').addEventListener('click', async ()=>{
+    const nome = document.getElementById('tord_nome').value.trim();
+    const prazo = Math.max(0, parseInt(document.getElementById('tord_prazo').value,10)||0);
+    const max = Math.max(1, parseInt(document.getElementById('tord_max').value,10)||1);
+    if(!nome){ showToast('Informe o nome do tipo de ordem.'); return; }
+    config.tiposServico.push({ id: uid('tord'), nome, prazoMinimoDias: prazo, maxPorDia: max });
+    await configSave();
+    document.getElementById('tord_nome').value='';
+    document.getElementById('tord_prazo').value='';
+    document.getElementById('tord_max').value='';
+    renderRows();
+    showToast('Tipo de ordem adicionado.');
+  });
+}
+
 function renderPagamentoTab(main){
   main.innerHTML = `
     <div class="card">
