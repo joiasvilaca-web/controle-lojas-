@@ -1461,6 +1461,123 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
   return {getCliente:()=>clienteSel};
 }
 
+function clienteFieldsHtml(prefix, c){
+  c = c || {};
+  const nome = c.cliente !== undefined ? c.cliente : (c.nome || '');
+  const tel = separarTelefone(c.telefone||'');
+  return `
+    <div class="grid-2">
+      <div class="field"><label>CPF</label><input id="${prefix}_cpf" placeholder="000.000.000-00" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field"><label>Nome do cliente</label><input id="${prefix}_cliente" placeholder="Nome completo" value="${escapeHtml(nome)}"></div>
+      <div class="field"><label>Telefone / WhatsApp</label><div style="display:flex; gap:6px;">
+        <input id="${prefix}_telefoneDDD" placeholder="DDD" maxlength="2" inputmode="numeric" style="width:56px; flex-shrink:0;" value="${escapeHtml(tel.ddd)}">
+        <input id="${prefix}_telefoneNum" placeholder="00000-0000" maxlength="10" inputmode="numeric" value="${escapeHtml(tel.numero.length>=8 ? formatarNumeroTelefone(tel.numero) : tel.numero)}">
+      </div></div>
+      <div class="field"><label>E-mail do cliente</label><input type="email" id="${prefix}_email" placeholder="cliente@email.com" value="${escapeHtml(c.email||'')}"></div>
+      <div class="field"><label>Data de nascimento</label><input type="date" id="${prefix}_nascimento" value="${c.dataNascimento||''}"></div>
+      <div class="field"><label>CEP</label><input id="${prefix}_cep" placeholder="00000-000" value="${escapeHtml(c.cep||'')}"></div>
+    </div>
+    <div class="grid-2" style="margin-top:10px;">
+      <div class="field"><label>Endereço</label><input id="${prefix}_endereco" placeholder="Rua / Avenida" value="${escapeHtml(c.endereco||'')}"></div>
+      <div class="field"><label>Número</label><input id="${prefix}_numero" placeholder="Nº" value="${escapeHtml(c.numero||'')}"></div>
+      <div class="field"><label>Complemento</label><input id="${prefix}_complemento" placeholder="Apto, bloco…" value="${escapeHtml(c.complemento||'')}"></div>
+      <div class="field"><label>Bairro</label><input id="${prefix}_bairro" placeholder="Bairro" value="${escapeHtml(c.bairro||'')}"></div>
+      <div class="field"><label>Cidade</label><input id="${prefix}_cidade" placeholder="Cidade" value="${escapeHtml(c.cidade||'')}"></div>
+      <div class="field"><label>Estado</label><input id="${prefix}_estado" placeholder="UF" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
+    </div>
+  `;
+}
+
+async function buscarEnderecoPorCep(cep){
+  const cepDigits = onlyDigits(cep);
+  if(cepDigits.length !== 8) return null;
+  // Tenta ViaCEP primeiro, BrasilAPI como fallback
+  const fontes = [
+    async () => {
+      const r = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+      const d = await r.json();
+      if(d.erro) return null;
+      return { endereco: d.logradouro||'', bairro: d.bairro||'', cidade: d.localidade||'', estado: d.uf||'' };
+    },
+    async () => {
+      const r = await fetch(`https://brasilapi.com.br/api/cep/v1/${cepDigits}`);
+      if(!r.ok) return null;
+      const d = await r.json();
+      return { endereco: d.street||'', bairro: d.neighborhood||'', cidade: d.city||'', estado: d.state||'' };
+    }
+  ];
+  for(const fn of fontes){
+    try{ const res = await fn(); if(res) return res; }catch(e){}
+  }
+  return null;
+}
+
+async function buscarCpfReceita(cpf){
+  const digits = onlyDigits(cpf);
+  if(digits.length !== 11) return null;
+  try{
+    const r = await fetch(`https://brasilapi.com.br/api/cpf/v1/${digits}`);
+    if(!r.ok) return null;
+    const d = await r.json();
+    // BrasilAPI retorna { cpf, name, birthday, situation }
+    if(!d || !d.name) return null;
+    return { nome: d.name, situacao: d.situation||'' };
+  }catch(e){ return null; }
+}
+
+function wireClienteFields(prefix, opts){
+  opts = opts || {};
+  wireTelefoneMask(prefix);
+
+  // Auto-fill de endereço ao digitar/sair do CEP
+  const cepInp = document.getElementById(prefix+'_cep');
+  if(cepInp){
+    cepInp.addEventListener('blur', async ()=>{
+      const cepDigits = onlyDigits(cepInp.value);
+      if(cepDigits.length !== 8) return;
+      cepInp.placeholder = '⏳ buscando...';
+      const endereco = await buscarEnderecoPorCep(cepDigits);
+      cepInp.placeholder = '00000-000';
+      if(!endereco){ showToast('CEP não encontrado.'); return; }
+      const f = k => document.getElementById(prefix+'_'+k);
+      if(f('endereco') && !f('endereco').value) f('endereco').value = endereco.endereco;
+      if(f('bairro')   && !f('bairro').value)   f('bairro').value   = endereco.bairro;
+      if(f('cidade')   && !f('cidade').value)    f('cidade').value   = endereco.cidade;
+      if(f('estado')   && !f('estado').value)    f('estado').value   = endereco.estado;
+      const numInp = f('numero'); if(numInp) numInp.focus();
+      showToast('Endereço preenchido — informe o número.');
+    });
+  }
+
+  // Busca no cadastro local pelo CPF e, se não achar, oferece Receita Federal
+  const cpfInp = document.getElementById(prefix+'_cpf');
+  const nomeInp = document.getElementById(prefix+'_cliente');
+  if(cpfInp){
+    cpfInp.addEventListener('blur', async ()=>{
+      const digits = onlyDigits(cpfInp.value);
+      if(digits.length !== 11) return;
+      if(opts.buscarClientePorCpf && Array.isArray(clientes)){
+        const found = clientes.find(c=> onlyDigits(c.cpf||'') === digits);
+        if(found){
+          const map = { cliente:found.nome,telefone:found.telefone,email:found.email,
+            nascimento:found.dataNascimento,cep:found.cep,endereco:found.endereco,
+            numero:found.numero,complemento:found.complemento,bairro:found.bairro,
+            cidade:found.cidade,estado:found.estado };
+          Object.keys(map).forEach(c=>{ const el=document.getElementById(prefix+'_'+c); if(el&&!el.value&&map[c]) el.value=map[c]; });
+          showToast('Cliente já cadastrado — dados preenchidos automaticamente.');
+          return;
+        }
+      }
+      if(nomeInp && nomeInp.value.trim()) return;
+      const res = await buscarCpfReceita(digits);
+      if(res && res.nome && nomeInp){
+        nomeInp.value = res.nome;
+        showToast('Nome preenchido pela Receita Federal — confira.');
+      }
+    });
+  }
+}
+
 function abrirSeletorCliente(onConfirmar, clienteAtual){
   let selecionado = clienteAtual ? { ...clienteAtual } : null;
   openModal(`
@@ -2111,7 +2228,7 @@ function mountObservacoes(container, orderLike, persisted){
         <button type="button" class="btn btn-ghost btn-sm" id="btnCancelObsInner">Cancelar</button>
       </div>
     `;
-    mountFotos(formEl.querySelector('#obsFotoContainer'), obsFotoHolder, persisted && !!editing, false);
+    mountFotosInline(formEl.querySelector('#obsFotoContainer'), obsFotoHolder.fotos || []);
     if(editing && editing.notificarPara.length>0){
       formEl.querySelector('#notifyBoxInner').style.display = 'block';
     }
@@ -2952,9 +3069,7 @@ function renderNovaOrdem(main){
       <!-- PAGAMENTO -->
       <div id="pagamentoContainerNova"></div>
 
-      <!-- FOTOS / ANOTAÇÕES -->
-      <div class="divider-nova"></div>
-      <div id="fotoContainerNova"></div>
+      <!-- ANOTAÇÕES -->
       <div class="divider-nova"></div>
       <div id="obsContainerNova"></div>
 
@@ -3000,9 +3115,6 @@ function renderNovaOrdem(main){
     mountItens(document.getElementById('itensContainerNova'), tempItensHolder,
       ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''));
   } catch(e) { console.error('mountItens OS:', e); }
-
-  const tempFotoHolder = { fotos: [] };
-  mountFotos(document.getElementById('fotoContainerNova'), tempFotoHolder, false, false);
 
   const tempObsHolder = { observacoes: [] };
   mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
@@ -3351,7 +3463,7 @@ function openEditModalOficina(order){
     </div>
   `);
   mountLocalizacao(document.getElementById('localContainerOficina'), order, false);
-  mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
+  mountFotosInline(document.getElementById('fotoContainerEditOficina'), order.fotos || []);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
   document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
@@ -3429,7 +3541,6 @@ function openEditModalCompleto(order, opts){
       <textarea id="e_descricao" style="min-height:70px;">${escapeHtml(order.descricao||'')}</textarea>
     </div>
     <div id="fotoContainerEdit"></div>
-    ${leiturasHtml(order)}
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="printBtnCompleto">🖨️ Imprimir</button>
@@ -3437,7 +3548,7 @@ function openEditModalCompleto(order, opts){
       ${somenteLeitura ? '' : '<button class="btn btn-accent" id="editSave">Salvar alterações</button>'}
     </div>
   `);
-  mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
+  mountFotosInline(document.getElementById('fotoContainerEdit'), order.fotos || []);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   mountPagamentosEdicao(document.getElementById('pagamentoContainerEdit'), order);
   mountLocalizacao(document.getElementById('localContainerEdit'), order, somenteLeitura);
