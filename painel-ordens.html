@@ -994,10 +994,12 @@ async function loadAll(){
   // (dezenas de milhares de linhas) é o que fazia a aba demorar pra abrir — a busca
   // de cliente já não depende dele (busca direto no servidor), então carrega em
   // segundo plano sem travar a abertura.
-  const [ordersR, codesR, orcamentosR, vendasHistR] = await Promise.all([
-    carregarOrdensDoBanco(), storageGet('codes', true), orcamentosGet(), vendasParaHistoricoGet()
+  const [ordersR, codesR, orcamentosR, vendasHistR, produtosR] = await Promise.all([
+    carregarOrdensDoBanco(), storageGet('codes', true), orcamentosGet(), vendasParaHistoricoGet(),
+    gatewayCall({ op:'selectAll', table:'produtos_estoque' }).then(r=>(r&&r.data)||[])
   ]);
   orders = ordersR; codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
+  produtosEstoque = produtosR || [];
   if(!clientes) clientes = [];
   // Clientes NÃO são mais baixados aqui, nem em segundo plano (22 mil+ linhas, ~7,5 MB
   // em 23 viagens a cada abertura). Busca e checagem de duplicidade consultam o servidor.
@@ -2245,6 +2247,329 @@ function openNotifyModal(order){
 /* ============================================================
    NOVA ORDEM
    ============================================================ */
+let produtosEstoque = [];
+
+function mountItens(container, holder, getLojaId){
+  if(!holder.itens) holder.itens = [];
+  getLojaId = getLojaId || (()=>'');
+
+  function totalItens(){ return holder.itens.reduce((acc,it)=> acc + (Number(it.quantidade)||0) * (Number(it.valorUnitario)||0), 0); }
+
+  /** Recalcula valorUnitario a partir do preço original + desconto/acréscimo (se algum
+   * ajuste estiver configurado). Se não houver ajuste, não mexe no que já está lá — a
+   * pessoa ainda pode digitar o valor unitário na mão, direto. */
+  /* Recalcula o valor final após um ajuste de desconto/acréscimo via botões.
+   Atualiza o campo de valor e o span de total inline sem redesenhar a linha. */
+function recalcularAjusteNovo(it, idx, row){
+  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ return; }
+  const base = Number(it.precoOriginal)||0;
+  if(!base) return;
+  const qtd = Number(it.ajusteQtd)||0;
+  const delta = it.ajusteModo==='percentual' ? base*qtd/100 : qtd;
+  it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
+  const inpVal=row ? row.querySelector('[data-itfield="valorUnitario"]') : null;
+  if(inpVal) inpVal.value=Number(it.valorUnitario).toFixed(2);
+  const span=document.getElementById('descTotal_'+idx);
+  if(span) span.textContent='= R$ '+Number(it.valorUnitario).toFixed(2);
+  updateTotalHint();
+}
+function recalcularValorAjustado(it){
+    if(it.ajusteTipo==='desconto' || it.ajusteTipo==='acrescimo'){
+      const base = Number(it.precoOriginal)||0;
+      const qtdAjuste = Number(it.ajusteQtd)||0;
+      const delta = it.ajusteModo==='percentual' ? base*qtdAjuste/100 : qtdAjuste;
+      it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
+    }
+  }
+  function outrasLojasComEstoque(produto, lojaAtualId){
+    const porLoja = (produto && produto.estoquePorLoja) || {};
+    return (config.lojas||[]).filter(l=> l.id!==lojaAtualId && (Number(porLoja[l.id])||0) > 0)
+      .map(l=> `${l.abreviacao} (${Number(porLoja[l.id])||0})`);
+  }
+
+  function draw(){
+    container.innerHTML = `
+      <div class="section-label">Itens vendidos</div>
+      <div id="itensRows"></div>
+      <div class="muted" id="itensTotalHint" style="margin-top:8px;"></div>
+    `;
+    drawRows();
+  }
+  function drawRows(){
+    const wrap = container.querySelector('#itensRows');
+    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
+    const lojaAtual = getLojaId();
+    if(vendaveis.length===0){
+      wrap.innerHTML = `<div class="empty" style="padding:16px;">Nenhum produto cadastrado ainda — cadastre em <b>Cadastro → Produtos</b> antes de lançar uma venda.</div>`;
+      return;
+    }
+    let __html='';
+    holder.itens.forEach((it,i)=>{
+      if(it._modo==='ok'){
+        const temObs=!!(it.observacaoItem||'').trim();
+        const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
+          ?` (${it.ajusteTipo==='desconto'?'−':'+'}${it.ajustePerc?it.ajustePerc+'%':('R$ '+it.ajusteValR)})`:'';
+        __html+=`<div class="venda-item-compact" data-idx="${i}">
+          <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?'R$ '+Number(it.valorUnitario).toFixed(2):''}${escapeHtml(descInfo)}</span>
+          <div class="venda-compact-icones">
+            ${temObs?`<button class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="${escapeHtml(it.observacaoItem)}">💬</button>`:''}
+            <button class="venda-compact-btn" data-iteditar="${i}" title="Editar">✏️</button>
+            <button class="venda-compact-btn" data-itdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
+          </div>
+        </div>
+        <div class="venda-compact-obs" id="vendaObs_${i}">${temObs?escapeHtml(it.observacaoItem):''}</div>`;
+      } else {
+        const produtoAtual=it.produtoEstoqueId?vendaveis.find(p=>p.id===it.produtoEstoqueId):null;
+        const estoqueAqui=produtoAtual?(Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0):null;
+        const outras=produtoAtual?outrasLojasComEstoque(produtoAtual,lojaAtual):[];
+        __html+=`<div class="item-row" data-idx="${i}">
+          <div class="item-row-topo">
+            <div class="prod-ac-wrap item-row-produto" id="pacWrap_${i}">
+              ${produtoAtual
+                ?`<div class="prod-ac-sel">
+                     <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
+                     ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>`:''}
+                     <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
+                   </div>`
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Nome, código, tipo, fornecedor ou bipe o código de barras..." autocomplete="off" spellcheck="false" data-pac="${i}">
+                   <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
+            </div>
+            <div class="item-row-valor">
+              <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00"
+                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+            </div>
+            <div class="item-row-desc">
+              <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}">Desc.</button>
+              <button type="button" class="btn-ajuste ${it.ajusteTipo==='acrescimo'?'ativo-acr':''}" data-aidbtn="acrescimo" data-idx2="${i}">Acrés.</button>
+              <input type="number" min="0" step="0.01" class="campo-perc" data-itfield="ajustePerc" placeholder="%" title="Percentual"
+                value="${it.ajustePerc!==undefined&&it.ajustePerc!==''?it.ajustePerc:''}">
+              <span class="desc-sep">ou</span>
+              <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
+                value="${it.ajusteValR!==undefined&&it.ajusteValR!==''?it.ajusteValR:''}">
+              <span class="desc-total" id="descTotal_${i}">${(()=>{
+                if(it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null) return '= R$ '+Number(it.valorUnitario).toFixed(2);
+                return '';
+              })()}</span>
+            </div>
+            <button type="button" class="btn-add-item" data-itadd="${i}" title="Confirmar este item e adicionar outro">Adicionar</button>
+            <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
+          </div>
+          ${produtoAtual?`
+          <div class="item-row-estoque">
+            <span class="muted" style="font-size:12px;">📦 <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} nesta loja</span>
+            ${outras.length>0?`<span class="muted" style="font-size:12px;">· também tem em: ${outras.join(', ')}</span>`:`<span class="muted" style="font-size:12px;">· sem estoque em outras lojas</span>`}
+          </div>
+          ${estoqueAqui<=0&&outras.length>0?`
+          <div style="margin-top:6px;padding:8px 10px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:12.5px;color:var(--wait,#b45309);font-weight:600;">
+            ⚠️ Sem estoque nesta loja, mas <b>tem em ${outras.join(', ')}</b>.
+            <div style="font-weight:500;margin-top:3px;">A peça é de outro CNPJ — verifique com a gerência a baixa de estoque correta.</div>
+          </div>`:''}
+          `:''}
+          <div class="item-row-obs">
+            <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)"
+              value="${escapeHtml(it.observacaoItem||'')}">
+          </div>
+        </div>`;
+      }
+    });
+    wrap.innerHTML=__html;
+
+    // ── Autocomplete de produto ──
+    wrap.querySelectorAll('[data-pac]').forEach(inp=>{
+      const i = Number(inp.dataset.pac);
+      const drop = document.getElementById('pacDrop_'+i);
+      let pacTimer=null, pacFocus=-1, pacAchados=[];
+      function fecharDrop(){ drop.style.display='none'; pacFocus=-1; }
+      function renderDrop(lista){
+        pacAchados=lista;
+        if(!lista.length){ drop.innerHTML='<div class="prod-ac-item" style="color:var(--ink-faint);">Nenhum produto encontrado.</div>'; drop.style.display='block'; return; }
+        drop.innerHTML=lista.map((p,k)=>`<div class="prod-ac-item" data-pk="${k}"><b>${escapeHtml(p.nome)}</b><span>${[p.codigo?'Cód. '+p.codigo:null,p.fator!=null&&p.fator!==''?'Fator '+p.fator:null,p.tipo||null,p.fornecedor||null,p.precoVenda!=null?'R$ '+Number(p.precoVenda).toFixed(2):null].filter(Boolean).join(' · ')}</span></div>`).join('');
+        drop.style.display='block';
+        drop.querySelectorAll('.prod-ac-item[data-pk]').forEach(el=>{
+          el.addEventListener('mouseover',()=>{ pacFocus=Number(el.dataset.pk); drop.querySelectorAll('.prod-ac-item').forEach((e,k)=>e.classList.toggle('pf',k===pacFocus)); });
+          el.addEventListener('mousedown',e=>{ e.preventDefault(); selecionarProduto(i,pacAchados[Number(el.dataset.pk)]); });
+        });
+      }
+      inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
+        const t=inp.value.toLowerCase().trim();
+        if(!t){ fecharDrop(); return; }
+        const codigoExato=/^\d{6,}$/.test(inp.value.trim());
+        if(codigoExato){
+          const porCod=vendaveis.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
+          if(porCod){ selecionarProduto(i,porCod); fecharDrop(); return; }
+        }
+        renderDrop(vendaveis.filter(p=>{
+          const campos=[p.nome,p.codigo,p.codigoBarras,String(p.fator||''),p.tipo,p.fornecedor];
+          return campos.some(c=>c&&String(c).toLowerCase().includes(t));
+        }).slice(0,15));
+      },120); });
+      inp.addEventListener('keydown',e=>{
+        const items=drop.querySelectorAll('.prod-ac-item[data-pk]');
+        if(!items.length) return;
+        if(e.key==='ArrowDown'){ e.preventDefault(); pacFocus=Math.min(pacFocus+1,items.length-1); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
+        else if(e.key==='ArrowUp'){ e.preventDefault(); pacFocus=Math.max(pacFocus-1,0); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
+        else if(e.key==='Enter'){ e.preventDefault();
+          if(pacFocus>=0) selecionarProduto(i,pacAchados[pacFocus]);
+          else if(pacAchados.length===1) selecionarProduto(i,pacAchados[0]);
+        }
+        else if(e.key==='Escape'){ fecharDrop(); }
+      });
+      inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
+      inp.focus();
+    });
+    // ＋ confirma → compacto + nova linha vazia
+    wrap.querySelectorAll('[data-itadd]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.itadd);
+        const it=holder.itens[idx];
+        if(!it.produtoEstoqueId&&!it.valorUnitario) return;
+        it._modo='ok';
+        holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
+        drawRows(); updateTotalHint();
+      });
+    });
+    // ✏️ volta ao modo editar
+    wrap.querySelectorAll('[data-iteditar]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        holder.itens[Number(btn.dataset.iteditar)]._modo='editar';
+        drawRows(); updateTotalHint();
+      });
+    });
+    // 💬 toggle obs
+    wrap.querySelectorAll('[data-itobstoggle]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const box=document.getElementById('vendaObs_'+btn.dataset.itobstoggle);
+        if(box) box.style.display=box.style.display==='block'?'none':'block';
+      });
+    });
+
+    // Botão × limpa produto
+    wrap.querySelectorAll('[data-paclear]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const i=Number(btn.dataset.paclear);
+        const it=holder.itens[i];
+        it.produtoEstoqueId=''; it.produto=''; it.precoOriginal=''; it.valorUnitario=''; it.ajusteTipo='nenhum'; it.ajusteQtd='';
+        drawRows(); updateTotalHint();
+      });
+    });
+
+    // ── Botões Desconto / Acréscimo ──
+    wrap.querySelectorAll('[data-aidbtn]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.idx2);
+        const it=holder.itens[idx];
+        const tipo=btn.dataset.aidbtn;
+        // toggle: clicar no mesmo botão ativo desativa
+        it.ajusteTipo = it.ajusteTipo===tipo ? 'nenhum' : tipo;
+        // atualiza aparência dos botões sem redesenhar a linha inteira
+        const row=wrap.querySelector('[data-idx="'+idx+'"]');
+        row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+          b.classList.remove('ativo-desc','ativo-acr');
+          if(it.ajusteTipo==='desconto'&&b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+          if(it.ajusteTipo==='acrescimo'&&b.dataset.aidbtn==='acrescimo') b.classList.add('ativo-acr');
+        });
+        if(it.ajusteTipo==='nenhum'){
+          it.ajustePerc=''; it.ajusteValR='';
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          // restaura valor original
+          if(it.precoOriginal!==''&&it.precoOriginal!=null){
+            it.valorUnitario=it.precoOriginal;
+            const inpVal=row.querySelector('[data-itfield="valorUnitario"]');
+            if(inpVal) inpVal.value=Number(it.precoOriginal).toFixed(2);
+          }
+          updateTotalHint();
+        } else {
+          recalcularAjusteNovo(it, idx, row);
+        }
+      });
+    });
+
+    // ── Campos de valor e desconto ──
+    wrap.querySelectorAll('[data-itfield]').forEach(el=>{
+      el.addEventListener('input',()=>{
+        const row=el.closest('[data-idx]');
+        const idx=Number(row.dataset.idx);
+        const field=el.dataset.itfield;
+        const it=holder.itens[idx];
+
+        if(field==='valorUnitario'){
+          it.valorUnitario=el.value===''?'':parseFloat(el.value);
+          it.precoOriginal=it.valorUnitario;
+          // limpa desconto ao editar valor manualmente
+          it.ajustePerc=''; it.ajusteValR=''; it.ajusteTipo='nenhum';
+          row.querySelectorAll('[data-aidbtn]').forEach(b=>b.classList.remove('ativo-desc','ativo-acr'));
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          updateTotalHint(); return;
+        }
+        if(field==='ajustePerc'){
+          it.ajustePerc=el.value===''?'':parseFloat(el.value);
+          it.ajusteValR='';
+          it.ajusteModo='percentual'; it.ajusteQtd=it.ajustePerc;
+          // Se não clicou em nenhum botão, ativa desconto automaticamente ao digitar
+          if(it.ajusteTipo==='nenhum' && it.ajustePerc!==''){
+            it.ajusteTipo='desconto';
+            row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+              b.classList.remove('ativo-desc','ativo-acr');
+              if(b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+            });
+          }
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          recalcularAjusteNovo(it, idx, row); return;
+        }
+        if(field==='ajusteValR'){
+          it.ajusteValR=el.value===''?'':parseFloat(el.value);
+          it.ajustePerc='';
+          it.ajusteModo='valor'; it.ajusteQtd=it.ajusteValR;
+          // Se não clicou em nenhum botão, ativa desconto automaticamente ao digitar
+          if(it.ajusteTipo==='nenhum' && it.ajusteValR!==''){
+            it.ajusteTipo='desconto';
+            row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+              b.classList.remove('ativo-desc','ativo-acr');
+              if(b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+            });
+          }
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          recalcularAjusteNovo(it, idx, row); return;
+        }
+        if(field==='observacaoItem'){ it.observacaoItem=el.value; return; }
+        it[field]=el.value; updateTotalHint();
+      });
+    });
+    wrap.querySelectorAll('[data-itdel]').forEach(b=>{
+      b.addEventListener('click',()=>{ holder.itens.splice(Number(b.dataset.itdel),1); drawRows(); updateTotalHint(); });
+    });
+    updateTotalHint();
+  }
+
+  // Seleciona produto pelo autocomplete
+  function selecionarProduto(idx, produto){
+    const it=holder.itens[idx];
+    it.produtoEstoqueId=produto.id; it.produto=produto.nome;
+    it.precoOriginal=produto.precoVenda!=null?produto.precoVenda:'';
+    if(it.valorUnitario===''||it.valorUnitario==null) it.valorUnitario=it.precoOriginal||'';
+    drawRows();
+    // Foca no campo de valor após selecionar produto
+    setTimeout(()=>{
+      const row=container.querySelector('[data-idx="'+idx+'"]');
+      if(row){ const v=row.querySelector('[data-itfield="valorUnitario"]'); if(v) v.focus(); }
+    },50);
+    updateTotalHint();
+  }
+  function updateTotalHint(){
+    const hint = container.querySelector('#itensTotalHint');
+    if(hint) hint.innerHTML = `Total dos itens: <b>R$ ${totalItens().toFixed(2)}</b> <span class="muted">(você pode ajustar o valor total do pagamento manualmente se houver desconto/acréscimo)</span>`;
+    // Avisa o bloco de pagamento para recalcular o total
+    if(typeof window.__pagRedraw==='function') window.__pagRedraw();
+  }
+  draw();
+  return { totalItens, refreshEstoque: drawRows };
+}
+
 function renderNovaOrdem(main){
   main.innerHTML = `
     <div class="page-head">
@@ -2255,12 +2580,15 @@ function renderNovaOrdem(main){
       </div>
     </div>
     <div class="ticket">
+      <!-- CLIENTE -->
       <div class="section-label">Cliente</div>
       <div class="field"><div id="f_clienteAcWrap"></div></div>
       <input type="hidden" id="f_cliente"><input type="hidden" id="f_telefone"><input type="hidden" id="f_email">
       <input type="hidden" id="f_cpf"><input type="hidden" id="f_nascimento"><input type="hidden" id="f_cep">
       <input type="hidden" id="f_endereco"><input type="hidden" id="f_numero"><input type="hidden" id="f_complemento">
       <input type="hidden" id="f_bairro"><input type="hidden" id="f_cidade"><input type="hidden" id="f_estado">
+
+      <!-- ORDEM -->
       <div class="divider-nova"></div>
       <div class="section-label">Ordem</div>
       <div class="grid-2">
@@ -2272,10 +2600,6 @@ function renderNovaOrdem(main){
         </div>
         <div class="field"><label>Número da via</label><input id="f_via" placeholder="Gerado automaticamente" readonly></div>
         <div class="field"><label>Nome da vendedora</label><select id="f_vendedora">${funcionarioOptionsHtml('vendedora', currentUser.nivel==='vendedora'?currentUser.nome:'')}</select></div>
-        <div class="field">
-          <label>Tipo de serviço</label>
-          <select id="f_servico"><option value="">Selecione</option>${servicoOptionsHtml('')}</select>
-        </div>
         <div class="field"><label>Data de agendamento</label><input type="date" id="f_data" min="${todayStr()}"></div>
       </div>
       <div id="slotBanner"></div>
@@ -2285,16 +2609,36 @@ function renderNovaOrdem(main){
           <input id="f_codigo" placeholder="Digite o código fornecido pela oficina/diretoria" style="text-transform:uppercase;">
         </div>
       </div>
-      <div id="pagamentoContainerNova"></div>
+
+      <!-- ITENS VENDIDOS -->
       <div class="divider-nova"></div>
-      <div class="field" style="margin-top:0;">
-        <label>Descrição do serviço <span class="muted">(o cliente vê isso na página de acompanhamento)</span></label>
-        <textarea id="f_descricao" placeholder="Ex: Troca de lente, ajuste de armação..." style="min-height:70px;"></textarea>
+      <div class="section-label">Itens vendidos</div>
+      <div id="itensContainerNova"></div>
+
+      <!-- OBSERVAÇÃO GERAL -->
+      <div class="divider-nova"></div>
+      <div class="obs-geral-box">
+        <div class="section-label" style="margin-top:0;">Observações</div>
+        <div class="field" style="margin-top:6px;">
+          <label>Descrição do serviço <span class="muted">(o cliente vê isso na página de acompanhamento)</span></label>
+          <textarea id="f_descricao" placeholder="Ex: troca de pedra, ajuste de aro..." style="min-height:60px;"></textarea>
+        </div>
+        <div class="field">
+          <label>Observação geral da ordem</label>
+          <textarea id="f_obsGeral" placeholder="Observação geral (aparece na via impressa)..." style="min-height:60px;"></textarea>
+        </div>
       </div>
+
+      <!-- PAGAMENTO -->
+      <div id="pagamentoContainerNova"></div>
+
+      <!-- FOTOS / ANOTAÇÕES -->
       <div class="divider-nova"></div>
       <div id="fotoContainerNova"></div>
       <div class="divider-nova"></div>
       <div id="obsContainerNova"></div>
+
+      <!-- INFO INTERNA -->
       <div class="info-interna-box" id="osInfoInternaBox" style="display:none;margin-top:10px;">
         <div class="info-interna-badge">🔒 Informação interna — visível só para usuários do sistema</div>
         <textarea id="f_infoInterna" placeholder="Anotações internas (não aparece para o cliente)..."></textarea>
@@ -2311,13 +2655,22 @@ function renderNovaOrdem(main){
   const linkVoltar = document.getElementById('linkVoltarPainel');
   if(linkVoltar) linkVoltar.addEventListener('click', (e)=>{ e.preventDefault(); modoNovaOrdem = false; currentTab = 'painel'; renderTabs(); renderView(); });
 
+  // Itens vendidos (igual ao Vendas)
+  const tempItensHolder = { itens: [{ id: uid('it'), produto:'', metal:'', quantidade:1,
+    valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum',
+    ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'',
+    observacaoItem:'', _modo:'editar' }] };
+  window.__itensHolder = tempItensHolder;
+  const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder,
+    ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''));
+
   const tempFotoHolder = { fotos: [] };
   mountFotos(document.getElementById('fotoContainerNova'), tempFotoHolder, false, false);
 
   const tempObsHolder = { observacoes: [] };
   mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
 
-  const tempPagHolder = { valorTotal: null, pagamentos: [] };
+  const tempPagHolder = { valorTotal: null, pagamentos: [], momentoPagamento: '', emissaoNota: '' };
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
 
   // Autocomplete inline de cliente
@@ -2344,7 +2697,7 @@ function renderNovaOrdem(main){
     btn.textContent=vis?'🔒 + Adicionar informação interna':'🔒 − Ocultar informação interna';
     if(!vis) document.getElementById('f_infoInterna').focus();
   });
-  const servicoSel = document.getElementById('f_servico');
+  // Tipo de serviço removido — usar itens com produto
   const dataInp = document.getElementById('f_data');
   const lojaSel = document.getElementById('f_loja');
   const viaInp = document.getElementById('f_via');
