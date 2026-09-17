@@ -542,6 +542,26 @@
 .item-row-desc .campo-perc,.item-row-desc .campo-val{width:72px;padding:6px 7px;border:1px solid var(--line);border-radius:8px;font-size:12.5px;height:34px;box-sizing:border-box;background:var(--surface);color:var(--ink);}
 .item-row-desc .campo-perc,.item-row-desc .campo-val{width:72px;padding:6px 7px;border:1px solid var(--line);border-radius:8px;font-size:12.5px;height:34px;box-sizing:border-box;background:var(--surface);color:var(--ink);}
 .item-row-desc .campo-perc:focus,.item-row-desc .campo-val:focus{border-color:var(--accent,#662344);outline:none;}
+.item-row-desc{display:flex; gap:5px; align-items:center; flex-shrink:0; flex-wrap:wrap;}
+.btn-ajuste{padding:5px 9px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--surface);color:var(--ink-soft);height:34px;white-space:nowrap;transition:background .12s,color .12s,border-color .12s;}
+.btn-ajuste.ativo-desc{background:#fbeaea;color:#b91c1c;border-color:#b91c1c;}
+.btn-ajuste.ativo-acr{background:#e3f5ea;color:#17794a;border-color:#17794a;}
+.item-row-desc .campo-perc,.item-row-desc .campo-val{width:72px;padding:6px 7px;border:1px solid var(--line);border-radius:8px;font-size:12.5px;height:34px;box-sizing:border-box;background:var(--surface);color:var(--ink);}
+.item-row-desc .campo-perc:focus,.item-row-desc .campo-val:focus{border-color:var(--accent,#662344);outline:none;}
+.item-row-desc .desc-sep{font-size:11px;color:var(--ink-faint);font-weight:700;}
+.item-row-desc .desc-total{font-size:12.5px; font-weight:700; color:var(--ok,#17794a); white-space:nowrap; min-width:70px;}
+.prod-ac-fator-inline{font-size:11.5px;color:var(--ok,#17794a);margin-left:6px;white-space:nowrap;flex-shrink:0;}
+.item-row-obs{margin-top:6px;}
+.btn-add-item{padding:5px 11px;border:1px solid var(--accent,#662344);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--accent,#662344);color:#fff;height:34px;white-space:nowrap;flex-shrink:0;}
+.btn-add-item:hover{opacity:.88;}
+.venda-item-compact{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;background:var(--surface);font-size:13px;}
+.venda-compact-nome{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.venda-compact-val{font-size:13px;font-weight:700;color:var(--accent,#662344);flex-shrink:0;}
+.venda-compact-obs{font-size:12px;color:var(--ink-faint);margin-top:3px;padding:4px 8px;background:var(--surface-2);border-radius:6px;display:none;}
+.venda-compact-icones{display:flex;gap:4px;flex-shrink:0;}
+.venda-compact-btn{background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px;color:var(--ink-faint);border-radius:6px;line-height:1;}
+.venda-compact-btn:hover{background:var(--surface-2);color:var(--ink);}
+.venda-compact-btn.tem-obs{color:var(--accent,#662344);}
 </style>
 </head>
 <body>
@@ -2249,6 +2269,54 @@ function openNotifyModal(order){
    ============================================================ */
 let produtosEstoque = [];
 
+function unidadeEstoqueLabel(u){ return u==='g' ? 'g' : u==='kg' ? 'kg' : 'un'; }
+
+/**
+ * Planeja o consumo de `quantidadeNecessaria` unidades do produto `produtoId`,
+ * explodindo pela composição (receita) em cascata quando falta estoque em
+ * qualquer nível — ex: falta o produto pronto -> usa o insumo secundário ->
+ * se também faltar, usa os insumos primários que compõem o secundário.
+ * `reservas` acumula quanto de cada produto já foi planejado consumir nesta
+ * venda (pra não contar duas vezes o mesmo estoque entre itens diferentes).
+ * Retorna { ok, faltando:[{produtoId, nome, quantidade}] }.
+ */
+/**
+ * Planeja o consumo de `quantidadeNecessaria` unidades do produto `produtoId`, NA
+ * LOJA `lojaId` (estoque agora é por loja, não mais um número global), explodindo
+ * pela composição (receita) em cascata quando falta estoque em qualquer nível —
+ * ex: falta o produto pronto -> usa o insumo secundário -> se também faltar, usa
+ * os insumos primários que compõem o secundário (sempre dentro da mesma loja).
+ * `reservas` acumula quanto de cada produto já foi planejado consumir nesta
+ * venda (pra não contar duas vezes o mesmo estoque entre itens diferentes).
+ * Retorna { ok, faltando:[{produtoId, nome, quantidade}] }.
+ */
+function planejarConsumoEstoque(produtoId, quantidadeNecessaria, reservas, lojaId){
+  const produto = produtosEstoque.find(p=>p.id===produtoId);
+  if(!produto) return { ok:false, faltando:[{ produtoId, nome:'(produto não encontrado)', quantidade:quantidadeNecessaria }] };
+
+  const estoqueNaLoja = Number((produto.estoquePorLoja||{})[lojaId]) || 0;
+  const jaReservado = reservas[produtoId] || 0;
+  const disponivel = Math.max(0, estoqueNaLoja - jaReservado);
+  const usarDoProprio = Math.min(disponivel, quantidadeNecessaria);
+  if(usarDoProprio > 0) reservas[produtoId] = jaReservado + usarDoProprio;
+
+  const faltaAinda = quantidadeNecessaria - usarDoProprio;
+  if(faltaAinda <= 1e-9) return { ok:true, faltando:[] };
+
+  if(!produto.composicao || produto.composicao.length===0){
+    return { ok:false, faltando:[{ produtoId, nome:produto.nome, quantidade:faltaAinda }] };
+  }
+
+  let tudoOk = true;
+  const faltandoTotal = [];
+  produto.composicao.forEach(comp=>{
+    const qtdComponente = (Number(comp.quantidade)||0) * faltaAinda;
+    const resultado = planejarConsumoEstoque(comp.insumoId, qtdComponente, reservas, lojaId);
+    if(!resultado.ok){ tudoOk = false; faltandoTotal.push(...resultado.faltando); }
+  });
+  return { ok: tudoOk, faltando: faltandoTotal };
+}
+
 function mountItens(container, holder, getLojaId){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -2612,7 +2680,6 @@ function renderNovaOrdem(main){
 
       <!-- ITENS VENDIDOS -->
       <div class="divider-nova"></div>
-      <div class="section-label">Itens vendidos</div>
       <div id="itensContainerNova"></div>
 
       <!-- OBSERVAÇÃO GERAL -->
@@ -2655,25 +2722,7 @@ function renderNovaOrdem(main){
   const linkVoltar = document.getElementById('linkVoltarPainel');
   if(linkVoltar) linkVoltar.addEventListener('click', (e)=>{ e.preventDefault(); modoNovaOrdem = false; currentTab = 'painel'; renderTabs(); renderView(); });
 
-  // Itens vendidos (igual ao Vendas)
-  const tempItensHolder = { itens: [{ id: uid('it'), produto:'', metal:'', quantidade:1,
-    valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum',
-    ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'',
-    observacaoItem:'', _modo:'editar' }] };
-  window.__itensHolder = tempItensHolder;
-  const itensApi = mountItens(document.getElementById('itensContainerNova'), tempItensHolder,
-    ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''));
-
-  const tempFotoHolder = { fotos: [] };
-  mountFotos(document.getElementById('fotoContainerNova'), tempFotoHolder, false, false);
-
-  const tempObsHolder = { observacoes: [] };
-  mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
-
-  const tempPagHolder = { valorTotal: null, pagamentos: [], momentoPagamento: '', emissaoNota: '' };
-  mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
-
-  // Autocomplete inline de cliente
+  // ── CLIENTE (sempre primeiro — não pode falhar) ──
   montarClienteAutocomplete(
     document.getElementById('f_clienteAcWrap'),
     (clienteFinal)=>{
@@ -2687,6 +2736,26 @@ function renderNovaOrdem(main){
       if(clienteFinal) mostrarOrcamentosAbertosModal(clienteFinal);
     }
   );
+
+  // ── ITENS, FOTOS, OBS, PAGAMENTO ──
+  const tempItensHolder = { itens: [{ id: uid('it'), produto:'', metal:'', quantidade:1,
+    valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum',
+    ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'',
+    observacaoItem:'', _modo:'editar' }] };
+  window.__itensHolder = tempItensHolder;
+  try {
+    mountItens(document.getElementById('itensContainerNova'), tempItensHolder,
+      ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''));
+  } catch(e) { console.error('mountItens OS:', e); }
+
+  const tempFotoHolder = { fotos: [] };
+  mountFotos(document.getElementById('fotoContainerNova'), tempFotoHolder, false, false);
+
+  const tempObsHolder = { observacoes: [] };
+  mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
+
+  const tempPagHolder = { valorTotal: null, pagamentos: [], momentoPagamento: '', emissaoNota: '' };
+  mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
 
   // Toggle info interna
   document.getElementById('btnToggleInfoInternaOS').addEventListener('click',()=>{
