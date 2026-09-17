@@ -1231,6 +1231,187 @@ function renderResultados(termo){
 }
 
 /* ============================================================
+   TELA DE NOVO / EDITAR ORÇAMENTO
+   ============================================================ */
+function renderNovo(main){
+  const editando = !!orcamentoEmEdicao;
+  const orcamentoEditando = orcamentoEmEdicao;
+  const validadePadrao = new Date(); validadePadrao.setDate(validadePadrao.getDate()+15);
+  const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
+
+  // Itens: começa do orçamento em edição, ou vazio com uma linha aberta
+  let itens = editando
+    ? (orcamentoEditando.itens||[]).map(it=>({...it, _modo:'ok'}))
+    : [{ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[], _modo:'editar' }];
+  if(itens.length===0 || itens.every(it=>it._modo==='ok'))
+    itens.unshift({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[], _modo:'editar' });
+
+  let ajusteTotal = editando
+    ? (orcamentoEditando.ajusteTotal||{tipo:'nenhum',modo:'percentual',percVal:'',rVal:''})
+    : {tipo:'nenhum',modo:'percentual',percVal:'',rVal:''};
+
+  main.innerHTML = `
+    <div class="page-head">
+      <h1 class="page-title">${editando ? 'Editar orçamento' : 'Novo orçamento'}</h1>
+      <p class="page-sub">Registre os itens e o valor estimado para o cliente.</p>
+    </div>
+    <div class="card">
+      <div class="section-label">Cliente</div>
+      <div id="o_clienteAcWrap"></div>
+      <input type="hidden" id="o_cliente" value="${escapeHtml(editando?orcamentoEditando.cliente:'')}" >
+      <input type="hidden" id="o_telefone" value="${escapeHtml(editando?orcamentoEditando.telefone:'')}" >
+      <input type="hidden" id="o_email"    value="${escapeHtml(editando?orcamentoEditando.email:'')}" >
+
+      <div class="grid-3" style="margin-top:14px;">
+        <div class="field"><label>Loja</label>
+          <select id="o_loja"><option value="">Selecione</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${(editando?orcamentoEditando.lojaId:lojaAtiva)===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Vendedora</label>
+          <select id="o_vendedora"><option value="">Selecione</option>${(config.funcionarios||[]).filter(f=>(f.cargos||[]).some(c=>['vendedora','gerente'].includes(c))||f.nivel==='gerente'||f.nivel==='diretoria').map(f=>`<option value="${escapeHtml(nomeExibicaoFuncionario(f))}" ${(editando?orcamentoEditando.vendedora:'')===nomeExibicaoFuncionario(f)?'selected':''}>${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>Validade</label>
+          <input type="date" id="o_validade" value="${editando?orcamentoEditando.validade:validadePadrao.toISOString().slice(0,10)}">
+        </div>
+      </div>
+      <div class="field">
+        <label>Data do orçamento</label>
+        <input type="date" id="o_data" value="${editando?orcamentoEditando.data:todayStr()}">
+      </div>
+
+      <div class="section-label" style="margin-top:14px;">Itens do orçamento</div>
+      <div id="itensRows"></div>
+
+      <div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;">
+        <div id="totalHint" style="font-size:13px;font-weight:700;color:var(--ink);"></div>
+      </div>
+
+      <div class="field" style="margin-top:14px;">
+        <label>Observações</label>
+        <textarea id="o_obs" rows="2" placeholder="Observações visíveis no orçamento...">${escapeHtml(editando?orcamentoEditando.observacoes:'')}</textarea>
+      </div>
+      <div class="field">
+        <label>Informação interna <span class="muted">(não aparece no orçamento do cliente)</span></label>
+        <textarea id="o_infoInterna" rows="2" placeholder="Notas internas...">${escapeHtml(editando?orcamentoEditando.infoInterna:'')}</textarea>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
+        <button class="btn btn-accent" id="btnSalvarOrcamento">${editando ? 'Salvar alterações' : 'Salvar orçamento'}</button>
+        <button class="btn btn-ghost" id="btnCancelarNovo">Cancelar</button>
+      </div>
+    </div>
+  `;
+
+  // Autocomplete de cliente
+  const clienteInicial = editando ? {nome:orcamentoEditando.cliente,telefone:orcamentoEditando.telefone,email:orcamentoEditando.email} : null;
+  const acCliente = montarClienteAutocomplete(
+    document.getElementById('o_clienteAcWrap'),
+    (c)=>{
+      if(c){ document.getElementById('o_cliente').value=c.nome||''; document.getElementById('o_telefone').value=c.telefone||''; document.getElementById('o_email').value=c.email||''; }
+      else { document.getElementById('o_cliente').value=''; document.getElementById('o_telefone').value=''; document.getElementById('o_email').value=''; }
+    },
+    clienteInicial
+  );
+
+  document.getElementById('btnCancelarNovo').addEventListener('click', ()=>{ orcamentoEmEdicao=null; currentTab='lista'; renderTabs(); renderView(); });
+
+  // Itens: reutiliza drawItens e updateTotal definidos em mountItens inline
+  function drawItens(){
+    const wrap = document.getElementById('itensRows');
+    if(!wrap) return;
+    let html='';
+    itens.forEach((it,i)=>{
+      if(it._modo==='ok'){
+        const temObs=!!(it.observacaoItem||'').trim();
+        const nFotos=(it.fotos||[]).length;
+        html+=`<div class="orc-item-compact" data-orcidx="${i}">
+          <span class="orc-compact-nome">${escapeHtml(it.produto||'Item')}</span>
+          <span class="orc-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(Number(it.valorUnitario)):''}</span>
+          ${nFotos?`<span style="font-size:12px;color:var(--ink-faint);">📷${nFotos}</span>`:''}
+          <div class="orc-compact-icones">
+            <button class="orc-compact-btn" data-orceditar="${i}" title="Editar item">✏️</button>
+            <button class="orc-compact-btn" data-orcitdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
+          </div>
+        </div>
+        ${temObs?`<div class="orc-compact-obs">${escapeHtml(it.observacaoItem)}</div>`:''}`;
+      } else {
+        html+=`<div class="orc-item-row" data-orcidx="${i}">
+          <div class="orc-item-topo">
+            <input class="orc-prod-input" placeholder="Produto / serviço..." data-orcprod="${i}" value="${escapeHtml(it.produto||'')}">
+            <div class="orc-item-valor"><input type="number" min="0" step="0.01" placeholder="Valor" data-ival="${i}" value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}"></div>
+            <button type="button" class="orc-item-add" data-orcadd="${i}" title="Confirmar">＋</button>
+            <button type="button" class="icon-btn" data-orcitdel="${i}">✕</button>
+          </div>
+          <div class="orc-item-obs"><input type="text" placeholder="Observação do item (opcional)" data-iobs="${i}" value="${escapeHtml(it.observacaoItem||'')}"></div>
+        </div>`;
+      }
+    });
+    wrap.innerHTML=html;
+    wrap.querySelectorAll('[data-orcprod]').forEach(inp=>{ inp.addEventListener('input',()=>{ itens[Number(inp.dataset.orcprod)].produto=inp.value; }); });
+    wrap.querySelectorAll('[data-ival]').forEach(inp=>{ inp.addEventListener('input',()=>{ itens[Number(inp.dataset.ival)].valorUnitario=inp.value===''?'':parseFloat(inp.value); updateTotal(); }); });
+    wrap.querySelectorAll('[data-iobs]').forEach(inp=>{ inp.addEventListener('input',()=>{ itens[Number(inp.dataset.iobs)].observacaoItem=inp.value; }); });
+    wrap.querySelectorAll('[data-orcadd]').forEach(btn=>{ btn.addEventListener('click',()=>{
+      const i=Number(btn.dataset.orcadd);
+      if(!itens[i].produto&&!itens[i].valorUnitario) return;
+      itens[i]._modo='ok';
+      itens.splice(0,0,{id:uid('oi'),produto:'',produtoId:'',fator:'',valorBase:'',valorUnitario:'',observacaoItem:'',fotos:[],_modo:'editar'});
+      drawItens(); updateTotal();
+    }); });
+    wrap.querySelectorAll('[data-orceditar]').forEach(btn=>{ btn.addEventListener('click',()=>{ itens[Number(btn.dataset.orceditar)]._modo='editar'; drawItens(); }); });
+    wrap.querySelectorAll('[data-orcitdel]').forEach(b=>{ b.addEventListener('click',()=>{
+      itens.splice(Number(b.dataset.orcitdel),1);
+      if(!itens.length) itens.push({id:uid('oi'),produto:'',produtoId:'',fator:'',valorBase:'',valorUnitario:'',observacaoItem:'',fotos:[],_modo:'editar'});
+      drawItens(); updateTotal();
+    }); });
+    updateTotal();
+  }
+  function updateTotal(){
+    const subtotal=itens.filter(it=>it._modo==='ok').reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
+    const box=document.getElementById('totalHint');
+    if(box) box.textContent='Total estimado: '+fmtMoeda(subtotal);
+  }
+  drawItens();
+
+  document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
+    const dataOrcamento = document.getElementById('o_data').value || todayStr();
+    const lojaId = document.getElementById('o_loja').value;
+    const vendedora = document.getElementById('o_vendedora').value;
+    const validade = document.getElementById('o_validade').value;
+    const clienteAc = acCliente ? acCliente.getCliente() : null;
+    const cliente = maiusc(clienteAc ? clienteAc.nome : document.getElementById('o_cliente').value);
+    const telefone = clienteAc ? clienteAc.telefone||'' : document.getElementById('o_telefone').value;
+    const email = clienteAc ? clienteAc.email||'' : document.getElementById('o_email').value;
+    const itensValidos = itens.filter(it=>it.produto&&it._modo==='ok');
+    const valorTotal = itensValidos.reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
+    if(!lojaId || !vendedora || !validade){ showToast('Preencha loja, vendedora e validade.'); return; }
+    if(!cliente){ showToast('Informe o nome do cliente.'); return; }
+    if(itensValidos.length===0){ showToast('Adicione ao menos um item confirmado (clique em ＋).'); return; }
+    const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+    const orcamento = editando ? {
+      ...orcamentoEditando,
+      loja: loja?loja.nome:'', lojaId, vendedora, validade, data: dataOrcamento, cliente, telefone, email,
+      itens: itensValidos, valorTotal, ajusteTotal,
+      observacoes: maiusc(document.getElementById('o_obs').value),
+      infoInterna: (document.getElementById('o_infoInterna')?.value||'').trim(),
+      editadoManualmente: true,
+    } : {
+      id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
+      data: dataOrcamento, cliente, telefone, email, itens: itensValidos, valorTotal, ajusteTotal,
+      observacoes: maiusc(document.getElementById('o_obs').value),
+      infoInterna: (document.getElementById('o_infoInterna')?.value||'').trim(),
+      status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
+      codigoVia: await bumpCodigoVia('orcamento', lojaId||''),
+      rascunho: false,
+    };
+    const ok = await orcamentoSalvar(orcamento);
+    if(ok){
+      if(editando){ const idx=orcamentos.findIndex(x=>x.id===orcamento.id); if(idx>=0) orcamentos[idx]=orcamento; else orcamentos.unshift(orcamento); showToast('Orçamento atualizado.'); }
+      else { orcamentos.unshift(orcamento); showToast('Orçamento salvo.'); }
+      orcamentoEmEdicao = null;
+      currentTab='lista'; renderTabs(); renderView();
+    }
+  });
+}
+
+/* ============================================================
    LISTA DE ORÇAMENTOS
    ============================================================ */
 function renderLista(main){
@@ -1782,12 +1963,107 @@ function printOrcamento(o){
   abrirImpressaoBobina('Orçamento', linhas.join(''), larguraMm, o.codigoVia||null);
 }
 
+const EMBEDDED = window.self !== window.top;
+
+function tabsForLevel(){
+  const t = [
+    { id:'novo', label:'Novo orçamento', icon:'📝' },
+    { id:'lista', label:'Orçamentos', icon:'📋' },
+  ];
+  if(window.__permissoesAbasOverride) return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
+  return t;
+}
+function buildTabs(){
+  const tabs = tabsForLevel();
+  const nav = document.getElementById('tabs');
+  if(nav){ nav.innerHTML = ''; tabs.forEach(t=>{ const b=document.createElement('button'); b.textContent=t.label; b.dataset.tab=t.id; b.addEventListener('click',()=>{ currentTab=t.id; renderTabs(); renderView(); }); nav.appendChild(b); }); }
+  const mobileNav = document.getElementById('mobileTabbar');
+  if(mobileNav){ mobileNav.innerHTML = ''; tabs.forEach(t=>{ const b=document.createElement('button'); b.dataset.tab=t.id; b.innerHTML=`<span class="mt-icon">${t.icon}</span><span>${t.label}</span>`; b.addEventListener('click',()=>{ currentTab=t.id; renderTabs(); renderView(); }); mobileNav.appendChild(b); }); }
+}
+function renderTabs(){
+  document.querySelectorAll('nav.tabs button, .mobile-tabbar button').forEach(b=>{ b.classList.toggle('active', b.dataset.tab===currentTab); });
+  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'orcamentos', tabId: currentTab }, '*');
+}
+function renderView(){
+  const main = document.getElementById('mainContent');
+  if(!main) return;
+  main.innerHTML = '';
+  if(currentTab==='novo') renderNovo(main);
+  else renderLista(main);
+}
+function podeCriarOrcamento(){
+  if(!currentUser) return false;
+  if(currentUser.nivel==='oficina') return false;
+  if(window.__permissoesAbasOverride && window.__permissoesAbasOverride['novo']===false) return false;
+  return true;
+}
+
 (async function init(){
   if(EMBEDDED){
+    document.documentElement.classList.add('embedded');
+    // Registra ouvinte ANTES de enviar ready, para não perder o 'auth' do shell
+    window.addEventListener('message', async (ev)=>{
+      if(!mensagemConfiavel(ev)) return;
+      if(!ev.data || !ev.data.type) return;
+      if(ev.data.type === 'auth'){
+        currentUser = ev.data.user;
+        __gatewaySenha = ev.data.user.senha;
+        window.__permissoesAbasOverride = ev.data.abas || null;
+        await loadAll();
+        document.getElementById('view-login').style.display = 'none';
+        document.getElementById('view-app').style.display = 'block';
+        document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
+        document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
+        buildTabs();
+        currentTab = 'lista';
+        renderTabs();
+        renderView();
+        const tabs = tabsForLevel();
+        parent.postMessage({ type:'tabs', modulo:'orcamentos', tabs, active: currentTab }, '*');
+      } else if(ev.data.type === 'gotoTab'){
+        currentTab = ev.data.tabId;
+        renderTabs();
+        renderView();
+      } else if(ev.data.type === 'lojaAtual'){
+        window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
+        if(currentUser && config) renderView();
+      } else if(ev.data.type === 'abrirRegistro'){
+        if(ev.data.id && Array.isArray(orcamentos)){
+          const alvo = orcamentos.find(o=>o.id===ev.data.id);
+          if(alvo) abrirDetalheOrcamento(alvo);
+        }
+      }
+    });
     parent.postMessage({ type:'ready', modulo:'orcamentos' }, '*');
     return;
   }
+  // Modo standalone: wire do botão de login
+  document.getElementById('btnLogin').addEventListener('click', doLoginStandalone);
+  document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLoginStandalone(); });
 })();
+
+async function doLoginStandalone(){
+  const pass = document.getElementById('loginPass').value.trim();
+  const err = document.getElementById('loginError');
+  const btn = document.getElementById('btnLogin');
+  if(!pass) return;
+  err.classList.remove('show');
+  btn.disabled = true;
+  const r = await gatewayLogin(pass);
+  btn.disabled = false;
+  if(!r || !r.ok){ err.classList.add('show'); return; }
+  __gatewaySenha = pass;
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:pass };
+  await loadAll();
+  document.getElementById('view-login').style.display = 'none';
+  document.getElementById('view-app').style.display = 'block';
+  document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
+  document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
+  buildTabs();
+  currentTab = 'lista';
+  renderTabs();
+  renderView();
+}
 
 /* Avisa o shell que houve atividade aqui dentro, para o contador de inatividade
    de 10 minutos não encerrar a sessão de quem está trabalhando dentro do módulo. */
