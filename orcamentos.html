@@ -686,11 +686,38 @@ async function salvarUmCliente(cliente){
 async function buscarEnderecoPorCep(cep){
   const cepDigits = onlyDigits(cep);
   if(cepDigits.length !== 8) return null;
+  // Tenta ViaCEP primeiro, BrasilAPI como fallback
+  const fontes = [
+    async () => {
+      const r = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
+      const d = await r.json();
+      if(d.erro) return null;
+      return { endereco: d.logradouro||'', bairro: d.bairro||'', cidade: d.localidade||'', estado: d.uf||'' };
+    },
+    async () => {
+      const r = await fetch(`https://brasilapi.com.br/api/cep/v1/${cepDigits}`);
+      if(!r.ok) return null;
+      const d = await r.json();
+      return { endereco: d.street||'', bairro: d.neighborhood||'', cidade: d.city||'', estado: d.state||'' };
+    }
+  ];
+  for(const fn of fontes){
+    try{ const res = await fn(); if(res) return res; }catch(e){}
+  }
+  return null;
+}
+
+// Busca CPF na Receita Federal via BrasilAPI — retorna { nome, situacao } ou null
+async function buscarCpfReceita(cpf){
+  const digits = onlyDigits(cpf);
+  if(digits.length !== 11) return null;
   try{
-    const res = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`);
-    const data = await res.json();
-    if(data.erro) return null;
-    return { endereco: data.logradouro || '', bairro: data.bairro || '', cidade: data.localidade || '', estado: data.uf || '' };
+    const r = await fetch(`https://brasilapi.com.br/api/cpf/v1/${digits}`);
+    if(!r.ok) return null;
+    const d = await r.json();
+    // BrasilAPI retorna { cpf, name, birthday, situation }
+    if(!d || !d.name) return null;
+    return { nome: d.name, situacao: d.situation||'' };
   }catch(e){ return null; }
 }
 function clienteFieldsHtml(prefix, c){
@@ -721,22 +748,43 @@ function clienteFieldsHtml(prefix, c){
 }
 function wireClienteFields(prefix){
   wireTelefoneMask(prefix);
+
+  // Auto-fill de endereço ao digitar/sair do CEP
   const cepInp = document.getElementById(prefix+'_cep');
   if(cepInp){
     cepInp.addEventListener('blur', async ()=>{
       const cepDigits = onlyDigits(cepInp.value);
       if(cepDigits.length !== 8) return;
+      cepInp.placeholder = '⏳ buscando...';
       const endereco = await buscarEnderecoPorCep(cepDigits);
-      if(!endereco) return;
-      const enderecoInp = document.getElementById(prefix+'_endereco');
-      const bairroInp = document.getElementById(prefix+'_bairro');
-      const cidadeInp = document.getElementById(prefix+'_cidade');
-      const estadoInp = document.getElementById(prefix+'_estado');
-      if(enderecoInp) enderecoInp.value = endereco.endereco;
-      if(bairroInp) bairroInp.value = endereco.bairro;
-      if(cidadeInp) cidadeInp.value = endereco.cidade;
-      if(estadoInp) estadoInp.value = endereco.estado;
-      showToast('Endereço preenchido — falta só número e complemento.');
+      cepInp.placeholder = '00000-000';
+      if(!endereco){ showToast('CEP não encontrado.'); return; }
+      const f = k => document.getElementById(prefix+'_'+k);
+      if(f('endereco') && !f('endereco').value) f('endereco').value = endereco.endereco;
+      if(f('bairro')   && !f('bairro').value)   f('bairro').value   = endereco.bairro;
+      if(f('cidade')   && !f('cidade').value)    f('cidade').value   = endereco.cidade;
+      if(f('estado')   && !f('estado').value)    f('estado').value   = endereco.estado;
+      // focar no número após preencher
+      const numInp = f('numero'); if(numInp) numInp.focus();
+      showToast('Endereço preenchido — informe o número.');
+    });
+  }
+
+  // Auto-busca de nome na Receita Federal ao sair do campo CPF
+  const cpfInp = document.getElementById(prefix+'_cpf');
+  const nomeInp = document.getElementById(prefix+'_cliente');
+  if(cpfInp && nomeInp){
+    cpfInp.addEventListener('blur', async ()=>{
+      const digits = onlyDigits(cpfInp.value);
+      if(digits.length !== 11) return;
+      if(nomeInp.value.trim()) return; // já tem nome preenchido, não sobrescreve
+      cpfInp.style.background = '#fffbe6';
+      const res = await buscarCpfReceita(digits);
+      cpfInp.style.background = '';
+      if(res && res.nome){
+        nomeInp.value = res.nome;
+        showToast('Nome preenchido pela Receita Federal — confira.');
+      }
     });
   }
 }
@@ -826,25 +874,62 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
     selecionado = c;
   }
   let buscaClienteTimeout = null;
-  function renderResultados(termo){
+function renderResultados(termo){
     const wrap = document.getElementById('resultados_cliente');
-    if(!termo){ wrap.innerHTML=''; return; }
-    wrap.innerHTML = `<div class="muted" style="padding:6px 2px;">Buscando...</div>`;
-    clearTimeout(buscaClienteTimeout);
-    buscaClienteTimeout = setTimeout(async ()=>{
-      const achados = await buscarClientesRemoto(termo);
-      const inputAtual = document.getElementById('busca_cliente');
-      if(!inputAtual || inputAtual.value.trim() !== termo) return; // digitou outra coisa nesse meio-tempo
-      wrap.innerHTML = achados.length===0
-        ? `<div class="empty">Nenhum cliente encontrado — preencha abaixo pra cadastrar um novo.</div>`
-        : achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}"><div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span></div></div>`).join('');
-      wrap.querySelectorAll('[data-selcli]').forEach(el=>{
-        el.addEventListener('click', ()=>{
-          const c = achados.find(x=>x.id===el.dataset.selcli);
-          if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+    if(!termo || termo.length<2){ wrap.innerHTML=''; return; }
+    wrap.innerHTML = `<div class="muted" style="padding:6px;">Buscando...</div>`;
+    buscarClientesComDebounce(termo, (achados)=>{
+      if(achados.length > 0){
+        wrap.innerHTML = achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}">
+          <div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span>${c.cpf?` <span class="muted">· ${escapeHtml(c.cpf)}</span>`:''}</div>
+        </div>`).join('');
+        wrap.querySelectorAll('[data-selcli]').forEach(el=>{
+          el.addEventListener('click', ()=>{
+            const c = achados.find(x=>x.id===el.dataset.selcli);
+            if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
+          });
         });
-      });
-    }, 350);
+      } else {
+        // Verificar se o termo parece um CPF (11 dígitos, com ou sem pontos/traço)
+        const digits = onlyDigits(termo);
+        const parece_cpf = digits.length === 11;
+        wrap.innerHTML = `
+          <div class="empty" style="padding:10px 0 6px;">
+            Nenhum cliente encontrado no cadastro.
+            ${parece_cpf ? `
+            <div style="margin-top:8px;">
+              <button type="button" class="btn btn-ghost btn-sm" id="btnBuscarCpfReceita" style="width:100%;">
+                🔎 Buscar CPF na Receita Federal
+              </button>
+              <div id="receitaResult" style="margin-top:6px;font-size:12.5px;"></div>
+            </div>` : ''}
+            <div class="muted" style="margin-top:8px;font-size:12px;">Preencha os dados abaixo para cadastrar.</div>
+          </div>`;
+        if(parece_cpf){
+          document.getElementById('btnBuscarCpfReceita')?.addEventListener('click', async ()=>{
+            const btn = document.getElementById('btnBuscarCpfReceita');
+            const div = document.getElementById('receitaResult');
+            btn.disabled = true; btn.textContent = '⏳ Consultando Receita Federal...';
+            const resultado = await buscarCpfReceita(termo);
+            btn.disabled = false; btn.textContent = '🔎 Buscar CPF na Receita Federal';
+            if(!resultado){
+              div.innerHTML = '<span style="color:var(--danger);">CPF não encontrado ou serviço indisponível.</span>';
+            } else {
+              div.innerHTML = `<span style="color:var(--ok);font-weight:700;">✅ ${escapeHtml(resultado.nome)}</span>
+                ${resultado.situacao?`<span class="muted"> — ${escapeHtml(resultado.situacao)}</span>`:''}
+                <button type="button" class="btn btn-ghost btn-sm" id="btnUsarNomeReceita" style="margin-left:8px;">Usar este nome</button>`;
+              document.getElementById('btnUsarNomeReceita')?.addEventListener('click', ()=>{
+                const nomeInp = document.getElementById('sel_cliente');
+                const cpfInp = document.getElementById('sel_cpf');
+                if(nomeInp) nomeInp.value = resultado.nome;
+                if(cpfInp) cpfInp.value = termo; // preenche o CPF digitado também
+                div.innerHTML = '<span class="muted">Nome e CPF preenchidos abaixo ↓</span>';
+              });
+            }
+          });
+        }
+      }
+    });
   }
   document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
 
