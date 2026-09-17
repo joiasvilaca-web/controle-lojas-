@@ -2183,6 +2183,57 @@ function checkSlot(serviceTypeId, dateStr, excludeOrderId){
   };
 }
 
+/**
+ * A partir do tipo de ordem, encontra a PRIMEIRA data (a contar do prazo mínimo
+ * configurado pra esse tipo) que ainda tem vaga livre — respeitando a quantidade
+ * máxima por dia já cadastrada em Configurações → Tipos de Ordem. Varre no máximo
+ * 120 dias à frente; se não achar vaga nesse intervalo (configuração incomum),
+ * devolve a data do prazo mínimo mesmo assim, pra não deixar o campo vazio.
+ */
+function proximaDataDisponivel(serviceTypeId, excludeOrderId){
+  const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
+  if(!st) return null;
+  const base = new Date(todayStr()+'T00:00:00');
+  for(let i=st.prazoMinimoDias; i<=st.prazoMinimoDias+120; i++){
+    const d = new Date(base); d.setDate(d.getDate()+i);
+    const dateStr = d.toISOString().slice(0,10);
+    const res = checkSlot(serviceTypeId, dateStr, excludeOrderId);
+    if(res && res.ok) return dateStr;
+  }
+  // Fallback: nenhuma vaga livre em 120 dias — devolve a data do prazo mínimo mesmo assim
+  const d = new Date(base); d.setDate(d.getDate()+st.prazoMinimoDias);
+  return d.toISOString().slice(0,10);
+}
+
+/**
+ * Valida em tempo real o código digitado no campo de encaixe, mostrando um retorno
+ * visual imediato (código válido / já usado / não encontrado) sem esperar o clique
+ * em salvar. A validação definitiva (marcar como usado) continua acontecendo só no
+ * momento de salvar a ordem.
+ */
+function wireCodigoHint(inpId, hintId){
+  const inp = document.getElementById(inpId);
+  const hint = document.getElementById(hintId);
+  if(!inp || !hint) return;
+  inp.addEventListener('input', ()=>{
+    const val = inp.value.trim().toUpperCase();
+    if(!val){ hint.innerHTML=''; return; }
+    const valido = (codes||[]).find(c=>c.codigo===val && !c.usado);
+    if(valido){
+      hint.innerHTML = `<span style="color:var(--ok,#17794a);font-weight:700;">✔ Código válido — autorizado por ${escapeHtml(valido.autorizadoPor)}. Via liberada para agendamento.</span>`;
+      return;
+    }
+    const usado = (codes||[]).find(c=>c.codigo===val && c.usado);
+    if(usado){
+      hint.innerHTML = `<span style="color:var(--danger);font-weight:700;">Este código já foi utilizado.</span>`;
+    } else if(val.length>=6){
+      hint.innerHTML = `<span style="color:var(--danger);font-weight:700;">Código não encontrado.</span>`;
+    } else {
+      hint.innerHTML = '';
+    }
+  });
+}
+
 function lojaOptionsHtml(selected){
   return (config.lojas||[]).map(l=>`<option value="${l.id}" ${selected===l.id?'selected':''}>${l.nome}</option>`).join('');
 }
@@ -2730,6 +2781,7 @@ function renderNovaOrdem(main){
         <div class="field" style="margin-top:6px;">
           <label>Código de autorização (encaixe)</label>
           <input id="f_codigo" placeholder="Digite o código fornecido pela oficina/diretoria" style="text-transform:uppercase;">
+          <div id="f_codigoHint" style="margin-top:4px;font-size:12.5px;"></div>
         </div>
       </div>
 
@@ -2844,10 +2896,24 @@ function renderNovaOrdem(main){
       if(!res.quantidadeOk) motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
       banner.innerHTML = `<div class="slot-banner slot-bad"><span class="dot"></span><div><b>Fora do padrão configurado:</b> ${motivos.join(' e ')}. Este lançamento será registrado como <b>encaixe</b> e exige código de autorização da oficina ou diretoria.</div></div>`;
       codeArea.style.display = 'block';
+      // Busca os códigos mais atuais (podem ter sido gerados agora mesmo em outro
+      // dispositivo/sessão) pra validar em tempo real o que a vendedora digitar.
+      storageGet('codes', true).then(c=>{ if(c) codes = c; });
     }
   }
-  servicoSel.addEventListener('change', updateBanner);
+  // Ao escolher o tipo de ordem, sugere automaticamente a primeira data com vaga
+  // livre (respeitando prazo mínimo e quantidade máxima cadastrados em Tipos de
+  // Ordem). A vendedora pode trocar a data manualmente depois se precisar.
+  servicoSel.addEventListener('change', ()=>{
+    const sid = servicoSel.value;
+    if(sid){
+      const sugerida = proximaDataDisponivel(sid, null);
+      if(sugerida) dataInp.value = sugerida;
+    }
+    updateBanner();
+  });
   dataInp.addEventListener('change', updateBanner);
+  wireCodigoHint('f_codigo','f_codigoHint');
 
   document.getElementById('btnLimparOrdem').addEventListener('click', ()=>renderView());
 
@@ -3177,6 +3243,7 @@ function openEditModalCompleto(order, opts){
       <div class="field" style="margin-top:6px;">
         <label>Código de autorização (encaixe)</label>
         <input id="e_codigo" placeholder="Código da oficina/diretoria" style="text-transform:uppercase;">
+        <div id="e_codigoHint" style="margin-top:4px;font-size:12.5px;"></div>
       </div>
     </div>
     <div id="pagamentoContainerEdit"></div>
@@ -3304,11 +3371,22 @@ function openEditModalCompleto(order, opts){
       if(!res.quantidadeOk) motivos.push('quantidade máxima do dia atingida (' + res.ocupadas + '/' + res.vagas + ')');
       banner.innerHTML = `<div class="slot-banner slot-bad"><span class="dot"></span><div><b>Fora do padrão:</b> ${motivos.join(' e ')}. Exige código de autorização.</div></div>`;
       codeArea.style.display = 'block';
+      storageGet('codes', true).then(c=>{ if(c) codes = c; });
     }
   }
-  servicoSel.addEventListener('change', updateBanner);
+  // Se a vendedora TROCAR o tipo de ordem durante a edição, sugere a primeira data
+  // livre pro tipo novo (o prazo/quantidade do tipo antigo pode não valer mais).
+  servicoSel.addEventListener('change', ()=>{
+    const sid = servicoSel.value;
+    if(sid){
+      const sugerida = proximaDataDisponivel(sid, order.id);
+      if(sugerida) dataInp.value = sugerida;
+    }
+    updateBanner();
+  });
   dataInp.addEventListener('change', updateBanner);
   statusSel.addEventListener('change', updateBanner);
+  wireCodigoHint('e_codigo','e_codigoHint');
   updateBanner();
 
   document.getElementById('editCancel').addEventListener('click', closeModal);
