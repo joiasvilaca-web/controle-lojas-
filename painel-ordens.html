@@ -1567,23 +1567,231 @@ function notaEmpresasErro(holder){
   return null;
 }
 
-function mountPagamentos(container, holder){
+function mountPagamentos(container, holder, getLojaVendaId){
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = ''; // sem pré-seleção — obrigatório escolher
-  if(!holder.emissaoNota) holder.emissaoNota = ''; // sem pré-seleção
+  if(!holder.emissaoNota) holder.emissaoNota = ''; // sem pré-seleção — usuário deve escolher
+  getLojaVendaId = getLojaVendaId || (()=>'');
+
+  // desconto/acréscimo sobre o total no bloco de pagamento
+  if(!holder.descTotalTipo) holder.descTotalTipo='nenhum';
+  if(!holder.descTotalModo) holder.descTotalModo='percentual';
+  if(holder.descTotalPerc===undefined) holder.descTotalPerc='';
+  if(holder.descTotalR===undefined) holder.descTotalR='';
+
+  function calcTotalItens(){
+    // Só conta itens confirmados (_modo==='ok') — a linha em edição não entra no total
+    // até o usuário clicar em "Adicionar". Isso garante que o pagamento mostra o valor
+    // real dos itens já lançados, não o que ainda está sendo digitado.
+    if(window.__itensHolder) return window.__itensHolder.itens
+      .filter(it=>it._modo==='ok')
+      .reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
+    return 0;
+  }
+  function calcTotalFinal(subtotal){
+    if(holder.descTotalTipo==='nenhum') return subtotal;
+    const qtd=Number(holder.descTotalPerc||holder.descTotalR)||0;
+    const delta=holder.descTotalModo==='percentual'?subtotal*qtd/100:qtd;
+    return Math.max(0,holder.descTotalTipo==='desconto'?subtotal-delta:subtotal+delta);
+  }
+
+  function draw(){
+    const subtotal = calcTotalItens();
+    const totalFinal = calcTotalFinal(subtotal);
+    container.innerHTML = `
+      <div class="section-label" style="margin-top:14px;">Pagamento</div>
+      <!-- Desconto sobre o total dos itens -->
+      <div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div>
+            <div style="font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.04em;font-weight:800;">Total dos itens</div>
+            <div style="font-size:19px;font-weight:800;" id="pagSubtotal">R$ ${subtotal.toFixed(2)}</div>
+          </div>
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+            <button type="button" class="btn-ajuste ${holder.descTotalTipo==='desconto'?'ativo-desc':''}" id="pagBtnDesc">Desc.</button>
+            <button type="button" class="btn-ajuste ${holder.descTotalTipo==='acrescimo'?'ativo-acr':''}" id="pagBtnAcr">Acrés.</button>
+            <input type="number" min="0" step="0.01" class="campo-perc" id="pagDescPerc" placeholder="%" value="${escapeHtml(String(holder.descTotalPerc||''))}">
+            <span class="desc-sep">ou</span>
+            <input type="number" min="0" step="0.01" class="campo-val" id="pagDescR" placeholder="R$" value="${escapeHtml(String(holder.descTotalR||''))}">
+          </div>
+          ${(()=>{
+            if(holder.descTotalTipo!=='nenhum') return `<div style="font-size:14px;font-weight:800;color:${holder.descTotalTipo==='desconto'?'#b91c1c':'#17794a'};">= R$ ${totalFinal.toFixed(2)}</div>`;
+            if(subtotal>0) return `<div style="font-size:13px;font-weight:700;color:var(--ink);">= R$ ${subtotal.toFixed(2)}</div>`;
+            return '';
+          })()}
+        </div>
+      </div>
+
+      <!-- Faixa: Valor Total + Momento + Nota Fiscal (mesma linha) -->
+      <div class="pag-info-row">
+        <!-- Valor total -->
+        <div class="pag-info-cel" style="flex:1 1 auto;min-width:120px;">
+          <div class="pag-info-cel-label">Valor total</div>
+          <div class="pag-info-cel-val" id="pagValorTotalDisplay">R$ ${(totalFinal>0?totalFinal:0).toFixed(2)}</div>
+          <input type="hidden" id="pagValorTotal" value="${totalFinal>0?totalFinal.toFixed(2):''}">
+        </div>
+        <!-- Momento do pagamento -->
+        <div class="pag-toggle-cel" style="flex:0 0 auto;">
+          <div class="pag-info-cel-label">Quando paga?</div>
+          <div class="pag-toggle-inner toggle-group">
+            <div class="toggle-opt">
+              <input type="radio" name="pagMomento" id="pagMomEnc" value="na_encomenda" ${holder.momentoPagamento==='na_encomenda'?'checked':''}>
+              <label for="pagMomEnc">💳 Pago agora</label>
+            </div>
+            <div class="toggle-opt">
+              <input type="radio" name="pagMomento" id="pagMomVolta" value="na_volta" ${holder.momentoPagamento==='na_volta'?'checked':''}>
+              <label for="pagMomVolta">🔄 Na volta</label>
+            </div>
+          </div>
+        </div>
+        <!-- Nota fiscal -->
+        <div class="pag-toggle-cel" style="flex:0 0 auto;">
+          <div class="pag-info-cel-label">Nota fiscal ${ajudaPonto('Marque "Sim" só se a nota já foi emitida.')}</div>
+          <div class="pag-toggle-inner toggle-group">
+            <div class="toggle-opt">
+              <input type="radio" name="pagEmiteNota" id="pagNotaSim" value="sim" ${holder.emissaoNota==='sim'?'checked':''}>
+              <label for="pagNotaSim">✅ Sim</label>
+            </div>
+            <div class="toggle-opt">
+              <input type="radio" name="pagEmiteNota" id="pagNotaNao" value="nao" ${holder.emissaoNota==='nao'?'checked':''}>
+              <label for="pagNotaNao">❌ Não</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="pagRows"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">+ Adicionar forma de pagamento</button>
+      <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+    `;
+    drawRows();
+    container.querySelectorAll('input[name="pagMomento"]').forEach(r=>{
+      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
+    });
+    container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
+      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; });
+    });
+    // pagValorTotal agora é hidden — valor vem dos itens + desconto/acréscimo
+    const inpTotal = container.querySelector('#pagValorTotal');
+    if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
+    container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
+      const primeiraForma = (config.formasPagamento && config.formasPagamento[0]) ? config.formasPagamento[0].id : '';
+      holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
+      drawRows();
+    });
+    // Botões desconto/acréscimo sobre o total
+    function aplicarDescTotal(){
+      const sub=calcTotalItens();
+      const fin=calcTotalFinal(sub);
+      const el=container.querySelector('#pagSubtotal'); if(el) el.textContent='R$ '+sub.toFixed(2);
+      const inpT=container.querySelector('#pagValorTotal');
+      if(inpT&&(holder.valorTotal===null||holder.valorTotal===undefined)){
+        inpT.value=fin.toFixed(2); holder.valorTotal=fin;
+      }
+      updateHint();
+      // atualiza o badge de total final inline
+      const finEl=container.querySelector('.ativo-desc,#pagBtnDesc')?.closest('div')?.querySelector('[style*="b91c1c"],[style*="17794a"]');
+    }
+    const btnDesc=container.querySelector('#pagBtnDesc');
+    const btnAcr=container.querySelector('#pagBtnAcr');
+    const dpPerc=container.querySelector('#pagDescPerc');
+    const dpR=container.querySelector('#pagDescR');
+    if(btnDesc) btnDesc.addEventListener('click',()=>{
+      holder.descTotalTipo=holder.descTotalTipo==='desconto'?'nenhum':'desconto';
+      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw(); updateHint();
+    });
+    if(btnAcr) btnAcr.addEventListener('click',()=>{
+      holder.descTotalTipo=holder.descTotalTipo==='acrescimo'?'nenhum':'acrescimo';
+      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw(); updateHint();
+    });
+    if(dpPerc) dpPerc.addEventListener('input',()=>{
+      holder.descTotalPerc=dpPerc.value; holder.descTotalR=''; holder.descTotalModo='percentual';
+      // Ativa desconto automaticamente se ainda não clicou em nenhum botão
+      if(holder.descTotalTipo==='nenhum' && dpPerc.value!=='') { holder.descTotalTipo='desconto'; draw(); return; }
+      const dr=container.querySelector('#pagDescR'); if(dr) dr.value='';
+      const sub=calcTotalItens(); const fin=calcTotalFinal(sub);
+      const inpT=container.querySelector('#pagValorTotal'); if(inpT){ inpT.value=fin.toFixed(2); holder.valorTotal=fin; }
+      updateHint();
+    });
+    if(dpR) dpR.addEventListener('input',()=>{
+      holder.descTotalR=dpR.value; holder.descTotalPerc=''; holder.descTotalModo='valor';
+      // Ativa desconto automaticamente se ainda não clicou em nenhum botão
+      if(holder.descTotalTipo==='nenhum' && dpR.value!=='') { holder.descTotalTipo='desconto'; draw(); return; }
+      const dp2=container.querySelector('#pagDescPerc'); if(dp2) dp2.value='';
+      const sub=calcTotalItens(); const fin=calcTotalFinal(sub);
+      const inpT=container.querySelector('#pagValorTotal'); if(inpT){ inpT.value=fin.toFixed(2); holder.valorTotal=fin; }
+      updateHint();
+    });
+  }
+
+  function drawRows(){
+    const wrap = container.querySelector('#pagRows');
+    wrap.innerHTML = holder.pagamentos.map((p,i)=>`
+      <div class="grid-2" style="margin-bottom:6px;">
+        <select data-pagform="${i}">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>💳 Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>📝 Fiado</option></select>
+        <div style="display:flex; gap:6px;">
+          <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
+          <button type="button" class="icon-btn" data-pagdel="${i}" title="Remover">✕</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagform)].formaId = sel.value; });
+    });
+    wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
+      inp.addEventListener('input', ()=>{
+        holder.pagamentos[Number(inp.dataset.pagvalor)].valor = inp.value === '' ? '' : parseFloat(inp.value);
+        updateHint();
+      });
+    });
+    wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
+      b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
+    });
+    updateHint();
+  }
+
+  function updateHint(){
+    const hint = container.querySelector('#pagSomaHint');
+    if(!hint) return;
+    const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
+    const total = Number(holder.valorTotal)||calcTotalItens();
+    if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
+    const saldo = total - soma;
+    if(saldo > 0.009){
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:13px;font-weight:700;color:var(--wait,#b45309);">
+        💰 Falta cobrir: <b>R$ ${saldo.toFixed(2)}</b> <span style="font-weight:500;">(total R$ ${total.toFixed(2)} — pago R$ ${soma.toFixed(2)})</span>
+      </div>`;
+    } else if(saldo < -0.009){
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:#fbeaea;border:1px solid #b91c1c;border-radius:8px;font-size:13px;font-weight:700;color:#b91c1c;">
+        ⚠️ Excede o total em R$ ${Math.abs(saldo).toFixed(2)}
+      </div>`;
+    } else {
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:var(--ok-soft,#e3f5ea);border:1px solid var(--ok,#17794a);border-radius:8px;font-size:13px;font-weight:700;color:var(--ok,#17794a);">
+        ✅ Pagamento completo — R$ ${total.toFixed(2)}
+      </div>`;
+    }
+  }
+
+  draw();
+  // Expõe redraw globalmente para os itens chamarem quando mudam
+  window.__pagRedraw = ()=>{ holder.valorTotal=null; draw(); };
+  return { redraw: window.__pagRedraw };
+}
+
+function mountPagamentosEdicao(container, holder){
+  if(!holder.pagamentos) holder.pagamentos = [];
+  if(!holder.momentoPagamento) holder.momentoPagamento = '';
+  if(!holder.emissaoNota) holder.emissaoNota = '';
 
   function draw(){
     container.innerHTML = `
       <div class="section-label" style="margin-top:14px;">Pagamento</div>
-      <!-- Faixa: Valor Total + Momento + Nota Fiscal -->
-      <div class="pag-info-row" style="margin-top:8px;">
+      <div class="pag-info-row">
         <div class="pag-info-cel" style="flex:1 1 auto;min-width:120px;">
           <div class="pag-info-cel-label">Valor total</div>
-          <div class="pag-info-cel-val">
-            <input type="number" step="0.01" min="0" id="pagValorTotal" placeholder="0,00"
-              style="border:none;background:transparent;font-size:18px;font-weight:800;width:110px;padding:0;outline:none;color:var(--ink);"
-              value="${holder.valorTotal!==undefined && holder.valorTotal!==null ? holder.valorTotal : ''}">
-          </div>
+          <input type="number" step="0.01" min="0" id="pagValorTotal" placeholder="0,00"
+            style="border:none;background:transparent;font-size:18px;font-weight:800;width:110px;padding:0;outline:none;color:var(--ink);"
+            value="${holder.valorTotal!==undefined && holder.valorTotal!==null ? holder.valorTotal : ''}">
         </div>
         <div class="pag-toggle-cel" style="flex:0 0 auto;">
           <div class="pag-info-cel-label">Quando paga?</div>
@@ -1615,89 +1823,31 @@ function mountPagamentos(container, holder){
       <div id="pagRows"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">+ Adicionar forma de pagamento</button>
       <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
-      <div id="pagNotaWrap" style="display:none;">
-        <div class="field">
-          <label>Emitiu nota fiscal?</label>
-          <div class="toggle-group" style="max-width:220px;">
-            <div class="toggle-opt">
-              <input type="radio" name="pagEmiteNota" id="pagNotaSim2" value="sim" ${holder.emissaoNota==='sim'?'checked':''}>
-              <label for="pagNotaSim2">✅ Sim</label>
-            </div>
-            <div class="toggle-opt">
-              <input type="radio" name="pagEmiteNota" id="pagNotaNao2" value="nao" ${holder.emissaoNota==='nao'?'checked':''}>
-              <label for="pagNotaNao2">❌ Não</label>
-            </div>
-          </div>
-        </div>
-        <div id="pagNotaCamposWrap" style="display:none;">
-          <div class="field"><label>Número da nota</label><input id="pagNumeroNota" placeholder="Ex: 12345" value="${escapeHtml(holder.numeroNota||'')}"></div>
-          <div class="grid-3">
-            <div class="field"><label>Empresa de onde sai a joia</label><select id="pagLojaSaida">${lojaOptionsHtml(holder.lojaSaidaId||'')}</select></div>
-            <div class="field"><label>Empresa que recebeu o pagamento</label><select id="pagLojaPagamento">${lojaOptionsHtml(holder.lojaPagamentoId||'')}</select></div>
-            <div class="field"><label>Empresa que emitiu a nota</label><select id="pagLojaNota">${lojaOptionsHtml(holder.lojaNotaId||'')}</select></div>
-          </div>
-          <div class="muted" id="pagNotaErroHint" style="margin-top:2px;"></div>
-        </div>
-      </div>
     `;
     drawRows();
-    atualizarVisibilidadeNota();
     container.querySelectorAll('input[name="pagMomento"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; atualizarVisibilidadeNota(); });
+      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
     });
-    container.querySelector('#pagValorTotal').addEventListener('input', (e)=>{
+    container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
+      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; });
+    });
+    const inpTotal = container.querySelector('#pagValorTotal');
+    if(inpTotal) inpTotal.addEventListener('input', (e)=>{
       holder.valorTotal = e.target.value === '' ? null : parseFloat(e.target.value);
       updateHint();
     });
     container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
-      const primeiraForma = (config.paymentTypes && config.paymentTypes[0]) ? config.paymentTypes[0].id : '';
+      const primeiraForma = (config.formasPagamento && config.formasPagamento[0]) ? config.formasPagamento[0].id : '';
       holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
       drawRows();
     });
-    container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; atualizarVisibilidadeNota(); });
-    });
-    const numNotaEl = container.querySelector('#pagNumeroNota');
-    if(numNotaEl) numNotaEl.addEventListener('input', ()=>{ holder.numeroNota = numNotaEl.value.trim(); });
-    const lojaSaidaEl = container.querySelector('#pagLojaSaida');
-    if(lojaSaidaEl) lojaSaidaEl.addEventListener('change', ()=>{ holder.lojaSaidaId = lojaSaidaEl.value; atualizarErroEmpresas(); });
-    const lojaPagamentoEl = container.querySelector('#pagLojaPagamento');
-    if(lojaPagamentoEl) lojaPagamentoEl.addEventListener('change', ()=>{ holder.lojaPagamentoId = lojaPagamentoEl.value; atualizarErroEmpresas(); });
-    const lojaNotaEl = container.querySelector('#pagLojaNota');
-    if(lojaNotaEl) lojaNotaEl.addEventListener('change', ()=>{ holder.lojaNotaId = lojaNotaEl.value; atualizarErroEmpresas(); });
-    atualizarErroEmpresas();
-  }
-
-  function atualizarErroEmpresas(){
-    const hint = container.querySelector('#pagNotaErroHint');
-    if(!hint) return;
-    const msg = notaEmpresasErro(holder);
-    hint.innerHTML = msg ? `<span style="color:var(--danger); font-weight:700;">⚠ ${escapeHtml(msg)}</span>` : '';
-  }
-
-  function atualizarVisibilidadeNota(){
-    const notaWrap = container.querySelector('#pagNotaWrap');
-    const camposWrap = container.querySelector('#pagNotaCamposWrap');
-    if(!notaWrap) return;
-    if(holder.momentoPagamento === 'na_encomenda'){
-      notaWrap.style.display = '';
-      camposWrap.style.display = holder.emissaoNota === 'sim' ? '' : 'none';
-    }else{
-      notaWrap.style.display = 'none';
-      holder.emissaoNota = 'nao';
-      holder.numeroNota = '';
-      holder.lojaSaidaId = '';
-      holder.lojaPagamentoId = '';
-      holder.lojaNotaId = '';
-    }
-    atualizarErroEmpresas();
   }
 
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="grid-2" style="margin-bottom:6px;">
-        <select data-pagform="${i}">${(config.paymentTypes||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>💳 Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>📝 Fiado</option></select>
+        <select data-pagform="${i}">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>💳 Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>📝 Fiado</option></select>
         <div style="display:flex; gap:6px;">
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
           <button type="button" class="icon-btn" data-pagdel="${i}" title="Remover">✕</button>
@@ -1714,11 +1864,7 @@ function mountPagamentos(container, holder){
       });
     });
     wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        holder.pagamentos.splice(Number(b.dataset.pagdel),1);
-        drawRows();
-        updateHint();
-      });
+      b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
     });
     updateHint();
   }
@@ -1726,18 +1872,29 @@ function mountPagamentos(container, holder){
   function updateHint(){
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
-    if(holder.pagamentos.length === 0){ hint.textContent = ''; return; }
     const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
     const total = Number(holder.valorTotal)||0;
-    if(Math.abs(soma - total) > 0.009){
-      hint.innerHTML = `<span style="color:var(--danger);">Soma dos pagamentos (R$ ${soma.toFixed(2)}) diferente do valor total (R$ ${total.toFixed(2)}).</span>`;
-    }else{
-      hint.innerHTML = `<span style="color:var(--ok);">Soma dos pagamentos confere com o valor total (R$ ${total.toFixed(2)}).</span>`;
+    if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
+    const saldo = total - soma;
+    if(saldo > 0.009){
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:13px;font-weight:700;color:var(--wait,#b45309);">
+        💰 Falta cobrir: <b>R$ ${saldo.toFixed(2)}</b> <span style="font-weight:500;">(total R$ ${total.toFixed(2)} — pago R$ ${soma.toFixed(2)})</span>
+      </div>`;
+    } else if(saldo < -0.009){
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:#fbeaea;border:1px solid #b91c1c;border-radius:8px;font-size:13px;font-weight:700;color:#b91c1c;">
+        ⚠️ Excede o total em R$ ${Math.abs(saldo).toFixed(2)}
+      </div>`;
+    } else {
+      hint.innerHTML = `<div style="margin-top:6px;padding:8px 12px;background:var(--ok-soft,#e3f5ea);border:1px solid var(--ok,#17794a);border-radius:8px;font-size:13px;font-weight:700;color:var(--ok,#17794a);">
+        ✅ Pagamento completo — R$ ${total.toFixed(2)}
+      </div>`;
     }
   }
 
   draw();
+  return { redraw: draw };
 }
+
 
 /** Soma já paga de uma ordem/venda (a partir dos pagamentos lançados). */
 function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
@@ -2907,8 +3064,22 @@ function renderNovaOrdem(main){
   function aoTrocarServico(){
     const sid = servicoSel.value;
     if(sid && !dataInp.value){
-      const sugerida = proximaDataDisponivel(sid, null);
-      if(sugerida) dataInp.value = sugerida;
+      try{
+        const sugerida = proximaDataDisponivel(sid, null);
+        if(sugerida) dataInp.value = sugerida;
+      }catch(e){
+        console.error('Falha ao calcular data automática, usando prazo mínimo simples:', e);
+        // Fallback: pelo menos aplica o prazo mínimo do tipo, sem checar a agenda,
+        // pra nunca deixar o campo vazio por causa de um erro inesperado.
+        try{
+          const st = config.serviceTypes.find(s=>s.id===sid);
+          if(st){
+            const d = new Date(todayStr()+'T00:00:00');
+            d.setDate(d.getDate()+(Number(st.prazoMinimoDias)||0));
+            dataInp.value = d.toISOString().slice(0,10);
+          }
+        }catch(e2){ console.error('Fallback de data também falhou:', e2); }
+      }
     }
     updateBanner();
   }
@@ -3268,7 +3439,7 @@ function openEditModalCompleto(order, opts){
   `);
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
-  mountPagamentos(document.getElementById('pagamentoContainerEdit'), order);
+  mountPagamentosEdicao(document.getElementById('pagamentoContainerEdit'), order);
   mountLocalizacao(document.getElementById('localContainerEdit'), order, somenteLeitura);
   wireClienteFields('e', { buscarClientePorCpf: true });
   const btnEditarCadCliEdit = document.getElementById('btnEditarCadastroClienteEdit');
