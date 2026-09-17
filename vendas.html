@@ -826,17 +826,68 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
       function mostrarMsg(txt){ drop.innerHTML=`<div class="cli-ac-msg">${txt}</div>`; drop.style.display='block'; }
 
       function renderResultados(achados){
-        if(!achados.length){ mostrarMsg('Nenhum cliente encontrado.'); return; }
-        drop.innerHTML = achados.map((c,i)=>`
-          <div class="cli-ac-item" data-idx="${i}">
-            <b>${escapeHtml(c.nome)}</b>
-            <span>${escapeHtml(c.telefone||'')}${c.cpf?' · '+escapeHtml(c.cpf):''}</span>
-          </div>`).join('');
-        drop.style.display='block';
-        drop.querySelectorAll('.cli-ac-item').forEach((el,i)=>{
-          el.addEventListener('mousedown', e=>{ e.preventDefault(); selecionar(achados[i]); });
-          el.addEventListener('mouseover', ()=>{ focarItem(i); });
-        });
+        if(achados.length){
+          drop.innerHTML = achados.map((c,i)=>`
+            <div class="cli-ac-item" data-idx="${i}">
+              <b>${escapeHtml(c.nome)}</b>
+              <span>${escapeHtml(c.telefone||'')}${c.cpf?' · '+escapeHtml(c.cpf):''}</span>
+            </div>`).join('');
+          drop.style.display='block';
+          drop.querySelectorAll('.cli-ac-item').forEach((el,i)=>{
+            el.addEventListener('mousedown', e=>{ e.preventDefault(); selecionar(achados[i]); });
+            el.addEventListener('mouseover', ()=>{ focarItem(i); });
+          });
+        } else {
+          // Não encontrou no cadastro — oferecer busca na Receita ou cadastro novo
+          const t = inp.value.trim();
+          const parece_cpf = /^\d[\d.\-]+$/.test(t) && onlyDigits(t).length === 11;
+          drop.innerHTML = `
+            <div style="padding:10px 12px;">
+              <div style="font-size:12.5px;color:var(--ink-faint);margin-bottom:8px;">
+                Nenhum cliente encontrado no cadastro.
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px;">
+                ${parece_cpf ? `
+                <button type="button" class="btn btn-ghost btn-sm" id="cliAcBtnReceita"
+                  style="justify-content:flex-start;gap:8px;text-align:left;">
+                  🔎 Buscar na Receita Federal
+                </button>
+                <div id="cliAcReceitaResult" style="font-size:12px;padding:0 2px;display:none;"></div>
+                ` : ''}
+                <button type="button" class="btn btn-ghost btn-sm" id="cliAcBtnCadastrar"
+                  style="justify-content:flex-start;gap:8px;text-align:left;">
+                  ＋ Cadastrar novo cliente
+                </button>
+              </div>
+            </div>`;
+          drop.style.display='block';
+
+          if(parece_cpf){
+            drop.querySelector('#cliAcBtnReceita')?.addEventListener('mousedown', async e=>{
+              e.preventDefault();
+              const btn = drop.querySelector('#cliAcBtnReceita');
+              const div = drop.querySelector('#cliAcReceitaResult');
+              btn.disabled=true; btn.textContent='⏳ Consultando...';
+              const res = await buscarCpfReceita(onlyDigits(t));
+              btn.disabled=false;
+              if(!res || !res.nome){
+                div.style.display='block';
+                div.innerHTML='<span style="color:var(--danger);">CPF não encontrado ou serviço indisponível.</span>';
+                btn.textContent='🔎 Buscar na Receita Federal';
+              } else {
+                // Achou — abre o popup já com o nome e CPF preenchidos
+                fecharDrop();
+                abrirSeletorCliente(c=>{ clienteSel=c; onSel(c); renderWrap(); }, { nome: res.nome, cpf: t });
+              }
+            });
+          }
+
+          drop.querySelector('#cliAcBtnCadastrar')?.addEventListener('mousedown', e=>{
+            e.preventDefault();
+            fecharDrop();
+            abrirSeletorCliente(c=>{ clienteSel=c; onSel(c); renderWrap(); });
+          });
+        }
       }
 
       function focarItem(idx){
