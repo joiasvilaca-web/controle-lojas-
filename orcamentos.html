@@ -1236,15 +1236,24 @@ function renderResultados(termo){
 function renderNovo(main){
   const editando = !!orcamentoEmEdicao;
   const orcamentoEditando = orcamentoEmEdicao;
-  const validadePadrao = new Date(); validadePadrao.setDate(validadePadrao.getDate()+15);
+  const validadePadrao = new Date(); validadePadrao.setDate(validadePadrao.getDate()+7);
   const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
 
-  // Itens: começa do orçamento em edição, ou vazio com uma linha aberta
-  let itens = editando
-    ? (orcamentoEditando.itens||[]).map(it=>({...it, _modo:'ok'}))
-    : [{ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[], _modo:'editar' }];
-  if(itens.length===0 || itens.every(it=>it._modo==='ok'))
-    itens.unshift({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[], _modo:'editar' });
+  // Holder de itens — mesmo schema do O.S. para usar mountItens
+  const orcItensHolder = { itens: editando
+    ? (orcamentoEditando.itens||[]).map(it=>({
+        id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'',
+        quantidade:Number(it.quantidade)||1, valorUnitario:it.valorUnitario||'',
+        produtoEstoqueId:it.produtoEstoqueId||'', precoOriginal:it.precoOriginal||'',
+        ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual',
+        ajusteQtd:it.ajusteQtd||'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'',
+        observacaoItem:it.observacaoItem||'', _modo:'ok'
+      }))
+    : [{ id:uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'',
+         produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum',
+         ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'',
+         observacaoItem:'', _modo:'editar' }]
+  };
 
   let ajusteTotal = editando
     ? (orcamentoEditando.ajusteTotal||{tipo:'nenhum',modo:'percentual',percVal:'',rVal:''})
@@ -1278,21 +1287,17 @@ function renderNovo(main){
         <input type="date" id="o_data" value="${editando?orcamentoEditando.data:todayStr()}">
       </div>
 
-      <div class="section-label" style="margin-top:14px;">Itens do orçamento</div>
-      <div id="itensRows"></div>
-
-      <div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-bottom:10px;">
-        <div id="totalHint" style="font-size:13px;font-weight:700;color:var(--ink);"></div>
-      </div>
+      <div id="orcItensContainer" style="margin-top:14px;"></div>
 
       <div class="field" style="margin-top:14px;">
         <label>Observações</label>
         <textarea id="o_obs" rows="2" placeholder="Observações visíveis no orçamento...">${escapeHtml(editando?orcamentoEditando.observacoes:'')}</textarea>
       </div>
-      <div class="field">
-        <label>Informação interna <span class="muted">(não aparece no orçamento do cliente)</span></label>
-        <textarea id="o_infoInterna" rows="2" placeholder="Notas internas...">${escapeHtml(editando?orcamentoEditando.infoInterna:'')}</textarea>
+      <div class="info-interna-box" id="orcInfoInternaBox" style="display:${editando&&orcamentoEditando.infoInterna?'block':'none'};margin-top:10px;">
+        <div class="info-interna-badge">🔒 Informação interna — visível só para usuários do sistema</div>
+        <textarea id="o_infoInterna" placeholder="Anotações internas (não aparece para o cliente)...">${escapeHtml(editando?orcamentoEditando.infoInterna:'')}</textarea>
       </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInternaOrc" style="margin-top:8px;font-size:12px;">${editando&&orcamentoEditando.infoInterna?'🔒 − Ocultar informação interna':'🔒 + Adicionar informação interna'}</button>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;">
         <button class="btn btn-accent" id="btnSalvarOrcamento">${editando ? 'Salvar alterações' : 'Salvar orçamento'}</button>
         <button class="btn btn-ghost" id="btnCancelarNovo">Cancelar</button>
@@ -1313,62 +1318,21 @@ function renderNovo(main){
 
   document.getElementById('btnCancelarNovo').addEventListener('click', ()=>{ orcamentoEmEdicao=null; currentTab='lista'; renderTabs(); renderView(); });
 
-  // Itens: reutiliza drawItens e updateTotal definidos em mountItens inline
-  function drawItens(){
-    const wrap = document.getElementById('itensRows');
-    if(!wrap) return;
-    let html='';
-    itens.forEach((it,i)=>{
-      if(it._modo==='ok'){
-        const temObs=!!(it.observacaoItem||'').trim();
-        const nFotos=(it.fotos||[]).length;
-        html+=`<div class="orc-item-compact" data-orcidx="${i}">
-          <span class="orc-compact-nome">${escapeHtml(it.produto||'Item')}</span>
-          <span class="orc-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(Number(it.valorUnitario)):''}</span>
-          ${nFotos?`<span style="font-size:12px;color:var(--ink-faint);">📷${nFotos}</span>`:''}
-          <div class="orc-compact-icones">
-            <button class="orc-compact-btn" data-orceditar="${i}" title="Editar item">✏️</button>
-            <button class="orc-compact-btn" data-orcitdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
-          </div>
-        </div>
-        ${temObs?`<div class="orc-compact-obs">${escapeHtml(it.observacaoItem)}</div>`:''}`;
-      } else {
-        html+=`<div class="orc-item-row" data-orcidx="${i}">
-          <div class="orc-item-topo">
-            <input class="orc-prod-input" placeholder="Produto / serviço..." data-orcprod="${i}" value="${escapeHtml(it.produto||'')}">
-            <div class="orc-item-valor"><input type="number" min="0" step="0.01" placeholder="Valor" data-ival="${i}" value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}"></div>
-            <button type="button" class="orc-item-add" data-orcadd="${i}" title="Confirmar">＋</button>
-            <button type="button" class="icon-btn" data-orcitdel="${i}">✕</button>
-          </div>
-          <div class="orc-item-obs"><input type="text" placeholder="Observação do item (opcional)" data-iobs="${i}" value="${escapeHtml(it.observacaoItem||'')}"></div>
-        </div>`;
-      }
-    });
-    wrap.innerHTML=html;
-    wrap.querySelectorAll('[data-orcprod]').forEach(inp=>{ inp.addEventListener('input',()=>{ itens[Number(inp.dataset.orcprod)].produto=inp.value; }); });
-    wrap.querySelectorAll('[data-ival]').forEach(inp=>{ inp.addEventListener('input',()=>{ itens[Number(inp.dataset.ival)].valorUnitario=inp.value===''?'':parseFloat(inp.value); updateTotal(); }); });
-    wrap.querySelectorAll('[data-iobs]').forEach(inp=>{ inp.addEventListener('input',()=>{ itens[Number(inp.dataset.iobs)].observacaoItem=inp.value; }); });
-    wrap.querySelectorAll('[data-orcadd]').forEach(btn=>{ btn.addEventListener('click',()=>{
-      const i=Number(btn.dataset.orcadd);
-      if(!itens[i].produto&&!itens[i].valorUnitario) return;
-      itens[i]._modo='ok';
-      itens.splice(0,0,{id:uid('oi'),produto:'',produtoId:'',fator:'',valorBase:'',valorUnitario:'',observacaoItem:'',fotos:[],_modo:'editar'});
-      drawItens(); updateTotal();
-    }); });
-    wrap.querySelectorAll('[data-orceditar]').forEach(btn=>{ btn.addEventListener('click',()=>{ itens[Number(btn.dataset.orceditar)]._modo='editar'; drawItens(); }); });
-    wrap.querySelectorAll('[data-orcitdel]').forEach(b=>{ b.addEventListener('click',()=>{
-      itens.splice(Number(b.dataset.orcitdel),1);
-      if(!itens.length) itens.push({id:uid('oi'),produto:'',produtoId:'',fator:'',valorBase:'',valorUnitario:'',observacaoItem:'',fotos:[],_modo:'editar'});
-      drawItens(); updateTotal();
-    }); });
-    updateTotal();
-  }
-  function updateTotal(){
-    const subtotal=itens.filter(it=>it._modo==='ok').reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
-    const box=document.getElementById('totalHint');
-    if(box) box.textContent='Total estimado: '+fmtMoeda(subtotal);
-  }
-  drawItens();
+  // Itens: mesma lógica do O.S. — autocomplete de produto + visual igual
+  try {
+    mountItens(document.getElementById('orcItensContainer'), orcItensHolder,
+      ()=>(window.__lojaAtual ? window.__lojaAtual.id : ''));
+  } catch(e){ console.error('mountItens orc:', e); }
+
+  // Toggle info interna
+  document.getElementById('btnToggleInfoInternaOrc').addEventListener('click',()=>{
+    const box=document.getElementById('orcInfoInternaBox');
+    const btn=document.getElementById('btnToggleInfoInternaOrc');
+    const vis=box.style.display!=='none';
+    box.style.display=vis?'none':'block';
+    btn.textContent=vis?'🔒 + Adicionar informação interna':'🔒 − Ocultar informação interna';
+    if(!vis) document.getElementById('o_infoInterna').focus();
+  });
 
   document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
     const dataOrcamento = document.getElementById('o_data').value || todayStr();
@@ -1379,11 +1343,12 @@ function renderNovo(main){
     const cliente = maiusc(clienteAc ? clienteAc.nome : document.getElementById('o_cliente').value);
     const telefone = clienteAc ? clienteAc.telefone||'' : document.getElementById('o_telefone').value;
     const email = clienteAc ? clienteAc.email||'' : document.getElementById('o_email').value;
-    const itensValidos = itens.filter(it=>it.produto&&it._modo==='ok');
-    const valorTotal = itensValidos.reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
+    const itensValidos = (orcItensHolder.itens||[]).filter(it=>it._modo==='ok'&&it.produto);
+    const valorTotal = itensValidos.reduce((acc,it)=>(acc+(Number(it.quantidade)||1)*(Number(it.valorUnitario)||0)),0);
     if(!lojaId || !vendedora || !validade){ showToast('Preencha loja, vendedora e validade.'); return; }
     if(!cliente){ showToast('Informe o nome do cliente.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item confirmado (clique em ＋).'); return; }
+    if(!validade){ showToast('Preencha a validade do orçamento.'); return; }
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
     const orcamento = editando ? {
       ...orcamentoEditando,
@@ -1409,6 +1374,329 @@ function renderNovo(main){
       currentTab='lista'; renderTabs(); renderView();
     }
   });
+}
+
+function unidadeEstoqueLabel(u){ return u==='g' ? 'g' : u==='kg' ? 'kg' : 'un'; }
+
+function mountItens(container, holder, getLojaId){
+  if(!holder.itens) holder.itens = [];
+  getLojaId = getLojaId || (()=>'');
+
+  function totalItens(){ return holder.itens.reduce((acc,it)=> acc + (Number(it.quantidade)||0) * (Number(it.valorUnitario)||0), 0); }
+
+  /** Recalcula valorUnitario a partir do preço original + desconto/acréscimo (se algum
+   * ajuste estiver configurado). Se não houver ajuste, não mexe no que já está lá — a
+   * pessoa ainda pode digitar o valor unitário na mão, direto. */
+  /* Recalcula o valor final após um ajuste de desconto/acréscimo via botões.
+   Atualiza o campo de valor e o span de total inline sem redesenhar a linha. */
+function recalcularAjusteNovo(it, idx, row){
+  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ return; }
+  const base = Number(it.precoOriginal)||0;
+  if(!base) return;
+  const qtd = Number(it.ajusteQtd)||0;
+  const delta = it.ajusteModo==='percentual' ? base*qtd/100 : qtd;
+  it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
+  const inpVal=row ? row.querySelector('[data-itfield="valorUnitario"]') : null;
+  if(inpVal) inpVal.value=Number(it.valorUnitario).toFixed(2);
+  const span=document.getElementById('descTotal_'+idx);
+  if(span) span.textContent='= R$ '+Number(it.valorUnitario).toFixed(2);
+  updateTotalHint();
+}
+function recalcularValorAjustado(it){
+    if(it.ajusteTipo==='desconto' || it.ajusteTipo==='acrescimo'){
+      const base = Number(it.precoOriginal)||0;
+      const qtdAjuste = Number(it.ajusteQtd)||0;
+      const delta = it.ajusteModo==='percentual' ? base*qtdAjuste/100 : qtdAjuste;
+      it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
+    }
+  }
+  function outrasLojasComEstoque(produto, lojaAtualId){
+    const porLoja = (produto && produto.estoquePorLoja) || {};
+    return (config.lojas||[]).filter(l=> l.id!==lojaAtualId && (Number(porLoja[l.id])||0) > 0)
+      .map(l=> `${l.abreviacao} (${Number(porLoja[l.id])||0})`);
+  }
+
+  function draw(){
+    container.innerHTML = `
+      <div class="section-label">Itens do orçamento</div>
+      <div id="itensRows"></div>
+      <div class="muted" id="itensTotalHint" style="margin-top:8px;"></div>
+    `;
+    drawRows();
+  }
+  function drawRows(){
+    const wrap = container.querySelector('#itensRows');
+    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
+    const lojaAtual = getLojaId();
+    if(vendaveis.length===0){
+      wrap.innerHTML = `<div class="empty" style="padding:16px;">Nenhum produto cadastrado ainda — cadastre em <b>Cadastro → Produtos</b> antes de lançar uma venda.</div>`;
+      return;
+    }
+    let __html='';
+    holder.itens.forEach((it,i)=>{
+      if(it._modo==='ok'){
+        const temObs=!!(it.observacaoItem||'').trim();
+        const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
+          ?` (${it.ajusteTipo==='desconto'?'−':'+'}${it.ajustePerc?it.ajustePerc+'%':('R$ '+it.ajusteValR)})`:'';
+        __html+=`<div class="venda-item-compact" data-idx="${i}">
+          <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?'R$ '+Number(it.valorUnitario).toFixed(2):''}${escapeHtml(descInfo)}</span>
+          <div class="venda-compact-icones">
+            ${temObs?`<button class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="${escapeHtml(it.observacaoItem)}">💬</button>`:''}
+            <button class="venda-compact-btn" data-iteditar="${i}" title="Editar">✏️</button>
+            <button class="venda-compact-btn" data-itdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
+          </div>
+        </div>
+        <div class="venda-compact-obs" id="vendaObs_${i}">${temObs?escapeHtml(it.observacaoItem):''}</div>`;
+      } else {
+        const produtoAtual=it.produtoEstoqueId?vendaveis.find(p=>p.id===it.produtoEstoqueId):null;
+        const estoqueAqui=produtoAtual?(Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0):null;
+        const outras=produtoAtual?outrasLojasComEstoque(produtoAtual,lojaAtual):[];
+        __html+=`<div class="item-row" data-idx="${i}">
+          <div class="item-row-topo">
+            <div class="prod-ac-wrap item-row-produto" id="pacWrap_${i}">
+              ${produtoAtual
+                ?`<div class="prod-ac-sel">
+                     <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
+                     ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>`:''}
+                     <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
+                   </div>`
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Nome, código, tipo, fornecedor ou bipe o código de barras..." autocomplete="off" spellcheck="false" data-pac="${i}">
+                   <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
+            </div>
+            <div class="item-row-valor">
+              <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00"
+                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+            </div>
+            <div class="item-row-desc">
+              <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}">Desc.</button>
+              <button type="button" class="btn-ajuste ${it.ajusteTipo==='acrescimo'?'ativo-acr':''}" data-aidbtn="acrescimo" data-idx2="${i}">Acrés.</button>
+              <input type="number" min="0" step="0.01" class="campo-perc" data-itfield="ajustePerc" placeholder="%" title="Percentual"
+                value="${it.ajustePerc!==undefined&&it.ajustePerc!==''?it.ajustePerc:''}">
+              <span class="desc-sep">ou</span>
+              <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
+                value="${it.ajusteValR!==undefined&&it.ajusteValR!==''?it.ajusteValR:''}">
+              <span class="desc-total" id="descTotal_${i}">${(()=>{
+                if(it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null) return '= R$ '+Number(it.valorUnitario).toFixed(2);
+                return '';
+              })()}</span>
+            </div>
+            <button type="button" class="btn-add-item" data-itadd="${i}" title="Confirmar este item e adicionar outro">Adicionar</button>
+            <button type="button" class="icon-btn" data-itdel="${i}" title="Remover">✕</button>
+          </div>
+          ${produtoAtual?`
+          <div class="item-row-estoque">
+            <span class="muted" style="font-size:12px;">📦 <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} nesta loja</span>
+            ${outras.length>0?`<span class="muted" style="font-size:12px;">· também tem em: ${outras.join(', ')}</span>`:`<span class="muted" style="font-size:12px;">· sem estoque em outras lojas</span>`}
+          </div>
+          ${estoqueAqui<=0&&outras.length>0?`
+          <div style="margin-top:6px;padding:8px 10px;background:var(--wait-soft,#fceedc);border:1px solid var(--wait,#b45309);border-radius:8px;font-size:12.5px;color:var(--wait,#b45309);font-weight:600;">
+            ⚠️ Sem estoque nesta loja, mas <b>tem em ${outras.join(', ')}</b>.
+            <div style="font-weight:500;margin-top:3px;">A peça é de outro CNPJ — verifique com a gerência a baixa de estoque correta.</div>
+          </div>`:''}
+          `:''}
+          <div class="item-row-obs">
+            <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)"
+              value="${escapeHtml(it.observacaoItem||'')}">
+          </div>
+        </div>`;
+      }
+    });
+    wrap.innerHTML=__html;
+
+    // ── Autocomplete de produto ──
+    wrap.querySelectorAll('[data-pac]').forEach(inp=>{
+      const i = Number(inp.dataset.pac);
+      const drop = document.getElementById('pacDrop_'+i);
+      let pacTimer=null, pacFocus=-1, pacAchados=[];
+      function fecharDrop(){ drop.style.display='none'; pacFocus=-1; }
+      function renderDrop(lista){
+        pacAchados=lista;
+        if(!lista.length){ drop.innerHTML='<div class="prod-ac-item" style="color:var(--ink-faint);">Nenhum produto encontrado.</div>'; drop.style.display='block'; return; }
+        drop.innerHTML=lista.map((p,k)=>`<div class="prod-ac-item" data-pk="${k}"><b>${escapeHtml(p.nome)}</b><span>${[p.codigo?'Cód. '+p.codigo:null,p.fator!=null&&p.fator!==''?'Fator '+p.fator:null,p.tipo||null,p.fornecedor||null,p.precoVenda!=null?'R$ '+Number(p.precoVenda).toFixed(2):null].filter(Boolean).join(' · ')}</span></div>`).join('');
+        drop.style.display='block';
+        drop.querySelectorAll('.prod-ac-item[data-pk]').forEach(el=>{
+          el.addEventListener('mouseover',()=>{ pacFocus=Number(el.dataset.pk); drop.querySelectorAll('.prod-ac-item').forEach((e,k)=>e.classList.toggle('pf',k===pacFocus)); });
+          el.addEventListener('mousedown',e=>{ e.preventDefault(); selecionarProduto(i,pacAchados[Number(el.dataset.pk)]); });
+        });
+      }
+      inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
+        const t=inp.value.toLowerCase().trim();
+        if(!t){ fecharDrop(); return; }
+        const codigoExato=/^\d{6,}$/.test(inp.value.trim());
+        if(codigoExato){
+          const porCod=vendaveis.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
+          if(porCod){ selecionarProduto(i,porCod); fecharDrop(); return; }
+        }
+        renderDrop(vendaveis.filter(p=>{
+          const campos=[p.nome,p.codigo,p.codigoBarras,String(p.fator||''),p.tipo,p.fornecedor];
+          return campos.some(c=>c&&String(c).toLowerCase().includes(t));
+        }).slice(0,15));
+      },120); });
+      inp.addEventListener('keydown',e=>{
+        const items=drop.querySelectorAll('.prod-ac-item[data-pk]');
+        if(!items.length) return;
+        if(e.key==='ArrowDown'){ e.preventDefault(); pacFocus=Math.min(pacFocus+1,items.length-1); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
+        else if(e.key==='ArrowUp'){ e.preventDefault(); pacFocus=Math.max(pacFocus-1,0); items.forEach((el,k)=>el.classList.toggle('pf',k===pacFocus)); }
+        else if(e.key==='Enter'){ e.preventDefault();
+          if(pacFocus>=0) selecionarProduto(i,pacAchados[pacFocus]);
+          else if(pacAchados.length===1) selecionarProduto(i,pacAchados[0]);
+        }
+        else if(e.key==='Escape'){ fecharDrop(); }
+      });
+      inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
+      inp.focus();
+    });
+    // ＋ confirma → compacto + nova linha vazia
+    wrap.querySelectorAll('[data-itadd]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.itadd);
+        const it=holder.itens[idx];
+        if(!it.produtoEstoqueId&&!it.valorUnitario) return;
+        it._modo='ok';
+        holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
+        drawRows(); updateTotalHint();
+      });
+    });
+    // ✏️ volta ao modo editar
+    wrap.querySelectorAll('[data-iteditar]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        holder.itens[Number(btn.dataset.iteditar)]._modo='editar';
+        drawRows(); updateTotalHint();
+      });
+    });
+    // 💬 toggle obs
+    wrap.querySelectorAll('[data-itobstoggle]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const box=document.getElementById('vendaObs_'+btn.dataset.itobstoggle);
+        if(box) box.style.display=box.style.display==='block'?'none':'block';
+      });
+    });
+
+    // Botão × limpa produto
+    wrap.querySelectorAll('[data-paclear]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const i=Number(btn.dataset.paclear);
+        const it=holder.itens[i];
+        it.produtoEstoqueId=''; it.produto=''; it.precoOriginal=''; it.valorUnitario=''; it.ajusteTipo='nenhum'; it.ajusteQtd='';
+        drawRows(); updateTotalHint();
+      });
+    });
+
+    // ── Botões Desconto / Acréscimo ──
+    wrap.querySelectorAll('[data-aidbtn]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.idx2);
+        const it=holder.itens[idx];
+        const tipo=btn.dataset.aidbtn;
+        // toggle: clicar no mesmo botão ativo desativa
+        it.ajusteTipo = it.ajusteTipo===tipo ? 'nenhum' : tipo;
+        // atualiza aparência dos botões sem redesenhar a linha inteira
+        const row=wrap.querySelector('[data-idx="'+idx+'"]');
+        row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+          b.classList.remove('ativo-desc','ativo-acr');
+          if(it.ajusteTipo==='desconto'&&b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+          if(it.ajusteTipo==='acrescimo'&&b.dataset.aidbtn==='acrescimo') b.classList.add('ativo-acr');
+        });
+        if(it.ajusteTipo==='nenhum'){
+          it.ajustePerc=''; it.ajusteValR='';
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          // restaura valor original
+          if(it.precoOriginal!==''&&it.precoOriginal!=null){
+            it.valorUnitario=it.precoOriginal;
+            const inpVal=row.querySelector('[data-itfield="valorUnitario"]');
+            if(inpVal) inpVal.value=Number(it.precoOriginal).toFixed(2);
+          }
+          updateTotalHint();
+        } else {
+          recalcularAjusteNovo(it, idx, row);
+        }
+      });
+    });
+
+    // ── Campos de valor e desconto ──
+    wrap.querySelectorAll('[data-itfield]').forEach(el=>{
+      el.addEventListener('input',()=>{
+        const row=el.closest('[data-idx]');
+        const idx=Number(row.dataset.idx);
+        const field=el.dataset.itfield;
+        const it=holder.itens[idx];
+
+        if(field==='valorUnitario'){
+          it.valorUnitario=el.value===''?'':parseFloat(el.value);
+          it.precoOriginal=it.valorUnitario;
+          // limpa desconto ao editar valor manualmente
+          it.ajustePerc=''; it.ajusteValR=''; it.ajusteTipo='nenhum';
+          row.querySelectorAll('[data-aidbtn]').forEach(b=>b.classList.remove('ativo-desc','ativo-acr'));
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          updateTotalHint(); return;
+        }
+        if(field==='ajustePerc'){
+          it.ajustePerc=el.value===''?'':parseFloat(el.value);
+          it.ajusteValR='';
+          it.ajusteModo='percentual'; it.ajusteQtd=it.ajustePerc;
+          // Se não clicou em nenhum botão, ativa desconto automaticamente ao digitar
+          if(it.ajusteTipo==='nenhum' && it.ajustePerc!==''){
+            it.ajusteTipo='desconto';
+            row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+              b.classList.remove('ativo-desc','ativo-acr');
+              if(b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+            });
+          }
+          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
+          recalcularAjusteNovo(it, idx, row); return;
+        }
+        if(field==='ajusteValR'){
+          it.ajusteValR=el.value===''?'':parseFloat(el.value);
+          it.ajustePerc='';
+          it.ajusteModo='valor'; it.ajusteQtd=it.ajusteValR;
+          // Se não clicou em nenhum botão, ativa desconto automaticamente ao digitar
+          if(it.ajusteTipo==='nenhum' && it.ajusteValR!==''){
+            it.ajusteTipo='desconto';
+            row.querySelectorAll('[data-aidbtn]').forEach(b=>{
+              b.classList.remove('ativo-desc','ativo-acr');
+              if(b.dataset.aidbtn==='desconto') b.classList.add('ativo-desc');
+            });
+          }
+          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
+          recalcularAjusteNovo(it, idx, row); return;
+        }
+        if(field==='observacaoItem'){ it.observacaoItem=el.value; return; }
+        it[field]=el.value; updateTotalHint();
+      });
+    });
+    wrap.querySelectorAll('[data-itdel]').forEach(b=>{
+      b.addEventListener('click',()=>{ holder.itens.splice(Number(b.dataset.itdel),1); drawRows(); updateTotalHint(); });
+    });
+    updateTotalHint();
+  }
+
+  // Seleciona produto pelo autocomplete
+  function selecionarProduto(idx, produto){
+    const it=holder.itens[idx];
+    it.produtoEstoqueId=produto.id; it.produto=produto.nome;
+    it.precoOriginal=produto.precoVenda!=null?produto.precoVenda:'';
+    if(it.valorUnitario===''||it.valorUnitario==null) it.valorUnitario=it.precoOriginal||'';
+    drawRows();
+    // Foca no campo de valor após selecionar produto
+    setTimeout(()=>{
+      const row=container.querySelector('[data-idx="'+idx+'"]');
+      if(row){ const v=row.querySelector('[data-itfield="valorUnitario"]'); if(v) v.focus(); }
+    },50);
+    updateTotalHint();
+  }
+  function updateTotalHint(){
+    const hint = container.querySelector('#itensTotalHint');
+    if(hint) hint.innerHTML = `Total dos itens: <b>R$ ${totalItens().toFixed(2)}</b> <span class="muted">(você pode ajustar o valor total do pagamento manualmente se houver desconto/acréscimo)</span>`;
+    // Avisa o bloco de pagamento para recalcular o total
+    if(typeof window.__pagRedraw==='function') window.__pagRedraw();
+  }
+  draw();
+  return { totalItens, refreshEstoque: drawRows };
 }
 
 /* ============================================================
