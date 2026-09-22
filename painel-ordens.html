@@ -1331,6 +1331,57 @@ async function salvarUmCliente(cliente){
     return true;
   }catch(e){ console.error('erro ao salvar cliente', e); showToast('Não foi possível salvar o cliente.'); return false; }
 }
+/**
+ * Após salvar uma O.S., atualiza o cadastro do cliente no banco com os dados
+ * mais recentes (nome, telefone, e-mail, endereço). Se o cliente ainda não
+ * existir no cadastro, cria um novo registro com uid gerado.
+ */
+async function upsertClienteFromOrder(cli){
+  if(!cli || !cli.cliente) return;
+  const telD = onlyDigits(cli.telefone||'');
+  // Buscar cliente existente pelo telefone (sem carregar lista completa em memória)
+  let cliCad = null;
+  if(telD) cliCad = await buscarClientePorTelefoneOuCpf(cli.telefone, '');
+  if(!cliCad && cli.cpf) cliCad = await buscarClientePorTelefoneOuCpf('', cli.cpf);
+  if(cliCad){
+    // Atualizar campos com os dados mais recentes da O.S.
+    const atualizado = Object.assign({}, cliCad, {
+      nome:          (cli.cliente||'').trim() || cliCad.nome,
+      telefone:      cli.telefone  || cliCad.telefone,
+      email:         cli.email     || cliCad.email,
+      cpf:           cli.cpf       || cliCad.cpf,
+      dataNascimento:cli.dataNascimento || cliCad.dataNascimento,
+      cep:           cli.cep       || cliCad.cep,
+      endereco:      cli.endereco  || cliCad.endereco,
+      numero:        cli.numero    || cliCad.numero,
+      complemento:   cli.complemento || cliCad.complemento,
+      bairro:        cli.bairro    || cliCad.bairro,
+      cidade:        cli.cidade    || cliCad.cidade,
+      estado:        cli.estado    || cliCad.estado,
+    });
+    await salvarUmCliente(atualizado);
+  } else {
+    // Cliente novo — criar registro
+    const novo = {
+      id: uid('cli'),
+      nome: (cli.cliente||'').trim(),
+      telefone: cli.telefone||'',
+      email: cli.email||'',
+      cpf: cli.cpf||'',
+      dataNascimento: cli.dataNascimento||'',
+      cep: cli.cep||'',
+      endereco: cli.endereco||'',
+      numero: cli.numero||'',
+      complemento: cli.complemento||'',
+      bairro: cli.bairro||'',
+      cidade: cli.cidade||'',
+      estado: cli.estado||'',
+      credito: 0, fiadoDebitos: [], creditoMovimentos: [],
+      criadoEm: Date.now(),
+    };
+    await salvarUmCliente(novo);
+  }
+}
 async function excluirCliente(id){
   try{
     const { error } = await supabaseClient.from('clientes_cadastro').delete().eq('id', id);
