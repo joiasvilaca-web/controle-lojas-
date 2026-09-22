@@ -2719,6 +2719,62 @@ function funcionarioOptionsTodosHtml(selected){
 /* ============================================================
    NOTIFICAR CLIENTE (modal pós-lançamento / pós-edição)
    ============================================================ */
+function montarMensagemOS(order, template){
+  const st = (config.serviceTypes||[]).find(s=>s.id===order.serviceTypeId);
+  const loja = (config.lojas||[]).find(l=>l.id===order.lojaId);
+  const nota = order.codigoVia || order.via || '';
+  const notaLinha = nota ? `Número da nota: ${nota}
+` : '';
+  const linkAcomp = `https://vilaca-controle-lojas.vercel.app/get-gravacao-status?via=${encodeURIComponent(order.via||'')}`;
+  return (template||DEFAULT_TEMPLATE)
+    .replace(/\{cliente\}/g, order.cliente||'')
+    .replace(/\{via\}/g, order.via||'')
+    .replace(/\{status\}/g, statusLabel(order.status))
+    .replace(/\{servico\}/g, st ? st.nome : (order.serviceTypeName||''))
+    .replace(/\{data\}/g, fmtDate(order.data))
+    .replace(/\{loja\}/g, loja ? loja.nome : (order.lojaId||''))
+    .replace(/\{vendedora\}/g, order.vendedora||'')
+    .replace(/\{recebidoPor\}/g, order.recebidoPor||'')
+    .replace(/\{notaLinha\}/g, notaLinha)
+    .replace(/\{linkAcompanhamento\}/g, linkAcomp);
+}
+function sendWhatsApp(order){
+  if(!order){ showToast('Ordem não encontrada.'); return; }
+  if(!order.telefone){ showToast('Este pedido não tem telefone salvo.'); return; }
+  const template = order.status==='pronto'
+    ? (config.mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
+    : order.status==='entregue'
+    ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
+    : (config.mensagemPadrao||DEFAULT_TEMPLATE);
+  const msg = encodeURIComponent(montarMensagemOS(order, template));
+  const url = `https://wa.me/55${onlyDigits(order.telefone)}?text=${msg}`;
+  const a = document.createElement('a');
+  a.href=url; a.target='_blank'; a.rel='noopener noreferrer';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+async function sendEmail(order){
+  if(!order){ showToast('Ordem não encontrada.'); return; }
+  if(!order.email){ showToast('Este pedido não tem e-mail salvo.'); return; }
+  const template = order.status==='pronto'
+    ? (config.mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
+    : order.status==='entregue'
+    ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
+    : (config.mensagemPadrao||DEFAULT_TEMPLATE);
+  const assunto = `Atualização do seu pedido — ${order.via||''}`;
+  const corpo = montarMensagemOS(order, template);
+  try{
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({ to:order.email, subject:assunto, body:corpo, senha:__gatewaySenha })
+    });
+    if(!r.ok) throw new Error('Falha no envio');
+    showToast('E-mail enviado com sucesso!');
+  }catch(e){
+    console.error('sendEmail:', e);
+    showToast('Falha ao enviar e-mail. Verifique a conexão.');
+  }
+}
 function openNotifyModal(order){
   openModal(`
     <h3>Notificar cliente?</h3>
