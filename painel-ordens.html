@@ -442,6 +442,8 @@
   /* ---------- OBSERVAÇÕES / ALERTAS ---------- */
   .obs-item{border:1px solid var(--line); border-radius:9px; padding:11px 13px; margin-bottom:8px; background:var(--surface);}
   .obs-item.obs-pending{border-color:var(--danger); background:var(--danger-soft);}
+.campo-faltando{border-color:var(--danger)!important; box-shadow:0 0 0 2px rgba(185,28,28,.15)!important;}
+.campo-faltando-label{color:var(--danger)!important; font-weight:800;}
   .badge-flag{background:var(--danger-soft); color:var(--danger); font-size:10.5px; margin-top:4px;}
   #alertBar{width:100%;}
   .alert-bar{background:var(--danger-soft); border-bottom:2px solid var(--danger); padding:14px 22px;}
@@ -3360,16 +3362,49 @@ function renderNovaOrdem(main){
     const sid = servicoSel.value;
     const dt = dataInp.value;
 
-    if(!cliente || !telefone || !vendedora || !loja || !sid || !dt){
-      const faltando = [];
-      if(!cliente)   faltando.push('nome do cliente');
-      if(!telefone)  faltando.push('telefone');
-      if(!vendedora) faltando.push('vendedora');
-      if(!loja)      faltando.push('loja');
-      if(!sid)       faltando.push('tipo de serviço');
-      if(!dt)        faltando.push('data');
-      showToast('Faltando: ' + faltando.join(', ') + '.');
+    // ── Highlight visual dos campos faltando ──────────────────────
+    const camposFaltando = [
+      { vazio: !cliente,   ids: ['f_clienteAcWrap'],               label: null },
+      { vazio: !telefone,  ids: ['f_clienteAcWrap'],               label: null },
+      { vazio: !vendedora, ids: ['f_vendedora'],                   label: 'vendedora' },
+      { vazio: !loja,      ids: [],                                label: null }, // loja vem do shell
+      { vazio: !sid,       ids: ['f_servico'],                     label: 'tipo de serviço' },
+      { vazio: !dt,        ids: ['f_data'],                        label: 'data' },
+    ];
+    // Limpar highlights anteriores
+    document.querySelectorAll('.campo-faltando').forEach(el=>el.classList.remove('campo-faltando'));
+    document.querySelectorAll('.campo-faltando-label').forEach(el=>el.classList.remove('campo-faltando-label'));
+    const faltando = [];
+    camposFaltando.forEach(({ vazio, ids, label })=>{
+      if(!vazio) return;
+      if(label) faltando.push(label);
+      ids.forEach(id=>{
+        const el = document.getElementById(id);
+        if(!el) return;
+        el.classList.add('campo-faltando');
+        // Marcar o label anterior também
+        const fieldDiv = el.closest('.field');
+        if(fieldDiv){ const lbl = fieldDiv.querySelector('label'); if(lbl) lbl.classList.add('campo-faltando-label'); }
+        el.scrollIntoView({ behavior:'smooth', block:'center' });
+      });
+    });
+    if(!cliente || !telefone){
+      faltando.unshift('cliente');
+      const wrap = document.getElementById('f_clienteAcWrap');
+      if(wrap){ wrap.scrollIntoView({ behavior:'smooth', block:'center' }); }
+    }
+    if(!loja) faltando.unshift('loja (selecione no topo da página)');
+    if(faltando.length > 0){
+      showToast('⚠️ Faltando: ' + faltando.join(', ') + '.');
       return;
+    }
+    // Garantir que a via foi gerada (pode estar vazia se a loja foi trocada)
+    if(!via){
+      const abrev = lojaAbreviacao(loja);
+      const r = await gatewayCall({ op:'bumpViaSequence', params:{ loja } });
+      const proximo = (r && r.ok) ? r.proximo : ((config.viaSequences||{})[loja]||0)+1;
+      if(config.viaSequences) config.viaSequences[loja] = proximo;
+      viaInp.value = `${abrev}-${proximo}`;
     }
     if(!tempPagHolder.momentoPagamento){ showToast('Informe o momento do pagamento (Pago agora ou Pagar na volta).'); return; }
     if(!tempPagHolder.emissaoNota){ showToast('Informe se haverá nota fiscal (Sim ou Não).'); return; }
