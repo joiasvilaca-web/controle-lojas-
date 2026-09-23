@@ -2738,6 +2738,137 @@ function montarMensagemOS(order, template){
     .replace(/\{notaLinha\}/g, notaLinha)
     .replace(/\{linkAcompanhamento\}/g, linkAcomp);
 }
+
+/**
+ * Abre uma janela com um documento formatado da ordem de serviço, pronto para impressão
+ * (ou salvar como PDF pelo próprio diálogo de impressão do navegador).
+ */
+function printOrder(order){
+  const paymentTypesMap = {};
+  (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
+  paymentTypesMap['__credito'] = 'Crédito do cliente'; paymentTypesMap['__fiado'] = 'Fiado';
+  const imp = (config.impressao && config.impressao.os) || {};
+  const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
+
+  const linhas = [];
+  linhas.push(`<div class="titulo">ORDEM DE SERVIÇO</div>`);
+  linhas.push(`<div class="destaque" style="text-align:center;">Loja ${escapeHtml(nomeLojaOrder(order))} · Via ${escapeHtml(order.via||'—')}</div>`);
+  linhas.push(`<div class="destaque" style="text-align:center;">Entrega prevista: ${fmtDate(order.data)}</div>`);
+  linhas.push(`<div class="linha"></div>`);
+
+  if(imp.cliente !== false){
+    linhas.push(`<div class="destaque">Cliente: ${escapeHtml(order.cliente||'—')}</div>`);
+  }
+  if(imp.telefone !== false && order.telefone){
+    linhas.push(`<div><b>Telefone:</b> ${escapeHtml(order.telefone)}</div>`);
+  }
+  if(imp.servico !== false){
+    linhas.push(`<div><b>Serviço:</b> ${escapeHtml(order.serviceTypeName||'—')}</div>`);
+  }
+  if(imp.descricao !== false && order.descricao){
+    linhas.push(`<div><b>Descrição:</b> ${escapeHtml(order.descricao)}</div>`);
+  }
+  if(imp.vendedora !== false){
+    linhas.push(`<div><b>Vendedora:</b> ${escapeHtml(order.vendedora||'—')}</div>`);
+  }
+  linhas.push(`<div><b>Status:</b> ${statusLabel(order.status)}${order.encaixe ? ' (Encaixe)' : ''}</div>`);
+  if(order.numeroNota){
+    linhas.push(`<div><b>Nota nº:</b> ${escapeHtml(order.numeroNota)}</div>`);
+  }
+
+  if(imp.valores !== false){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div><b>PAGAMENTO</b></div>`);
+    linhas.push(`<div>Momento: ${order.momentoPagamento==='na_volta' ? 'Na retirada' : 'No ato'}</div>`);
+    if(order.valorTotal) linhas.push(`<div class="destaque">Valor total: R$ ${Number(order.valorTotal).toFixed(2)}</div>`);
+    (order.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
+      linhas.push(`<div class="destaque">${escapeHtml(paymentTypesMap[p.formaId]||'—')}: R$ ${Number(p.valor||0).toFixed(2)}</div>`);
+    });
+    linhas.push(`<div class="destaque">Recebido: R$ ${valorRecebidoDe(order).toFixed(2)}</div>`);
+    linhas.push(`<div class="destaque">A receber: R$ ${valorAReceberDe(order).toFixed(2)}</div>`);
+  }
+
+  // O array "observacoes" é um histórico INTERNO (nome do funcionário + anotação dele
+  // — ex: "Fulano: confirmado com fornecedor"), não é uma nota pro cliente. De
+  // propósito, isso NUNCA entra na impressão.
+
+  if(imp.assinatura !== false){
+    linhas.push(`<div class="linha"></div>`);
+    linhas.push(`<div class="assinatura"></div>`);
+    linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
+  }
+
+  abrirImpressaoBobina('Ordem de Serviço', linhas.join(''), larguraMm, order.codigoVia);
+}
+
+/** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
+ * configurada. Se `codigoVia` for passado, imprime um código de barras nítido no
+ * rodapé, com o número do código escrito logo abaixo dele. */
+const ESCALA_BOBINA_PX = {
+  pequena: { base:12, titulo:14, sub:11 },
+  media:   { base:14, titulo:17, sub:12.5 },
+  grande:  { base:16.5, titulo:20, sub:14.5 },
+};
+function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
+  const impCfg = config.impressao || {};
+  const px = ESCALA_BOBINA_PX[impCfg.escalaTexto] || ESCALA_BOBINA_PX.media;
+  const peso = impCfg.negrito!==false ? 700 : 400;
+  const reforcoCss = impCfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
+  const rodape = (impCfg.mensagemRodape||'').trim();
+  const codigoHtml = codigoVia ? `
+    <div class="linha"></div>
+    <div class="barcode-wrap"><svg id="barcodeSvg"></svg></div>
+    <div class="sub" style="text-align:center; font-weight:800; letter-spacing:.04em; margin-top:2px;">${escapeHtml(codigoVia)}</div>
+  ` : '';
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(titulo)}</title>
+${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>` : ''}
+<style>
+  @page{ size:${larguraMm}mm auto; margin:0; }
+  *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body{ font-family:'Courier New', monospace; width:${larguraMm}mm; margin:0 auto; padding:4mm 3mm; color:#000; font-weight:${peso}; font-size:${px.base}px; line-height:1.42; -webkit-font-smoothing:none; ${reforcoCss} }
+  .titulo{ font-size:${px.titulo}px; font-weight:800; text-align:center; letter-spacing:.02em; }
+  .sub{ font-size:${px.sub}px; color:#000; text-align:center; }
+  .linha{ border-top:1px dashed #000; margin:6px 0; }
+  .assinatura{ border-top:1px solid #000; margin-top:26px; }
+  .rodape{ text-align:center; margin-top:10px; font-size:${px.sub}px; }
+  b{ font-weight:800; }
+  .destaque{ font-weight:800; font-size:${Math.round(px.base*1.25)}px; }
+  .barcode-wrap{ text-align:center; margin-top:6px; }
+  .barcode-wrap svg{ max-width:100%; }
+  @media print{ body{ padding:1mm 2mm; } }
+</style>
+</head>
+<body>
+  ${codigoHtml}
+  ${conteudoHtml}
+  ${rodape ? `<div class="linha"></div><div class="rodape">${escapeHtml(rodape)}</div>` : ''}
+</body>
+</html>`;
+  const printWin = window.open('', '_blank', 'width=420,height=700');
+  if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
+  printWin.document.open();
+  printWin.document.write(html);
+  printWin.document.close();
+  printWin.focus();
+  if(codigoVia){
+    const tentarGerarCodigo = ()=>{
+      try{
+        if(printWin.JsBarcode){
+          printWin.JsBarcode(printWin.document.getElementById('barcodeSvg'), codigoVia, { format:'CODE128', width:2, height:42, displayValue:false, margin:0 });
+        }
+      }catch(e){}
+      setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 250);
+    };
+    setTimeout(tentarGerarCodigo, 400);
+  } else {
+    setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  }
+}
+
 function sendWhatsApp(order){
   if(!order){ showToast('Ordem não encontrada.'); return; }
   if(!order.telefone){ showToast('Este pedido não tem telefone salvo.'); return; }
