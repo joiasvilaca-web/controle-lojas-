@@ -1035,58 +1035,127 @@ async function renderVendasDP(main){
   desenhar();
 }
 
-function renderFuncionarios(main){
-  const podeEditar = podeEditarDP();
-  main.innerHTML = `
-    <div class="page-head">
-      <h1 class="page-title">Funcionários</h1>
-      <p class="page-sub">${podeEditar ? 'Cadastro único por funcionário: função (usada nos módulos), dados pessoais, profissionais, bancários e acesso — tudo numa aba só.' : 'Suas informações cadastradas.'}</p>
-    </div>
-    <div class="card" style="padding:14px 18px;">
-      <table>
-        <thead><tr><th>Nome</th><th>Cargo</th><th>Loja</th><th>Admissão</th><th>Status</th><th></th></tr></thead>
-        <tbody id="tbodyFunc"></tbody>
-      </table>
-    </div>
-    ${podeEditar ? `
-    <div class="card" style="padding:14px 18px;">
-      <div class="section-label" style="margin-top:0;">Novo funcionário</div>
-      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
-        <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
-        <div class="field" style="flex:0 1 150px; min-width:120px; margin-bottom:0;"><input id="func_apelido" placeholder="Apelido (opcional)"></div>
-        <div class="cargo-checks">
-          <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
-          <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
-          <label><input type="checkbox" value="gerente" class="func_cargo_new"> Gerente</label>
-          <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
-        </div>
-        <div class="field" style="flex:0 1 200px; min-width:170px; margin-bottom:0;">
-          <select id="func_lojaNova"><option value="">Loja de acesso...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
-        </div>
-        <div class="field" style="flex:0 1 220px; min-width:180px; margin-bottom:0;"><input type="email" id="func_emailNovo" placeholder="E-mail (opcional — envia link de cadastro)"></div>
-        <button class="btn btn-accent btn-sm" id="btnAddFunc">+ Adicionar</button>
+/* Retorna quantos dias faltam para completar 90 dias a partir de dataAdmissao (string YYYY-MM-DD).
+   Retorna null se dataAdmissao for inválida ou se já passaram os 90 dias. */
+function diasParaCompletarExperiencia(dataAdmissao){
+  if(!dataAdmissao) return null;
+  const admissao = new Date(dataAdmissao + 'T00:00:00');
+  if(isNaN(admissao)) return null;
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const diff = Math.floor((hoje - admissao) / 86400000);
+  const restam = 90 - diff;
+  return restam > 0 ? restam : null;
+}
+
+/* Abre o popup de inativação e, ao confirmar, bloqueia o acesso e salva status=desligado. */
+async function abrirModalInativar(f, onConcluido){
+  const funcId = f.funcionarioId || f.id;
+  openModal(`
+    <div class="modal-head"><h2>Inativar funcionário</h2></div>
+    <div class="modal-body">
+      <p style="margin:0 0 16px;">Você está prestes a inativar <b>${escapeHtml(f.nome)}</b>.<br>
+      O acesso ao sistema será desabilitado imediatamente.</p>
+      <div class="field">
+        <label>Motivo do desligamento <span style="color:var(--danger);">*</span></label>
+        <textarea id="inativar_motivo" rows="3" placeholder="Descreva o motivo..." style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; resize:vertical;"></textarea>
+      </div>
+      <div class="field">
+        <label>Data de desligamento</label>
+        <input type="date" id="inativar_data" value="${todayStr()}" style="padding:8px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px;">
       </div>
     </div>
-    ` : ''}
-  `;
+    <div class="modal-foot" style="display:flex; gap:10px; justify-content:flex-end;">
+      <button class="btn btn-ghost" id="btnInativarCancelar">Cancelar</button>
+      <button class="btn" style="background:var(--danger,#c0392b); color:#fff;" id="btnInativarConfirmar">🔒 Inativar</button>
+    </div>
+  `);
+  document.getElementById('btnInativarCancelar').addEventListener('click', closeModal);
+  document.getElementById('btnInativarConfirmar').addEventListener('click', async ()=>{
+    const motivo = document.getElementById('inativar_motivo').value.trim();
+    const dataDesligamento = document.getElementById('inativar_data').value;
+    if(!motivo){ showToast('Informe o motivo do desligamento.'); return; }
+    const btn = document.getElementById('btnInativarConfirmar');
+    btn.disabled = true; btn.textContent = 'Inativando...';
+
+    // 1) Bloqueia o acesso (reutiliza op bloquearAcesso se existir, senão apenas seta bloqueado via saveConfig)
+    try{
+      await chamarFuncionarioAcesso({ op:'bloquearAcesso', senha: __gatewaySenha, funcionarioId: funcId });
+    }catch(e){ console.warn('bloquearAcesso indisponível:', e); }
+
+    // 2) Fallback: garante bloqueado=true no users do config
+    const userConfig = (config.users||[]).find(u=>u.funcionarioId===funcId);
+    if(userConfig){ userConfig.bloqueado = true; await configSave(); }
+
+    // 3) Atualiza perfil de RH com status=desligado + motivo
+    const perfisFrescos = await funcionariosGet();
+    const perfilAtual = perfisFrescos.find(p=>p.funcionarioId===funcId);
+    if(perfilAtual){
+      await funcionarioSalvar({ ...perfilAtual, status:'desligado', dataDesligamento, motivoDesligamento: motivo });
+    }
+
+    funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+    closeModal();
+    showToast(`${escapeHtml(f.nome)} foi inativado(a).`);
+    if(onConcluido) onConcluido();
+  });
+}
+
+function renderFuncionarios(main){
+  const podeEditar = podeEditarDP();
+  let abaFuncAtiva = 'ativos';
+
+  function admissaoHtml(f){
+    const dias = diasParaCompletarExperiencia(f.dataAdmissao);
+    if(dias !== null){
+      return `<span style="color:#c0392b; font-weight:700;" title="Período de experiência: ${dias} dia(s) restante(s) para completar 90 dias">⏱ ${dias}d</span>`;
+    }
+    return fmtDate(f.dataAdmissao);
+  }
+
   function draw(){
     const tbody = document.getElementById('tbodyFunc');
-    if(funcionarios.length===0){ tbody.innerHTML = `<tr><td colspan="6" class="empty">${podeEditar?'Nenhum funcionário cadastrado ainda.':'Nenhuma informação encontrada.'}</td></tr>`; return; }
-    tbody.innerHTML = funcionarios.slice().reverse().map(f=>`
-      <tr>
-        <td><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''}${f.semFicha?` <span class="badge" style="margin-left:6px; font-size:11px;">ficha em branco</span>`:''}</td>
-        <td>${escapeHtml(f.cargo||'—')}</td>
-        <td>${escapeHtml(f.loja||'—')}</td>
-        <td>${fmtDate(f.dataAdmissao)}</td>
-        <td><span class="badge ${f.status==='desligado'?'badge-erro':'badge-ok'}">${f.status==='desligado'?'Desligado':'Ativo'}</span></td>
-        <td>
-          <button class="icon-btn" data-verfunc="${f.id}" title="${podeEditarFuncionario(f)?'Ver/editar':'Ver'}">${podeEditarFuncionario(f)?'✎':'👁'}</button>
-        </td>
-      </tr>
-    `).join('');
+    if(!tbody) return;
+    const lista = funcionarios.slice().reverse().filter(f=>
+      abaFuncAtiva==='inativos' ? f.status==='desligado' : f.status!=='desligado'
+    );
+    if(lista.length===0){
+      const msg = abaFuncAtiva==='inativos' ? 'Nenhum funcionário inativo.'
+        : (podeEditar ? 'Nenhum funcionário ativo cadastrado.' : 'Nenhuma informação encontrada.');
+      const cols = abaFuncAtiva==='inativos' ? 7 : 5;
+      tbody.innerHTML = `<tr><td colspan="${cols}" class="empty">${msg}</td></tr>`;
+      return;
+    }
+    if(abaFuncAtiva==='inativos'){
+      tbody.innerHTML = lista.map(f=>`
+        <tr>
+          <td><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''}</td>
+          <td>${escapeHtml(f.cargo||'—')}</td>
+          <td>${escapeHtml(f.loja||'—')}</td>
+          <td>${fmtDate(f.dataAdmissao)}</td>
+          <td>${fmtDate(f.dataDesligamento)||'—'}</td>
+          <td><span class="muted" style="font-size:12px;">${escapeHtml(f.motivoDesligamento||'—')}</span></td>
+          <td><button class="icon-btn" data-verfunc="${f.id}" title="Ver">👁</button></td>
+        </tr>`).join('');
+    } else {
+      tbody.innerHTML = lista.map(f=>`
+        <tr>
+          <td><b>${escapeHtml(f.nome)}</b>${(f.apelido||'').trim()?` <span class="muted">(${escapeHtml(f.apelido)})</span>`:''}${f.semFicha?` <span class="badge" style="margin-left:6px; font-size:11px;">ficha em branco</span>`:''}</td>
+          <td>${escapeHtml(f.cargo||'—')}</td>
+          <td>${escapeHtml(f.loja||'—')}</td>
+          <td>${admissaoHtml(f)}</td>
+          <td style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <button class="icon-btn" data-verfunc="${f.id}" title="${podeEditarFuncionario(f)?'Ver/editar':'Ver'}">${podeEditarFuncionario(f)?'✎':'👁'}</button>
+            ${podeEditar ? `<button class="btn btn-sm" style="background:#fde8e8; color:#c0392b; border:1px solid #c0392b; padding:4px 10px; font-size:12px;" data-inativar="${f.id}" title="Inativar funcionário">🔒 Inativar</button>` : ''}
+          </td>
+        </tr>`).join('');
+      tbody.querySelectorAll('[data-inativar]').forEach(b=>{
+        b.addEventListener('click', ()=>{
+          const func = funcionarios.find(f=>f.id===b.dataset.inativar);
+          if(func) abrirModalInativar(func, renderEstrutura);
+        });
+      });
+    }
     tbody.querySelectorAll('[data-verfunc]').forEach(b=> b.addEventListener('click', async ()=>{
-      // Busca fresca antes de abrir: evita mostrar uma ficha desatualizada (ex: o
-      // funcionário acabou de preencher o link de autocadastro dele) e nunca duplica.
       const idClicado = b.dataset.verfunc;
       const alvoAntigo = funcionarios.find(f=>f.id===idClicado);
       const funcionarioIdAlvo = alvoAntigo ? alvoAntigo.funcionarioId : null;
@@ -1097,37 +1166,81 @@ function renderFuncionarios(main){
       abrirFuncionarioCompletoModal(funcionarioCadastro || { id: funcionarioIdAlvo, nome: (atualizado||alvoAntigo).nome, apelido: (atualizado||alvoAntigo).apelido||'', cargos: [] });
     }));
   }
-  draw();
-  window.__redrawFuncionarios = draw;
 
-  if(podeEditar){
-    document.getElementById('btnAddFunc').addEventListener('click', async ()=>{
-      const nome = maiusc(document.getElementById('func_nome').value);
-      const apelido = maiusc(document.getElementById('func_apelido').value);
-      const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
-      const lojaEscolhida = document.getElementById('func_lojaNova').value;
-      const email = document.getElementById('func_emailNovo').value.trim();
-      if(!nome){ showToast('Informe o nome do funcionário.'); return; }
-      if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-      if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
-      const rCriar = await chamarFuncionarioAcesso({ op:'criarFuncionario', senha: __gatewaySenha, nome, apelido, cargos });
-      if(!rCriar || !rCriar.ok){ showToast((rCriar && rCriar.error) || 'Não foi possível cadastrar o funcionário.'); return; }
-      const novoId = rCriar.funcionarioId;
-      // Já deixa o acesso inicializado (nível Vendedora + a loja escolhida aqui).
-      // A diretoria pode ajustar depois pela aba Acesso do cadastro completo.
-      await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
-      let mensagem = 'Funcionário cadastrado.';
-      if(email){
-        const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
-        mensagem = (rConvite && rConvite.ok)
-          ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).'
-          : 'Funcionário cadastrado, mas não foi possível enviar o link por e-mail: ' + ((rConvite && rConvite.error) || 'erro desconhecido');
-      }
-      funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
-      renderFuncionarios(main);
-      showToast(mensagem);
+  function renderEstrutura(){
+    const colsHead = abaFuncAtiva==='inativos'
+      ? '<th>Nome</th><th>Cargo</th><th>Loja</th><th>Admissão</th><th>Desligamento</th><th>Motivo</th><th></th>'
+      : '<th>Nome</th><th>Cargo</th><th>Loja</th><th>Admissão</th><th></th>';
+    main.innerHTML = `
+      <div class="page-head">
+        <h1 class="page-title">Funcionários</h1>
+        <p class="page-sub">${podeEditar ? 'Cadastro único por funcionário: função (usada nos módulos), dados pessoais, profissionais, bancários e acesso — tudo numa aba só.' : 'Suas informações cadastradas.'}</p>
+      </div>
+      <div class="mini-tabs" id="miniTabsFunc" style="margin-bottom:0;">
+        <button class="${abaFuncAtiva==='ativos'?'active':''}" data-func-tab="ativos">✅ Ativos</button>
+        <button class="${abaFuncAtiva==='inativos'?'active':''}" data-func-tab="inativos">🔒 Inativos</button>
+      </div>
+      <div class="card" style="padding:14px 18px; margin-top:0; border-top-left-radius:0; border-top-right-radius:0;">
+        <table>
+          <thead><tr>${colsHead}</tr></thead>
+          <tbody id="tbodyFunc"></tbody>
+        </table>
+      </div>
+      ${podeEditar && abaFuncAtiva==='ativos' ? `
+      <div class="card" style="padding:14px 18px;">
+        <div class="section-label" style="margin-top:0;">Novo funcionário</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:180px; margin-bottom:0;"><input id="func_nome" placeholder="Nome do funcionário"></div>
+          <div class="field" style="flex:0 1 150px; min-width:120px; margin-bottom:0;"><input id="func_apelido" placeholder="Apelido (opcional)"></div>
+          <div class="cargo-checks">
+            <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
+            <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
+            <label><input type="checkbox" value="gerente" class="func_cargo_new"> Gerente</label>
+            <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
+          </div>
+          <div class="field" style="flex:0 1 200px; min-width:170px; margin-bottom:0;">
+            <select id="func_lojaNova"><option value="">Loja de acesso...</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
+          </div>
+          <div class="field" style="flex:0 1 220px; min-width:180px; margin-bottom:0;"><input type="email" id="func_emailNovo" placeholder="E-mail (opcional — envia link de cadastro)"></div>
+          <button class="btn btn-accent btn-sm" id="btnAddFunc">+ Adicionar</button>
+        </div>
+      </div>
+      ` : ''}
+    `;
+    document.querySelectorAll('[data-func-tab]').forEach(b=>{
+      b.addEventListener('click', ()=>{ abaFuncAtiva = b.dataset.funcTab; renderEstrutura(); });
     });
+    draw();
+    if(podeEditar && abaFuncAtiva==='ativos' && document.getElementById('btnAddFunc')){
+      document.getElementById('btnAddFunc').addEventListener('click', async ()=>{
+        const nome = maiusc(document.getElementById('func_nome').value);
+        const apelido = maiusc(document.getElementById('func_apelido').value);
+        const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
+        const lojaEscolhida = document.getElementById('func_lojaNova').value;
+        const email = document.getElementById('func_emailNovo').value.trim();
+        if(!nome){ showToast('Informe o nome do funcionário.'); return; }
+        if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
+        if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
+        const rCriar = await chamarFuncionarioAcesso({ op:'criarFuncionario', senha: __gatewaySenha, nome, apelido, cargos });
+        if(!rCriar || !rCriar.ok){ showToast((rCriar && rCriar.error) || 'Não foi possível cadastrar o funcionário.'); return; }
+        const novoId = rCriar.funcionarioId;
+        await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
+        let mensagem = 'Funcionário cadastrado.';
+        if(email){
+          const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
+          mensagem = (rConvite && rConvite.ok)
+            ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).'
+            : 'Funcionário cadastrado, mas não foi possível enviar o link por e-mail: ' + ((rConvite && rConvite.error) || 'erro desconhecido');
+        }
+        funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+        renderEstrutura();
+        showToast(mensagem);
+      });
+    }
   }
+
+  window.__redrawFuncionarios = renderEstrutura;
+  renderEstrutura();
 }
 
 const ABAS_FUNC_COMPLETO = ['Básico','Pessoais','Profissionais','Bancários','Acesso'];

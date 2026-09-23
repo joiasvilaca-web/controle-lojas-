@@ -221,6 +221,46 @@ async function calcularAvisos(){
       tag: 'sem ficha', tagTipo:'danger',
       abrir:{ alvo:'dp', tab:'funcionarios' },
     }))});
+
+    // ---- Período de experiência (90 dias): só para Gerentes e Diretoria ----
+    if(souGestao){
+      const MARCOS_EXPERIENCIA = [80, 70, 60, 50, 40, 30, 20, 10]; // avisos de 10 em 10 dias
+      const emExperiencia = fichas.filter(f=>{
+        if((f.status||'ativo')==='desligado' || !f.dataAdmissao) return false;
+        const dias = diasDesde(f.dataAdmissao);
+        return dias !== null && dias >= 0 && dias < 90;
+      }).map(f=>{
+        const dias = diasDesde(f.dataAdmissao);
+        const restam = 90 - dias;
+        // Verificar se está próximo a um marco de aviso (dentro de ±1 dia do múltiplo de 10)
+        const marcoPerto = MARCOS_EXPERIENCIA.some(m=> restam <= m && restam > m - 2);
+        return { f, restam, marcoPerto };
+      });
+
+      const urgentes = emExperiencia.filter(x=> x.restam <= 10);
+      const marcos   = emExperiencia.filter(x=> !x.urgentes && x.marcoPerto && x.restam > 10);
+      const demais   = emExperiencia.filter(x=> x.restam > 10 && !x.marcoPerto);
+
+      if(urgentes.length) grupos.push({ titulo:'Experiência vencendo em até 10 dias', tipo:'danger', itens: urgentes.map(({f,restam})=>({
+        titulo: f.nome || nomeExibicaoFuncionario(f),
+        sub: `Admissão: ${fmtDate(f.dataAdmissao)} · Loja: ${f.loja||'—'}`,
+        tag: `${plural(restam,'dia restante','dias restantes')}`, tagTipo:'danger',
+        abrir:{ alvo:'dp', tab:'funcionarios' },
+      }))});
+      if(marcos.length) grupos.push({ titulo:'Marcas de 10 dias no período de experiência', tipo:'wait', itens: marcos.map(({f,restam})=>({
+        titulo: f.nome || nomeExibicaoFuncionario(f),
+        sub: `Admissão: ${fmtDate(f.dataAdmissao)} · Loja: ${f.loja||'—'}`,
+        tag: `${plural(restam,'dia restante','dias restantes')}`, tagTipo:'wait',
+        abrir:{ alvo:'dp', tab:'funcionarios' },
+      }))});
+      if(demais.length) grupos.push({ titulo:'Em período de experiência', tipo:'info', itens: demais.map(({f,restam})=>({
+        titulo: f.nome || nomeExibicaoFuncionario(f),
+        sub: `Admissão: ${fmtDate(f.dataAdmissao)} · Loja: ${f.loja||'—'}`,
+        tag: `${plural(restam,'dia restante','dias restantes')}`, tagTipo:'wait',
+        abrir:{ alvo:'dp', tab:'funcionarios' },
+      }))});
+    }
+
     if(grupos.length) modulos.push({ nome:'Administração', icone:'⚙️', abas:[{ nome:'Departamento Pessoal', icone:'👤', alvo:'dp', grupos }] });
   }
 
