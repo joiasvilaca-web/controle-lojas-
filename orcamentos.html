@@ -977,295 +977,112 @@ function abrirSeletorCliente(onConfirmar, clienteAtual){
     selecionado = c;
   }
   let buscaClienteTimeout = null;
+  // Busca no servidor (o cadastro de clientes não fica mais inteiro no navegador).
+  function buscarClientesComDebounce(termo, cb){
+    clearTimeout(buscaClienteTimeout);
+    buscaClienteTimeout = setTimeout(async ()=>{
+      const r = await gatewayCall({ op:'searchClients', params:{ termo } });
+      cb(Array.isArray(r && r.data) ? r.data : []);
+    }, 300);
+  }
 function renderResultados(termo){
     const wrap = document.getElementById('resultados_cliente');
     if(!termo || termo.length<2){ wrap.innerHTML=''; return; }
     wrap.innerHTML = `<div class="muted" style="padding:6px;">Buscando...</div>`;
     buscarClientesComDebounce(termo, (achados)=>{
       if(achados.length > 0){
-        wrap.innerHTML = achados.map((c,i)=>{
-          const card = clienteCardHtml(c,i);
-          return card.replace('data-idx="'+i+'"','data-selcli="'+(c.id||'')+'"');
-        }).join('');
+        wrap.innerHTML = achados.map(c=>`<div class="code-list-item" style="cursor:pointer;" data-selcli="${c.id}">
+          <div><b>${escapeHtml(c.nome)}</b> <span class="muted">${escapeHtml(c.telefone||'—')}</span>${c.cpf?` <span class="muted">· ${escapeHtml(c.cpf)}</span>`:''}</div>
+        </div>`).join('');
         wrap.querySelectorAll('[data-selcli]').forEach(el=>{
           el.addEventListener('click', ()=>{
             const c = achados.find(x=>x.id===el.dataset.selcli);
             if(c){ preencherFormulario(c); showToast('Dados preenchidos — confira e confirme.'); }
           });
         });
-      }
-    });
-    inp.addEventListener('input',()=>{ clearTimeout(timer); timer=setTimeout(()=>{
-      const t=inp.value.toLowerCase().trim();
-      if(!t){ fechar(); return; }
-      const __lista=(produtosEstoque||[]).filter(p=>p.vendavel!==false&&p.nome&&p.nome.toLowerCase().includes(t)).slice(0,15); window.__orcListaProd=__lista; renderDrop(__lista);
-    },120); });
-    inp.addEventListener('keydown',e=>{
-      const items=drop.querySelectorAll('[data-pk]');
-      if(!items.length) return;
-      if(e.key==='ArrowDown'){ e.preventDefault(); focus=Math.min(focus+1,items.length-1); items.forEach((el,k)=>el.classList.toggle('pf',k===focus)); }
-      else if(e.key==='ArrowUp'){ e.preventDefault(); focus=Math.max(focus-1,0); items.forEach((el,k)=>el.classList.toggle('pf',k===focus)); }
-      else if(e.key==='Enter'&&focus>=0){ e.preventDefault(); if(window.__orcListaProd && window.__orcListaProd[focus]) orcSelecionarProduto(idx,window.__orcListaProd[focus]); }
-      else if(e.key==='Escape'){ fechar(); }
-    });
-    inp.addEventListener('blur',()=>setTimeout(fechar,150));
-    inp.focus();
-  }
-
-  /* Cada item tem dois modos:
-     - editando (it._modo==='editar' ou undefined): linha completa com autocomplete, valor, ＋
-     - compacto (it._modo==='ok'): linha fina com produto · valor · 💬 · ✏️
-     O ＋ confirma o item (vira compacto) e abre uma nova linha vazia no topo.
-     O ✏️ na linha compacta volta ao modo editar. */
-  function drawItens(){
-    const wrap = document.getElementById('itensRows');
-    let html = '';
-    itens.forEach((it,i)=>{
-      if(it._modo==='ok'){
-        // ── LINHA COMPACTA ──
-        const temObs = !!(it.observacaoItem||'').trim();
-        const nFotos = (it.fotos||[]).length;
-        html += `
-        <div class="orc-item-compact" data-orcidx="${i}">
-          <span class="orc-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
-          <span class="orc-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(Number(it.valorUnitario)):''}</span>
-          ${nFotos?`<span style="font-size:12px;color:var(--ink-faint);">📷${nFotos}</span>`:''}
-          <div class="orc-compact-icones">
-            <button class="orc-compact-btn ${temObs?'tem-obs':''}" data-obsToggle="${i}" title="${temObs?it.observacaoItem:'Observação'}">💬</button>
-            <button class="orc-compact-btn" data-orceditar="${i}" title="Editar item">✏️</button>
-            <button class="orc-compact-btn" data-orcitdel="${i}" title="Remover" style="color:var(--danger);">✕</button>
-          </div>
-        </div>
-        ${temObs?`<div class="orc-compact-obs" id="orcObs_${i}">${escapeHtml(it.observacaoItem)}</div>`:'<div class="orc-compact-obs" id="orcObs_'+i+'"></div>'}`;
       } else {
-        // ── LINHA COMPLETA (editando) ──
-        const prod = it.produtoId ? (produtosEstoque||[]).find(p=>p.id===it.produtoId) : null;
-        html += `
-        <div class="orc-item-row" data-orcidx="${i}">
-          <div class="orc-item-topo">
-            <div class="orc-prod-wrap" style="flex:1;min-width:160px;" id="orcPacWrap_${i}">
-              ${prod
-                ? `<div class="orc-prod-sel"><b>${escapeHtml(prod.nome)}</b>${prod.fator?`<span class="orc-prod-fator">· Fator ${prod.fator}</span>`:''}<button type="button" class="pa-clr" data-orcpaclear="${i}">×</button></div>`
-                : `<input class="orc-prod-input" id="orcPacInp_${i}" placeholder="Digite o produto..." autocomplete="off" data-orcpac="${i}" value="${escapeHtml(it.produto||'')}"><div class="orc-prod-drop" id="orcPacDrop_${i}" style="display:none;"></div>`}
-            </div>
-            <div class="orc-item-valor">
-              <input type="number" min="0" step="0.01" placeholder="Valor" data-ival="${i}"
-                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
-            </div>
-            <button type="button" class="orc-item-add" data-orcadd="${i}" title="Confirmar e adicionar outro">＋</button>
-            <button type="button" class="icon-btn" data-orcitdel="${i}">✕</button>
-          </div>
-          <div class="orc-item-obs">
-            <input type="text" placeholder="Observação do item (opcional)" data-iobs="${i}"
-              value="${escapeHtml(it.observacaoItem||'')}">
-          </div>
-          <div class="orc-item-fotos" id="orcFotos_${i}">
-            ${(it.fotos||[]).map(f=>`<img class="orc-thumb" src="${escapeHtml(f.url)}" title="${escapeHtml(f.nome||'')}" onclick="window.open('${escapeHtml(f.url)}','_blank')">`).join('')}
-            <label style="cursor:pointer;padding:5px 10px;border:1px dashed var(--line);border-radius:8px;font-size:12px;color:var(--accent,#662344);">
-              📷 Foto/vídeo
-              <input type="file" accept="image/*,video/*" multiple capture="environment" style="display:none;" data-orcfoto="${i}">
-            </label>
-          </div>
-        </div>`;
-      }
-    });
-    wrap.innerHTML = html;
-
-    // ── WIRING ──
-    // Autocomplete
-    wrap.querySelectorAll('[data-orcpac]').forEach(inp=>ligarAutocompleteProd(Number(inp.dataset.orcpac)));
-    // × limpa produto
-    wrap.querySelectorAll('[data-orcpaclear]').forEach(btn=>{
-      btn.addEventListener('click',()=>{
-        const i=Number(btn.dataset.orcpaclear);
-        itens[i].produtoId=''; itens[i].produto=''; itens[i].fator=''; itens[i].valorBase=''; itens[i].valorUnitario='';
-        drawItens(); updateTotal();
-      });
-    });
-    // Valor
-    wrap.querySelectorAll('[data-ival]').forEach(inp=>{
-      inp.addEventListener('input',()=>{ itens[Number(inp.dataset.ival)].valorUnitario=inp.value===''?'':parseFloat(inp.value); updateTotal(); });
-    });
-    // Obs item (linha completa)
-    wrap.querySelectorAll('[data-iobs]').forEach(inp=>{
-      inp.addEventListener('input',()=>{ itens[Number(inp.dataset.iobs)].observacaoItem=inp.value; });
-    });
-    // ＋ confirma → vira compacto + novo vazio no topo
-    wrap.querySelectorAll('[data-orcadd]').forEach(btn=>{
-      btn.addEventListener('click',()=>{
-        const i=Number(btn.dataset.orcadd);
-        if(!itens[i].produto&&!itens[i].valorUnitario) return;
-        itens[i]._modo='ok';
-        itens.splice(0,0,{ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[], _modo:'editar' });
-        drawItens(); updateTotal();
-      });
-    });
-    // ✏️ volta ao modo editar
-    wrap.querySelectorAll('[data-orceditar]').forEach(btn=>{
-      btn.addEventListener('click',()=>{
-        const i=Number(btn.dataset.orceditar);
-        itens[i]._modo='editar';
-        drawItens(); updateTotal();
-      });
-    });
-    // 💬 toggle observação
-    wrap.querySelectorAll('[data-obsToggle]').forEach(btn=>{
-      btn.addEventListener('click',()=>{
-        const i=Number(btn.dataset.obsToggle);
-        const box=document.getElementById('orcObs_'+i);
-        if(box){ box.style.display=box.style.display==='block'?'none':'block'; }
-      });
-    });
-    // ✕ remove
-    wrap.querySelectorAll('[data-orcitdel]').forEach(b=>{
-      b.addEventListener('click',()=>{
-        itens.splice(Number(b.dataset.orcitdel),1);
-        if(!itens.length) itens.push({ id:uid('oi'), produto:'', produtoId:'', fator:'', valorBase:'', valorUnitario:'', observacaoItem:'', fotos:[] });
-        drawItens(); updateTotal();
-      });
-    });
-    // Upload fotos
-    wrap.querySelectorAll('[data-orcfoto]').forEach(inp=>{
-      inp.addEventListener('change',async()=>{
-        const i=Number(inp.dataset.orcfoto);
-        if(!inp.files||!inp.files.length) return;
-        const thumb=document.getElementById('orcFotos_'+i);
-        if(thumb){ const prog=document.createElement('span'); prog.textContent='⏳ Enviando...'; thumb.appendChild(prog); }
-        for(const file of inp.files){
-          try{
-            const b64=await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
-            const resp=await fetch(SUPABASE_URL+'/functions/v1/upload-foto-drive',{
-              method:'POST', headers:{'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY},
-              body:JSON.stringify({ senha:__gatewaySenha, base64:b64, mimeType:file.type, fileName:'orc_'+Date.now()+'_'+file.name, folder:'orcamentos' })
-            });
-            const rj=await resp.json();
-            if(rj.url){ itens[i].fotos=itens[i].fotos||[]; itens[i].fotos.push({ url:rj.url, nome:file.name }); }
-          }catch(e){ showToast('Erro ao enviar '+file.name); }
+        // Verificar se o termo parece um CPF (11 dígitos, com ou sem pontos/traço)
+        const digits = onlyDigits(termo);
+        const parece_cpf = digits.length === 11;
+        wrap.innerHTML = `
+          <div class="empty" style="padding:10px 0 6px;">
+            Nenhum cliente encontrado no cadastro.
+            ${parece_cpf ? `
+            <div style="margin-top:8px;">
+              <button type="button" class="btn btn-ghost btn-sm" id="btnBuscarCpfReceita" style="width:100%;">
+                🔎 Buscar CPF na Receita Federal
+              </button>
+              <div id="receitaResult" style="margin-top:6px;font-size:12.5px;"></div>
+            </div>` : ''}
+            <div class="muted" style="margin-top:8px;font-size:12px;">Preencha os dados abaixo para cadastrar.</div>
+          </div>`;
+        if(parece_cpf){
+          document.getElementById('btnBuscarCpfReceita')?.addEventListener('click', async ()=>{
+            const btn = document.getElementById('btnBuscarCpfReceita');
+            const div = document.getElementById('receitaResult');
+            btn.disabled = true; btn.textContent = '⏳ Consultando Receita Federal...';
+            const resultado = await buscarCpfReceita(termo);
+            btn.disabled = false; btn.textContent = '🔎 Buscar CPF na Receita Federal';
+            if(!resultado){
+              div.innerHTML = '<span style="color:var(--danger);">CPF não encontrado ou serviço indisponível.</span>';
+            } else {
+              div.innerHTML = `<span style="color:var(--ok);font-weight:700;">✅ ${escapeHtml(resultado.nome)}</span>
+                ${resultado.situacao?`<span class="muted"> — ${escapeHtml(resultado.situacao)}</span>`:''}
+                <button type="button" class="btn btn-ghost btn-sm" id="btnUsarNomeReceita" style="margin-left:8px;">Usar este nome</button>`;
+              document.getElementById('btnUsarNomeReceita')?.addEventListener('click', ()=>{
+                const nomeInp = document.getElementById('sel_cliente');
+                const cpfInp = document.getElementById('sel_cpf');
+                if(nomeInp) nomeInp.value = resultado.nome;
+                if(cpfInp) cpfInp.value = termo; // preenche o CPF digitado também
+                div.innerHTML = '<span class="muted">Nome e CPF preenchidos abaixo ↓</span>';
+              });
+            }
+          });
         }
-        drawItens(); updateTotal();
-      });
-    });
-    updateTotal();
-  }
-
-  // ajuste total (desconto/acréscimo sobre o total)
-  let ajusteTotal = editando ? (orcamentoEditando.ajusteTotal||{tipo:'nenhum',modo:'percentual',percVal:'',rVal:''}) : {tipo:'nenhum',modo:'percentual',percVal:'',rVal:''};
-
-  function calcParcelamento(base){
-    // 12x sem juros, arredondado PARA CIMA sem centavos
-    return Math.ceil(base/12);
-  }
-  function updateTotal(){
-    const subtotal = itens.reduce((acc,it)=> acc + (Number(it.valorUnitario)||0), 0);
-    let totalFinal = subtotal;
-    if(ajusteTotal.tipo!=='nenhum'){
-      const qtd = Number(ajusteTotal.percVal||ajusteTotal.rVal)||0;
-      const delta = ajusteTotal.modo==='percentual' ? subtotal*qtd/100 : qtd;
-      totalFinal = Math.max(0, ajusteTotal.tipo==='desconto' ? subtotal-delta : subtotal+delta);
-    }
-    const parcela = calcParcelamento(subtotal); // sempre sobre o valor sem desconto
-    const box = document.getElementById('totalHint');
-    if(box) box.innerHTML = `
-      <div class="orc-total-box">
-        <div style="margin-bottom:4px;font-size:12px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.04em;">Subtotal</div>
-        <div style="font-size:17px;font-weight:800;">${fmtMoeda(subtotal)}</div>
-        <div class="orc-desc-btns" id="orcDescBtns">
-          <span style="font-size:12px;font-weight:700;color:var(--ink-faint);">Ajuste:</span>
-          <button type="button" class="orc-btn-ajuste ${ajusteTotal.tipo==='desconto'?'ativo-desc':''}" data-otipo="desconto">Desconto</button>
-          <button type="button" class="orc-btn-ajuste ${ajusteTotal.tipo==='acrescimo'?'ativo-acr':''}" data-otipo="acrescimo">Acrésc.</button>
-          <input type="number" class="orc-desc-campo" id="orcDescPerc" placeholder="%" value="${escapeHtml(String(ajusteTotal.percVal||''))}">
-          <span class="orc-desc-sep">ou</span>
-          <input type="number" class="orc-desc-campo" id="orcDescR" placeholder="R$" value="${escapeHtml(String(ajusteTotal.rVal||''))}">
-        </div>
-        ${ajusteTotal.tipo!=='nenhum' ? `
-        <div style="margin-top:6px;font-size:15px;font-weight:800;color:${ajusteTotal.tipo==='desconto'?'#b91c1c':'#17794a'};">
-          ${ajusteTotal.tipo==='desconto'?'Com desconto':'Com acréscimo'}: <b>${fmtMoeda(totalFinal)}</b>
-        </div>` : ''}
-        <div class="orc-parcela-box">12× ${fmtMoeda(parcela)} <span style="font-size:12px;font-weight:500;color:var(--ok,#17794a);">(sem juros, sobre o valor de tabela)</span></div>
-      </div>
-    `;
-    // wiring dos controles de desconto total
-    document.querySelectorAll('[data-otipo]').forEach(b=>{
-      b.addEventListener('click',()=>{
-        ajusteTotal.tipo=ajusteTotal.tipo===b.dataset.otipo?'nenhum':b.dataset.otipo;
-        ajusteTotal.percVal=''; ajusteTotal.rVal=''; updateTotal();
-      });
-    });
-    const dp=document.getElementById('orcDescPerc');
-    const dr=document.getElementById('orcDescR');
-    if(dp) dp.addEventListener('input',()=>{ ajusteTotal.percVal=dp.value; ajusteTotal.rVal=''; ajusteTotal.modo='percentual'; if(dr) dr.value=''; updateTotal(); });
-    if(dr) dr.addEventListener('input',()=>{ ajusteTotal.rVal=dr.value; ajusteTotal.percVal=''; ajusteTotal.modo='valor'; if(dp) dp.value=''; updateTotal(); });
-  }
-  drawItens();
-  // item adicionado pelo botão ＋ na linha (sem botão separado)
-
-  // Guarda o registro completo do cliente escolhido, pra o ✎ abrir o cadastro preenchido.
-  // Começa com o que já sabemos (do próprio orçamento) e, em segundo plano, tenta achar
-  // o cadastro completo no banco pelo telefone — sem bloquear a tela esperando isso.
-  // Autocomplete inline de cliente
-  montarClienteAutocomplete(
-    document.getElementById('o_clienteAcWrap'),
-    (clienteFinal)=>{
-      if(clienteFinal){
-        document.getElementById('o_cliente').value=clienteFinal.nome||'';
-        document.getElementById('o_telefone').value=clienteFinal.telefone||'';
-        document.getElementById('o_email').value=clienteFinal.email||'';
-      } else {
-        document.getElementById('o_cliente').value='';
-        document.getElementById('o_telefone').value='';
-        document.getElementById('o_email').value='';
       }
-    },
-    editando?{nome:orcamentoEditando.cliente,telefone:orcamentoEditando.telefone,email:orcamentoEditando.email}:null
-  );
+    });
+  }
+  document.getElementById('busca_cliente').addEventListener('input', e=> renderResultados(e.target.value.trim()));
 
-  document.getElementById('btnSalvarOrcamento').addEventListener('click', async ()=>{
-    const dataOrcamento = document.getElementById('o_data').value || todayStr();
-    const lojaId = document.getElementById('o_loja').value;
-    const vendedora = document.getElementById('o_vendedora').value;
-    const validade = document.getElementById('o_validade').value;
-    const cliente = maiusc(document.getElementById('o_cliente').value);
-    const telefone = document.getElementById('o_telefone').value.trim();
-    const email = document.getElementById('o_email').value.trim();
-    const itensValidos = itens.filter(it=>it.produto||it.valorUnitario);
-    if(!lojaId || !vendedora || !validade){ showToast('Preencha loja, vendedora e validade.'); return; }
-    if(!cliente){ showToast('Informe o nome do cliente.'); return; }
-    if(itensValidos.length===0){ showToast('Adicione ao menos um item com produto ou valor.'); return; }
-    const loja = (config.lojas||[]).find(l=>l.id===lojaId);
-    const valorTotal = itensValidos.reduce((acc,it)=> acc + (Number(it.valorUnitario)||0), 0);
-    const orcamento = editando ? {
-      ...orcamentoEditando,
-      data: dataOrcamento, loja: loja?loja.nome:'', lojaId, vendedora, validade,
-      cliente, telefone, email, itens: itensValidos, valorTotal, ajusteTotal,
-      observacoes: maiusc(document.getElementById('o_obs').value),
-      infoInterna: (document.getElementById('o_infoInterna')?.value||'').trim(),
-      rascunho: false,
-      // Editar um orçamento que já era "de verdade" (não um rascunho sendo concluído agora)
-      // pausa o encerramento automático do prazo final (15 dias) — sinal de que alguém
-      // está cuidando dele. Concluir um rascunho conta como criação, não como edição.
-      editadoManualmente: orcamentoEditando.rascunho ? (orcamentoEditando.editadoManualmente||false) : true,
-    } : {
-      id: uid('orc'), loja: loja?loja.nome:'', lojaId, vendedora, validade,
-      data: dataOrcamento, cliente, telefone, email, itens: itensValidos, valorTotal, ajusteTotal,
-      observacoes: maiusc(document.getElementById('o_obs').value),
-      infoInterna: (document.getElementById('o_infoInterna')?.value||'').trim(),
-      status: statusInicialId(), criadoPor: currentUser.nome, criadoEm: Date.now(),
-      codigoVia: await bumpCodigoVia('orcamento', lojaId||''),
-      rascunho: false,
+  document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
+  document.getElementById('btnConfirmarSelecaoCliente').addEventListener('click', async ()=>{
+    const nome = maiusc(document.getElementById('sel_cliente').value);
+    if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    const telefoneCombinado = combinarTelefoneValidado('sel');
+    if(telefoneCombinado === null) return;
+    const patch = {
+      nome,
+      telefone: telefoneCombinado,
+      email: document.getElementById('sel_email').value.trim(),
+      cpf: document.getElementById('sel_cpf').value.trim(),
+      dataNascimento: document.getElementById('sel_nascimento').value,
+      cep: document.getElementById('sel_cep').value.trim(),
+      endereco: maiusc(document.getElementById('sel_endereco').value),
+      numero: maiusc(document.getElementById('sel_numero').value),
+      complemento: maiusc(document.getElementById('sel_complemento').value),
+      bairro: maiusc(document.getElementById('sel_bairro').value),
+      cidade: maiusc(document.getElementById('sel_cidade').value),
+      estado: maiusc(document.getElementById('sel_estado').value),
     };
-    const ok = await orcamentoSalvar(orcamento);
-    if(ok){
-      if(editando){
-        const idx = orcamentos.findIndex(x=>x.id===orcamento.id);
-        if(idx>=0) orcamentos[idx] = orcamento; else orcamentos.unshift(orcamento);
-        showToast('Orçamento atualizado.');
+    let clienteFinal;
+    if(selecionado && selecionado.id){
+      clienteFinal = { ...selecionado, ...patch };
+      const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+      if(idx>=0) clientes[idx] = clienteFinal; else clientes.unshift(clienteFinal);
+    } else {
+      const existente = await buscarClientePorTelefoneOuCpf(patch.telefone, patch.cpf);
+      if(existente){
+        clienteFinal = { ...existente, ...patch };
+        const idx = clientes.findIndex(x=>x.id===clienteFinal.id);
+        if(idx>=0) clientes[idx] = clienteFinal;
       } else {
-        orcamentos.unshift(orcamento);
-        showToast('Orçamento salvo.');
+        clienteFinal = { id: uid('cli'), ...patch, criadoEm: Date.now() };
+        clientes.unshift(clienteFinal);
       }
-      orcamentoEmEdicao = null;
-      currentTab = 'lista'; renderTabs(); renderView();
     }
+    await salvarUmCliente(clienteFinal);
+    closeModal();
+    onConfirmar(clienteFinal);
   });
 }
 

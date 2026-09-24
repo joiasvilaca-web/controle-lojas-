@@ -122,7 +122,7 @@ Grupos de menu com abas em `#shellTopTabs`:
 
 | Função | Versão prod | Uso |
 |---|---|---|
-| `db-gateway` | v49 | Gateway central — TODA leitura/escrita do banco |
+| `db-gateway` | v50 | Gateway central — TODA leitura/escrita do banco |
 | `funcionario-acesso` | v19 | Login, convite, troca de senha, sessões |
 | `send-email-gmail` | v8 | E-mail automático (sem modal de composição) |
 | `ia-chat` | v17 | Chat IA + análise de imagem (Gemini) |
@@ -266,4 +266,7 @@ Cada conversa é **escopada a um único módulo**:
 - Bibliotecas externas só entram na tela que realmente usa: o SDK do Supabase ficou só onde é chamado (index, painel-ordens, gravacoes, dp); XLSX é carregado sob demanda no index (`carregarXLSX()`).
 - `sw.js` v2: bibliotecas de CDN e imagens vêm do cache (stale-while-revalidate); HTML sempre da rede.
 - A logo da tela de login virou arquivo (`logo-vilaca.png`), não base64.
-
+- 24/set: `db-gateway` v50 — `selectAll` pagina de 1000 em 1000 (antes o Supabase cortava em 1000 linhas e sumiam os registros mais novos).
+- 24/set: o mesmo commit de 17/set (`ba04bba`) também quebrou o `orcamentos.html`: colou uma cópia antiga da tela de Novo Orçamento dentro de `abrirSeletorCliente` e apagou os botões Confirmar/Cancelar do modal de cliente. Restaurado a partir do `87dc6fc`. Ao revisar qualquer arquivo, conferir se as funções fecham onde deveriam (função de 90 linhas que vira 300 é sinal de colagem errada).
+- Dashboard: metas gravadas com `mergeConfigKey` na chave `metasMensais` (nunca mais `saveConfig` da config inteira).
+- Marketing: aba Orçamentos carrega sob demanda (`carregarOrcamentosSeNecessario`).

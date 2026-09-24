@@ -899,7 +899,9 @@
     const abc = curvaAbcProdutos();
     const abcVend = curvaAbcVendedoras();
     const avisos = avisosDadosIncompletos();
-    const metas = (configCompleto && configCompleto.metas && configCompleto.metas.mensal) || {};
+    // Metas ficam na chave própria `metasMensais` (gravada só por ela, sem tocar no resto da config).
+    // `metas.mensal` é o lugar antigo, lido só como reserva.
+    let metas = (configCompleto && (configCompleto.metasMensais || (configCompleto.metas && configCompleto.metas.mensal))) || {};
     const totaisMes = totalDoMesPorLoja();
     const hoje = new Date();
     const diaDoMes = hoje.getDate();
@@ -1155,15 +1157,17 @@
 
     async function salvarMetas(novasMetas){
       if(!configCompleto){ alert("Configuração ainda não carregada."); return; }
-      const payload = { ...configCompleto, metas: { ...(configCompleto.metas||{}), mensal: novasMetas } };
       try{
-        const { error } = await supabaseClient.from("gestao_config").upsert({ id:"config", payload });
-        if(error) throw error;
-        configCompleto = payload;
+        // Grava só a chave das metas: não sobrescreve mudanças que outras pessoas fizeram
+        // na configuração depois que este Dashboard foi aberto.
+        const r = await gatewayCall({ op:"mergeConfigKey", params:{ key:"metasMensais", value: novasMetas } });
+        if(!r || r.error) throw new Error((r && r.error) || "falha ao salvar");
+        configCompleto.metasMensais = novasMetas;
+        metas = novasMetas;
         renderMetasLista();
       }catch(e){
         console.error("erro ao salvar metas", e);
-        alert("Não foi possível salvar as metas. Verifique se seu acesso tem permissão de Configurações.");
+        alert("Não foi possível salvar as metas. Verifique sua internet e se seu acesso tem permissão do Dashboard.");
       }
     }
 

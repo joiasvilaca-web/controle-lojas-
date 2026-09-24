@@ -224,6 +224,23 @@ async function carregarClientesSeNecessario(){
   return clientes;
 }
 let orcamentos = [];
+let orcamentosCarregados = false;
+/** Baixa os orçamentos só quando a aba Orçamentos é aberta (regra: nenhuma lista
+    carrega sozinha ao abrir o módulo). Também preenche o filtro de vendedoras. */
+async function carregarOrcamentosSeNecessario(){
+  if(orcamentosCarregados) return orcamentos;
+  const r = await gatewayCall({ op:'selectAll', table:'orcamentos' });
+  if(r && r.error) return orcamentos; // sem marcar como carregado: tenta de novo na próxima vez
+  orcamentos = (r.data||[]).map(x=>x.payload).filter(Boolean);
+  orcamentosCarregados = true;
+  const selVend = document.getElementById('orcFiltroVend');
+  const jaTem = new Set([...selVend.options].map(o=>o.value));
+  [...new Set(orcamentos.map(o=>o.vendedora||o.funcionario||'').filter(Boolean))].forEach(v=>{
+    if(jaTem.has(v)) return;
+    const o=document.createElement('option'); o.value=v; o.textContent=v; selVend.appendChild(o);
+  });
+  return orcamentos;
+}
 let mensagensSalvas = [];
 
 async function gatewayCall(body){
@@ -291,7 +308,11 @@ document.querySelectorAll('.tabs-bar button').forEach(b=>{
     document.getElementById('tab-'+b.dataset.tab).classList.add('active');
     parent.postMessage({ type:'activeTab', modulo:'marketing', tabId:b.dataset.tab }, '*');
     if(b.dataset.tab==='aniversario') renderAniversario();
-    if(b.dataset.tab==='orcamentos') renderOrcamentosMarketing();
+    if(b.dataset.tab==='orcamentos'){
+      const alvo = document.getElementById('orcAlertasAtrasados');
+      if(!orcamentosCarregados && alvo) alvo.innerHTML = '<div class="muted" style="padding:10px 0;">Carregando orçamentos...</div>';
+      carregarOrcamentosSeNecessario().then(renderOrcamentosMarketing);
+    }
     if(b.dataset.tab==='maladire') renderMalaDirete();
   });
 });
@@ -354,13 +375,12 @@ async function loadAll(){
   // O cadastro de clientes NÃO é mais baixado aqui: eram dezenas de milhares de
   // linhas carregadas só pra abrir o módulo. Aniversários buscam no servidor, e a
   // Mala Direta baixa a lista só quando a aba é aberta (carregarClientesSeNecessario).
-  const [rConfig, rOrc, rMsgs] = await Promise.all([
+  // Orçamentos NÃO são baixados aqui: só quando a aba é aberta (carregarOrcamentosSeNecessario).
+  const [rConfig, rMsgs] = await Promise.all([
     gatewayCall({ op:'getConfig' }),
-    gatewayCall({ op:'selectAll', table:'orcamentos' }),
     gatewayCall({ op:'selectAll', table:'marketing_mensagens' }).catch(()=>({ data:[] })),
   ]);
   config = rConfig.data || {};
-  orcamentos = (rOrc.data||[]).map(r=>r.payload).filter(Boolean);
   mensagensSalvas = (rMsgs.data||[]).map(r=>r.payload).filter(Boolean);
 
   // (os meses da aba Aniversário são preenchidos em renderAniversario, sob demanda)
@@ -370,10 +390,7 @@ async function loadAll(){
   const selLoja = document.getElementById('orcFiltroLoja');
   lojas.forEach(l=>{ const o=document.createElement('option'); o.value=l.nome; o.textContent=l.nome; selLoja.appendChild(o); });
 
-  // Vendedoras
-  const vends = [...new Set(orcamentos.map(o=>o.vendedora||o.funcionario||'').filter(Boolean))];
-  const selVend = document.getElementById('orcFiltroVend');
-  vends.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; selVend.appendChild(o); });
+  // Vendedoras: preenchidas por carregarOrcamentosSeNecessario, quando a aba abre.
 
   // Status abertos
   const statusAbertos = statusOrcamentoAbertos();
