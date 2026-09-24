@@ -122,7 +122,7 @@ Grupos de menu com abas em `#shellTopTabs`:
 
 | Função | Versão prod | Uso |
 |---|---|---|
-| `db-gateway` | v45+ | Gateway central — TODA leitura/escrita do banco |
+| `db-gateway` | v49 | Gateway central — TODA leitura/escrita do banco |
 | `funcionario-acesso` | v19 | Login, convite, troca de senha, sessões |
 | `send-email-gmail` | v8 | E-mail automático (sem modal de composição) |
 | `ia-chat` | v17 | Chat IA + análise de imagem (Gemini) |
@@ -237,8 +237,7 @@ Cada conversa é **escopada a um único módulo**:
 
 ## 13. Pendências em aberto
 
-- [ ] `db-gateway` v49 escrito mas não deployado (no ar: v47) — corrige bug de vendedora em transferência
-- [ ] Regra "lista não carrega sozinha" pendente em: Caixa, Conciliação, O.S., Dashboard, Vendas
+- [ ] SQL de segurança aguardando aprovação do Felipe: `search_path` fixo nas funções `registrar_movimento_estoque`, `incrementar_via_sequence`, `liberar_via_sequence`, `abrev_para_loja_id`, `temp_sigla_loja`; revogar EXECUTE de `temp_sigla_loja` pro anon; ligar RLS em `clientes_backup_pre_limpeza_20260914` e `vendas_backup_pre_limpeza_20260914`
 - [ ] Railway: upgrade pro Hobby pendente (cartão deu erro em 14/set) — trial vence ~12/out
 - [ ] Chave Evolution API precisa ser trocada (Railway Variables + tabela `atendimento_segredos`)
 - [ ] `venda-pg.html` e `pg-mes.html`: deletar manualmente no GitHub
@@ -258,3 +257,13 @@ Cada conversa é **escopada a um único módulo**:
 - **Instância WhatsApp:** `reformajoias` (canal Baileys)
 - **Meta App:** "Atendimento Reforma Joia" (id `2230560377789265`)
 - **GitHub org:** `joiasvilaca-web`
+
+---
+
+## 15. Lições de 23/set (auditoria geral)
+
+- Edições anteriores apagaram blocos inteiros sem perceber (ex.: commit de 17/set no painel-ordens levou impressão e fotos). **Antes de entregar, rodar a varredura de "função chamada e não definida"** em todo arquivo editado, e comparar a lista de funções com a versão anterior.
+- Bibliotecas externas só entram na tela que realmente usa: o SDK do Supabase ficou só onde é chamado (index, painel-ordens, gravacoes, dp); XLSX é carregado sob demanda no index (`carregarXLSX()`).
+- `sw.js` v2: bibliotecas de CDN e imagens vêm do cache (stale-while-revalidate); HTML sempre da rede.
+- A logo da tela de login virou arquivo (`logo-vilaca.png`), não base64.
+

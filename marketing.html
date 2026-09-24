@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Marketing — Gestão e Controle</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --bg:#F4F6F8; --surface:#FFFFFF; --surface-2:#F1F4F7;
@@ -236,6 +235,20 @@ async function gatewayCall(body){
     });
     return await res.json();
   }catch(e){ return { error: 'Sem conexão.' }; }
+}
+
+/* Envio de e-mail pela Edge Function send-email-gmail — mesmo padrão do Orçamento.
+   Sempre manda a sessão (senha) e dispara erro se o servidor recusar, pra falha
+   nunca ser contada como envio. */
+async function enviarEmailGmail(to, subject, body){
+  const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+    body: JSON.stringify({ to, subject, body, senha:__gatewaySenha })
+  });
+  let j = null; try{ j = await r.json(); }catch(e){}
+  if(!r.ok || (j && j.error)) throw new Error((j && j.error) || 'falha no envio');
+  return j;
 }
 
 // ============================================================
@@ -515,8 +528,7 @@ async function sendEmailAniversario(clienteId){
   const assunto = `Feliz Aniversário, ${c.nome}!`;
   const corpo = buildAniversarioMsg(c.nome);
   try{
-    const rSup = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    await rSup.functions.invoke('send-email-gmail', { body:{ to:c.email, subject:assunto, body:corpo, senha:__gatewaySenha } });
+    await enviarEmailGmail(c.email, assunto, corpo);
     showToast('E-mail de aniversário enviado!');
     await marcarAniversarioEnviado(clienteId);
     renderAniversario();
@@ -649,8 +661,7 @@ async function enviarEmailOrc(orcId){
   let corpo = si.mensagemEmail;
   corpo = corpo.replaceAll('{cliente}',o.cliente||'').replaceAll('{loja}',o.loja||'').replaceAll('{valor}',`R$ ${(Number(o.valorTotal)||0).toFixed(2)}`);
   try{
-    const rSup = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    await rSup.functions.invoke('send-email-gmail', { body:{ to:o.email, subject:assunto, body:corpo, senha:__gatewaySenha } });
+    await enviarEmailGmail(o.email, assunto, corpo);
     showToast('E-mail enviado!');
   }catch(e){ showToast('Falha no envio.'); }
 }
@@ -946,8 +957,7 @@ async function executarEnvioMalaDireta(lista, texto, viaWa, viaEmail){
     }
     if(viaEmail && c.email){
       try{
-        const rSup = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        await rSup.functions.invoke('send-email-gmail', { body:{ to:c.email, subject:'Vilaça Joias — Novidades para você', body:msg } });
+        await enviarEmailGmail(c.email, 'Vilaça Joias — Novidades para você', msg);
         enviados++;
       }catch(e){ falhas++; }
     }

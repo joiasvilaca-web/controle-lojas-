@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Painel de Ordens — Gestão e Controle</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#F4F6F8;
@@ -1737,6 +1736,155 @@ function renderResultados(termo){
   document.getElementById('btnCancelarSelecaoCliente').addEventListener('click', closeModal);
 }
 
+let photoCache = {};
+
+function compressImage(file, maxDim=900, quality=0.72){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        let { width, height } = img;
+        if(width > maxDim || height > maxDim){
+          if(width > height){ height = Math.round(height * maxDim / width); width = maxDim; }
+          else { width = Math.round(width * maxDim / height); height = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function getPhotoDataUrl(fotoId){
+  if(photoCache[fotoId]) return photoCache[fotoId];
+  const val = await storageGet('foto:' + fotoId, true);
+  if(val) photoCache[fotoId] = val;
+  return val;
+}
+
+function openPhotoModal(src){
+  document.getElementById('photoLightboxImg').src = src;
+  document.getElementById('photoLightboxOverlay').classList.add('show');
+}
+document.getElementById('photoLightboxClose').addEventListener('click', ()=>{
+  document.getElementById('photoLightboxOverlay').classList.remove('show');
+  document.getElementById('photoLightboxImg').src = '';
+});
+document.getElementById('photoLightboxOverlay').addEventListener('click', (e)=>{
+  if(e.target.id==='photoLightboxOverlay'){
+    document.getElementById('photoLightboxOverlay').classList.remove('show');
+    document.getElementById('photoLightboxImg').src = '';
+  }
+});
+
+/**
+ * Mounts a photo attachment widget into `container`, bound to `holder.fotos` (array of {id, nome, criadoEm}).
+ * Actual image bytes are stored separately per photo (key "foto:<id>") to keep the main orders record light.
+ * `persisted`: true saves the parent orders array to storage after each change (holder is a real order/observation).
+ * `readOnly`: true shows thumbnails only, no add/remove controls (used for the oficina view).
+ */
+function mountFotos(container, holder, persisted, readOnly){
+  if(!holder.fotos) holder.fotos = [];
+
+  function draw(){
+    container.innerHTML = `
+      <div class="section-label" style="margin-top:14px;">Fotos</div>
+      <div class="foto-grid" id="fotoGridInner"></div>
+      ${readOnly ? '' : `
+        <input type="file" accept="image/*" multiple id="fotoInputGaleria" style="display:none;">
+        <input type="file" accept="image/*" capture="environment" id="fotoInputCamera" style="display:none;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-ghost btn-sm" id="btnAddFotoGaleria">🖼️ Anexar foto</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnAddFotoCamera">📷 Tirar foto</button>
+        </div>
+      `}
+    `;
+    drawGrid();
+    if(!readOnly){
+      const inpGaleria = container.querySelector('#fotoInputGaleria');
+      const inpCamera = container.querySelector('#fotoInputCamera');
+      container.querySelector('#btnAddFotoGaleria').addEventListener('click', ()=> inpGaleria.click());
+      container.querySelector('#btnAddFotoCamera').addEventListener('click', ()=> inpCamera.click());
+
+      async function processFiles(inputEl){
+        const files = Array.from(inputEl.files || []);
+        if(files.length===0) return;
+        for(const file of files){
+          try{
+            const dataUrl = await compressImage(file);
+            const fotoId = uid('foto');
+            let driveResult = null;
+            try{
+              driveResult = await uploadFotoParaDrive(dataUrl, fotoId + '_' + file.name);
+            }catch(driveErr){
+              console.error('Falha ao enviar foto para o Google Drive, salvando localmente:', driveErr);
+            }
+            if(driveResult && driveResult.url){
+              holder.fotos.push({ id: fotoId, nome: file.name, criadoEm: Date.now(), driveUrl: driveResult.url, driveFileId: driveResult.fileId });
+            }else{
+              photoCache[fotoId] = dataUrl;
+              await storageSet('foto:' + fotoId, dataUrl, true);
+              holder.fotos.push({ id: fotoId, nome: file.name, criadoEm: Date.now() });
+            }
+          }catch(e){ showToast('Não foi possível processar uma das fotos.'); }
+        }
+        inputEl.value = '';
+        if(persisted) await saveOrders();
+        drawGrid();
+        showToast('Foto(s) anexada(s).');
+      }
+      inpGaleria.addEventListener('change', ()=>processFiles(inpGaleria));
+      inpCamera.addEventListener('change', ()=>processFiles(inpCamera));
+    }
+  }
+
+  function drawGrid(){
+    const grid = container.querySelector('#fotoGridInner');
+    if(holder.fotos.length===0){
+      grid.innerHTML = `<div class="muted">Nenhuma foto anexada.</div>`;
+      return;
+    }
+    grid.innerHTML = holder.fotos.map(f=>`
+      <div class="foto-thumb" data-fid="${f.id}">
+        <img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl || photoCache[f.id] || '')}" alt="${escapeHtml(f.nome)}">
+        ${readOnly ? '' : `<button type="button" class="foto-del" data-fotodel="${f.id}" title="Remover foto">✕</button>`}
+      </div>
+    `).join('');
+    grid.querySelectorAll('img[data-fotoimg]').forEach(img=>{
+      const fid = img.dataset.fotoimg;
+      const fObj = holder.fotos.find(x=>x.id===fid);
+      if(fObj && fObj.driveUrl){
+        img.addEventListener('click', ()=>{ if(img.src) openPhotoModal(img.src); });
+        return;
+      }
+      if(!photoCache[fid]){
+        getPhotoDataUrl(fid).then(url=>{ if(url){ img.src = url; } });
+      }
+      img.addEventListener('click', ()=>{ if(img.src) openPhotoModal(img.src); });
+    });
+    if(!readOnly){
+      grid.querySelectorAll('[data-fotodel]').forEach(b=>{
+        b.addEventListener('click', async (e)=>{
+          e.stopPropagation();
+          holder.fotos = holder.fotos.filter(x=>x.id!==b.dataset.fotodel);
+          if(persisted) await saveOrders();
+          drawGrid();
+        });
+      });
+    }
+  }
+
+  draw();
+}
+
 function mountFotosInline(container, fotosArray){
   if(!fotosArray || fotosArray.length===0){ container.innerHTML=''; return; }
   container.innerHTML = fotosArray.map(f=>`
@@ -2334,7 +2482,7 @@ function mountObservacoes(container, orderLike, persisted){
         <button type="button" class="btn btn-ghost btn-sm" id="btnCancelObsInner">Cancelar</button>
       </div>
     `;
-    mountFotosInline(formEl.querySelector('#obsFotoContainer'), obsFotoHolder.fotos || []);
+    mountFotos(formEl.querySelector('#obsFotoContainer'), obsFotoHolder, persisted && !!editing, false);
     if(editing && editing.notificarPara.length>0){
       formEl.querySelector('#notifyBoxInner').style.display = 'block';
     }
@@ -3362,6 +3510,10 @@ function renderNovaOrdem(main){
       <!-- PAGAMENTO -->
       <div id="pagamentoContainerNova"></div>
 
+      <!-- FOTOS -->
+      <div class="divider-nova"></div>
+      <div id="fotoContainerNova"></div>
+
       <!-- ANOTAÇÕES -->
       <div class="divider-nova"></div>
       <div id="obsContainerNova"></div>
@@ -3410,6 +3562,7 @@ function renderNovaOrdem(main){
   } catch(e) { console.error('mountItens OS:', e); }
 
   const tempFotoHolder = { fotos: [] };
+  mountFotos(document.getElementById('fotoContainerNova'), tempFotoHolder, false, false);
   const tempObsHolder = { observacoes: [] };
   mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
 
@@ -3808,7 +3961,7 @@ function openEditModalOficina(order){
     </div>
   `);
   mountLocalizacao(document.getElementById('localContainerOficina'), order, false);
-  mountFotosInline(document.getElementById('fotoContainerEditOficina'), order.fotos || []);
+  mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
   document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
@@ -3895,7 +4048,7 @@ function openEditModalCompleto(order, opts){
       ${somenteLeitura ? '' : '<button class="btn btn-accent" id="editSave">Salvar alterações</button>'}
     </div>
   `);
-  mountFotosInline(document.getElementById('fotoContainerEdit'), order.fotos || []);
+  mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
   const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', _modo:'ok' })) };
@@ -3918,14 +4071,14 @@ function openEditModalCompleto(order, opts){
   wireClienteFields('e', { buscarClientePorCpf: true });
   const btnEditarCadCliEdit = document.getElementById('btnEditarCadastroClienteEdit');
   if(btnEditarCadCliEdit){
-    btnEditarCadCliEdit.addEventListener('click', ()=>{
+    btnEditarCadCliEdit.addEventListener('click', async ()=>{
       // Acha o cliente no cadastro central pelo telefone/CPF que estão na ordem.
       const ddd = onlyDigits((document.getElementById('e_telefoneDDD')||{}).value);
       const numero = onlyDigits((document.getElementById('e_telefoneNum')||{}).value);
       const telAtual = (ddd && numero) ? `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}` : (order.telefone || '');
       const cpfAtual = (document.getElementById('e_cpf')||{}).value || order.cpf || '';
-      const idx = findClienteIndex(telAtual, cpfAtual);
-      if(idx === -1){
+      const clienteAchado = await buscarClientePorTelefoneOuCpf(telAtual, cpfAtual);
+      if(!clienteAchado){
         showToast('Esse cliente ainda não está no cadastro. Use "Trocar cliente" para buscar ou cadastrar.');
         return;
       }
@@ -3946,7 +4099,7 @@ function openEditModalCompleto(order, opts){
         order.estado = clienteFinal.estado || '';
         openEditModalCompleto(order, opts);
         showToast('Cadastro do cliente atualizado — revise e salve a ordem.');
-      }, clientes[idx]);
+      }, clienteAchado);
     });
   }
   const btnTrocarClienteEdit = document.getElementById('btnTrocarClienteEdit');
