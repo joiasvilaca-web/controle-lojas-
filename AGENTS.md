@@ -135,7 +135,7 @@ Grupos de menu com abas em `#shellTopTabs`:
 | `atendimento-webhook` | v3 | Recebe eventos WhatsApp (Evolution) e Instagram |
 | `atendimento-api` | v4 | Todas as ops do módulo Atendimento |
 | `upload-foto-drive` | v23 | Upload de fotos para Google Drive |
-| `reforma-api` | v1 | Todas as ops do módulo Reforma (públicas `public*` sem sessão + internas com `senha`) |
+| `reforma-api` | v2 | Todas as ops do módulo Reforma (públicas `public*` sem sessão + internas com `senha`) — v2: multi-itens, frete, WhatsApp Evolution |
 | `cotacoes-mercado` | — | Cotações (não usa sessão) |
 
 Deploy: **`files` param precisa do conteúdo completo com `name: index.ts`** e `verify_jwt: true` (boolean).
@@ -250,12 +250,11 @@ Cada conversa é **escopada a um único módulo**:
 - [ ] Chave Evolution API precisa ser trocada (Railway Variables + tabela `atendimento_segredos`)
 - [ ] `venda-pg.html` e `pg-mes.html`: deletar manualmente no GitHub
 - [ ] NFC-e/NF-e: aguardando certificado A1 + orientação do contador
-- [ ] Integração Correios Vipp: aguardando credenciais da agência parceira
 - [ ] Modelo multiloja (loja do select vira contexto fixo): desenhado, não implementado
 - [ ] O.S.: migração para o catálogo novo de produtos (hoje usa `produtosOtica` legado)
 - [ ] Instagram Atendimento: falta vincular conta da Reforma ao app Meta e gerar token
-- [ ] Reforma fase 2: envio automático da mensagem pelo WhatsApp (Evolution API) — hoje o botão abre o wa.me com a mensagem pronta
 - [ ] Reforma: Oficina fica com o módulo desligado por padrão (para não aparecer no login da Up Case) — liberar por usuário no DP se a oficina for fazer o check-out
+- [ ] Reforma: Felipe já tem contrato com os Correios, mas ainda não configurou as credenciais (usuário do Meu Correios, código de acesso à API do CWS, número do cartão de postagem) em Configurações do módulo — enquanto isso, `frete.provider` fica em `"tabela"` (valores fixos por faixa)
 
 ---
 
@@ -283,14 +282,31 @@ Cada conversa é **escopada a um único módulo**:
 
 ---
 
-## 16. Módulo Reforma (25/set/2026)
+## 16. Módulo Reforma (v2 — 25/set/2026)
 
-Fluxo: cliente abre `https://vilaca-controle-lojas.vercel.app/reforma.html` → manda nome, WhatsApp, loja, serviço, descrição e fotos → pedido entra na fila do módulo **Reforma** (menu 💍) → vendedora orça (valor, prazo, validade 10 dias — CDC art. 40) → botão WhatsApp abre `wa.me` com a mensagem e o link individual (`reforma.html?t=TOKEN`) → cliente aceita ou recusa pelo link (fica registrado com data/IP/UA) ou "Aceite presencial" → check-in de custódia na loja (peso, teor, lacre, fotos, assinatura em canvas) → **Gerar O.S.** → check-out (peso de saída) → entrega (assinatura). Recibo de custódia imprimível.
+Fluxo v2: cliente abre `https://vilaca-controle-lojas.vercel.app/reforma.html` → escolhe **entrega** (leva na loja / envia pelos Correios) e **devolução** (retira na loja / recebe pelos Correios — pede CEP e, se for essa a devolução, endereço completo via ViaCEP) → adiciona **até 10 itens**, cada um com serviço, descrição, peso opcional, observação e 1-6 fotos → pedido entra na fila do módulo **Reforma** (menu 💍) → vendedora orça **peça por peça** (valor, obs pública, obs interna, "inviável") e, se envolver Correios, calcula/edita o **frete** (ida informativa + volta cobrada, com "frete grátis" manual ou por regra `gratisAcima`, e "reembolsar envio do cliente") → WhatsApp (mensagem pronta: **"Enviar pelo sistema"** via Evolution API, registrado no módulo Atendimento, ou **"Abrir no meu WhatsApp"** via `wa.me`) → cliente aprova **item a item** pelo link (ou "Aceite presencial") → **check-in de custódia** com peso, teor, lacre e **foto obrigatória de cada peça aprovada** (+ fotos do pacote se veio pelos Correios) → **Gerar O.S.** → **check-out** com peso e **foto obrigatória de cada peça** → se devolução for Correios: **postar** (rastreio + foto do comprovante, status vira `enviado`) → **entregar** (assinatura). Recibo de custódia imprimível com uma linha por peça.
 
-Regras:
-- **A O.S. é criada direto na tabela `ordens_servico`** pela `reforma-api` (op `gerarOS`), no mesmo formato do painel-ordens: `codigoVia` via rpc `incrementar_via_sequence` (`codigo_${ABREV}_pedido` → ex. `MC12P`), `status:'aguardando'`, `momentoPagamento:'na_volta'`, `pagamentos:[]`, item único `REFORMA - <serviço>`, fotos com `driveUrl` = signed URL de 10 anos. Marcadores: `origem:'reforma'`, `reformaId`, `reformaCodigo`. **painel-ordens.html não foi alterado** — não recriar essa conversão lá.
+Modelo de dados (`reforma_pedidos.payload`):
+- `itens[]`: `{id, descricao, servico, servicoNome, pesoInformado, obsCliente, fotos[], orcamento:{valor,obsPublica,obsInterna,inviavel}, aprovado, custodia:{entrada:{peso,teor,teorObs,lacre,observacoes,fotos},saida:{peso,lacre,observacoes,fotos}}}`
+- `entrega:{modo:'loja'|'correios', lojaId}`, `devolucao:{modo:'retirar'|'correios', lojaId}`, `endereco:{cep,logradouro,numero,complemento,bairro,cidade,uf}` (só preenchido se algum modo usa Correios)
+- `orcamento.frete:{ida,volta:{servico,valor,prazo,origem}, gratis, reembolsarIda, gratisAcima}` — `origem` é `'correios'`, `'tabela'` ou `'manual'`
+- `aceite:{em,modo,itens[],totais}`; `custodia:{entrada,fotosPacote,saida,entrega}`; `postagem:{rastreio,servico,valorPago,fotos,em}`
+- Totais (`calcularTotais` no backend e replicado no front): `total = subtotal dos itens aprovados + frete de volta cobrado (se Correios e não grátis) − reembolso do frete de ida (se marcado)`; frete grátis = manual OU `subtotal ≥ frete.gratisAcima`; custo que a loja absorve vai só para `infoInterna` da O.S., nunca no total cobrado do cliente
+- Pedidos da v1 (um item só) são convertidos em memória por `normalizar()` ao abrir (`it_legado`) — não precisa migração de dados
+
+Frete (`reforma_config` id=`config`, chave `frete`):
+- `provider`: `'tabela'` (padrão — valores fixos por faixa mesmaUf/sudeste/brasil × SEDEX/PAC, editável em Configurações) ou `'correios'` (API oficial)
+- Se `provider:'correios'` e a chamada falhar, cai automaticamente na tabela e devolve `aviso` — nunca trava o orçamento
+- Credenciais dos Correios ficam em `reforma_config` id=**`segredos`** (nunca voltam para o front — `init` só devolve `segredosStatus:{correios:boolean}`): `correiosUsuario`, `correiosCodigoAcesso` (gerado em cws.correios.com.br → Gestão de acesso a API's — **não é a senha do Meu Correios**, e regerar invalida qualquer outro sistema que já use esse código), `correiosCartao` (número do cartão de postagem do contrato)
+- Endpoints usados: token `POST /token/v1/autentica/cartaopostagem`, preço `GET /preco/v1/nacional/{cod}`, prazo `GET /prazo/v1/nacional/{cod}` (`api.correios.com.br`, códigos padrão SEDEX `03220` / PAC `03298`)
+- Felipe tem contrato próprio (confirmado 25/set) mas pediu para não configurar ainda — módulo segue com `provider:'tabela'`
+
+WhatsApp: usa os **mesmos segredos do módulo Atendimento** (`atendimento_segredos`: `EVOLUTION_URL`, `EVOLUTION_API_KEY`; instância padrão configurável em `reforma_config.whatsappInstancia`, senão primeira instância não-Instagram de `config.atendimentoInstancias`, senão `'reformajoias'`). Envio pelo sistema cria/atualiza a conversa em `atendimento_conversas`/`atendimento_mensagens` — aparece também no módulo Atendimento. Templates com placeholders `{cliente} {codigo} {itens} {valor} {frete} {prazo} {validade} {link} {loja} {endereco} {entrega} {devolucao} {rastreio}`.
+
+Regras que continuam da v1:
+- **A O.S. é criada direto na tabela `ordens_servico`** pela `reforma-api` (op `gerarOS`), no mesmo formato do painel-ordens: `codigoVia` via rpc `incrementar_via_sequence` (`codigo_${ABREV}_pedido` → ex. `MC12P`), `status:'aguardando'`, `momentoPagamento:'na_volta'`, `pagamentos:[]`, **um item de O.S. por peça aprovada** + linha `FRETE RETORNO CORREIOS` (se cobrado) + linha negativa `REEMBOLSO ENVIO DO CLIENTE` (se marcado), fotos com `driveUrl` = signed URL de 10 anos. Marcadores: `origem:'reforma'`, `reformaId`, `reformaCodigo`. **painel-ordens.html não foi alterado** — não recriar essa conversão lá.
 - Cliente sem cadastro entra em `clientes_cadastro` (busca pelo telefone antes de inserir; nunca duplica).
 - Sessão: mesma regra do db-gateway (`sessaoValida` copiada). Permissão: `permissoes.reforma.ativo`; padrão diretoria/gerente/vendedora = true, oficina = false. Vendedora só vê pedidos das lojas dela (`user.lojas`).
 - Ops públicas (`publicInit`, `publicCriar`, `publicConsultar`, `publicAceitar`) não têm sessão: rate limit 5 pedidos/telefone/24h e 25/IP/24h; a visão pública nunca inclui observações internas.
-- Numeração do pedido: `R` + `numero` (bigserial) com 5 dígitos (`R00012`). Status: `novo` → `orcado` → `aprovado`/`recusado` → `em_custodia` → `os_gerada` → `pronto` → `entregue` (ou `cancelado`; `expirado` é calculado quando `validadeAte` passou).
-- Shell/DP: acréscimos únicos foram `{ id:'reforma', label:'Reforma', icon:'💍', src:'reforma-admin.html' }` em `SIDEBAR_MODULES`, `reforma` em `MODULOS_APP` e `reforma:{ ativo:true|false }` nos três blocos de `permissoesPadrao` (index.html e dp.html).
+- Numeração do pedido: `R` + `numero` (bigserial) com 5 dígitos (`R00012`). Status: `novo` → `orcado` → `aprovado`/`recusado` → `em_custodia` → `os_gerada` → `pronto` → (`enviado`, só se devolução for Correios) → `entregue` (ou `cancelado`; `expirado` é calculado quando `validadeAte` passou).
+- Shell/DP: acréscimos únicos foram `{ id:'reforma', label:'Reforma', icon:'💍', src:'reforma-admin.html' }` em `SIDEBAR_MODULES`, `reforma` em `MODULOS_APP` e `reforma:{ ativo:true|false }` nos três blocos de `permissoesPadrao` (index.html e dp.html). Nada disso mudou na v2 — v2 foi só `reforma-api`, `reforma.html` e `reforma-admin.html`.
