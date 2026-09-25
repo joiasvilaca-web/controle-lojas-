@@ -93,6 +93,8 @@ Cada loja tem cor temática. Login da Up Case abre direto em Gravações.
 | `atendimento.html` | Atendimento WhatsApp/Instagram |
 | `definir-senha.html` | Página pública de setup de senha (link de convite) |
 | `advertencia.html` | Página pública de confirmação de advertência (DP) |
+| `reforma-admin.html` | Reforma — módulo interno (fila de pedidos, orçamento, custódia, Gerar O.S.) |
+| `reforma.html` | Página pública do cliente da Reforma (envia fotos, aceita orçamento, acompanha pelo link `?t=TOKEN`) |
 
 **`index.html` (shell) só é editado na conversa APP GERAL.**
 
@@ -133,6 +135,7 @@ Grupos de menu com abas em `#shellTopTabs`:
 | `atendimento-webhook` | v3 | Recebe eventos WhatsApp (Evolution) e Instagram |
 | `atendimento-api` | v4 | Todas as ops do módulo Atendimento |
 | `upload-foto-drive` | v23 | Upload de fotos para Google Drive |
+| `reforma-api` | v1 | Todas as ops do módulo Reforma (públicas `public*` sem sessão + internas com `senha`) |
 | `cotacoes-mercado` | — | Cotações (não usa sessão) |
 
 Deploy: **`files` param precisa do conteúdo completo com `name: index.ts`** e `verify_jwt: true` (boolean).
@@ -162,10 +165,14 @@ apikey: ${SERVICE_ROLE_KEY}
 | `atendimento_segredos` | Segredos protegidos (só service_role) |
 | `painel_ordens_kv` | KV do módulo O.S. |
 | `ia_memoria` | Memória do módulo IA |
+| `reforma_pedidos` | Pedidos de reforma (colunas reais: `numero` bigserial, `token`, `status`, `loja_id`, `telefone_digits` + `payload`) |
+| `reforma_config` | Config do módulo Reforma (id=`config`: lojas públicas, endereços, serviços, textos, mensagens WhatsApp) |
 
 **Tabelas KV** têm colunas `key`/`value`. Acesso via `kvGet`/`kvSet` no db-gateway (não anon direto).
 
 **JSONB:** usar `payload->>'campo'` em queries SQL.
+
+**Storage:** buckets privados `atendimento-midia` e `reforma-fotos` (fotos do cliente/custódia da Reforma — sempre via signed URL gerada pela Edge Function, nunca URL pública).
 
 ---
 
@@ -230,6 +237,7 @@ Cada conversa é **escopada a um único módulo**:
 | `APP DP` | dp.html |
 | `APP CADASTRO` | Trecho Cadastro dentro do index.html |
 | `APP ATENDIMENTO` | atendimento.html |
+| `APP REFORMA` | reforma-admin.html + reforma.html + Edge Function reforma-api |
 
 **Antes de qualquer ação:** verificar se o app foi atualizado em outra conversa paralela (Felipe trabalha em múltiplas conversas ao mesmo tempo).
 
@@ -246,6 +254,8 @@ Cada conversa é **escopada a um único módulo**:
 - [ ] Modelo multiloja (loja do select vira contexto fixo): desenhado, não implementado
 - [ ] O.S.: migração para o catálogo novo de produtos (hoje usa `produtosOtica` legado)
 - [ ] Instagram Atendimento: falta vincular conta da Reforma ao app Meta e gerar token
+- [ ] Reforma fase 2: envio automático da mensagem pelo WhatsApp (Evolution API) — hoje o botão abre o wa.me com a mensagem pronta
+- [ ] Reforma: Oficina fica com o módulo desligado por padrão (para não aparecer no login da Up Case) — liberar por usuário no DP se a oficina for fazer o check-out
 
 ---
 
@@ -270,3 +280,17 @@ Cada conversa é **escopada a um único módulo**:
 - 24/set: o mesmo commit de 17/set (`ba04bba`) também quebrou o `orcamentos.html`: colou uma cópia antiga da tela de Novo Orçamento dentro de `abrirSeletorCliente` e apagou os botões Confirmar/Cancelar do modal de cliente. Restaurado a partir do `87dc6fc`. Ao revisar qualquer arquivo, conferir se as funções fecham onde deveriam (função de 90 linhas que vira 300 é sinal de colagem errada).
 - Dashboard: metas gravadas com `mergeConfigKey` na chave `metasMensais` (nunca mais `saveConfig` da config inteira).
 - Marketing: aba Orçamentos carrega sob demanda (`carregarOrcamentosSeNecessario`).
+
+---
+
+## 16. Módulo Reforma (25/set/2026)
+
+Fluxo: cliente abre `https://vilaca-controle-lojas.vercel.app/reforma.html` → manda nome, WhatsApp, loja, serviço, descrição e fotos → pedido entra na fila do módulo **Reforma** (menu 💍) → vendedora orça (valor, prazo, validade 10 dias — CDC art. 40) → botão WhatsApp abre `wa.me` com a mensagem e o link individual (`reforma.html?t=TOKEN`) → cliente aceita ou recusa pelo link (fica registrado com data/IP/UA) ou "Aceite presencial" → check-in de custódia na loja (peso, teor, lacre, fotos, assinatura em canvas) → **Gerar O.S.** → check-out (peso de saída) → entrega (assinatura). Recibo de custódia imprimível.
+
+Regras:
+- **A O.S. é criada direto na tabela `ordens_servico`** pela `reforma-api` (op `gerarOS`), no mesmo formato do painel-ordens: `codigoVia` via rpc `incrementar_via_sequence` (`codigo_${ABREV}_pedido` → ex. `MC12P`), `status:'aguardando'`, `momentoPagamento:'na_volta'`, `pagamentos:[]`, item único `REFORMA - <serviço>`, fotos com `driveUrl` = signed URL de 10 anos. Marcadores: `origem:'reforma'`, `reformaId`, `reformaCodigo`. **painel-ordens.html não foi alterado** — não recriar essa conversão lá.
+- Cliente sem cadastro entra em `clientes_cadastro` (busca pelo telefone antes de inserir; nunca duplica).
+- Sessão: mesma regra do db-gateway (`sessaoValida` copiada). Permissão: `permissoes.reforma.ativo`; padrão diretoria/gerente/vendedora = true, oficina = false. Vendedora só vê pedidos das lojas dela (`user.lojas`).
+- Ops públicas (`publicInit`, `publicCriar`, `publicConsultar`, `publicAceitar`) não têm sessão: rate limit 5 pedidos/telefone/24h e 25/IP/24h; a visão pública nunca inclui observações internas.
+- Numeração do pedido: `R` + `numero` (bigserial) com 5 dígitos (`R00012`). Status: `novo` → `orcado` → `aprovado`/`recusado` → `em_custodia` → `os_gerada` → `pronto` → `entregue` (ou `cancelado`; `expirado` é calculado quando `validadeAte` passou).
+- Shell/DP: acréscimos únicos foram `{ id:'reforma', label:'Reforma', icon:'💍', src:'reforma-admin.html' }` em `SIDEBAR_MODULES`, `reforma` em `MODULOS_APP` e `reforma:{ ativo:true|false }` nos três blocos de `permissoesPadrao` (index.html e dp.html).
