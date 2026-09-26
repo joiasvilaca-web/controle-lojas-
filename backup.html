@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Backup — Gestão e Controle</title>
+<style>
+  :root{ --bg:#F4F6F8; --surface:#FFFFFF; --ink:#1A1D24; --ink-soft:#4B5566; --ink-faint:#7C8592; --line:#E1E5EA; --line-strong:#C7CDD5;
+    --accent:#662344; --ok:#17794A; --ok-soft:#E3F5EA; --danger:#B91C1C; --danger-soft:#FBEAEA; --radius:12px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif; }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;} body{font-family:var(--font);background:var(--bg);color:var(--ink);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:28px 26px;max-width:440px;width:100%;}
+  h1{font-size:19px;margin:0 0 4px;} p.sub{color:var(--ink-faint);font-size:13.5px;margin:0 0 20px;}
+  label{display:block;font-size:12px;font-weight:700;color:var(--ink-soft);margin:12px 0 5px;text-transform:uppercase;letter-spacing:.04em;}
+  input{width:100%;padding:11px 12px;border:1.5px solid var(--line-strong);border-radius:10px;font-size:15px;}
+  button{width:100%;padding:13px 16px;border-radius:10px;border:none;font-size:15px;font-weight:700;cursor:pointer;margin-top:16px;}
+  .btn-accent{background:var(--accent);color:#fff;} .btn-accent[disabled]{opacity:.55;cursor:default;}
+  .alert{border-radius:10px;padding:11px 13px;font-size:13.5px;margin-top:14px;} .alert-danger{background:var(--danger-soft);color:var(--danger);} .alert-ok{background:var(--ok-soft);color:var(--ok);}
+  .hide{display:none!important;}
+  .resumo{margin-top:16px;font-size:13px;color:var(--ink-soft);max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
+  .resumo div{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--line);} .resumo div:last-child{border-bottom:none;}
+  .tip{font-size:12px;color:var(--ink-faint);margin-top:14px;line-height:1.5;}
+  .spinner{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px;} @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🗄️ Backup completo</h1>
+    <p class="sub">Gestão e Controle — Vilaça Joias. Acesso restrito à Diretoria.</p>
+
+    <div id="telaLogin">
+      <label>Usuário</label><input id="lUser" autocomplete="username">
+      <label>Senha</label><input id="lPass" type="password" autocomplete="current-password">
+      <div id="loginErro" class="alert alert-danger hide"></div>
+      <button class="btn-accent" id="btnLogin">Entrar</button>
+    </div>
+
+    <div id="telaBackup" class="hide">
+      <p style="font-size:14px;">Logado como <b id="nomeUsuario"></b>.</p>
+      <button class="btn-accent" id="btnBackup">📥 Baixar backup completo agora</button>
+      <div id="backupErro" class="alert alert-danger hide"></div>
+      <div id="backupOk" class="alert alert-ok hide"></div>
+      <div id="resumo" class="resumo hide"></div>
+      <p class="tip">O arquivo baixa para a pasta <b>Downloads</b> do navegador. Para guardar num HD externo: mova o arquivo pra lá depois de baixar, ou mude a pasta padrão de downloads do Chrome (Configurações → Downloads → Local) para uma pasta dentro do HD.</p>
+    </div>
+  </div>
+
+<script>
+/* Página independente — não faz parte do shell (index.html). Login próprio via db-gateway,
+   depois chama a Edge Function backup-export com o mesmo token de sessão. */
+const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+let token = null;
+
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function chamar(url, body){
+  const res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify(body) });
+  return res;
+}
+
+document.getElementById('btnLogin').addEventListener('click', async () => {
+  const usuario = document.getElementById('lUser').value.trim();
+  const senha = document.getElementById('lPass').value;
+  const erroEl = document.getElementById('loginErro'); erroEl.classList.add('hide');
+  if (!usuario || !senha) { erroEl.textContent = 'Preencha usuário e senha.'; erroEl.classList.remove('hide'); return; }
+  const btn = document.getElementById('btnLogin'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Entrando…';
+  try {
+    const res = await chamar(SUPABASE_URL + '/functions/v1/db-gateway', { op:'login', usuario, senha });
+    const j = await res.json();
+    if (!j.ok) { erroEl.textContent = j.bloqueado ? 'Usuário bloqueado — desbloqueie no DP.' : 'Usuário ou senha incorretos.'; erroEl.classList.remove('hide'); btn.disabled=false; btn.textContent='Entrar'; return; }
+    if (j.user.nivel !== 'diretoria') { erroEl.textContent = 'Só a Diretoria pode gerar o backup completo.'; erroEl.classList.remove('hide'); btn.disabled=false; btn.textContent='Entrar'; return; }
+    token = j.token;
+    document.getElementById('nomeUsuario').textContent = j.user.nome;
+    document.getElementById('telaLogin').classList.add('hide');
+    document.getElementById('telaBackup').classList.remove('hide');
+  } catch (e) {
+    erroEl.textContent = 'Falha de conexão. Tente de novo.'; erroEl.classList.remove('hide');
+    btn.disabled = false; btn.textContent = 'Entrar';
+  }
+});
+
+document.getElementById('btnBackup').addEventListener('click', async () => {
+  const btn = document.getElementById('btnBackup');
+  const erroEl = document.getElementById('backupErro'); const okEl = document.getElementById('backupOk'); const resumoEl = document.getElementById('resumo');
+  erroEl.classList.add('hide'); okEl.classList.add('hide'); resumoEl.classList.add('hide');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Gerando backup…';
+  try {
+    const res = await chamar(SUPABASE_URL + '/functions/v1/backup-export', { senha: token });
+    if (!res.ok) { const j = await res.json().catch(()=>({})); throw new Error(j.error || ('Erro ' + res.status)); }
+    const texto = await res.text();
+    const dados = JSON.parse(texto);
+    const blob = new Blob([texto], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const agora = new Date();
+    const nome = `backup_gestao_controle_${agora.toISOString().slice(0,10)}_${String(agora.getHours()).padStart(2,'0')}${String(agora.getMinutes()).padStart(2,'0')}.json`;
+    a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    okEl.textContent = 'Backup baixado: ' + nome; okEl.classList.remove('hide');
+    resumoEl.innerHTML = Object.entries(dados.resumo || {}).map(([t,n]) => `<div><span>${esc(t)}</span><b>${n<0?'erro':n+' linha(s)'}</b></div>`).join('');
+    resumoEl.classList.remove('hide');
+  } catch (e) {
+    erroEl.textContent = e.message || 'Falha ao gerar o backup.'; erroEl.classList.remove('hide');
+  }
+  btn.disabled = false; btn.textContent = '📥 Baixar backup completo agora';
+});
+</script>
+</body>
+</html>
