@@ -2,7 +2,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 /**
- * reforma-api — v4 (v4: buscarClientes, cadastrarCliente, enviarEstimativa — envio da estimativa com foto por WhatsApp/e-mail)
+ * reforma-api — v5 (v5: estimativas salvas — salvarEstimativa, listarEstimativas, obterEstimativa, registrarPesoReal, excluirEstimativa; tabela reforma_estimativas)
+ * v4: buscarClientes, cadastrarCliente, enviarEstimativa — envio da estimativa com foto por WhatsApp/e-mail
  * v3: op preCalcular — Calculadora de peso com IA Gemini
  * reforma-api — v2
  * v2: vários itens por pedido (foto + observação cada), orçamento e aprovação POR ITEM,
@@ -15,9 +16,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * Ops INTERNAS (reforma-admin.html, `senha` = token de sessão): init, listar, obter, criarBalcao,
  *   orcar, calcularFrete, aceitePresencial, anotar, sugerirData, gerarOS, checkin, checkout,
  *   postar, entregar, cancelar, enviarWhatsApp, listarInstancias, preCalcular, buscarClientes, cadastrarCliente,
- *   enviarEstimativa, salvarConfig, salvarSegredos
+ *   enviarEstimativa, salvarEstimativa, listarEstimativas, obterEstimativa, registrarPesoReal, excluirEstimativa,
+ *   salvarConfig, salvarSegredos
  *
- * Tabelas: reforma_pedidos, reforma_config (id=config e id=segredos). Bucket privado reforma-fotos.
+ * Tabelas: reforma_pedidos, reforma_estimativas, reforma_config (id=config e id=segredos). Bucket privado reforma-fotos.
  * Escreve em ordens_servico (só a O.S. que ela mesma cria), clientes_cadastro (só insere cliente
  * novo) e atendimento_conversas/atendimento_mensagens (registra o WhatsApp enviado).
  */
@@ -444,6 +446,19 @@ function fotosDeDataUrls(lista: any[]) {
     .filter((m: any) => m[2].length <= MAX_FOTO_BYTES * 1.4).map((m: any) => ({ mime: m[1].replace("jpg", "jpeg"), b64: m[2] }));
 }
 
+async function fotoStorageB64(path: string) {
+  const { data, error } = await admin.storage.from(BUCKET).download(path); if (error || !data) return null;
+  const bytes = new Uint8Array(await data.arrayBuffer()); let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { mime: data.type || "image/jpeg", b64: btoa(bin) };
+}
+function codigoEst(numero: number) { return "E" + String(numero).padStart(5, "0"); }
+function resumoEstimativa(row: any) {
+  const p = row.payload || {}; const r = p.resultado || {};
+  return { id: row.id, codigo: codigoEst(row.numero), criadoEm: p.criadoEm, por: p.por || "", lojaId: row.loja_id, cliente: p.cliente ? { nome: p.cliente.nome, telefone: p.cliente.telefone } : null,
+    modeloNome: p.modeloNome || p.modelo || "", tipo: p.tipo || "", metal: p.metal?.nome || r.metal || "", min: r.min, max: r.max, central: r.central, valorOrc: p.valorOrc || null,
+    envios: (p.envios || []).map((e: any) => e.canal), nFotos: (p.fotos || []).length, pesoReal: p.pesoReal?.valor ?? null };
+}
+
 /** Primeira data que respeita prazo e (se existir) limite diário do Tipo de Ordem. */
 async function sugerirData(config: any, serviceTypeId: string, prazoDias: number) {
   const st = (config.serviceTypes || []).find((s: any) => s.id === serviceTypeId);
@@ -868,18 +883,82 @@ As caixas devem envolver justo o objeto (só a joia, sem sombra). Se a referênc
       const { data: cr } = await admin.from("clientes_cadastro").select("id,payload").eq("id", String(params.clienteId || "")).maybeSingle();
       if (!cr) return json({ error: "Escolha ou cadastre o cliente." }, 400);
       const texto = String(params.texto || "").trim().slice(0, 4000); if (!texto) return json({ error: "Estimativa vazia." }, 400);
-      const fotos = fotosDeDataUrls(params.fotos);
+      let fotos: any[] = fotosDeDataUrls(params.fotos);
+      let est: any = null;
+      if (params.estimativaId) { const { data: er } = await admin.from("reforma_estimativas").select("*").eq("id", String(params.estimativaId)).maybeSingle(); est = er || null; }
+      if (!fotos.length && est && Array.isArray(params.fotosIdx)) {
+        for (const i of params.fotosIdx.slice(0, 3)) { const f = (est.payload?.fotos || [])[Number(i)]; if (f && f.path) { const b = await fotoStorageB64(f.path); if (b) fotos.push(b); } }
+      }
+      const registrarEnvio = async (para: string) => { if (!est) return; const pl = est.payload || {}; pl.envios = [...(pl.envios || []), { canal, em: Date.now(), por, para }]; await admin.from("reforma_estimativas").update({ payload: pl, updated_at: new Date().toISOString() }).eq("id", est.id); };
       if (canal === "email") {
         const to = String(cr.payload?.email || "").trim(); if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return json({ error: "Este cliente não tem e-mail cadastrado." }, 400);
         const html = String(params.html || "").slice(0, 60000) || `<pre>${texto.replace(/</g, "&lt;")}</pre>`;
         const id = await enviarEmailHtml(to, String(params.assunto || "Estimativa — Vilaça Joias").slice(0, 150), html, texto, fotos);
+        await registrarEnvio(to);
         return json({ ok: true, canal, para: to, id });
       }
       const d = onlyDigits(cr.payload?.telefone); if (d.length < 10) return json({ error: "Este cliente não tem telefone válido." }, 400);
       const numero = d.startsWith("55") && d.length >= 12 ? d : "55" + d; const instancia = instanciaPadrao(config, rcfg);
       for (let i = 0; i < fotos.length; i++) await enviarFotoWhatsApp(instancia, numero, fotos[i], i);
       const r = await enviarWhatsApp(config, rcfg, user, numero, texto);
+      await registrarEnvio(cr.payload?.telefone || numero);
       return json({ ok: true, canal, para: cr.payload?.telefone, fotos: fotos.length, instancia: r.instancia });
+    }
+    if (op === "salvarEstimativa") {
+      const dados = params.dados && typeof params.dados === "object" ? params.dados : null;
+      if (!dados || !dados.resultado || !(Number(dados.resultado.central) > 0)) return json({ error: "Calcule o peso antes de salvar." }, 400);
+      if (JSON.stringify(dados).length > 150000) return json({ error: "Estimativa grande demais para salvar." }, 400);
+      const { fotos: _f, envios: _e, pesoReal: _p, id: _i, codigo: _c, criadoEm: _ce, por: _po, ...limpo } = dados;
+      const novasFotos = Array.isArray(params.fotos) && params.fotos.length ? params.fotos.slice(0, 6) : null;
+      const cli = dados.cliente && dados.cliente.id ? String(dados.cliente.id) : null;
+      if (params.id) {
+        const { data: row, error } = await admin.from("reforma_estimativas").select("*").eq("id", String(params.id)).maybeSingle(); if (error) throw error;
+        if (!row) return json({ error: "Estimativa não encontrada." }, 404);
+        const ant = row.payload || {}; let fotos = ant.fotos || [];
+        if (novasFotos) { fotos = await subirFotos(row.id, "estimativa", novasFotos, por, 6); if ((ant.fotos || []).length) await admin.storage.from(BUCKET).remove(ant.fotos.map((f: any) => f.path).filter(Boolean)); }
+        const payload = { ...limpo, id: row.id, codigo: codigoEst(row.numero), criadoEm: ant.criadoEm, por: ant.por, atualizadoEm: Date.now(), atualizadoPor: por, fotos, envios: ant.envios || [], pesoReal: ant.pesoReal || null };
+        const { error: eu } = await admin.from("reforma_estimativas").update({ payload, cliente_id: cli, updated_at: new Date().toISOString() }).eq("id", row.id); if (eu) throw eu;
+        return json({ ok: true, id: row.id, codigo: payload.codigo, atualizada: true });
+      }
+      const id = uid("est_"); const lojaId = params.lojaId ? String(params.lojaId) : null;
+      const { data: ins, error: ei } = await admin.from("reforma_estimativas").insert({ id, cliente_id: cli, loja_id: lojaId, payload: {} }).select("numero").single(); if (ei) throw ei;
+      let fotos: any[] = []; try { if (novasFotos) fotos = await subirFotos(id, "estimativa", novasFotos, por, 6); } catch (e) { console.error("fotos estimativa", e); }
+      const payload = { ...limpo, id, codigo: codigoEst(ins.numero), criadoEm: Date.now(), por, fotos, envios: [], pesoReal: null };
+      const { error: eu } = await admin.from("reforma_estimativas").update({ payload, updated_at: new Date().toISOString() }).eq("id", id); if (eu) throw eu;
+      return json({ ok: true, id, codigo: payload.codigo });
+    }
+    if (op === "listarEstimativas") {
+      let q = admin.from("reforma_estimativas").select("id,numero,cliente_id,loja_id,created_at,payload").order("created_at", { ascending: false }).limit(300);
+      if (params.de) q = q.gte("created_at", params.de + "T00:00:00-03:00");
+      if (params.ate) q = q.lte("created_at", params.ate + "T23:59:59-03:00");
+      if (params.clienteId) q = q.eq("cliente_id", String(params.clienteId));
+      const { data, error } = await q; if (error) throw error;
+      const busca = String(params.busca || "").trim().toUpperCase(); const bd = onlyDigits(busca);
+      const lista = (data || []).filter((r: any) => podeVerLoja(r.loja_id) || !r.loja_id).map(resumoEstimativa).filter((e: any) => !busca || e.codigo.includes(busca) ||
+        String(e.cliente?.nome || "").toUpperCase().includes(busca) || (bd.length >= 4 && onlyDigits(e.cliente?.telefone).includes(bd)) || String(e.modeloNome).toUpperCase().includes(busca));
+      return json({ ok: true, estimativas: lista });
+    }
+    if (op === "obterEstimativa") {
+      const { data: row, error } = await admin.from("reforma_estimativas").select("*").eq("id", String(params.id || "")).maybeSingle(); if (error) throw error;
+      if (!row) return json({ error: "Estimativa não encontrada." }, 404);
+      const p = row.payload || {};
+      return json({ ok: true, estimativa: { ...p, codigo: codigoEst(row.numero), fotos: await assinarFotos(p.fotos || []) } });
+    }
+    if (op === "registrarPesoReal") {
+      const { data: row, error } = await admin.from("reforma_estimativas").select("*").eq("id", String(params.id || "")).maybeSingle(); if (error) throw error;
+      if (!row) return json({ error: "Estimativa não encontrada." }, 404);
+      const v = num(params.peso); const p = row.payload || {};
+      p.pesoReal = v > 0 ? { valor: Math.round(v * 1000) / 1000, em: Date.now(), por } : null;
+      const { error: eu } = await admin.from("reforma_estimativas").update({ payload: p, updated_at: new Date().toISOString() }).eq("id", row.id); if (eu) throw eu;
+      return json({ ok: true, pesoReal: p.pesoReal });
+    }
+    if (op === "excluirEstimativa") {
+      if (!gestaoTotal(user)) return json({ error: "Só Diretoria/Gerente exclui estimativas." }, 403);
+      const { data: row } = await admin.from("reforma_estimativas").select("payload").eq("id", String(params.id || "")).maybeSingle();
+      if (!row) return json({ error: "Estimativa não encontrada." }, 404);
+      const paths = (row.payload?.fotos || []).map((f: any) => f.path).filter(Boolean); if (paths.length) await admin.storage.from(BUCKET).remove(paths);
+      const { error } = await admin.from("reforma_estimativas").delete().eq("id", String(params.id)); if (error) throw error;
+      return json({ ok: true });
     }
     if (op === "salvarConfig") {
       if (!gestaoTotal(user)) return json({ error: "Só Diretoria/Gerente altera a configuração." }, 403);

@@ -1,4 +1,4 @@
-// backup-export v1
+// backup-export v2 (v2: inclui reforma_estimativas)
 // Exporta um snapshot completo (JSON) das tabelas de dados reais do app, para o
 // usuário baixar no próprio computador. Só leitura, só Diretoria.
 //
@@ -26,7 +26,7 @@ function json(body: unknown, status = 200) {
 // Tabelas incluídas no backup — todas as tabelas de dados reais do app (não segredos, não lixo histórico).
 const TABELAS_BACKUP = [
   "gestao_config", "clientes_cadastro", "ordens_servico", "vendas_pdv", "orcamentos",
-  "reforma_pedidos", "reforma_config", "dp_funcionarios", "dp_registros", "gastos", "gastos_fixos",
+  "reforma_pedidos", "reforma_estimativas", "reforma_config", "dp_funcionarios", "dp_registros", "gastos", "gastos_fixos",
   "produtos_estoque", "transferencias_controle", "reposicao_controle", "via_sequences",
   "estoque_movimentos", "atendimento_conversas", "atendimento_mensagens", "marketing_mensagens",
   "controle_config", "gravacoes_kv", "gravacoes_pedidos", "painel_ordens_kv",
