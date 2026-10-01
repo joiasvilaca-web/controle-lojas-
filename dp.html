@@ -912,7 +912,7 @@ function enterApp(){
 
 const TABS = [
   { id:'funcionarios', label:'Funcionários', icon:'👤' },
-  { id:'vendas', label:'Vendas', icon:'🛍️', soDiretoria:true },
+  { id:'vendas', label:'Vendas e Comissões', icon:'🛍️', soDiretoria:true },
   { id:'pagamentos', label:'Pagamentos', icon:'💰', soDiretoria:true },
   { id:'ferias', label:'Férias', icon:'🌴' },
   { id:'avisos', label:'Advertência', icon:'⚠️' },
@@ -968,76 +968,445 @@ function funcionarioOptionsHtml(selected){
    FUNCIONÁRIOS (cadastro completo)
    ============================================================ */
 /** Aba Vendas: total vendido por funcionário direto do PDV e das O.S. entregues (dado real, não depende de sync manual). */
-async function renderVendasDP(main){
-  main.innerHTML = `<div class="page-head"><h1 class="page-title">Vendas</h1><p class="page-sub">Carregando...</p></div>`;
-  const podeVerTodos = podeEditarDP();
-  const [vendasPdv, ordensEntregues] = await Promise.all([vendasPdvGet(), ordensEntreguesGet()]);
-  let mesFiltro = new Date().toISOString().slice(0,7);
+/* ============================================================================================
+   VENDAS E COMISSÕES (aba "vendas" do DP) — regime de caixa, comissão progressiva por faixas
+   Regras (definidas pelo Felipe em 01/10/2026):
+   • Base = líquido do mês = dinheiro RECEBIDO no mês (vendas PDV + pedidos/O.S.) − DEVOLUÇÕES do mês.
+     Venda a prazo/fiado, crédito de cliente e pedido ainda a receber não entram.
+   • Recebimento: venda "na encomenda" → data da venda; pedido "na encomenda" → data de criação;
+     pedido "na volta" → data em que foi entregue (recebidoEm). Venda cancelada = devolução no mês do cancelamento.
+   • Comissão progressiva: cada faixa paga o seu % sobre a parte do líquido que cai nela.
+   • Soma tudo o que a vendedora vendeu em todas as lojas e aplica a tabela da LOJA-BASE dela
+     (ou a tabela própria dela, se tiver). Faixas por loja e por mês; 7 níveis padrão (pode incluir/remover).
+   Armazenamento: dp_registros — tipo 'comissaoFaixas' (id comfx_AAAA-MM), 'comissaoCadastro' (id comcad_geral),
+   'comissaoFechamento' (id comfech_AAAA-MM). Sem tabela nova.
+   ============================================================================================ */
+const COM_NIVEIS_PADRAO = 7;
+const COM_FORMAS_NAO_RECEBIDAS = ['__fiado','__credito','__sem_custo'];
+let comCache = { produtos:null, ordens:null };
+let comEstado = { mes: new Date().toISOString().slice(0,7), sub:'vendedoras', calc:null };
 
-  function desenhar(){
-    const vendasDoMes = vendasPdv.filter(v=> (v.data||'').startsWith(mesFiltro));
-    const ordensDoMes = ordensEntregues.filter(o=> (o.data||'').startsWith(mesFiltro));
-    let listaFuncionarios = funcionarios.filter(f=>f.status!=='desligado');
-    // vendedora/oficina só podem ver a própria linha aqui — não o comparativo de todo mundo
-    if(!podeVerTodos){
-      listaFuncionarios = listaFuncionarios.filter(f=> funcionarioBateComNome(f, currentUser && currentUser.nome));
-    }
-    const linhas = listaFuncionarios.map(f=>{
-      const minhasVendas = vendasDoMes.filter(v=> funcionarioBateComNome(f, v.vendedora));
-      const minhasOrdens = ordensDoMes.filter(o=> funcionarioBateComNome(f, o.vendedora));
-      const totalPdv = minhasVendas.reduce((acc,v)=> acc + (Number(v.valorTotal)||0), 0);
-      const totalOs = minhasOrdens.reduce((acc,o)=> acc + (Number(o.valorTotal)||0), 0);
-      return { nome:nomeExibicaoFuncionario(f), qtdPdv:minhasVendas.length, totalPdv, qtdOs:minhasOrdens.length, totalOs, total:totalPdv+totalOs };
-    }).sort((a,b)=>b.total-a.total);
-
-    const historicoConferencias = podeVerTodos
-      ? registros.filter(r=>r.tipo==='vendaspg').filter(r=> r.mesReferencia===mesFiltro).slice().reverse()
-      : [];
-
-    main.innerHTML = `
-      <div class="page-head">
-        <h1 class="page-title">Vendas</h1>
-        <p class="page-sub">${podeVerTodos ? 'Direto do PDV e das O.S. entregues — atualizado em tempo real, não depende de conferência manual.' : 'Suas vendas, direto do PDV e das O.S. entregues.'}</p>
-      </div>
-      <div class="card" style="max-width:220px; padding:14px 18px;">
-        <div class="field" style="margin-bottom:0;"><label>Mês</label><input type="month" id="vdp_mes" value="${mesFiltro}"></div>
-      </div>
-      <div class="card" style="padding:14px 18px;">
-        <table>
-          <thead><tr><th>Funcionário</th><th>Vendas PDV</th><th>Valor PDV</th><th>O.S. entregues</th><th>Valor O.S.</th><th>Total</th></tr></thead>
-          <tbody>
-            ${linhas.length===0 ? `<tr><td colspan="6" class="empty">Nenhum funcionário cadastrado ainda.</td></tr>` : linhas.map(l=>`
-              <tr>
-                <td><b>${escapeHtml(l.nome)}</b></td>
-                <td>${l.qtdPdv}</td>
-                <td>${fmtMoeda(l.totalPdv)}</td>
-                <td>${l.qtdOs}</td>
-                <td>${fmtMoeda(l.totalOs)}</td>
-                <td><b>${fmtMoeda(l.total)}</b></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-      ${historicoConferencias.length>0 ? `
-        <div class="card" style="padding:14px 18px;">
-          <div class="section-label" style="border:none; padding:0; margin-bottom:10px;">Conferências do Venda PG nesse mês <span class="muted" style="text-transform:none; font-weight:400;">(por categoria, confirmadas pela diretoria)</span></div>
-          <table>
-            <thead><tr><th>Funcionário</th><th>Loja</th><th>Total (categorias)</th></tr></thead>
-            <tbody>
-              ${historicoConferencias.map(r=>{
-                const total = ['alianca','fabricacao','servico','represOuro','represPrata','relogio'].reduce((acc,c)=> acc + (Number(r[c])||0), 0);
-                return `<tr><td>${escapeHtml(nomeFuncionario(r.funcionarioId))}</td><td>${escapeHtml(r.loja||'—')}</td><td>${fmtMoeda(total)}</td></tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-      ` : ''}
-    `;
-    document.getElementById('vdp_mes').addEventListener('change', e=>{ mesFiltro = e.target.value; desenhar(); });
-  }
-  desenhar();
+function comNumBR(v){ let s = String(v==null?'':v).trim(); if(s.includes(',')) s = s.replace(/\./g,'').replace(',','.'); const n = Number(s); return isNaN(n) ? 0 : n; }
+function comR2(v){ return Math.round((Number(v)||0)*100)/100; }
+function comPct(v){ return (Math.round((Number(v)||0)*100)/100).toString().replace('.',',') + '%'; }
+/** Data local AAAA-MM-DD a partir de ms, ISO ou "AAAA-MM-DD". */
+function comDataLocal(v){
+  if(v==null || v==='') return '';
+  if(typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(typeof v==='number' ? v : (/^\d+$/.test(String(v)) ? Number(v) : v));
+  if(isNaN(d)) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
+function comMesAnterior(mes){ const [a,m] = mes.split('-').map(Number); const d = new Date(a, m-2, 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
+function comNomeMes(mes){ const [a,m] = mes.split('-'); return ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'][Number(m)-1] + '/' + a; }
+function comLojasFisicas(){ return (config.lojas||[]); }
+function comNomeLoja(id){ if(!id) return 'Sem loja'; const l=(config.lojas||[]).find(x=>x.id===id); return l ? (l.abreviacao||l.nome) : id; }
+function comRegistro(id){ return registros.find(r=>r.id===id) || null; }
+async function comSalvarRegistro(r){
+  const ok = await registroSalvar(r);
+  if(ok){ const i = registros.findIndex(x=>x.id===r.id); if(i>=0) registros[i]=r; else registros.push(r); }
+  return ok;
+}
+
+/* ---------- dados ---------- */
+async function comProdutosGet(){
+  if(comCache.produtos) return comCache.produtos;
+  const r = await gatewayCall({ op:'selectAll', table:'produtos_estoque' });
+  if(r && r.error){ console.error('produtos', r.error); comCache.produtos = {}; return comCache.produtos; }
+  const mapa = {}; ((r && r.data)||[]).forEach(row=>{ const p=row.payload||{}; mapa[p.id||row.id] = p; });
+  comCache.produtos = mapa; return mapa;
+}
+async function comOrdensGet(){
+  if(comCache.ordens) return comCache.ordens;
+  const r = await gatewayCall({ op:'selectAll', table:'ordens_servico' });
+  if(r && r.error){ console.error('ordens', r.error); comCache.ordens = []; return []; }
+  comCache.ordens = ((r && r.data)||[]).map(row=>row.payload); return comCache.ordens;
+}
+function comValorRecebido(reg){
+  return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) ? 0 : comNumBR(p.valor)), 0));
+}
+function comValorAReceber(reg){
+  return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (p.formaId==='__fiado' ? comNumBR(p.valor) : 0), 0));
+}
+/** Encontra o funcionário pelo nome gravado na venda (nome completo ou apelido). */
+function comFuncionarioDaVenda(nomeGravado){
+  const ativos = funcionarios.filter(f=>f.status!=='desligado'); const todos = funcionarios;
+  return ativos.find(f=>funcionarioBateComNome(f, nomeGravado)) || todos.find(f=>funcionarioBateComNome(f, nomeGravado)) || null;
+}
+function comIdFunc(f){ return f ? (f.funcionarioId || f.id) : null; }
+/** Classifica os itens (categoria, subcategoria, fornecedor, tipo) com o peso de cada item no valor. */
+function comItensClassificados(reg, origem, produtos){
+  const cats = (config.produtosOtica && config.produtosOtica.categorias) || [];
+  const subs = (config.produtosOtica && config.produtosOtica.subcategorias) || [];
+  const nomeCat = id=> (cats.find(c=>c.id===id)||{}).nome || '';
+  const nomeSub = id=> (subs.find(c=>c.id===id)||{}).nome || '';
+  const itens = (reg.itens||[]).map(it=>{
+    const p = it.produtoEstoqueId ? produtos[it.produtoEstoqueId] : null;
+    const peso = Math.max(0, comNumBR(it.quantidade||1) * comNumBR(it.valorUnitario));
+    return {
+      peso,
+      categoria: (p && nomeCat(p.categoriaId)) || (origem==='os' ? 'PEDIDO/O.S. (sem catálogo)' : 'SEM CATEGORIA'),
+      subcategoria: (p && nomeSub(p.subcategoriaId)) || 'SEM SUBCATEGORIA',
+      fornecedor: (p && String(p.fornecedor||'').trim().toUpperCase()) || 'SEM FORNECEDOR',
+      tipo: (p && p.tipo) || (origem==='os' ? (reg.serviceTypeName ? 'PEDIDO — ' + String(reg.serviceTypeName).toUpperCase() : 'PEDIDO/O.S.') : 'SEM TIPO'),
+    };
+  });
+  const total = itens.reduce((a,i)=>a+i.peso,0);
+  if(!itens.length || total<=0) return [{ fracao:1, categoria: origem==='os'?'PEDIDO/O.S. (sem catálogo)':'SEM CATEGORIA', subcategoria:'SEM SUBCATEGORIA', fornecedor:'SEM FORNECEDOR', tipo: origem==='os'?'PEDIDO/O.S.':'SEM TIPO' }];
+  return itens.map(i=>({ ...i, fracao: i.peso/total }));
+}
+/** Monta os lançamentos do mês: entradas (recebido) e devoluções, cada um com loja, vendedora e classificação. */
+function comLancamentosDoMes(mes, vendas, ordens, produtos){
+  const lanc = []; const aReceber = [];
+  const noMes = d=> d && d.slice(0,7)===mes;
+  (vendas||[]).forEach(v=>{
+    const recebido = comValorRecebido(v); const f = comFuncionarioDaVenda(v.vendedora);
+    const base = { origem:'venda', id:v.id, codigo:v.codigoVia||'', lojaId:v.lojaId||'', vendedoraNome:v.vendedora||'', funcId:comIdFunc(f), cliente:(v.cliente||''), classes: comItensClassificados(v,'venda',produtos) };
+    const dataReceb = comDataLocal(v.data);
+    if(recebido>0 && noMes(dataReceb)) lanc.push({ ...base, tipoMov:'entrada', data:dataReceb, valor:recebido, estimada: v.momentoPagamento==='na_volta' });
+    if(v.status==='cancelada' && recebido>0){ const dc = comDataLocal(v.canceladoEm); if(noMes(dc)) lanc.push({ ...base, tipoMov:'devolucao', data:dc, valor:recebido, motivo:v.motivoCancelamento||'' }); }
+    const fiado = comValorAReceber(v); if(fiado>0 && v.status!=='cancelada' && noMes(dataReceb)) aReceber.push({ ...base, data:dataReceb, valor:fiado, motivo:'fiado' });
+  });
+  (ordens||[]).forEach(o=>{
+    if(!o || o.status==='rascunho') return;
+    const recebido = comValorRecebido(o); const f = comFuncionarioDaVenda(o.vendedora);
+    const base = { origem:'os', id:o.id, codigo:o.codigoVia||'', lojaId:o.lojaId||'', vendedoraNome:o.vendedora||'', funcId:comIdFunc(f), cliente:(o.cliente||''), classes: comItensClassificados(o,'os',produtos) };
+    const cancelada = /^cancel/.test(String(o.status||''));
+    let dataReceb = '';
+    if(o.momentoPagamento==='na_volta') dataReceb = o.status==='entregue' ? comDataLocal(o.recebidoEm) : '';
+    else dataReceb = comDataLocal(o.criadoEm) || comDataLocal(o.data);
+    if(recebido>0 && dataReceb && noMes(dataReceb)) lanc.push({ ...base, tipoMov:'entrada', data:dataReceb, valor:recebido, estimada:false });
+    if(cancelada && recebido>0 && dataReceb){ const dc = comDataLocal(o.canceladoEm); if(noMes(dc)) lanc.push({ ...base, tipoMov:'devolucao', data:dc, valor:recebido, motivo:o.motivoCancelamento||'' }); }
+    if(!cancelada && o.momentoPagamento==='na_volta' && o.status!=='entregue' && comNumBR(o.valorTotal)>0) aReceber.push({ ...base, data:comDataLocal(o.criadoEm)||'', valor:comNumBR(o.valorTotal), motivo:'pedido a receber na entrega' });
+  });
+  return { lanc, aReceber };
+}
+
+/* ---------- faixas / comissão ---------- */
+function comFaixasVazias(){ return Array.from({length:COM_NIVEIS_PADRAO}, ()=>({ ate:null, perc:null })); }
+function comCadastro(){ return comRegistro('comcad_geral') || { id:'comcad_geral', tipo:'comissaoCadastro', vendedoras:{} }; }
+function comFaixasDoMes(mes){ return comRegistro('comfx_'+mes); }
+function comFechamento(mes){ return comRegistro('comfech_'+mes); }
+/** Loja-base: a escolhida no cadastro de comissão; se não houver e o acesso for a uma loja só, essa loja. */
+function comLojaBase(f){
+  const cad = comCadastro(); const id = comIdFunc(f); const c = (cad.vendedoras||{})[id];
+  if(c && c.lojaBase) return c.lojaBase;
+  const u = (config.users||[]).find(u=> u.funcionarioId===id);
+  if(u && Array.isArray(u.lojas) && u.lojas.length===1) return u.lojas[0];
+  return '';
+}
+/** Normaliza faixas: ordena, remove vazias; a última pode não ter teto (até = sem limite). */
+function comFaixasValidas(faixas){
+  const fx = (faixas||[]).filter(x=> x && x.perc!=null && x.perc!=='' && !isNaN(Number(x.perc)))
+    .map(x=>({ ate: (x.ate==null || x.ate==='' ) ? null : Number(x.ate), perc:Number(x.perc) }));
+  const comTeto = fx.filter(x=>x.ate!=null).sort((a,b)=>a.ate-b.ate); const semTeto = fx.filter(x=>x.ate==null);
+  return comTeto.concat(semTeto.length ? [semTeto[0]] : []);
+}
+/** Comissão progressiva com o detalhe de cada faixa. */
+function comCalcularProgressiva(base, faixas){
+  const fx = comFaixasValidas(faixas); let anterior = 0; let total = 0; const detalhe = []; let nivelAtingido = 0;
+  if(!(base>0) || !fx.length) return { total:0, detalhe, nivelAtingido:0 };
+  for(let i=0;i<fx.length;i++){
+    const teto = fx[i].ate==null ? Infinity : fx[i].ate;
+    if(teto <= anterior) continue;
+    const parte = Math.max(0, Math.min(base, teto) - anterior);
+    if(parte>0){ const v = comR2(parte * fx[i].perc / 100); total += v; nivelAtingido = i+1; detalhe.push({ nivel:i+1, de:anterior, ate:teto, perc:fx[i].perc, parte:comR2(parte), valor:v }); }
+    anterior = teto; if(base <= teto) break;
+  }
+  if(base > anterior && anterior>0 && fx[fx.length-1].ate!=null){ detalhe.push({ nivel:null, de:anterior, ate:Infinity, perc:0, parte:comR2(base-anterior), valor:0, foraDaTabela:true }); }
+  return { total:comR2(total), detalhe, nivelAtingido };
+}
+function comTabelaDaVendedora(mes, f){
+  const reg = comFaixasDoMes(mes); if(!reg) return { faixas:null, fonte:'sem tabela no mês' };
+  const id = comIdFunc(f); const prop = reg.vendedoras && reg.vendedoras[id];
+  if(prop && Array.isArray(prop.faixas) && comFaixasValidas(prop.faixas).length) return { faixas:prop.faixas, fonte:'tabela própria' };
+  const lb = comLojaBase(f); if(!lb) return { faixas:null, fonte:'sem loja-base' };
+  const tl = reg.lojas && reg.lojas[lb];
+  if(tl && comFaixasValidas(tl.faixas).length) return { faixas:tl.faixas, fonte:'tabela da ' + comNomeLoja(lb) };
+  return { faixas:null, fonte:'loja ' + comNomeLoja(lb) + ' sem faixas no mês' };
+}
+
+/* ---------- cálculo do mês ---------- */
+async function comCalcularMes(mes){
+  const [vendas, ordens, produtos] = await Promise.all([vendasPdvGet(), comOrdensGet(), comProdutosGet()]);
+  const { lanc, aReceber } = comLancamentosDoMes(mes, vendas, ordens, produtos);
+  const lojasIds = Array.from(new Set(lanc.map(l=>l.lojaId||''))).sort((a,b)=>comNomeLoja(a).localeCompare(comNomeLoja(b)));
+  // por vendedora × loja
+  const porVend = {};
+  lanc.forEach(l=>{
+    const chave = l.funcId || ('?' + (l.vendedoraNome||'SEM VENDEDORA').toUpperCase());
+    if(!porVend[chave]){ const f = l.funcId ? funcionarios.find(x=>comIdFunc(x)===l.funcId) : null;
+      porVend[chave] = { chave, funcId:l.funcId, f, nome: f ? nomeExibicaoFuncionario(f) : (l.vendedoraNome ? l.vendedoraNome.toUpperCase() + ' (não identificada)' : 'SEM VENDEDORA'), lojas:{}, recebido:0, devolvido:0 }; }
+    const pv = porVend[chave]; const lj = l.lojaId||''; pv.lojas[lj] = pv.lojas[lj] || { recebido:0, devolvido:0 };
+    if(l.tipoMov==='entrada'){ pv.lojas[lj].recebido += l.valor; pv.recebido += l.valor; } else { pv.lojas[lj].devolvido += l.valor; pv.devolvido += l.valor; }
+  });
+  const vendedoras = Object.values(porVend).map(v=>{
+    v.liquido = comR2(v.recebido - v.devolvido);
+    let tab = { faixas:null, fonte:'não identificada no DP' }; let com = { total:0, detalhe:[], nivelAtingido:0 };
+    if(v.f){ tab = comTabelaDaVendedora(mes, v.f); if(tab.faixas) com = comCalcularProgressiva(v.liquido, tab.faixas); v.lojaBase = comLojaBase(v.f); }
+    return { ...v, recebido:comR2(v.recebido), devolvido:comR2(v.devolvido), tabela:tab, comissao:com };
+  }).sort((a,b)=> (a.funcId?0:1)-(b.funcId?0:1) || b.liquido-a.liquido);
+  // por loja
+  const lojas = lojasIds.map(id=>{
+    const ls = lanc.filter(l=>(l.lojaId||'')===id);
+    const recebido = comR2(ls.filter(l=>l.tipoMov==='entrada').reduce((a,l)=>a+l.valor,0)); const devolvido = comR2(ls.filter(l=>l.tipoMov==='devolucao').reduce((a,l)=>a+l.valor,0));
+    const semVend = ls.filter(l=>!l.funcId); const semVendLiq = comR2(semVend.reduce((a,l)=> a + (l.tipoMov==='entrada'?l.valor:-l.valor), 0));
+    return { id, recebido, devolvido, liquido:comR2(recebido-devolvido), qtdEntradas: ls.filter(l=>l.tipoMov==='entrada').length, qtdDevol: ls.filter(l=>l.tipoMov==='devolucao').length, semVendLiq, aReceber: comR2(aReceber.filter(a=>(a.lojaId||'')===id).reduce((s,a)=>s+a.valor,0)) };
+  });
+  // classificação
+  const dims = { categoria:{}, subcategoria:{}, fornecedor:{}, tipo:{} };
+  lanc.forEach(l=>{ const sinal = l.tipoMov==='entrada' ? 1 : -1; l.classes.forEach(c=>{
+    Object.keys(dims).forEach(d=>{ const k = c[d]; dims[d][k] = dims[d][k] || { total:0, porLoja:{} }; const v = sinal * l.valor * c.fracao; dims[d][k].total += v; dims[d][k].porLoja[l.lojaId||''] = (dims[d][k].porLoja[l.lojaId||'']||0) + v; });
+  }); });
+  return { mes, lanc, aReceber, lojasIds, vendedoras, lojas, dims, calculadoEm: Date.now() };
+}
+
+/* ---------- interface ---------- */
+async function renderVendasDP(main){
+  const fech = comFechamento(comEstado.mes);
+  main.innerHTML = `
+    <div class="page-head"><h1 class="page-title">Vendas e Comissões</h1>
+      <p class="page-sub">Regime de caixa: conta o dinheiro recebido no mês (vendas + pedidos) menos as devoluções. Comissão progressiva pelas faixas da loja-base de cada vendedora.</p></div>
+    <div class="card" style="padding:14px 18px;">
+      <div class="filters" style="margin-bottom:0;">
+        <div class="field" style="margin-bottom:0;"><label>Mês</label><input type="month" id="com_mes" value="${comEstado.mes}"></div>
+        <button class="btn btn-accent" id="com_calcular" style="align-self:flex-end;">Calcular</button>
+        <span class="muted" id="com_status" style="align-self:flex-end;font-size:12.5px;">${fech ? '🔒 Mês fechado em ' + new Date(fech.fechadoEm).toLocaleString('pt-BR') + ' por ' + escapeHtml(fech.por||'') : ''}</span>
+      </div>
+    </div>
+    <div class="mini-tabs" id="com_subs">${[['vendedoras','👩 Vendedoras'],['lojas','🏬 Lojas'],['classes','🏷️ Categorias, fornecedores e tipos'],['lancamentos','📄 Lançamentos'],['faixas','📶 Faixas de comissão'],['cadastro','⚙️ Loja-base das vendedoras']].map(s=>`<button class="btn btn-ghost btn-sm ${comEstado.sub===s[0]?'active':''}" data-sub="${s[0]}">${s[1]}</button>`).join('')}</div>
+    <div id="com_corpo"></div>`;
+  document.getElementById('com_mes').addEventListener('change', e=>{ comEstado.mes = e.target.value || comEstado.mes; comEstado.calc = null; renderVendasDP(main); });
+  document.getElementById('com_calcular').addEventListener('click', async ()=>{ const b = document.getElementById('com_calcular'); b.disabled = true; b.textContent = 'Calculando…';
+    try{ comEstado.calc = await comCalcularMes(comEstado.mes); }catch(e){ console.error(e); showToast('Não foi possível calcular: ' + (e.message||e)); }
+    b.disabled = false; b.textContent = 'Calcular'; comDesenharSub(); });
+  document.querySelectorAll('#com_subs [data-sub]').forEach(b=>b.addEventListener('click', ()=>{ comEstado.sub = b.dataset.sub; document.querySelectorAll('#com_subs [data-sub]').forEach(x=>x.classList.toggle('active', x===b)); comDesenharSub(); }));
+  comDesenharSub();
+}
+function comPrecisaCalcular(corpo){
+  if(comEstado.calc && comEstado.calc.mes===comEstado.mes) return false;
+  corpo.innerHTML = `<div class="card empty">Escolha o mês e clique em <b>Calcular</b>.</div>`; return true;
+}
+function comDesenharSub(){
+  const corpo = document.getElementById('com_corpo'); if(!corpo) return;
+  const s = comEstado.sub;
+  if(s==='faixas') return comRenderFaixas(corpo);
+  if(s==='cadastro') return comRenderCadastro(corpo);
+  if(comPrecisaCalcular(corpo)) return;
+  if(s==='vendedoras') return comRenderVendedoras(corpo);
+  if(s==='lojas') return comRenderLojas(corpo);
+  if(s==='classes') return comRenderClasses(corpo);
+  if(s==='lancamentos') return comRenderLancamentos(corpo);
+}
+function comCelula(v){ return Math.abs(v)<0.005 ? '<span class="muted">—</span>' : fmtMoeda(v); }
+
+function comRenderVendedoras(corpo){
+  const c = comEstado.calc; const fech = comFechamento(c.mes);
+  const lojas = c.lojasIds;
+  const totCom = c.vendedoras.reduce((a,v)=>a+v.comissao.total,0);
+  const historicoConferencias = registros.filter(r=>r.tipo==='vendaspg' && r.mesReferencia===c.mes);
+  corpo.innerHTML = `
+    ${fech ? `<div class="card" style="padding:12px 16px;border-left:4px solid var(--wait);"><b>🔒 Este mês está fechado.</b> Os valores abaixo são recalculados com os dados de hoje; o valor oficial é o do fechamento. <button class="btn btn-ghost btn-sm" id="com_verFech">Ver fechamento</button></div>` : ''}
+    <div class="card" style="padding:14px 18px;overflow-x:auto;">
+      <table>
+        <thead><tr><th>Vendedora</th><th>Loja-base</th>${lojas.map(l=>`<th style="text-align:right;">${escapeHtml(comNomeLoja(l))}<br><span style="font-weight:500;text-transform:none;">recebido / devolvido</span></th>`).join('')}<th style="text-align:right;">Recebido</th><th style="text-align:right;">Devolvido</th><th style="text-align:right;">Líquido</th><th>Nível</th><th style="text-align:right;">Comissão</th></tr></thead>
+        <tbody>${c.vendedoras.length ? c.vendedoras.map((v,i)=>`<tr style="${v.funcId?'':'background:var(--wait-soft);'}">
+          <td><b>${escapeHtml(v.nome)}</b></td>
+          <td>${v.funcId ? (v.lojaBase ? escapeHtml(comNomeLoja(v.lojaBase)) : '<span class="badge badge-erro">definir</span>') : '—'}</td>
+          ${lojas.map(l=>{ const x = v.lojas[l]; return `<td style="text-align:right;white-space:nowrap;">${x ? comCelula(x.recebido) + (x.devolvido ? '<br><span style="color:var(--danger);">− ' + fmtMoeda(x.devolvido) + '</span>' : '') : '<span class="muted">—</span>'}</td>`; }).join('')}
+          <td style="text-align:right;">${fmtMoeda(v.recebido)}</td><td style="text-align:right;color:var(--danger);">${v.devolvido?'− '+fmtMoeda(v.devolvido):'—'}</td>
+          <td style="text-align:right;"><b>${fmtMoeda(v.liquido)}</b></td>
+          <td>${v.tabela.faixas ? (v.comissao.nivelAtingido ? 'Nível ' + v.comissao.nivelAtingido : '—') : `<span class="badge badge-wait" title="${escapeHtml(v.tabela.fonte)}">${escapeHtml(v.tabela.fonte)}</span>`}</td>
+          <td style="text-align:right;"><b>${v.funcId && v.tabela.faixas ? fmtMoeda(v.comissao.total) : '—'}</b> ${v.funcId && v.tabela.faixas ? `<button class="btn btn-ghost btn-sm" data-det="${i}" title="Ver a conta">🔍</button>` : ''}</td>
+        </tr>`).join('') : `<tr><td colspan="${7+lojas.length}" class="empty">Nenhum recebimento ou devolução neste mês.</td></tr>`}</tbody>
+        ${c.vendedoras.length ? `<tfoot><tr><th colspan="2">Total</th>${lojas.map(l=>{ const x = c.lojas.find(y=>y.id===l); return `<th style="text-align:right;">${fmtMoeda(x.liquido)}</th>`; }).join('')}<th style="text-align:right;">${fmtMoeda(c.vendedoras.reduce((a,v)=>a+v.recebido,0))}</th><th style="text-align:right;">${fmtMoeda(c.vendedoras.reduce((a,v)=>a+v.devolvido,0))}</th><th style="text-align:right;">${fmtMoeda(c.vendedoras.reduce((a,v)=>a+v.liquido,0))}</th><th></th><th style="text-align:right;">${fmtMoeda(totCom)}</th></tr></tfoot>` : ''}
+      </table>
+      <p class="muted" style="font-size:12px;margin-top:8px;">Linhas em amarelo: nome gravado na venda que não bate com nenhum funcionário do DP (nome completo ou apelido) — essas vendas ficam sem comissão até o nome ser corrigido.</p>
+    </div>
+    <div class="filters"><button class="btn btn-ghost" id="com_csv">⬇️ Exportar Excel (CSV)</button><button class="btn btn-ghost" id="com_print">🖨 Imprimir</button>${currentUser.nivel==='diretoria' ? (fech ? `<button class="btn btn-ghost" id="com_reabrir">🔓 Reabrir mês</button>` : `<button class="btn btn-accent" id="com_fechar">🔒 Fechar o mês</button>`) : ''}</div>
+    ${historicoConferencias.length ? `<div class="card" style="padding:14px 18px;"><div class="section-label" style="border:none;padding:0;margin-bottom:10px;">Conferências do Venda PG nesse mês <span class="muted" style="text-transform:none;font-weight:400;">(histórico)</span></div><table><thead><tr><th>Funcionário</th><th>Loja</th><th>Total (categorias)</th></tr></thead><tbody>${historicoConferencias.map(r=>{ const total=['alianca','fabricacao','servico','represOuro','represPrata','relogio'].reduce((acc,k)=>acc+(Number(r[k])||0),0); return `<tr><td>${escapeHtml(nomeFuncionario(r.funcionarioId))}</td><td>${escapeHtml(r.loja||'—')}</td><td>${fmtMoeda(total)}</td></tr>`; }).join('')}</tbody></table></div>` : ''}`;
+  corpo.querySelectorAll('[data-det]').forEach(b=>b.addEventListener('click', ()=>comAbrirDetalhe(c.vendedoras[Number(b.dataset.det)])));
+  document.getElementById('com_csv').onclick = ()=>comExportarCSV(c);
+  document.getElementById('com_print').onclick = ()=>comImprimir(c);
+  const bf = document.getElementById('com_fechar'); if(bf) bf.onclick = ()=>comFecharMes(c);
+  const br = document.getElementById('com_reabrir'); if(br) br.onclick = ()=>comReabrirMes(c.mes);
+  const bv = document.getElementById('com_verFech'); if(bv) bv.onclick = ()=>comVerFechamento(c.mes);
+}
+function comAbrirDetalhe(v){
+  const linhas = v.comissao.detalhe.map(d=>`<tr><td>${d.foraDaTabela ? 'Acima da última faixa' : 'Nível ' + d.nivel}</td><td>${fmtMoeda(d.de)} a ${d.ate===Infinity ? 'sem limite' : fmtMoeda(d.ate)}</td><td style="text-align:right;">${fmtMoeda(d.parte)}</td><td style="text-align:right;">${comPct(d.perc)}</td><td style="text-align:right;"><b>${fmtMoeda(d.valor)}</b></td></tr>`).join('');
+  openModal(`<div class="modal-head"><h2>${escapeHtml(v.nome)} — ${comNomeMes(comEstado.mes)}</h2></div><div class="modal-body">
+    <p style="margin:0 0 10px;">Líquido: <b>${fmtMoeda(v.recebido)}</b> recebido − <b>${fmtMoeda(v.devolvido)}</b> devolvido = <b>${fmtMoeda(v.liquido)}</b><br><span class="muted">Faixas usadas: ${escapeHtml(v.tabela.fonte)}</span></p>
+    <table><thead><tr><th>Faixa</th><th>Intervalo</th><th style="text-align:right;">Parte do líquido</th><th style="text-align:right;">%</th><th style="text-align:right;">Comissão</th></tr></thead><tbody>${linhas || '<tr><td colspan="5" class="empty">Sem comissão (líquido zero ou negativo).</td></tr>'}</tbody>
+    <tfoot><tr><th colspan="4">Total</th><th style="text-align:right;">${fmtMoeda(v.comissao.total)}</th></tr></tfoot></table>
+    ${v.comissao.detalhe.some(d=>d.foraDaTabela) ? '<p style="color:var(--danger);font-size:12.5px;">O líquido passou do teto da última faixa e a parte acima ficou sem %. Deixe a última faixa sem valor em "até" para valer sem limite.</p>' : ''}
+  </div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>`);
+}
+function comRenderLojas(corpo){
+  const c = comEstado.calc;
+  corpo.innerHTML = `<div class="card" style="padding:14px 18px;overflow-x:auto;"><table>
+    <thead><tr><th>Loja</th><th style="text-align:right;">Recebido</th><th style="text-align:right;">Devolvido</th><th style="text-align:right;">Líquido</th><th style="text-align:right;">Sem vendedora identificada</th><th style="text-align:right;">A receber (fora da conta)</th></tr></thead>
+    <tbody>${c.lojas.length ? c.lojas.map(l=>`<tr><td><b>${escapeHtml(comNomeLoja(l.id))}</b><br><span class="muted" style="font-size:12px;">${l.qtdEntradas} recebimento(s) · ${l.qtdDevol} devolução(ões)</span></td><td style="text-align:right;">${fmtMoeda(l.recebido)}</td><td style="text-align:right;color:var(--danger);">${l.devolvido?'− '+fmtMoeda(l.devolvido):'—'}</td><td style="text-align:right;"><b>${fmtMoeda(l.liquido)}</b></td><td style="text-align:right;">${Math.abs(l.semVendLiq)>0.005?'<span class="badge badge-wait">'+fmtMoeda(l.semVendLiq)+'</span>':'<span class="badge badge-ok">tudo atribuído</span>'}</td><td style="text-align:right;">${comCelula(l.aReceber)}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">Sem movimento no mês.</td></tr>'}</tbody>
+    ${c.lojas.length ? `<tfoot><tr><th>Total do grupo</th><th style="text-align:right;">${fmtMoeda(c.lojas.reduce((a,l)=>a+l.recebido,0))}</th><th style="text-align:right;">${fmtMoeda(c.lojas.reduce((a,l)=>a+l.devolvido,0))}</th><th style="text-align:right;">${fmtMoeda(c.lojas.reduce((a,l)=>a+l.liquido,0))}</th><th style="text-align:right;">${fmtMoeda(c.lojas.reduce((a,l)=>a+l.semVendLiq,0))}</th><th style="text-align:right;">${fmtMoeda(c.lojas.reduce((a,l)=>a+l.aReceber,0))}</th></tr></tfoot>` : ''}
+  </table><p class="muted" style="font-size:12px;margin-top:8px;">"Sem vendedora identificada" mostra quanto da loja não está ligado a nenhum funcionário — é a conferência loja × vendedoras. "A receber" (fiado e pedidos ainda não entregues) não entra no líquido nem na comissão.</p></div>`;
+}
+function comRenderClasses(corpo){
+  const c = comEstado.calc; const lojas = c.lojasIds;
+  const bloco = (titulo, dim)=>{ const linhas = Object.entries(c.dims[dim]).sort((a,b)=>b[1].total-a[1].total);
+    return `<div class="card" style="padding:14px 18px;overflow-x:auto;"><div class="section-label" style="border:none;padding:0;margin-bottom:8px;">${titulo}</div><table>
+      <thead><tr><th>${titulo}</th>${lojas.map(l=>`<th style="text-align:right;">${escapeHtml(comNomeLoja(l))}</th>`).join('')}<th style="text-align:right;">Total</th></tr></thead>
+      <tbody>${linhas.length ? linhas.map(([k,v])=>`<tr><td>${escapeHtml(k)}</td>${lojas.map(l=>`<td style="text-align:right;">${comCelula(v.porLoja[l]||0)}</td>`).join('')}<td style="text-align:right;"><b>${fmtMoeda(v.total)}</b></td></tr>`).join('') : `<tr><td colspan="${lojas.length+2}" class="empty">Sem dados.</td></tr>`}</tbody>
+      <tfoot><tr><th>Total</th>${lojas.map(l=>`<th style="text-align:right;">${fmtMoeda(linhas.reduce((a,[,v])=>a+(v.porLoja[l]||0),0))}</th>`).join('')}<th style="text-align:right;">${fmtMoeda(linhas.reduce((a,[,v])=>a+v.total,0))}</th></tr></tfoot></table></div>`; };
+  corpo.innerHTML = `<p class="muted" style="font-size:12.5px;">Valores líquidos (recebido − devolvido), por loja e no total. Quando uma venda tem vários itens, o valor recebido é dividido entre eles na proporção do preço de cada item. Item digitado sem escolher do catálogo aparece como "SEM CATEGORIA".</p>
+    ${bloco('Categoria','categoria')}${bloco('Subcategoria','subcategoria')}${bloco('Fornecedor','fornecedor')}${bloco('Tipo','tipo')}`;
+}
+function comRenderLancamentos(corpo){
+  const c = comEstado.calc; const ls = c.lanc.slice().sort((a,b)=>a.data.localeCompare(b.data));
+  corpo.innerHTML = `<div class="card" style="padding:14px 18px;overflow-x:auto;"><table>
+    <thead><tr><th>Data</th><th>Mov.</th><th>Origem</th><th>Código</th><th>Loja</th><th>Vendedora (gravada)</th><th>Cliente</th><th style="text-align:right;">Valor</th></tr></thead>
+    <tbody>${ls.length ? ls.map(l=>`<tr><td>${fmtDate(l.data)}${l.estimada?' <span class="badge badge-wait" title="Pagamento na volta sem data de recebimento: considerado na data da venda">estimada</span>':''}</td><td>${l.tipoMov==='entrada'?'<span class="badge badge-ok">recebido</span>':'<span class="badge badge-erro">devolução</span>'}</td><td>${l.origem==='venda'?'Venda':'Pedido/O.S.'}</td><td>${escapeHtml(l.codigo)}</td><td>${escapeHtml(comNomeLoja(l.lojaId))}</td><td>${escapeHtml(l.vendedoraNome||'—')}${l.funcId?'':' <span class="badge badge-wait">não identificada</span>'}</td><td>${escapeHtml(String(l.cliente||'').slice(0,40))}</td><td style="text-align:right;${l.tipoMov==='entrada'?'':'color:var(--danger);'}">${l.tipoMov==='entrada'?'':'− '}${fmtMoeda(l.valor)}</td></tr>`).join('') : '<tr><td colspan="8" class="empty">Nenhum lançamento no mês.</td></tr>'}</tbody></table>
+    ${c.aReceber.length ? `<div class="section-label" style="border:none;padding:0;margin:14px 0 8px;">A receber (fora da conta)</div><table><thead><tr><th>Data</th><th>Origem</th><th>Código</th><th>Loja</th><th>Vendedora</th><th>Motivo</th><th style="text-align:right;">Valor</th></tr></thead><tbody>${c.aReceber.map(a=>`<tr><td>${fmtDate(a.data)}</td><td>${a.origem==='venda'?'Venda':'Pedido/O.S.'}</td><td>${escapeHtml(a.codigo)}</td><td>${escapeHtml(comNomeLoja(a.lojaId))}</td><td>${escapeHtml(a.vendedoraNome||'—')}</td><td>${escapeHtml(a.motivo)}</td><td style="text-align:right;">${fmtMoeda(a.valor)}</td></tr>`).join('')}</tbody></table>` : ''}</div>`;
+}
+
+/* ---- faixas ---- */
+function comRenderFaixas(corpo){
+  const mes = comEstado.mes; const reg = comFaixasDoMes(mes); const ant = comFaixasDoMes(comMesAnterior(mes));
+  const lojas = comLojasFisicas(); const pode = currentUser.nivel==='diretoria';
+  const rascunho = JSON.parse(JSON.stringify(reg || { id:'comfx_'+mes, tipo:'comissaoFaixas', mes, lojas:{}, vendedoras:{} }));
+  lojas.forEach(l=>{ if(!rascunho.lojas[l.id]) rascunho.lojas[l.id] = { faixas: comFaixasVazias() }; });
+  const fech = comFechamento(mes);
+  const tabelaHtml = (chave, faixas)=> `<table class="com-fx" data-chave="${chave}"><thead><tr><th>Nível</th><th>De (R$)</th><th>Até (R$)</th><th>% comissão</th>${pode?'<th></th>':''}</tr></thead><tbody>${faixas.map((f,i)=>{
+      const de = i===0 ? 0 : (faixas[i-1].ate!=null && faixas[i-1].ate!=='' ? faixas[i-1].ate : null);
+      return `<tr><td>${i+1}</td><td class="muted">${de==null?'—':fmtMoeda(de)}</td><td><input class="com-in" data-i="${i}" data-k="ate" inputmode="decimal" placeholder="${i===faixas.length-1?'sem limite':''}" value="${f.ate!=null&&f.ate!==''?String(f.ate).replace('.',','):''}" ${pode?'':'disabled'} style="width:130px;"></td><td><input class="com-in" data-i="${i}" data-k="perc" inputmode="decimal" value="${f.perc!=null&&f.perc!==''?String(f.perc).replace('.',','):''}" ${pode?'':'disabled'} style="width:80px;"> %</td>${pode?`<td><button class="btn btn-ghost btn-sm" data-rm="${i}" title="Remover nível">✕</button></td>`:''}</tr>`; }).join('')}</tbody></table>
+      ${pode?`<div class="filters" style="margin-top:8px;"><button class="btn btn-ghost btn-sm" data-add="1">＋ Nível</button><select data-copiar="1"><option value="">Copiar faixas de…</option>${lojas.filter(l=>'loja:'+l.id!==chave).map(l=>`<option value="${l.id}">${escapeHtml(l.abreviacao||l.nome)}</option>`).join('')}</select></div>`:''}`;
+  const vendComPropria = Object.keys(rascunho.vendedoras||{}).filter(id=>rascunho.vendedoras[id] && rascunho.vendedoras[id].faixas);
+  corpo.innerHTML = `
+    ${fech ? '<div class="card" style="padding:12px 16px;border-left:4px solid var(--wait);">🔒 Mês fechado — mudar as faixas não altera o fechamento já gravado.</div>' : ''}
+    <div class="card" style="padding:14px 18px;">
+      <p style="margin:0 0 6px;"><b>Faixas de ${comNomeMes(mes)}</b> — comissão progressiva: cada faixa paga o seu % sobre a parte do líquido que cai nela. Deixe o "até" do último nível em branco para valer sem limite.</p>
+      ${pode ? `<div class="filters" style="margin-bottom:0;"><button class="btn btn-ghost" id="com_copiarAnt" ${ant?'':'disabled'}>📋 Copiar tudo de ${comNomeMes(comMesAnterior(mes))}</button><span class="muted" style="font-size:12.5px;">${ant?'':'(mês anterior sem faixas)'}</span></div>` : '<p class="muted">Só a diretoria altera as faixas.</p>'}
+    </div>
+    ${lojas.map(l=>`<div class="card" style="padding:14px 18px;" data-bloco="loja:${l.id}"><div class="section-label" style="border:none;padding:0;margin-bottom:8px;">🏬 ${escapeHtml(l.nome)} ${l.abreviacao?'('+escapeHtml(l.abreviacao)+')':''}</div>${tabelaHtml('loja:'+l.id, rascunho.lojas[l.id].faixas)}</div>`).join('')}
+    <div class="card" style="padding:14px 18px;">
+      <div class="section-label" style="border:none;padding:0;margin-bottom:8px;">👩 Tabelas próprias (exceção)</div>
+      <p class="muted" style="font-size:12.5px;margin:0 0 8px;">Use só quando uma vendedora tiver faixas diferentes das da loja dela neste mês.</p>
+      ${vendComPropria.map(id=>`<div data-bloco="vend:${id}" style="margin-bottom:12px;"><b>${escapeHtml(nomeFuncionario(id))}</b> ${pode?`<button class="btn btn-ghost btn-sm" data-rmvend="${id}">remover tabela própria</button>`:''}${tabelaHtml('vend:'+id, rascunho.vendedoras[id].faixas)}</div>`).join('') || '<p class="muted">Nenhuma.</p>'}
+      ${pode ? `<div class="filters"><select id="com_addVend"><option value="">Criar tabela própria para…</option>${funcionarios.filter(f=>f.status!=='desligado' && !vendComPropria.includes(comIdFunc(f))).map(f=>`<option value="${comIdFunc(f)}">${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select></div>` : ''}
+    </div>
+    ${pode ? `<div class="filters"><button class="btn btn-accent" id="com_salvarFx">💾 Salvar faixas de ${comNomeMes(mes)}</button></div>` : ''}`;
+  if(!pode) return;
+  const ler = ()=>{ corpo.querySelectorAll('table.com-fx').forEach(t=>{ const [tp,id] = t.dataset.chave.split(':'); const alvo = tp==='loja' ? rascunho.lojas[id] : rascunho.vendedoras[id];
+    t.querySelectorAll('.com-in').forEach(inp=>{ const i=Number(inp.dataset.i); const v = inp.value.trim(); alvo.faixas[i][inp.dataset.k] = v==='' ? null : comNumBR(v); }); }); };
+  const redesenhar = ()=>{ comEstado.rascunhoFx = rascunho; comRenderFaixasDe(corpo, rascunho); };
+  corpo.querySelectorAll('table.com-fx').forEach(t=>{
+    const [tp,id] = t.dataset.chave.split(':'); const alvo = ()=> tp==='loja' ? rascunho.lojas[id] : rascunho.vendedoras[id];
+    const bloco = t.parentElement;
+    t.querySelectorAll('[data-rm]').forEach(b=>b.addEventListener('click', ()=>{ ler(); if(alvo().faixas.length<=1) return showToast('Mantenha pelo menos um nível.'); alvo().faixas.splice(Number(b.dataset.rm),1); redesenhar(); }));
+    const add = bloco.querySelector('[data-add]'); if(add) add.addEventListener('click', ()=>{ ler(); alvo().faixas.push({ ate:null, perc:null }); redesenhar(); });
+    const cp = bloco.querySelector('[data-copiar]'); if(cp) cp.addEventListener('change', ()=>{ if(!cp.value) return; ler(); alvo().faixas = JSON.parse(JSON.stringify(rascunho.lojas[cp.value].faixas)); redesenhar(); });
+    t.querySelectorAll('.com-in').forEach(inp=>inp.addEventListener('change', ()=>{ ler(); redesenhar(); }));
+  });
+  corpo.querySelectorAll('[data-rmvend]').forEach(b=>b.addEventListener('click', ()=>{ ler(); delete rascunho.vendedoras[b.dataset.rmvend]; redesenhar(); }));
+  const av = document.getElementById('com_addVend'); if(av) av.addEventListener('change', ()=>{ if(!av.value) return; ler(); const lb = comLojaBase(funcionarios.find(f=>comIdFunc(f)===av.value)); rascunho.vendedoras[av.value] = { faixas: JSON.parse(JSON.stringify((lb && rascunho.lojas[lb] && rascunho.lojas[lb].faixas) || comFaixasVazias())) }; redesenhar(); });
+  const ca = document.getElementById('com_copiarAnt'); if(ca) ca.addEventListener('click', ()=>{ if(!confirm(`Substituir as faixas de ${comNomeMes(mes)} pelas de ${comNomeMes(comMesAnterior(mes))}? (só grava ao clicar em Salvar)`)) return; const novo = JSON.parse(JSON.stringify(ant)); rascunho.lojas = novo.lojas || {}; rascunho.vendedoras = novo.vendedoras || {}; lojas.forEach(l=>{ if(!rascunho.lojas[l.id]) rascunho.lojas[l.id] = { faixas: comFaixasVazias() }; }); redesenhar(); });
+  document.getElementById('com_salvarFx').addEventListener('click', async ()=>{
+    ler();
+    // validação: tetos crescentes, % entre 0 e 100, só o último pode ficar sem teto
+    const erros = [];
+    const checar = (nome, fx)=>{ const usadas = fx.filter(x=>x.perc!=null); let anterior = 0;
+      usadas.forEach((x,i)=>{ if(x.perc<0 || x.perc>100) erros.push(`${nome}: nível ${i+1} com % inválido.`);
+        if(x.ate==null && i<usadas.length-1) erros.push(`${nome}: só o último nível pode ficar sem "até".`);
+        if(x.ate!=null){ if(x.ate<=anterior) erros.push(`${nome}: o "até" do nível ${i+1} precisa ser maior que o do nível anterior.`); anterior = x.ate; } });
+      fx.forEach((x,i)=>{ if(x.perc==null && x.ate!=null) erros.push(`${nome}: nível ${i+1} sem %.`); }); };
+    Object.entries(rascunho.lojas).forEach(([id,v])=>checar(comNomeLoja(id), v.faixas));
+    Object.entries(rascunho.vendedoras).forEach(([id,v])=>checar(nomeFuncionario(id), v.faixas));
+    if(erros.length){ alert('Corrija antes de salvar:\n\n' + erros.slice(0,12).join('\n')); return; }
+    rascunho.atualizadoEm = Date.now(); rascunho.atualizadoPor = currentUser.nome;
+    const ok = await comSalvarRegistro(rascunho);
+    if(ok){ showToast('Faixas de ' + comNomeMes(mes) + ' salvas.'); comEstado.rascunhoFx = null; if(comEstado.calc) comEstado.calc = await comCalcularMes(mes); comRenderFaixas(corpo); }
+  });
+}
+/** Redesenha a aba de faixas mantendo o rascunho em edição (sem perder o que foi digitado). */
+function comRenderFaixasDe(corpo, rascunho){
+  const original = registros.findIndex(r=>r.id===rascunho.id); const backup = original>=0 ? registros[original] : null;
+  if(original>=0) registros[original] = rascunho; else registros.push(rascunho);
+  try{ comRenderFaixas(corpo); } finally { if(original>=0) registros[original] = backup; else registros.splice(registros.findIndex(r=>r===rascunho),1); }
+}
+
+/* ---- loja-base ---- */
+function comRenderCadastro(corpo){
+  const cad = JSON.parse(JSON.stringify(comCadastro())); cad.vendedoras = cad.vendedoras || {};
+  const pode = currentUser.nivel==='diretoria'; const lojas = comLojasFisicas();
+  const lista = funcionarios.filter(f=>f.status!=='desligado').sort((a,b)=>nomeExibicaoFuncionario(a).localeCompare(nomeExibicaoFuncionario(b)));
+  corpo.innerHTML = `<div class="card" style="padding:14px 18px;overflow-x:auto;">
+    <p style="margin:0 0 10px;">A <b>loja-base</b> define qual tabela de faixas vale para cada vendedora (as vendas de todas as lojas somam no líquido dela). Quem tem acesso a uma loja só já vem com ela preenchida.</p>
+    <table><thead><tr><th>Funcionário</th><th>Acesso (lojas)</th><th>Loja-base para comissão</th></tr></thead><tbody>
+    ${lista.map(f=>{ const id = comIdFunc(f); const u = (config.users||[]).find(u=>u.funcionarioId===id); const atual = (cad.vendedoras[id]||{}).lojaBase || '';
+      const auto = !atual && u && Array.isArray(u.lojas) && u.lojas.length===1 ? u.lojas[0] : '';
+      return `<tr><td><b>${escapeHtml(nomeExibicaoFuncionario(f))}</b>${u?' <span class="muted" style="font-size:12px;">'+escapeHtml(levelLabel(u.nivel))+'</span>':''}</td><td style="font-size:12px;">${u && u.lojas ? u.lojas.map(comNomeLoja).map(escapeHtml).join(', ') : '<span class="muted">sem login</span>'}</td>
+        <td><select data-lb="${id}" ${pode?'':'disabled'}><option value="">${auto ? 'Automático: ' + escapeHtml(comNomeLoja(auto)) : '— definir —'}</option>${lojas.map(l=>`<option value="${l.id}" ${atual===l.id?'selected':''}>${escapeHtml(l.abreviacao||l.nome)}</option>`).join('')}</select></td></tr>`; }).join('')}
+    </tbody></table>
+    ${pode ? '<div class="filters" style="margin-top:12px;"><button class="btn btn-accent" id="com_salvarCad">💾 Salvar loja-base</button></div>' : '<p class="muted">Só a diretoria altera.</p>'}</div>`;
+  const b = document.getElementById('com_salvarCad'); if(!b) return;
+  b.addEventListener('click', async ()=>{
+    corpo.querySelectorAll('[data-lb]').forEach(s=>{ const id = s.dataset.lb; if(s.value) cad.vendedoras[id] = { ...(cad.vendedoras[id]||{}), lojaBase:s.value }; else if(cad.vendedoras[id]) delete cad.vendedoras[id].lojaBase; });
+    cad.atualizadoEm = Date.now(); cad.atualizadoPor = currentUser.nome;
+    if(await comSalvarRegistro(cad)){ showToast('Loja-base salva.'); if(comEstado.calc) comEstado.calc = await comCalcularMes(comEstado.mes); }
+  });
+}
+
+/* ---- fechamento, exportação, impressão ---- */
+function comLinhasExport(c){
+  return c.vendedoras.map(v=>({ vendedora:v.nome, lojaBase:v.lojaBase?comNomeLoja(v.lojaBase):'', porLoja:c.lojasIds.map(l=>{ const x=v.lojas[l]; return x ? { loja:comNomeLoja(l), recebido:comR2(x.recebido), devolvido:comR2(x.devolvido) } : null; }).filter(Boolean),
+    recebido:v.recebido, devolvido:v.devolvido, liquido:v.liquido, nivel:v.comissao.nivelAtingido||'', comissao:v.funcId&&v.tabela.faixas?v.comissao.total:null, fonte:v.tabela.fonte, detalhe:v.comissao.detalhe }));
+}
+async function comFecharMes(c){
+  const semTabela = c.vendedoras.filter(v=>v.funcId && !v.tabela.faixas); const naoId = c.vendedoras.filter(v=>!v.funcId);
+  let aviso = `Fechar ${comNomeMes(c.mes)}? Os valores de hoje ficam gravados como oficiais.`;
+  if(semTabela.length) aviso += `\n\n⚠️ ${semTabela.length} vendedora(s) sem faixas (sem comissão): ${semTabela.map(v=>v.nome).join(', ')}.`;
+  if(naoId.length) aviso += `\n\n⚠️ Há vendas com vendedora não identificada: ${naoId.map(v=>v.nome).join(', ')}.`;
+  if(!confirm(aviso)) return;
+  const reg = { id:'comfech_'+c.mes, tipo:'comissaoFechamento', mes:c.mes, fechadoEm:Date.now(), por:currentUser.nome, lojas:c.lojas.map(l=>({ loja:comNomeLoja(l.id), recebido:l.recebido, devolvido:l.devolvido, liquido:l.liquido, semVendedora:l.semVendLiq })), vendedoras:comLinhasExport(c), faixasUsadas: comFaixasDoMes(c.mes) || null };
+  if(await comSalvarRegistro(reg)){ showToast('Mês fechado.'); renderVendasDP(document.getElementById('mainContent')); }
+}
+async function comReabrirMes(mes){
+  if(!confirm(`Reabrir ${comNomeMes(mes)}? O fechamento gravado será apagado.`)) return;
+  if(await registroExcluir('comfech_'+mes)){ registros = registros.filter(r=>r.id!=='comfech_'+mes); showToast('Mês reaberto.'); renderVendasDP(document.getElementById('mainContent')); }
+}
+function comVerFechamento(mes){
+  const f = comFechamento(mes); if(!f) return;
+  openModal(`<div class="modal-head"><h2>Fechamento de ${comNomeMes(mes)}</h2></div><div class="modal-body">
+    <p class="muted" style="margin:0 0 10px;">Fechado em ${new Date(f.fechadoEm).toLocaleString('pt-BR')} por ${escapeHtml(f.por||'')}</p>
+    <table><thead><tr><th>Vendedora</th><th style="text-align:right;">Líquido</th><th>Nível</th><th style="text-align:right;">Comissão</th></tr></thead><tbody>${(f.vendedoras||[]).map(v=>`<tr><td>${escapeHtml(v.vendedora)}</td><td style="text-align:right;">${fmtMoeda(v.liquido)}</td><td>${v.nivel?'Nível '+v.nivel:'—'}</td><td style="text-align:right;">${v.comissao==null?'—':fmtMoeda(v.comissao)}</td></tr>`).join('')}</tbody>
+    <tfoot><tr><th>Total</th><th style="text-align:right;">${fmtMoeda((f.vendedoras||[]).reduce((a,v)=>a+(v.liquido||0),0))}</th><th></th><th style="text-align:right;">${fmtMoeda((f.vendedoras||[]).reduce((a,v)=>a+(v.comissao||0),0))}</th></tr></tfoot></table>
+  </div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>`);
+}
+function comExportarCSV(c){
+  const q = s=>'"' + String(s==null?'':s).replace(/"/g,'""') + '"'; const n = v=> v==null ? '' : String(comR2(v)).replace('.',',');
+  const L = [];
+  L.push(['VENDAS E COMISSÕES — ' + comNomeMes(c.mes).toUpperCase()].map(q).join(';')); L.push('');
+  L.push(['Vendedora','Loja-base', ...c.lojasIds.flatMap(l=>[comNomeLoja(l)+' recebido', comNomeLoja(l)+' devolvido']), 'Recebido','Devolvido','Líquido','Nível','Comissão','Faixas usadas'].map(q).join(';'));
+  c.vendedoras.forEach(v=>L.push([q(v.nome), q(v.lojaBase?comNomeLoja(v.lojaBase):''), ...c.lojasIds.flatMap(l=>{ const x=v.lojas[l]; return [n(x?x.recebido:0), n(x?x.devolvido:0)]; }), n(v.recebido), n(v.devolvido), n(v.liquido), q(v.comissao.nivelAtingido||''), n(v.funcId&&v.tabela.faixas?v.comissao.total:null), q(v.tabela.fonte)].join(';')));
+  L.push(''); L.push(['LOJA','Recebido','Devolvido','Líquido','Sem vendedora identificada','A receber'].map(q).join(';'));
+  c.lojas.forEach(l=>L.push([q(comNomeLoja(l.id)), n(l.recebido), n(l.devolvido), n(l.liquido), n(l.semVendLiq), n(l.aReceber)].join(';')));
+  [['CATEGORIA','categoria'],['SUBCATEGORIA','subcategoria'],['FORNECEDOR','fornecedor'],['TIPO','tipo']].forEach(([t,d])=>{
+    L.push(''); L.push([t, ...c.lojasIds.map(comNomeLoja), 'Total'].map(q).join(';'));
+    Object.entries(c.dims[d]).sort((a,b)=>b[1].total-a[1].total).forEach(([k,v])=>L.push([q(k), ...c.lojasIds.map(l=>n(v.porLoja[l]||0)), n(v.total)].join(';')));
+  });
+  const blob = new Blob(['\ufeff' + L.join('\r\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `vendas-comissoes-${c.mes}.csv`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+}
+function comImprimir(c){
+  const w = window.open('', '_blank'); if(!w){ showToast('Libere pop-ups para imprimir.'); return; }
+  const tab = (cab, linhas)=>`<table><thead><tr>${cab.map(h=>`<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${linhas.map(l=>`<tr>${l.map(x=>`<td>${x}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const vend = tab(['Vendedora','Loja-base', ...c.lojasIds.map(comNomeLoja),'Recebido','Devolvido','Líquido','Nível','Comissão'], c.vendedoras.map(v=>[escapeHtml(v.nome), escapeHtml(v.lojaBase?comNomeLoja(v.lojaBase):''), ...c.lojasIds.map(l=>{ const x=v.lojas[l]; return x ? fmtMoeda(x.recebido-x.devolvido) : '—'; }), fmtMoeda(v.recebido), fmtMoeda(v.devolvido), '<b>'+fmtMoeda(v.liquido)+'</b>', v.comissao.nivelAtingido||'—', v.funcId&&v.tabela.faixas?'<b>'+fmtMoeda(v.comissao.total)+'</b>':'—']));
+  const lojas = tab(['Loja','Recebido','Devolvido','Líquido','Sem vendedora'], c.lojas.map(l=>[escapeHtml(comNomeLoja(l.id)), fmtMoeda(l.recebido), fmtMoeda(l.devolvido), '<b>'+fmtMoeda(l.liquido)+'</b>', fmtMoeda(l.semVendLiq)]));
+  const cats = tab(['Categoria', ...c.lojasIds.map(comNomeLoja), 'Total'], Object.entries(c.dims.categoria).sort((a,b)=>b[1].total-a[1].total).map(([k,v])=>[escapeHtml(k), ...c.lojasIds.map(l=>fmtMoeda(v.porLoja[l]||0)), '<b>'+fmtMoeda(v.total)+'</b>']));
+  w.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Vendas e Comissões ${c.mes}</title><style>body{font-family:Arial,sans-serif;font-size:12px;margin:18px;color:#111}h1{font-size:18px;margin:0 0 4px}h2{font-size:14px;margin:18px 0 6px}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #ddd;padding:5px 6px;text-align:left}th{background:#f3f3f3}.np{margin-top:14px}@media print{.np{display:none}}</style></head><body>
+    <h1>Vendas e Comissões — ${escapeHtml(comNomeMes(c.mes))}</h1><div>Regime de caixa (recebido − devolvido). Emitido em ${new Date().toLocaleString('pt-BR')} por ${escapeHtml(currentUser.nome)}.</div>
+    <h2>Vendedoras</h2>${vend}<h2>Lojas</h2>${lojas}<h2>Categorias</h2>${cats}<div class="np"><button onclick="window.print()">Imprimir</button></div></body></html>`);
+  w.document.close();
+}
+
 
 /* Retorna quantos dias faltam para completar 90 dias a partir de dataAdmissao (string YYYY-MM-DD).
    Retorna null se dataAdmissao for inválida ou se já passaram os 90 dias. */
