@@ -2,7 +2,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 /**
- * reforma-api — v3 (v3: op preCalcular — Calculadora de peso com IA Gemini)
+ * reforma-api — v4 (v4: buscarClientes, cadastrarCliente, enviarEstimativa — envio da estimativa com foto por WhatsApp/e-mail)
+ * v3: op preCalcular — Calculadora de peso com IA Gemini
  * reforma-api — v2
  * v2: vários itens por pedido (foto + observação cada), orçamento e aprovação POR ITEM,
  *     frete (tabela própria ou API dos Correios) com frete grátis acima de X / manual,
@@ -13,7 +14,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * Ops PÚBLICAS (reforma.html): publicInit, publicCriar, publicConsultar, publicAceitar
  * Ops INTERNAS (reforma-admin.html, `senha` = token de sessão): init, listar, obter, criarBalcao,
  *   orcar, calcularFrete, aceitePresencial, anotar, sugerirData, gerarOS, checkin, checkout,
- *   postar, entregar, cancelar, enviarWhatsApp, listarInstancias, preCalcular, salvarConfig, salvarSegredos
+ *   postar, entregar, cancelar, enviarWhatsApp, listarInstancias, preCalcular, buscarClientes, cadastrarCliente,
+ *   enviarEstimativa, salvarConfig, salvarSegredos
  *
  * Tabelas: reforma_pedidos, reforma_config (id=config e id=segredos). Bucket privado reforma-fotos.
  * Escreve em ordens_servico (só a O.S. que ela mesma cria), clientes_cadastro (só insere cliente
@@ -400,6 +402,46 @@ async function enviarWhatsApp(config: any, rcfg: any, user: any, telefone: strin
     }
   } catch (e) { console.error("registro atendimento", e); }
   return { externoId, instancia, numero };
+}
+
+// ---------- envio de estimativa com foto (v4) ----------
+function b64Utf8(str: string): string { const bytes = new TextEncoder().encode(str); let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]); return btoa(bin); }
+function b64Url(b64: string) { return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+async function gmailToken(): Promise<string> {
+  const clientId = Deno.env.get("GOOGLE_OAUTH_CLIENT_ID"), clientSecret = Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET"), refreshToken = Deno.env.get("GMAIL_REFRESH_TOKEN");
+  if (!clientId || !clientSecret || !refreshToken) throw new Error("Credenciais do Gmail não configuradas no Supabase.");
+  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: "refresh_token" }) });
+  const j = await r.json(); if (!j.access_token) throw new Error("Gmail: falha ao renovar acesso: " + JSON.stringify(j).slice(0, 200));
+  return j.access_token;
+}
+/** E-mail HTML com fotos embutidas (cid:foto0, cid:foto1…). */
+async function enviarEmailHtml(to: string, subject: string, html: string, texto: string, fotos: { mime: string; b64: string }[]) {
+  const from = Deno.env.get("GMAIL_FROM_EMAIL") || "vilacajoias3@gmail.com";
+  const bRel = "rel_" + crypto.randomUUID().replace(/-/g, ""), bAlt = "alt_" + crypto.randomUUID().replace(/-/g, "");
+  const quebra = (b64: string) => b64.replace(/(.{76})/g, "$1\r\n");
+  const partes = [
+    `From: Vilaça Joias <${from}>`, `To: ${to}`, `Subject: =?UTF-8?B?${b64Utf8(subject)}?=`, "MIME-Version: 1.0", `Content-Type: multipart/related; boundary="${bRel}"`, "",
+    `--${bRel}`, `Content-Type: multipart/alternative; boundary="${bAlt}"`, "",
+    `--${bAlt}`, 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", quebra(b64Utf8(texto)),
+    `--${bAlt}`, 'Content-Type: text/html; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", quebra(b64Utf8(html)),
+    `--${bAlt}--`,
+  ];
+  fotos.forEach((f, i) => { partes.push(`--${bRel}`, `Content-Type: ${f.mime}; name="foto${i + 1}.jpg"`, "Content-Transfer-Encoding: base64", `Content-ID: <foto${i}>`, `Content-Disposition: inline; filename="foto${i + 1}.jpg"`, "", quebra(f.b64)); });
+  partes.push(`--${bRel}--`, "");
+  const raw = b64Url(b64Utf8(partes.join("\r\n")));
+  const token = await gmailToken();
+  const r = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ raw }) });
+  const j = await r.json().catch(() => ({})); if (!r.ok || !j.id) throw new Error("Gmail: falha ao enviar: " + JSON.stringify(j).slice(0, 200));
+  return j.id;
+}
+/** Foto pelo WhatsApp (Evolution v2; se recusar, tenta o formato v1). */
+async function enviarFotoWhatsApp(instancia: string, numero: string, f: { mime: string; b64: string }, i: number) {
+  try { return await evolution(`/message/sendMedia/${encodeURIComponent(instancia)}`, { number: numero, mediatype: "image", mimetype: f.mime, caption: "", media: f.b64, fileName: `foto${i + 1}.jpg` }); }
+  catch (_e) { return await evolution(`/message/sendMedia/${encodeURIComponent(instancia)}`, { number: numero, mediaMessage: { mediatype: "image", media: f.b64, caption: "", fileName: `foto${i + 1}.jpg` } }); }
+}
+function fotosDeDataUrls(lista: any[]) {
+  return (Array.isArray(lista) ? lista : []).slice(0, 3).map((d: any) => /^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/i.exec(String(d || ""))).filter(Boolean)
+    .filter((m: any) => m[2].length <= MAX_FOTO_BYTES * 1.4).map((m: any) => ({ mime: m[1].replace("jpg", "jpeg"), b64: m[2] }));
 }
 
 /** Primeira data que respeita prazo e (se existir) limite diário do Tipo de Ordem. */
@@ -797,6 +839,47 @@ As caixas devem envolver justo o objeto (só a joia, sem sombra). Se a referênc
         mensagem: String(analise.mensagem || "").slice(0, 300),
       };
       return json({ ok: true, analise: out, modelo });
+    }
+    if (op === "buscarClientes") {
+      const termo = String(params.termo || "").trim().replace(/[,()"'%]/g, " ").replace(/\s+/g, " ").slice(0, 60); if (termo.length < 2) return json({ ok: true, clientes: [] });
+      const dig = onlyDigits(termo);
+      const filtro = dig.length >= 4 ? `payload->>telefone.ilike.%${dig.slice(-8, -4)}%${dig.slice(-4)}%,payload->>nome.ilike.%${termo}%` : `payload->>nome.ilike.%${termo}%,payload->>email.ilike.%${termo}%`;
+      const { data, error } = await admin.from("clientes_cadastro").select("id,payload").or(filtro).limit(12); if (error) throw error;
+      return json({ ok: true, clientes: (data || []).map((r: any) => ({ id: r.id, nome: r.payload?.nome || "", telefone: r.payload?.telefone || "", email: r.payload?.email || "" })) });
+    }
+    if (op === "cadastrarCliente") {
+      const nome = maiusc(params.nome).slice(0, 80); const tel = onlyDigits(params.telefone); const email = String(params.email || "").trim().toLowerCase().slice(0, 120);
+      if (nome.length < 3) return json({ error: "Informe o nome do cliente." }, 400);
+      if (tel.length !== 10 && tel.length !== 11) return json({ error: "Telefone inválido (DDD + número)." }, 400);
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: "E-mail inválido." }, 400);
+      const { data: ach } = await admin.from("clientes_cadastro").select("id,payload").ilike("payload->>telefone", `%${tel.slice(-8, -4)}%${tel.slice(-4)}%`).limit(10);
+      const existe = (ach || []).find((c: any) => onlyDigits(c.payload?.telefone) === tel);
+      if (existe) {
+        // já cadastrado: só completa o e-mail se estiver vazio — nunca sobrescreve dado existente
+        if (email && !existe.payload?.email) { const pl = { ...existe.payload, email }; await admin.from("clientes_cadastro").update({ payload: pl }).eq("id", existe.id); existe.payload = pl; }
+        return json({ ok: true, jaExistia: true, cliente: { id: existe.id, nome: existe.payload?.nome || "", telefone: existe.payload?.telefone || "", email: existe.payload?.email || "" } });
+      }
+      const id = uid("cli_"); const cli = { id, nome, telefone: fmtTel(tel), email, cpf: "", criadoEm: Date.now(), origem: "reforma" };
+      const { error } = await admin.from("clientes_cadastro").insert({ id, payload: cli }); if (error) throw error;
+      return json({ ok: true, cliente: { id, nome, telefone: cli.telefone, email } });
+    }
+    if (op === "enviarEstimativa") {
+      const canal = String(params.canal || ""); if (!["whatsapp", "email"].includes(canal)) return json({ error: "Canal inválido." }, 400);
+      const { data: cr } = await admin.from("clientes_cadastro").select("id,payload").eq("id", String(params.clienteId || "")).maybeSingle();
+      if (!cr) return json({ error: "Escolha ou cadastre o cliente." }, 400);
+      const texto = String(params.texto || "").trim().slice(0, 4000); if (!texto) return json({ error: "Estimativa vazia." }, 400);
+      const fotos = fotosDeDataUrls(params.fotos);
+      if (canal === "email") {
+        const to = String(cr.payload?.email || "").trim(); if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return json({ error: "Este cliente não tem e-mail cadastrado." }, 400);
+        const html = String(params.html || "").slice(0, 60000) || `<pre>${texto.replace(/</g, "&lt;")}</pre>`;
+        const id = await enviarEmailHtml(to, String(params.assunto || "Estimativa — Vilaça Joias").slice(0, 150), html, texto, fotos);
+        return json({ ok: true, canal, para: to, id });
+      }
+      const d = onlyDigits(cr.payload?.telefone); if (d.length < 10) return json({ error: "Este cliente não tem telefone válido." }, 400);
+      const numero = d.startsWith("55") && d.length >= 12 ? d : "55" + d; const instancia = instanciaPadrao(config, rcfg);
+      for (let i = 0; i < fotos.length; i++) await enviarFotoWhatsApp(instancia, numero, fotos[i], i);
+      const r = await enviarWhatsApp(config, rcfg, user, numero, texto);
+      return json({ ok: true, canal, para: cr.payload?.telefone, fotos: fotos.length, instancia: r.instancia });
     }
     if (op === "salvarConfig") {
       if (!gestaoTotal(user)) return json({ error: "Só Diretoria/Gerente altera a configuração." }, 403);

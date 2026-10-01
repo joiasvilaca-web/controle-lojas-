@@ -113,6 +113,20 @@
     <div class="acoes"><button class="btn btn-accent" id="cCalcular">⚖️ Calcular peso e valor</button></div>
     <div id="cResultado"></div>
   </div>
+  <div class="card">
+    <div class="section-label" style="margin-top:0;">6. Observações, cliente e envio</div>
+    <label class="f">Observações (vão no envio e na impressão)</label><textarea class="inp" id="cObs" placeholder="ex.: peça com desgaste no aro; valor final depende da pesagem na loja"></textarea>
+    <div class="grid g3"><div><label class="f">Valor do orçamento ao cliente (R$) — opcional</label><input class="inp" id="cValorOrc" inputmode="decimal" placeholder="ex.: 450,00"></div>
+      <div><label class="chkl" style="margin-top:28px;"><input type="checkbox" id="cIncluirMetal" checked> Incluir valor estimado do metal</label></div></div>
+    <label class="f">Cliente</label>
+    <div id="cCliSel"></div>
+    <div id="cCliBusca"><div class="grid g3"><div style="grid-column:span 2;"><input class="inp" id="cCliTermo" placeholder="Buscar por nome, telefone ou e-mail"></div><div><button class="btn btn-ghost" id="cCliNovoBtn" style="width:100%;justify-content:center;">＋ Cadastrar cliente</button></div></div><div id="cCliRes"></div></div>
+    <div id="cCliNovo" class="sub-box hide"><div class="grid g3"><div><label class="f">Nome</label><input class="inp" id="cnNome"></div><div><label class="f">WhatsApp (com DDD)</label><input class="inp" id="cnTel" inputmode="tel" placeholder="(32) 99999-9999" maxlength="15"></div><div><label class="f">E-mail</label><input class="inp" id="cnEmail" inputmode="email"></div></div>
+      <div class="acoes"><button class="btn btn-accent btn-sm" id="cnSalvar">Salvar cliente</button><button class="btn btn-ghost btn-sm" id="cnCancelar">Cancelar</button></div></div>
+    <label class="f">Fotos que vão no envio (até 3)</label><div class="cthumbs" id="cEnvFotos"></div>
+    <div class="acoes"><button class="btn btn-wa" id="cEnvWa">💬 Enviar por WhatsApp</button><button class="btn btn-ghost" id="cEnvWaMeu">Abrir no meu WhatsApp</button><button class="btn btn-accent" id="cEnvEmail">✉️ Enviar por e-mail</button><button class="btn btn-ghost" id="cImprimir">🖨 Imprimir</button></div>
+    <div class="muted" style="font-size:12px;">WhatsApp e e-mail exigem o cliente cadastrado e o peso calculado. "Abrir no meu WhatsApp" leva só o texto — a foto você anexa à mão.</div>
+  </div>
 </div>
 
 <div class="modal-overlay" id="cViewer"><div class="modal" style="max-width:980px;">
@@ -607,13 +621,13 @@ function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; 
 function renderCalc(){
   const sm = document.getElementById('cMetal'); const atual = sm.value;
   sm.innerHTML = metaisCalc().map(m=>`<option value="${escapeHtml(m.id)}">${escapeHtml(m.nome)}</option>`).join(''); if(atual && metaisCalc().some(m=>m.id===atual)) sm.value = atual;
-  atualizarMetal(); renderThumbs(); renderOpcoes(); renderCampos(); renderIABox(); renderResultado();
+  atualizarMetal(); renderThumbs(); renderOpcoes(); renderCampos(); renderIABox(); renderResultado(); renderCliente(); renderEnvFotos();
 }
 function metalAtual(){ return metaisCalc().find(m=>m.id===document.getElementById('cMetal').value) || metaisCalc()[0]; }
 function atualizarMetal(){ const m = metalAtual(); document.getElementById('cDens').value = String(m.densidade).replace('.',','); const c = lsGet('reformaCalcCot_'+m.id); document.getElementById('cCot').value = c || ''; }
 document.getElementById('cMetal').addEventListener('change', ()=>{ atualizarMetal(); if(calc.resultado) calcular(true); });
 document.getElementById('cCot').addEventListener('input', e=>{ lsSet('reformaCalcCot_'+metalAtual().id, e.target.value); });
-document.getElementById('cNovo').addEventListener('click', ()=>{ if(calc.imagens.length && !confirm('Começar uma nova estimativa? Os dados atuais serão descartados.')) return; calcNovo(); renderCalc(); });
+document.getElementById('cNovo').addEventListener('click', ()=>{ if(calc.imagens.length && !confirm('Começar uma nova estimativa? Os dados atuais serão descartados.')) return; calcNovo(); calcCliente = null; calcEnvFotos = null; ['cObs','cValorOrc'].forEach(id=>document.getElementById(id).value=''); renderCalc(); });
 
 /* ---- mídia ---- */
 function carregarImagem(dataUrl){ return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error('Imagem inválida')); im.src=dataUrl; }); }
@@ -640,6 +654,7 @@ async function adicionarArquivos(files){
 }
 document.getElementById('cArquivos').addEventListener('change', async ev=>{ await adicionarArquivos(ev.target.files); ev.target.value=''; });
 function renderThumbs(){
+  if(document.getElementById('cEnvFotos')) setTimeout(renderEnvFotos, 0);
   const box = document.getElementById('cThumbs');
   box.innerHTML = calc.imagens.map((im,i)=>`<div class="cthumb" data-i="${i}" style="${i===calc.imgSel?'border-color:var(--accent);':''}"><img src="${im.dataUrl}" alt=""><span class="tg ${im.scale?'ok':''}">${i} · ${im.scale?'escala ✓':im.origem}</span><button type="button" data-rm="${i}">✕</button></div>`).join('');
   box.querySelectorAll('.cthumb').forEach(el=>el.addEventListener('click', ev=>{ if(ev.target.dataset.rm!=null) return; calc.imgSel = Number(el.dataset.i); renderThumbs(); abrirViewer(calc.imgSel,'ver'); }));
@@ -818,6 +833,106 @@ function renderResultado(){
     <div class="muted" style="font-size:12px;">Estimativa interna. Confirme sempre na balança no check-in.</div></div>`;
   document.getElementById('cCopiar').onclick = async ()=>{ const t = `Estimativa ${MODELOS_CALC.find(m=>m.id===r.modelo).nome} (${r.tipo}) — ${r.metal}: ${fmtG(r.min)} a ${fmtG(r.max)} (central ${fmtG(r.central)})${r.cot>0?` · valor do metal ${fmtMoney(r.min*r.cot)} a ${fmtMoney(r.max*r.cot)}`:''}`; try{ await navigator.clipboard.writeText(t); showToast('Resumo copiado.'); }catch(e){ prompt('Copie:', t); } };
 }
+
+/* ---- cliente, observações e envio da estimativa ---- */
+let calcCliente = null, calcEnvFotos = null;
+function renderCliente(){
+  const sel = document.getElementById('cCliSel');
+  sel.innerHTML = calcCliente ? `<div class="item-box ap" style="display:flex;justify-content:space-between;align-items:center;gap:10px;"><div><b>${escapeHtml(calcCliente.nome)}</b><div class="muted" style="font-size:12.5px;">${escapeHtml(calcCliente.telefone||'sem telefone')} · ${escapeHtml(calcCliente.email||'sem e-mail')}</div></div><button class="btn btn-ghost btn-sm" id="cCliTrocar">Trocar</button></div>` : '';
+  document.getElementById('cCliBusca').classList.toggle('hide', !!calcCliente);
+  if(calcCliente) document.getElementById('cCliTrocar').onclick = ()=>{ calcCliente = null; renderCliente(); };
+}
+let buscaTimer = null;
+document.getElementById('cCliTermo').addEventListener('input', ev=>{
+  clearTimeout(buscaTimer); const t = ev.target.value.trim(); const box = document.getElementById('cCliRes');
+  if(t.length<2){ box.innerHTML=''; return; }
+  buscaTimer = setTimeout(async ()=>{ try{ const r = await api('buscarClientes',{ termo:t });
+    box.innerHTML = r.clientes.length ? r.clientes.map((c,i)=>`<div class="item-box" data-cli="${i}" style="cursor:pointer;"><b>${escapeHtml(c.nome)}</b> <span class="muted" style="font-size:12.5px;">· ${escapeHtml(c.telefone||'')} · ${escapeHtml(c.email||'sem e-mail')}</span></div>`).join('') : '<div class="muted" style="margin-top:6px;">Nenhum cliente encontrado — use "Cadastrar cliente".</div>';
+    box.querySelectorAll('[data-cli]').forEach(el=>el.addEventListener('click', ()=>{ calcCliente = r.clientes[Number(el.dataset.cli)]; box.innerHTML=''; document.getElementById('cCliTermo').value=''; renderCliente(); }));
+  }catch(e){ box.innerHTML = `<div class="muted">${escapeHtml(e.message)}</div>`; } }, 350);
+});
+document.getElementById('cCliNovoBtn').addEventListener('click', ()=>{ document.getElementById('cCliNovo').classList.remove('hide'); const t=document.getElementById('cCliTermo').value.trim(); if(t && !/\d/.test(t)) document.getElementById('cnNome').value=t; else if(/\d{4}/.test(t)) document.getElementById('cnTel').value=fmtTel(t); });
+document.getElementById('cnCancelar').addEventListener('click', ()=>document.getElementById('cCliNovo').classList.add('hide'));
+document.getElementById('cnTel').addEventListener('input', e=>{ e.target.value = fmtTel(e.target.value); });
+document.getElementById('cnSalvar').addEventListener('click', async ()=>{
+  const b = document.getElementById('cnSalvar'); b.disabled = true;
+  try{ const r = await api('cadastrarCliente',{ nome:document.getElementById('cnNome').value, telefone:document.getElementById('cnTel').value, email:document.getElementById('cnEmail').value });
+    calcCliente = r.cliente; ['cnNome','cnTel','cnEmail'].forEach(id=>document.getElementById(id).value=''); document.getElementById('cCliNovo').classList.add('hide'); renderCliente();
+    showToast(r.jaExistia ? 'Cliente já existia no cadastro — selecionado.' : 'Cliente cadastrado.'); }
+  catch(e){ showToast(e.message, 4500); }
+  b.disabled = false;
+});
+function renderEnvFotos(){
+  if(!calcEnvFotos) calcEnvFotos = new Set();
+  if(!calcEnvFotos.size && !calcEnvFotos.manual && calc.imagens.length) calcEnvFotos.add(calc.imgSel!=null && calc.imgSel<calc.imagens.length ? calc.imgSel : 0);
+  for(const i of Array.from(calcEnvFotos)) if(i>=calc.imagens.length) calcEnvFotos.delete(i);
+  const box = document.getElementById('cEnvFotos');
+  box.innerHTML = calc.imagens.length ? calc.imagens.map((im,i)=>`<label class="cthumb" style="${calcEnvFotos.has(i)?'border-color:var(--ok);':''}"><img src="${im.dataUrl}" alt=""><span class="tg ${calcEnvFotos.has(i)?'ok':''}"><input type="checkbox" data-env="${i}" ${calcEnvFotos.has(i)?'checked':''} style="vertical-align:-2px;"> ${i}</span></label>`).join('') : '<div class="muted">Anexe fotos no passo 2.</div>';
+  box.querySelectorAll('[data-env]').forEach(ch=>ch.addEventListener('change', ()=>{ const i=Number(ch.dataset.env); calcEnvFotos.manual = true; if(ch.checked){ if(calcEnvFotos.size>=3){ ch.checked=false; return showToast('No máximo 3 fotos.'); } calcEnvFotos.add(i); } else calcEnvFotos.delete(i); renderEnvFotos(); }));
+}
+/** Tudo o que foi preenchido, em linhas "rótulo: valor". */
+function linhasEstimativa(){
+  const r = calc.resultado; const c = calc.campos; const lista = camposDoModelo(calc.modelo).filter(f=>!f.se||f.se(c));
+  const dados = lista.map(f=>{ const v = c[f.k]; if(v==null||v==='') return null;
+    if(f.tipo==='sel'){ const o = f.opts.find(x=>x[0]===v); return [f.label, o?o[1]:v]; }
+    const nv = numBR(v); if(!(nv>0)) return null; return [f.label, String(nv).replace('.',',') + (f.unid?' '+f.unid:'')]; }).filter(Boolean);
+  const valorOrc = numBR(document.getElementById('cValorOrc').value); const inclMetal = document.getElementById('cIncluirMetal').checked;
+  return { r, dados, obs: document.getElementById('cObs').value.trim(), valorOrc, inclMetal,
+    tipoNome: (TIPOS_CALC.find(t=>t.id===r.tipo)||{}).nome || r.tipo, modeloNome: (MODELOS_CALC.find(m=>m.id===r.modelo)||{}).nome || r.modelo };
+}
+function textoEstimativa(){
+  const e = linhasEstimativa(); const r = e.r; const L = [];
+  L.push(`*Estimativa de peso — Vilaça Joias*`); if(calcCliente) L.push(`Cliente: ${calcCliente.nome}`); L.push(`Data: ${new Date().toLocaleDateString('pt-BR')}`); L.push('');
+  L.push(`*Peça:* ${e.modeloNome} · ${e.tipoNome}`); L.push(`*Metal:* ${r.metal} (densidade ${String(r.dens).replace('.',',')} g/cm³)`); L.push('');
+  L.push('*Dimensões e características:*'); e.dados.forEach(d=>L.push(`• ${d[0]}: ${d[1]}`)); L.push('');
+  L.push(`*Peso estimado do metal:* ${fmtG(r.min)} a ${fmtG(r.max)} (central ${fmtG(r.central)})`); if(r.modelo==='brinco') L.push(`Par: ${fmtG(r.min*2)} a ${fmtG(r.max*2)}`);
+  if(e.inclMetal && r.cot>0) L.push(`*Valor estimado do metal:* ${fmtMoney(r.min*r.cot)} a ${fmtMoney(r.max*r.cot)} (cotação ${fmtMoney(r.cot)}/g)`);
+  if(e.valorOrc>0) L.push(`*Valor do orçamento:* ${fmtMoney(e.valorOrc)}`);
+  if(e.obs){ L.push(''); L.push(`*Observações:* ${e.obs}`); }
+  L.push(''); L.push('_Estimativa feita por foto. O peso definitivo é conferido na balança, na loja._');
+  return L.join('\n');
+}
+function htmlEstimativa(fotosSrc){
+  const e = linhasEstimativa(); const r = e.r; const td = 'style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:14px;"';
+  const linha = (a,b,forte)=>`<tr><td ${td}>${escapeHtml(a)}</td><td ${td}><b style="${forte?'color:#662344;':''}">${escapeHtml(b)}</b></td></tr>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#1A1D24;max-width:640px;">
+    <h2 style="margin:0 0 4px;color:#662344;">Estimativa de peso — Vilaça Joias</h2>
+    <div style="color:#6b7280;font-size:13px;margin-bottom:12px;">${calcCliente?'Cliente: <b>'+escapeHtml(calcCliente.nome)+'</b> · ':''}${new Date().toLocaleDateString('pt-BR')}</div>
+    ${fotosSrc.length?`<div style="margin-bottom:12px;">${fotosSrc.map(src=>`<img src="${src}" style="width:190px;height:190px;object-fit:cover;border-radius:8px;border:1px solid #e5e7eb;margin:0 6px 6px 0;">`).join('')}</div>`:''}
+    <table style="width:100%;border-collapse:collapse;">
+      ${linha('Peça', e.modeloNome+' · '+e.tipoNome)}${linha('Metal', r.metal+' ('+String(r.dens).replace('.',',')+' g/cm³)')}
+      ${e.dados.map(d=>linha(d[0], d[1])).join('')}
+      ${linha('Peso estimado do metal', fmtG(r.min)+' a '+fmtG(r.max)+' (central '+fmtG(r.central)+')', true)}
+      ${r.modelo==='brinco'?linha('Par', fmtG(r.min*2)+' a '+fmtG(r.max*2)):''}
+      ${e.inclMetal && r.cot>0 ? linha('Valor estimado do metal', fmtMoney(r.min*r.cot)+' a '+fmtMoney(r.max*r.cot)+' (cotação '+fmtMoney(r.cot)+'/g)', true) : ''}
+      ${e.valorOrc>0 ? linha('Valor do orçamento', fmtMoney(e.valorOrc), true) : ''}
+    </table>
+    ${e.obs?`<p style="font-size:14px;margin-top:12px;"><b>Observações:</b> ${escapeHtml(e.obs)}</p>`:''}
+    <p style="font-size:12px;color:#6b7280;margin-top:14px;">Estimativa feita por foto. O peso definitivo é conferido na balança, na loja.</p></div>`;
+}
+function fotosEnvio(){ return Array.from(calcEnvFotos||[]).sort((a,b)=>a-b).map(i=>calc.imagens[i]).filter(Boolean).map(im=>im.dataUrl); }
+function prontoParaEnviar(precisaCliente){ if(!calc.resultado){ showToast('Calcule o peso antes (passo 5).', 4000); return false; } if(precisaCliente && !calcCliente){ showToast('Escolha ou cadastre o cliente.', 4000); return false; } return true; }
+document.getElementById('cEnvWa').addEventListener('click', async ()=>{
+  if(!prontoParaEnviar(true)) return; if(!calcCliente.telefone) return showToast('Cliente sem telefone.');
+  if(!confirm(`Enviar a estimativa (${fotosEnvio().length} foto(s) + texto) para ${calcCliente.nome} — ${calcCliente.telefone}, pelo WhatsApp da loja?`)) return;
+  const b = document.getElementById('cEnvWa'); b.disabled = true;
+  try{ const r = await api('enviarEstimativa',{ canal:'whatsapp', clienteId:calcCliente.id, texto:textoEstimativa(), fotos:fotosEnvio() }); showToast(`Enviado pelo WhatsApp (${r.fotos} foto(s)).`, 4000); }
+  catch(e){ showToast('Não enviou: '+e.message+' — use "Abrir no meu WhatsApp".', 7000); }
+  b.disabled = false;
+});
+document.getElementById('cEnvWaMeu').addEventListener('click', ()=>{ if(!prontoParaEnviar(true)) return; window.open(waLink(calcCliente.telefone||'', textoEstimativa()), '_blank'); });
+document.getElementById('cEnvEmail').addEventListener('click', async ()=>{
+  if(!prontoParaEnviar(true)) return; if(!calcCliente.email) return showToast('Este cliente não tem e-mail — cadastre o e-mail (Cadastrar cliente com o mesmo telefone completa o e-mail).', 6000);
+  if(!confirm(`Enviar a estimativa por e-mail para ${calcCliente.email}?`)) return;
+  const b = document.getElementById('cEnvEmail'); b.disabled = true; const fotos = fotosEnvio();
+  try{ await api('enviarEstimativa',{ canal:'email', clienteId:calcCliente.id, assunto:'Estimativa da sua joia — Vilaça Joias', texto:textoEstimativa().replace(/[*_]/g,''), html:htmlEstimativa(fotos.map((_,i)=>'cid:foto'+i)), fotos }); showToast('E-mail enviado para '+calcCliente.email, 4000); }
+  catch(e){ showToast('Não enviou: '+e.message, 7000); }
+  b.disabled = false;
+});
+document.getElementById('cImprimir').addEventListener('click', ()=>{
+  if(!prontoParaEnviar(false)) return; const r = calc.resultado;
+  abrirImpressao('Estimativa de peso', htmlEstimativa(fotosEnvio()) + `<h3>Memória de cálculo</h3><div class="sub">${r.passos.map(escapeHtml).join('<br>')}<br>Volume ${r.V.toFixed(0)} mm³ × ${String(r.dens).replace('.',',')} g/cm³ ÷ 1000 · margem ±${Math.round(r.margem*100)}%</div><div class="sub">Emitido por ${escapeHtml(currentUser&&currentUser.nome||'')} em ${fmtDataHora(Date.now())}</div>`);
+});
 
 /* ============================================================ TABS / SHELL ============================================================ */
 function setTab(id){ currentTab = id; document.querySelectorAll('.tab-content').forEach(t=>t.classList.toggle('active', t.id==='tab-'+id)); parent.postMessage({ type:'activeTab', modulo:'reforma', tabId:id }, '*'); if(id==='config') renderConfig(); if(id==='calc') renderCalc(); }
