@@ -119,6 +119,9 @@
   <div class="modal-head"><h3 id="cvTitulo">Foto</h3><button class="btn btn-ghost btn-sm" id="cvFechar">✕</button></div>
   <div class="muted" id="cvAjuda" style="font-size:13px;margin-bottom:6px;"></div>
   <div style="overflow:auto;"><canvas id="cvCanvas" style="display:block;max-width:100%;cursor:crosshair;border-radius:8px;background:#202020;"></canvas></div>
+  <div id="cvCalPanel" class="caviso hide" style="margin-top:8px;"><b>Quanto mede, de verdade, a linha amarela que você marcou?</b>
+    <div class="acoes" id="cvCalRefs"></div>
+    <div class="acoes" style="align-items:center;"><span>Outra medida:</span><input class="inp" id="cvCalMm" inputmode="decimal" placeholder="ex.: 22" style="width:110px;"><span>mm</span><button class="btn btn-accent btn-sm" id="cvCalOk">Usar esta medida</button><button class="btn btn-ghost btn-sm" id="cvCalRefazer">Marcar de novo</button></div></div>
   <div class="acoes"><button class="btn btn-ghost btn-sm" id="cvCalibrar">📐 Calibrar nesta foto</button><span class="muted" id="cvEscala" style="font-size:12.5px;align-self:center;"></span></div>
 </div></div>
 
@@ -734,9 +737,9 @@ function desenharViewer(){
   v.pts.forEach(p=>{ ctx.beginPath(); ctx.arc(p.x*k,p.y*k,5,0,Math.PI*2); ctx.fill(); });
   if(v.pts.length===2){ ctx.beginPath(); ctx.moveTo(v.pts[0].x*k,v.pts[0].y*k); ctx.lineTo(v.pts[1].x*k,v.pts[1].y*k); ctx.stroke(); }
   document.getElementById('cvTitulo').textContent = `Imagem ${v.idx}` + (v.modo==='medir'?` — medir: ${v.campo.label}`:(v.modo==='calibrar'?' — calibração':''));
-  document.getElementById('cvAjuda').textContent = v.modo==='calibrar' ? 'Clique nas duas pontas de algo com medida conhecida (diâmetro da moeda, trecho da régua). Depois informe a medida em mm.'
+  document.getElementById('cvAjuda').textContent = v.modo==='calibrar' ? 'Clique nas duas pontas de algo cujo tamanho real você sabe (de uma borda à outra da moeda, um trecho da régua, ou uma medida da própria peça que você conheça).'
     : v.modo==='medir' ? (img.scale ? 'Clique nas duas pontas da medida.' : 'Esta foto ainda não tem escala — calibre primeiro (botão abaixo).') : 'Caixas: vermelho = referência, azul = peça de frente, verde = peça de lado.';
-  document.getElementById('cvEscala').textContent = img.scale ? `Escala: ${img.scale.toFixed(4)} mm/pixel (${img.fonte})` : 'Sem escala nesta foto.';
+  document.getElementById('cvEscala').textContent = img.scale ? `✔ Foto calibrada — medidas em mm (${img.fonte})` : 'Esta foto ainda não sabe o tamanho real — calibre usando uma moeda ou uma medida conhecida.';
 }
 document.getElementById('cvCanvas').addEventListener('click', ev=>{
   const v = viewer; if(!v || v.modo==='ver') return; const img = calc.imagens[v.idx];
@@ -745,11 +748,25 @@ document.getElementById('cvCanvas').addEventListener('click', ev=>{
   const p = { x:(ev.clientX-r.left)*sx/v.k, y:(ev.clientY-r.top)*sx/v.k }; if(v.pts.length>=2) v.pts = []; v.pts.push(p); desenharViewer();
   if(v.pts.length<2) return;
   const dpx = Math.hypot(v.pts[1].x-v.pts[0].x, v.pts[1].y-v.pts[0].y); if(dpx<3) return;
-  if(v.modo==='calibrar'){ const mm = numBR(prompt(`Distância marcada: ${dpx.toFixed(0)} pixels.\nQuanto ela mede de verdade, em mm? (moeda de R$ 1 = 27)`)||''); if(!(mm>0)) { v.pts=[]; return desenharViewer(); }
-    img.scale = mm/dpx; img.fonte = 'calibração manual'; calc.solicitar = (calc.solicitar||[]).filter(s=>s!=='calibracao'); v.pts=[]; if(v.voltarMedir){ v.modo='medir'; v.campo=v.voltarMedir; v.voltarMedir=null; } renderThumbs(); renderIABox(); desenharViewer(); showToast('Escala definida nesta foto.'); }
+  if(v.modo==='calibrar'){ v.dpx = dpx; mostrarPainelCal(); }
   else if(v.modo==='medir'){ const mm = Math.round(dpx*img.scale*100)/100; calc.campos[v.campo.k] = mm; calc.iaCampos.delete(v.campo.k); fecharViewer(); renderCampos(); showToast(`${v.campo.label}: ${String(mm).replace('.',',')} mm`); }
 });
-function fecharViewer(){ document.getElementById('cViewer').classList.remove('show'); viewer = null; }
+const REF_BOTOES = [['moeda_1_real','Moeda R$ 1 (27 mm)'],['moeda_50_centavos','R$ 0,50 (23 mm)'],['moeda_25_centavos','R$ 0,25 (25 mm)'],['moeda_10_centavos','R$ 0,10 (20 mm)'],['cartao','Cartão — lado maior (85,6 mm)']];
+function mostrarPainelCal(){
+  const pn = document.getElementById('cvCalPanel'); pn.classList.remove('hide'); document.getElementById('cvCalMm').value = '';
+  document.getElementById('cvCalRefs').innerHTML = REF_BOTOES.map(r=>`<button type="button" class="btn btn-ghost btn-sm" data-ref="${r[0]}">${r[1]}</button>`).join('');
+  pn.querySelectorAll('[data-ref]').forEach(b=>b.addEventListener('click', ()=>aplicarCalibracao(REF_MM[b.dataset.ref], REF_NOME[b.dataset.ref])));
+}
+function aplicarCalibracao(mm, nome){
+  const v = viewer; if(!v || !(mm>0) || !(v.dpx>0)) return; const img = calc.imagens[v.idx];
+  img.scale = mm/v.dpx; img.fonte = 'calibração: ' + (nome || (String(mm).replace('.',',')+' mm')); calc.solicitar = (calc.solicitar||[]).filter(s=>s!=='calibracao');
+  v.pts=[]; v.dpx=null; document.getElementById('cvCalPanel').classList.add('hide');
+  if(v.voltarMedir){ v.modo='medir'; v.campo=v.voltarMedir; v.voltarMedir=null; } else v.modo='ver';
+  renderThumbs(); renderIABox(); desenharViewer(); showToast('Pronto: agora esta foto mede em milímetros.');
+}
+document.getElementById('cvCalOk').addEventListener('click', ()=>{ const mm = numBR(document.getElementById('cvCalMm').value); if(!(mm>0)) return showToast('Digite a medida em mm.'); aplicarCalibracao(mm); });
+document.getElementById('cvCalRefazer').addEventListener('click', ()=>{ if(!viewer) return; viewer.pts=[]; viewer.dpx=null; document.getElementById('cvCalPanel').classList.add('hide'); desenharViewer(); });
+function fecharViewer(){ document.getElementById('cViewer').classList.remove('show'); document.getElementById('cvCalPanel').classList.add('hide'); viewer = null; }
 document.getElementById('cvFechar').addEventListener('click', fecharViewer);
 document.getElementById('cViewer').addEventListener('click', e=>{ if(e.target.id==='cViewer') fecharViewer(); });
 document.getElementById('cvCalibrar').addEventListener('click', ()=>{ if(!viewer) return; if(viewer.modo==='medir') viewer.voltarMedir = viewer.campo; viewer.modo='calibrar'; viewer.pts=[]; desenharViewer(); });
