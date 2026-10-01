@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 /**
+ * reforma-api — v3 (v3: op preCalcular — Calculadora de peso com IA Gemini)
  * reforma-api — v2
  * v2: vários itens por pedido (foto + observação cada), orçamento e aprovação POR ITEM,
  *     frete (tabela própria ou API dos Correios) com frete grátis acima de X / manual,
@@ -12,7 +13,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * Ops PÚBLICAS (reforma.html): publicInit, publicCriar, publicConsultar, publicAceitar
  * Ops INTERNAS (reforma-admin.html, `senha` = token de sessão): init, listar, obter, criarBalcao,
  *   orcar, calcularFrete, aceitePresencial, anotar, sugerirData, gerarOS, checkin, checkout,
- *   postar, entregar, cancelar, enviarWhatsApp, listarInstancias, salvarConfig, salvarSegredos
+ *   postar, entregar, cancelar, enviarWhatsApp, listarInstancias, preCalcular, salvarConfig, salvarSegredos
  *
  * Tabelas: reforma_pedidos, reforma_config (id=config e id=segredos). Bucket privado reforma-fotos.
  * Escreve em ordens_servico (só a O.S. que ela mesma cria), clientes_cadastro (só insere cliente
@@ -738,6 +739,64 @@ Deno.serve(async (req: Request) => {
       const lista = await evolution("/instance/fetchInstances", null, "GET");
       const out = (Array.isArray(lista) ? lista : []).map((it: any) => ({ nome: it.name || (it.instance && it.instance.instanceName) || "", estado: it.connectionStatus || (it.instance && it.instance.status) || it.state || "", perfil: it.profileName || null })).filter((x: any) => x.nome);
       return json({ ok: true, instancias: out });
+    }
+    if (op === "preCalcular") {
+      // v3: Calculadora de peso — a IA só IDENTIFICA (tipo, modelo, referência, caixas da peça);
+      // as medidas em mm são calculadas no navegador pela geometria da referência.
+      const apiKey = Deno.env.get("GEMINI_API_KEY");
+      if (!apiKey) return json({ error: "GEMINI_API_KEY não configurada no Supabase." }, 503);
+      const modelo = Deno.env.get("GEMINI_VISION_MODEL") || Deno.env.get("GEMINI_TEXT_MODEL") || "gemini-flash-latest";
+      const imgs = (Array.isArray(params.imagens) ? params.imagens : []).slice(0, 8);
+      if (!imgs.length) return json({ error: "Anexe pelo menos uma foto ou vídeo." }, 400);
+      const parts: any[] = [];
+      for (let i = 0; i < imgs.length; i++) {
+        const m = /^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/i.exec(String(imgs[i] || ""));
+        if (!m) return json({ error: `Imagem ${i + 1} inválida.` }, 400);
+        if (m[2].length > MAX_FOTO_BYTES * 1.4) return json({ error: `Imagem ${i + 1} grande demais.` }, 400);
+        parts.push({ text: `IMAGEM ${i}` });
+        parts.push({ inline_data: { mime_type: m[1].replace("jpg", "jpeg"), data: m[2] } });
+      }
+      const dicas = params.dicas || {};
+      const prompt = `Você é um avaliador de joias de uma ourivesaria. Analise as IMAGENS (índices 0 a ${imgs.length - 1}) da MESMA joia.
+Dicas já informadas pela vendedora (podem estar vazias): tipo=${dicas.tipo || "?"}, modelo=${dicas.modelo || "?"}.
+NÃO tente medir em milímetros. Sua tarefa é IDENTIFICAR e LOCALIZAR. Responda SOMENTE um JSON, sem texto fora dele, neste formato:
+{
+ "tipo": "2D" ou "3D" (2D = joia plana/chapa de espessura uniforme; 3D = com relevo, volume, aro com cabeça),
+ "modelo": "anel" | "brinco" | "pingente" | "cordao" | "pulseira" | "outro",
+ "confianca": número de 0 a 1,
+ "referencia": { "encontrada": true/false, "tipo": "moeda_1_real" | "moeda_50_centavos" | "moeda_25_centavos" | "moeda_10_centavos" | "moeda_5_centavos" | "moeda_1_centavo" | "cartao" | "regua" | "outro" | null, "imagem": índice ou null, "box": [ymin, xmin, ymax, xmax] normalizado 0-1000 ou null },
+ "pecaFrente": { "imagem": índice, "box": [ymin, xmin, ymax, xmax] } ou null (vista de frente, a de maior área visível),
+ "pecaLado": { "imagem": índice, "box": [ymin, xmin, ymax, xmax] } ou null (vista lateral/de perfil, mostrando a espessura),
+ "atributos": { "oco": true/false/null, "vazado": "nada"|"pouco"|"muito"|null, "pedras": número ou null, "formato": "redondo"|"oval"|"retangular"|"irregular"|null, "temCabeca": true/false/null, "perfilAro": "reto"|"abaulado"|"meiaCana"|null, "malha": "cartier"|"grumet"|"veneziana"|"piastrine"|"baiano"|"corda"|"rabo_de_rato"|"singapura"|"outra"|null, "fecho": "integrado"|"boia"|"lagosta"|"gaveta"|"canhao"|null },
+ "solicitar": lista com zero ou mais de: "calibracao" (há referência mas não é moeda/cartão conhecido, ou está distorcida), "foto_referencia" (não há objeto de referência), "foto_lateral" (falta vista de lado para a espessura), "tudo" (imagens inúteis: borradas, peça cortada, sem a joia),
+ "mensagem": "orientação curta em português para a vendedora (máx. 2 frases)"
+}
+As caixas devem envolver justo o objeto (só a joia, sem sombra). Se a referência for uma moeda, a caixa envolve a moeda inteira.`;
+      parts.unshift({ text: prompt });
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`, {
+        method: "POST", headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0.1, responseMimeType: "application/json" } }),
+      });
+      if (!res.ok) { const t = await res.text().catch(() => ""); return json({ error: `IA indisponível (${res.status}): ${t.slice(0, 200)}` }, 502); }
+      const data = await res.json();
+      const texto = (data?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").replace(/```json|```/g, "").trim();
+      let analise: any = null;
+      try { analise = JSON.parse(texto); } catch { return json({ error: "A IA respondeu fora do formato. Tente de novo.", bruto: texto.slice(0, 300) }, 502); }
+      const box = (b: any) => Array.isArray(b) && b.length === 4 && b.every((n: any) => Number.isFinite(Number(n))) ? b.map((n: any) => Math.max(0, Math.min(1000, Number(n)))) : null;
+      const idx = (n: any) => Number.isInteger(Number(n)) && Number(n) >= 0 && Number(n) < imgs.length ? Number(n) : null;
+      const vista = (v: any) => v && idx(v.imagem) !== null && box(v.box) ? { imagem: idx(v.imagem), box: box(v.box) } : null;
+      const r = analise.referencia || {};
+      const out = {
+        tipo: ["2D", "3D"].includes(analise.tipo) ? analise.tipo : null,
+        modelo: ["anel", "brinco", "pingente", "cordao", "pulseira", "outro"].includes(analise.modelo) ? analise.modelo : null,
+        confianca: Math.max(0, Math.min(1, Number(analise.confianca) || 0)),
+        referencia: { encontrada: !!r.encontrada, tipo: r.tipo || null, imagem: idx(r.imagem), box: box(r.box) },
+        pecaFrente: vista(analise.pecaFrente), pecaLado: vista(analise.pecaLado),
+        atributos: analise.atributos && typeof analise.atributos === "object" ? analise.atributos : {},
+        solicitar: (Array.isArray(analise.solicitar) ? analise.solicitar : []).filter((s: any) => ["calibracao", "foto_referencia", "foto_lateral", "tudo"].includes(s)),
+        mensagem: String(analise.mensagem || "").slice(0, 300),
+      };
+      return json({ ok: true, analise: out, modelo });
     }
     if (op === "salvarConfig") {
       if (!gestaoTotal(user)) return json({ error: "Só Diretoria/Gerente altera a configuração." }, 403);
