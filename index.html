@@ -3979,9 +3979,10 @@ async function buscarCotacaoPrataDia(){ return buscarCotacaoMercado('prata'); }
 /** Dólar comercial (venda) do dia via API oficial do Banco Central do Brasil
  * (SGS, série 1 — Taxa de câmbio livre, dólar americano, venda, diária). */
 async function buscarCotacaoDolarDia(){ return buscarCotacaoMercado('dolar'); }
-/* Compra Metal: cada campo tem o valor digitado à mão OU um deságio (%) sobre a cotação oficial do dia.
-   `ativo` diz qual cotação oficial serve de base; `teor` é a fração de metal fino (ouro 750 = 0,75).
-   Os ids ficam os mesmos de sempre — só os rótulos mudaram. */
+/* Compra Metal: cada campo é a cotação oficial do dia (cartão Ouro do dia / Prata do dia) × teor × (1 − deságio %).
+   `ativo` diz qual cartão serve de base; `teor` é a fração de metal fino (ouro 750 = 0,75).
+   Os ids ficam os mesmos de sempre. O valor digitado à mão (versão antiga da tela) só continua valendo
+   enquanto o campo não tiver deságio preenchido — no primeiro deságio salvo ele é apagado. */
 const CAMPOS_COMPRA_METAL = [
   { id:'ouroDtvm',    label:'Valor do Ouro 1000 DTVM',          ativo:'ouro',  teor:1,    rotuloAtivo:'Ouro 1000' },
   { id:'ouroGarimpo', label:'Valor do Ouro 1000 Cooperativa',   ativo:'ouro',  teor:1,    rotuloAtivo:'Ouro 1000' },
@@ -3994,8 +3995,8 @@ function refCompraMetal(campo){
   const v = q && q.valor!=null ? Number(q.valor) : NaN;
   return isNaN(v) ? null : v * campo.teor;
 }
-/** Valor de compra efetivo de um campo: se há deságio e cotação oficial, calcula (referência × (1 − deságio));
- *  senão usa o valor digitado à mão. Quem precisa do valor de compra do metal deve chamar esta função. */
+/** Valor de compra efetivo de um campo: cotação oficial × teor × (1 − deságio). Sem deságio salvo (ou sem cotação),
+ *  usa o valor antigo digitado, se existir. Quem precisa do valor de compra do metal deve chamar esta função. */
 function valorCompraMetal(id){
   garantirConfigFator();
   const campo = CAMPOS_COMPRA_METAL.find(c=>c.id===id);
@@ -4023,7 +4024,7 @@ async function renderFatorTab(main){
     </div>
     <div class="card">
       <div class="section-label">Compra Metal</div>
-      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Informe o valor à mão (use ponto pra casas decimais, ex: 285.50, nunca vírgula) <b>ou</b> o deságio em relação à cotação oficial do dia. Com o deságio preenchido, o valor é calculado sozinho todo dia e o campo Valor fica desativado. O ouro 750 usa a cotação oficial × 0,75.</p>
+      <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Informe só o <b>deságio</b> (%) em relação à cotação oficial do dia (cartões acima: os três ouros usam o <b>Ouro do dia</b>, a prata usa a <b>Prata do dia</b>). O valor aplicado é calculado sozinho e acompanha a cotação todos os dias. O ouro 750 usa a cotação do ouro × 0,75. Use ponto pra casas decimais (ex: 2.5).</p>
       <div id="compraMetalFields"></div>
       <button class="btn btn-accent btn-sm" id="btnSalvarCompraMetal" style="margin-top:14px;">Salvar Compra Metal</button>
     </div>
@@ -4093,16 +4094,15 @@ async function renderFatorTab(main){
   if(!config.fator.prata || config.fator.prata.dataCotacao !== hoje) atualizar('prata', false);
   if(!config.fator.dolar || config.fator.dolar.dataCotacao !== hoje) atualizar('dolar', false);
 
-  // ---- Compra Metal: valor manual OU deságio sobre a cotação oficial do dia ----
+  // ---- Compra Metal: deságio sobre a cotação oficial do dia (ouro → "Ouro do dia", prata → "Prata do dia") ----
   const compraWrap = document.getElementById('compraMetalFields');
   compraWrap.innerHTML = CAMPOS_COMPRA_METAL.map(c=>{
-    const val = config.fator.compraMetal[c.id]; const des = config.fator.compraMetal[c.id+'Desagio'];
+    const des = config.fator.compraMetal[c.id+'Desagio'];
     return `
     <div style="border-bottom:1px solid var(--line); padding:10px 0;">
       <div class="muted" style="font-size:12px; font-weight:700; margin-bottom:6px;">${c.label}</div>
-      <div class="grid-3">
-        <div class="field" style="margin-bottom:0;"><label>Valor (R$/g)</label><input type="number" step="0.01" id="cm_${c.id}" placeholder="0.00" value="${val!=null?val:''}"></div>
-        <div class="field" style="margin-bottom:0;"><label>Deságio sobre a cotação oficial (%)</label><input type="number" step="0.01" min="0" max="100" id="cmd_${c.id}" placeholder="0.00" value="${des!=null?des:''}"></div>
+      <div class="grid-2">
+        <div class="field" style="margin-bottom:0;"><label>Deságio (%)</label><input type="number" step="0.01" min="0" max="100" id="cmd_${c.id}" placeholder="0.00" value="${des!=null?des:''}"></div>
         <div class="field" style="margin-bottom:0;"><label>Valor aplicado (R$/g)</label><input type="text" id="cmv_${c.id}" disabled></div>
       </div>
       <div class="muted" id="cmr_${c.id}" style="font-size:11.5px; margin-top:6px;"></div>
@@ -4110,52 +4110,48 @@ async function renderFatorTab(main){
   }).join('');
   function fmtPct(n){ return (Math.round(n*100)/100).toString().replace('.',','); }
   function fmtBR2(n){ return 'R$ ' + Number(n).toFixed(2).replace('.',','); }
-  /** Recalcula, ao vivo, a referência do dia, o valor aplicado e o deságio implícito de cada campo. */
+  /** Recalcula, ao vivo, a referência do dia e o valor aplicado de cada campo. */
   function atualizarCompraMetalRefs(){
     if(!document.getElementById('compraMetalFields')) return;
     CAMPOS_COMPRA_METAL.forEach(c=>{
-      const inpVal = document.getElementById('cm_'+c.id), inpDes = document.getElementById('cmd_'+c.id), inpApl = document.getElementById('cmv_'+c.id), msg = document.getElementById('cmr_'+c.id);
-      if(!inpVal || !inpDes || !inpApl || !msg) return;
+      const inpDes = document.getElementById('cmd_'+c.id), inpApl = document.getElementById('cmv_'+c.id), msg = document.getElementById('cmr_'+c.id);
+      if(!inpDes || !inpApl || !msg) return;
       const ref = refCompraMetal(c);
       const q = c.ativo==='prata' ? config.fator.prata : config.fator.ouro;
       const desTxt = inpDes.value.trim(); const des = desTxt==='' ? null : parseFloat(desTxt);
-      const valTxt = inpVal.value.trim(); const val = valTxt==='' ? null : parseFloat(valTxt);
+      const antigo = config.fator.compraMetal[c.id]; const temAntigo = antigo!=null && antigo!=='' && !isNaN(Number(antigo));
       const usaDes = des!=null && !isNaN(des) && ref!=null;
-      inpVal.disabled = usaDes;
       let aplicado = null;
-      if(usaDes) aplicado = Math.round(ref*(1-des/100)*100)/100; else if(val!=null && !isNaN(val)) aplicado = val;
+      if(usaDes) aplicado = Math.round(ref*(1-des/100)*100)/100; else if(temAntigo) aplicado = Number(antigo);
       inpApl.value = aplicado!=null ? aplicado.toFixed(2) : '';
       const partes = [];
       if(ref==null){
-        partes.push('Cotação oficial ainda não carregada — use ↻ Atualizar nos cartões acima.' + (des!=null && !isNaN(des) ? ' Enquanto isso vale o valor digitado.' : ''));
+        partes.push('Cotação oficial ainda não carregada — use ↻ Atualizar nos cartões acima.' + (temAntigo ? ' Enquanto isso vale o valor antigo.' : ''));
       } else {
         const tampa = q && q.dataCotacao && q.dataCotacao!==hojeSaoPaulo() ? ` <span style="color:var(--danger);">(cotação de ${q.dataCotacao.split('-').reverse().join('/')} — não é de hoje)</span>` : '';
-        partes.push(`Cotação oficial hoje (${c.rotuloAtivo}): <b>${fmtBR2(ref)}/g</b>${c.teor!==1 ? ` (= ${fmtBR2(Number(q.valor))} × ${String(c.teor).replace('.',',')})` : ''}${tampa}`);
-        if(usaDes) partes.push(`com deságio de ${fmtPct(des)}% → <b>${fmtBR2(aplicado)}/g</b>`);
-        else if(val!=null && !isNaN(val) && ref>0){ const imp = (1 - val/ref)*100; partes.push(`o valor digitado equivale a ${imp>=0 ? 'um deságio' : 'um ágio'} de <b>${fmtPct(Math.abs(imp))}%</b> sobre a cotação de hoje`); }
+        partes.push(`${c.ativo==='prata' ? 'Prata do dia' : 'Ouro do dia'}: <b>${fmtBR2(Number(q.valor))}/g</b>${c.teor!==1 ? ` × ${String(c.teor).replace('.',',')} = <b>${fmtBR2(ref)}/g</b>` : ''}${tampa}`);
+        if(!usaDes && temAntigo && ref>0){ const imp = (1 - Number(antigo)/ref)*100; partes.push(`<span style="color:var(--danger);">valor antigo digitado (${fmtBR2(Number(antigo))}) — equivale a ${imp>=0 ? 'deságio' : 'ágio'} de ${fmtPct(Math.abs(imp))}%; informe o deságio para usar a cotação do dia</span>`); }
+        else if(!usaDes && !temAntigo) partes.push('informe o deságio');
       }
       msg.innerHTML = partes.join(' · ');
     });
   }
   CAMPOS_COMPRA_METAL.forEach(c=>{
-    document.getElementById('cm_'+c.id).addEventListener('input', atualizarCompraMetalRefs);
     document.getElementById('cmd_'+c.id).addEventListener('input', atualizarCompraMetalRefs);
   });
   atualizarCompraMetalRefs();
   document.getElementById('btnSalvarCompraMetal').addEventListener('click', async ()=>{
     const novos = {};
     for(const c of CAMPOS_COMPRA_METAL){
-      const v = document.getElementById('cm_'+c.id).value.trim();
       const d = document.getElementById('cmd_'+c.id).value.trim();
       const dn = d==='' ? null : parseFloat(d);
       if(dn!=null && (isNaN(dn) || dn<0 || dn>100)){ showToast(`Deságio de "${c.label}" precisa estar entre 0 e 100.`); return; }
-      if(v!=='' && isNaN(parseFloat(v))){ showToast(`Valor de "${c.label}" inválido.`); return; }
-      novos[c.id] = v==='' ? null : parseFloat(v);
       novos[c.id+'Desagio'] = dn;
+      if(dn!=null) novos[c.id] = null;   // com deságio, o valor antigo digitado sai de cena
     }
     Object.assign(config.fator.compraMetal, novos);
     const ok = await configSave();
-    if(ok) showToast('Compra Metal salva.');
+    if(ok){ showToast('Compra Metal salva.'); atualizarCompraMetalRefs(); }
   });
 
   // ---- Venda (manual) — cada campo agora tem Valor, Desconto (%) e Valor c/ desconto (calculado) ----
