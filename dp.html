@@ -1055,29 +1055,72 @@ function comItensClassificados(reg, origem, produtos){
   if(!itens.length || total<=0) return [{ fracao:1, categoria: origem==='os'?'PEDIDO/O.S. (sem catálogo)':'SEM CATEGORIA', subcategoria:'SEM SUBCATEGORIA', fornecedor:'SEM FORNECEDOR', tipo: origem==='os'?'PEDIDO/O.S.':'SEM TIPO' }];
   return itens.map(i=>({ ...i, fracao: i.peso/total }));
 }
-/** Monta os lançamentos do mês: entradas (recebido) e devoluções, cada um com loja, vendedora e classificação. */
+/** Funcionário a partir do registro: prefere o código gravado (vendedoraId); senão, pelo nome (completo ou apelido). */
+function comFuncionarioDoRegistro(reg){
+  if(reg && reg.vendedoraId){ const f = funcionarios.find(x=>comIdFunc(x)===reg.vendedoraId); if(f) return f; }
+  return comFuncionarioDaVenda(reg && reg.vendedora);
+}
+/** Monta os lançamentos do mês: entradas (recebido) e devoluções, cada um com loja, vendedora e classificação.
+    Movimentos de dinheiro considerados (os mesmos que o Caixa enxerga):
+    • venda/pedido: cada pagamento em dinheiro/PIX/cartão, na data do próprio pagamento (ou na data da venda/pedido);
+    • recebimento de fiado: na data em que foi recebido, atribuído à vendedora e loja da venda de origem;
+    • troca: diferença paga pelo cliente (entrada) ou devolvida em dinheiro (devolução) na data da troca;
+    • devolução de item: valor devolvido em dinheiro na data da devolução;
+    • cancelamento: o valor que saiu do caixa, na data do cancelamento.
+    Crédito do cliente e fiado não entram como dinheiro. */
 function comLancamentosDoMes(mes, vendas, ordens, produtos){
   const lanc = []; const aReceber = [];
   const noMes = d=> d && d.slice(0,7)===mes;
+  const origemPorDebito = {};
+  (vendas||[]).forEach(v=>{ if(v.tipo!=='recebimentoFiado' && v.fiadoDebitoId) origemPorDebito[v.fiadoDebitoId] = { reg:v, origem:'venda' }; });
+  (ordens||[]).forEach(o=>{ if(o && o.fiadoDebitoId) origemPorDebito[o.fiadoDebitoId] = { reg:o, origem:'os' }; });
+  const baseDe = (reg, origem)=>{ const f = comFuncionarioDoRegistro(reg);
+    return { origem, id:reg.id, codigo:reg.codigoVia||'', lojaId:reg.lojaId||'', vendedoraNome:reg.vendedora||'', funcId:comIdFunc(f), cliente:(reg.cliente||''), classes: comItensClassificados(reg, origem, produtos) }; };
+  const entrada = (base, data, valor, extra)=>{ if(valor>0.004 && noMes(data)) lanc.push({ ...base, tipoMov:'entrada', data, valor:comR2(valor), ...(extra||{}) }); };
+  const devol = (base, data, valor, motivo)=>{ if(valor>0.004 && noMes(data)) lanc.push({ ...base, tipoMov:'devolucao', data, valor:comR2(valor), motivo:motivo||'' }); };
+  const pagamentosEmDinheiro = reg=> (reg.pagamentos||[]).filter(p=>!COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) && comNumBR(p.valor)>0);
+
   (vendas||[]).forEach(v=>{
-    const recebido = comValorRecebido(v); const f = comFuncionarioDaVenda(v.vendedora);
-    const base = { origem:'venda', id:v.id, codigo:v.codigoVia||'', lojaId:v.lojaId||'', vendedoraNome:v.vendedora||'', funcId:comIdFunc(f), cliente:(v.cliente||''), classes: comItensClassificados(v,'venda',produtos) };
-    const dataReceb = comDataLocal(v.data);
-    if(recebido>0 && noMes(dataReceb)) lanc.push({ ...base, tipoMov:'entrada', data:dataReceb, valor:recebido, estimada: v.momentoPagamento==='na_volta' });
-    if(v.status==='cancelada' && recebido>0){ const dc = comDataLocal(v.canceladoEm); if(noMes(dc)) lanc.push({ ...base, tipoMov:'devolucao', data:dc, valor:recebido, motivo:v.motivoCancelamento||'' }); }
-    const fiado = comValorAReceber(v); if(fiado>0 && v.status!=='cancelada' && noMes(dataReceb)) aReceber.push({ ...base, data:dataReceb, valor:fiado, motivo:'fiado' });
+    if(!v) return;
+    if(v.tipo==='recebimentoFiado'){
+      const ref = v.refFiado && v.refFiado.debitoId ? origemPorDebito[v.refFiado.debitoId] : null;
+      const base = ref ? { ...baseDe(ref.reg, ref.origem), codigo:(ref.reg.codigoVia||'') + ' (fiado)' }
+                       : { ...baseDe(v,'venda'), codigo:'Recebimento de fiado', semOrigem:true };
+      if(v.status!=='cancelada') entrada(base, comDataLocal(v.data), comValorRecebido(v), { fiadoRecebido:true });
+      return;
+    }
+    const base = baseDe(v,'venda');
+    const dataVenda = comDataLocal(v.data);
+    pagamentosEmDinheiro(v).forEach(p=>{ entrada(base, comDataLocal(p.data) || dataVenda, comNumBR(p.valor), { estimada: !p.data && v.momentoPagamento==='na_volta' }); });
+    if(v.status==='cancelada'){
+      const saiu = v.caixaSaidaCancelamento!=null && v.caixaSaidaCancelamento!=='' ? comNumBR(v.caixaSaidaCancelamento) : comValorRecebido(v);
+      devol(base, comDataLocal(v.canceladoEm), saiu, v.motivoCancelamento);
+    } else {
+      (v.trocas||[]).forEach(t=>{
+        const dif = comNumBR(t.diferenca); const dt = comDataLocal(t.data);
+        if(dif>0 && !COM_FORMAS_NAO_RECEBIDAS.includes(t.formaDiferenca)) entrada(base, dt, dif, { troca:true });
+        else if(dif<0 && t.formaDiferenca!=='__credito') devol(base, dt, Math.abs(dif), t.tipoMov==='devolucao' ? 'Devolução de item' : 'Troca com devolução de diferença');
+      });
+      const fiado = comValorAReceber(v); if(fiado>0 && noMes(dataVenda)) aReceber.push({ ...base, data:dataVenda, valor:fiado, motivo:'fiado' });
+    }
   });
   (ordens||[]).forEach(o=>{
     if(!o || o.status==='rascunho') return;
-    const recebido = comValorRecebido(o); const f = comFuncionarioDaVenda(o.vendedora);
-    const base = { origem:'os', id:o.id, codigo:o.codigoVia||'', lojaId:o.lojaId||'', vendedoraNome:o.vendedora||'', funcId:comIdFunc(f), cliente:(o.cliente||''), classes: comItensClassificados(o,'os',produtos) };
+    const base = baseDe(o,'os');
     const cancelada = /^cancel/.test(String(o.status||''));
-    let dataReceb = '';
-    if(o.momentoPagamento==='na_volta') dataReceb = o.status==='entregue' ? comDataLocal(o.recebidoEm) : '';
-    else dataReceb = comDataLocal(o.criadoEm) || comDataLocal(o.data);
-    if(recebido>0 && dataReceb && noMes(dataReceb)) lanc.push({ ...base, tipoMov:'entrada', data:dataReceb, valor:recebido, estimada:false });
-    if(cancelada && recebido>0 && dataReceb){ const dc = comDataLocal(o.canceladoEm); if(noMes(dc)) lanc.push({ ...base, tipoMov:'devolucao', data:dc, valor:recebido, motivo:o.motivoCancelamento||'' }); }
-    if(!cancelada && o.momentoPagamento==='na_volta' && o.status!=='entregue' && comNumBR(o.valorTotal)>0) aReceber.push({ ...base, data:comDataLocal(o.criadoEm)||'', valor:comNumBR(o.valorTotal), motivo:'pedido a receber na entrega' });
+    const naVolta = o.momentoPagamento==='na_volta';
+    const dataEntrega = o.status==='entregue' ? comDataLocal(o.recebidoEm) : '';
+    const dataCriacao = comDataLocal(o.criadoEm) || comDataLocal(o.data);
+    let houveEntrada = false;
+    pagamentosEmDinheiro(o).forEach(p=>{
+      const dt = naVolta ? dataEntrega : (comDataLocal(p.data) || dataCriacao);
+      if(dt){ entrada(base, dt, comNumBR(p.valor), {}); houveEntrada = true; }
+    });
+    if(cancelada && houveEntrada){
+      const saiu = o.caixaSaidaCancelamento!=null && o.caixaSaidaCancelamento!=='' ? comNumBR(o.caixaSaidaCancelamento) : comValorRecebido(o);
+      devol(base, comDataLocal(o.canceladoEm), saiu, o.motivoCancelamento);
+    }
+    if(!cancelada && naVolta && o.status!=='entregue' && comNumBR(o.valorTotal)>0) aReceber.push({ ...base, data:dataCriacao, valor:comNumBR(o.valorTotal), motivo:'pedido a receber na entrega' });
   });
   return { lanc, aReceber };
 }
@@ -1263,7 +1306,7 @@ function comRenderLancamentos(corpo){
   const c = comEstado.calc; const ls = c.lanc.slice().sort((a,b)=>a.data.localeCompare(b.data));
   corpo.innerHTML = `<div class="card" style="padding:14px 18px;overflow-x:auto;"><table>
     <thead><tr><th>Data</th><th>Mov.</th><th>Origem</th><th>Código</th><th>Loja</th><th>Vendedora (gravada)</th><th>Cliente</th><th style="text-align:right;">Valor</th></tr></thead>
-    <tbody>${ls.length ? ls.map(l=>`<tr><td>${fmtDate(l.data)}${l.estimada?' <span class="badge badge-wait" title="Pagamento na volta sem data de recebimento: considerado na data da venda">estimada</span>':''}</td><td>${l.tipoMov==='entrada'?'<span class="badge badge-ok">recebido</span>':'<span class="badge badge-erro">devolução</span>'}</td><td>${l.origem==='venda'?'Venda':'Pedido/O.S.'}</td><td>${escapeHtml(l.codigo)}</td><td>${escapeHtml(comNomeLoja(l.lojaId))}</td><td>${escapeHtml(l.vendedoraNome||'—')}${l.funcId?'':' <span class="badge badge-wait">não identificada</span>'}</td><td>${escapeHtml(String(l.cliente||'').slice(0,40))}</td><td style="text-align:right;${l.tipoMov==='entrada'?'':'color:var(--danger);'}">${l.tipoMov==='entrada'?'':'− '}${fmtMoeda(l.valor)}</td></tr>`).join('') : '<tr><td colspan="8" class="empty">Nenhum lançamento no mês.</td></tr>'}</tbody></table>
+    <tbody>${ls.length ? ls.map(l=>`<tr><td>${fmtDate(l.data)}${l.estimada?' <span class="badge badge-wait" title="Pagamento na volta sem data de recebimento: considerado na data da venda">estimada</span>':''}</td><td>${l.tipoMov==='entrada'?'<span class="badge badge-ok">recebido</span>':'<span class="badge badge-erro">devolução</span>'}${l.fiadoRecebido?' <span class="badge badge-loja">fiado recebido</span>':''}${l.troca?' <span class="badge badge-loja">troca</span>':''}${l.semOrigem?' <span class="badge badge-wait" title="Não achei a venda de origem deste fiado: ficou na vendedora que registrou o recebimento">sem venda de origem</span>':''}${l.motivo&&l.tipoMov==='devolucao'?'<br><span class="muted" style="font-size:11.5px;">'+escapeHtml(String(l.motivo).slice(0,50))+'</span>':''}</td><td>${l.origem==='venda'?'Venda':'Pedido/O.S.'}</td><td>${escapeHtml(l.codigo)}</td><td>${escapeHtml(comNomeLoja(l.lojaId))}</td><td>${escapeHtml(l.vendedoraNome||'—')}${l.funcId?'':' <span class="badge badge-wait">não identificada</span>'}</td><td>${escapeHtml(String(l.cliente||'').slice(0,40))}</td><td style="text-align:right;${l.tipoMov==='entrada'?'':'color:var(--danger);'}">${l.tipoMov==='entrada'?'':'− '}${fmtMoeda(l.valor)}</td></tr>`).join('') : '<tr><td colspan="8" class="empty">Nenhum lançamento no mês.</td></tr>'}</tbody></table>
     ${c.aReceber.length ? `<div class="section-label" style="border:none;padding:0;margin:14px 0 8px;">A receber (fora da conta)</div><table><thead><tr><th>Data</th><th>Origem</th><th>Código</th><th>Loja</th><th>Vendedora</th><th>Motivo</th><th style="text-align:right;">Valor</th></tr></thead><tbody>${c.aReceber.map(a=>`<tr><td>${fmtDate(a.data)}</td><td>${a.origem==='venda'?'Venda':'Pedido/O.S.'}</td><td>${escapeHtml(a.codigo)}</td><td>${escapeHtml(comNomeLoja(a.lojaId))}</td><td>${escapeHtml(a.vendedoraNome||'—')}</td><td>${escapeHtml(a.motivo)}</td><td style="text-align:right;">${fmtMoeda(a.valor)}</td></tr>`).join('')}</tbody></table>` : ''}</div>`;
 }
 

@@ -1130,6 +1130,23 @@ function funcionarioBateComNome(f, nomeGravado){
   if(!alvo) return false;
   return String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo;
 }
+/** Código (id no cadastro de funcionários) da vendedora escolhida. Vazio se o nome não bater com exatamente um funcionário.
+ *  Gravado junto com o nome para o DP ligar a venda à vendedora sem depender de grafia/apelido. */
+function vendedoraIdPorNome(nome){
+  const alvo = String(nome||'').trim().toLowerCase();
+  if(!alvo) return '';
+  const achados = (config.funcionarios||[]).filter(f=> String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo);
+  return achados.length===1 ? achados[0].id : '';
+}
+/** Carimba a data (AAAA-MM-DD) em cada pagamento que ainda não tem. Se a data da venda foi corrigida,
+ *  o pagamento que tinha a data antiga acompanha a nova. Base do regime de caixa no DP. */
+function carimbarPagamentos(pags, dataVenda, dataAntiga){
+  return (pags||[]).map(p=>{
+    const q = { ...p };
+    if(!q.data || (dataAntiga && q.data===dataAntiga && dataAntiga!==dataVenda)) q.data = dataVenda;
+    return q;
+  });
+}
 function vendedoraOptionsHtml(selected){
   const lista = (config.funcionarios||[]).filter(f=>(f.cargos||[]).includes('vendedora'));
   const naLista = lista.some(f=>nomeExibicaoFuncionario(f)===selected);
@@ -2406,10 +2423,10 @@ function renderNovaVenda(main){
     const venda = {
       id: uid('venda'),
       loja: loja ? loja.nome : '',
-      lojaId, vendedora, data, cliente, telefone,
+      lojaId, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), data, cliente, telefone,
       itens: itensValidos,
       valorTotal: tempPagHolder.valorTotal,
-      pagamentos: tempPagHolder.pagamentos,
+      pagamentos: carimbarPagamentos(tempPagHolder.pagamentos, data),
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
       numeroNota: tempPagHolder.numeroNota || '',
@@ -2619,6 +2636,102 @@ function encontrarClienteDaVenda(venda){
   const nomeL = (venda.cliente||'').trim().toLowerCase();
   return clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL)) || null;
 }
+/* ============================================================
+   DEVOLUÇÃO DE ITEM (sem item novo)
+   Devolve UM item inteiro da venda: volta o estoque do item (igual à troca/cancelamento) e o valor
+   do item sai do caixa (dinheiro/PIX/cartão) ou vira crédito do cliente. É gravada em venda.trocas
+   com tipoMov:'devolucao' — assim o Caixa já a enxerga na linha "Trocas (diferença líquida)"
+   e o DP desconta da comissão no mês em que a devolução aconteceu.
+   Devolução de só parte da quantidade de um item: hoje não existe — devolva o item e lance de novo o que ficou.
+   ============================================================ */
+async function devolverEstoqueDoItem(venda, item, lojaEstoque){
+  if(item.estoqueConsumidoItem && Object.keys(item.estoqueConsumidoItem).length>0){
+    for(const [pid, qtd] of Object.entries(item.estoqueConsumidoItem)){
+      const p = produtosEstoque.find(x=>x.id===pid);
+      if(!p) continue;
+      if(!p.estoquePorLoja) p.estoquePorLoja = {};
+      const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{ produtoId:pid, lojaId:lojaEstoque, tipoMovimento:'CANCELAMENTO_VENDA', quantidade: qtd, referenciaId: venda.id }});
+      if(r && !r.error && typeof r.saldoNovo === 'number'){ p.estoquePorLoja[lojaEstoque] = r.saldoNovo; }
+      else{ console.error('erro ao devolver estoque (devolução de item)', pid, r && r.error); p.estoquePorLoja[lojaEstoque] = (Number(p.estoquePorLoja[lojaEstoque])||0) + qtd; }
+    }
+  } else if(item.produtoEstoqueId){
+    const p = produtosEstoque.find(x=>x.id===item.produtoEstoqueId);
+    if(p){
+      if(!p.estoquePorLoja) p.estoquePorLoja = {};
+      const qtd = Number(item.quantidade||0);
+      const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{ produtoId:item.produtoEstoqueId, lojaId:lojaEstoque, tipoMovimento:'CANCELAMENTO_VENDA', quantidade: qtd, referenciaId: venda.id,
+        observacao:'Devolução simples (venda anterior ao controle por item) — confira manualmente se tem composição.' }});
+      if(r && !r.error && typeof r.saldoNovo === 'number'){ p.estoquePorLoja[lojaEstoque] = r.saldoNovo; }
+      else{ console.error('erro ao devolver estoque simples (devolução de item)', r && r.error); p.estoquePorLoja[lojaEstoque] = (Number(p.estoquePorLoja[lojaEstoque])||0) + qtd; }
+      showToast('Item devolvido ao estoque de forma simples (venda anterior a este controle) — confira manualmente se ele tem composição.');
+    }
+  }
+}
+function abrirDevolucaoItem(venda){
+  if(!venda || venda.status==='cancelada') return;
+  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem registrar uma devolução.'); return; }
+  const disponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado && !x.it.devolvido);
+  if(disponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra devolução.'); return; }
+  const lojaEstoqueDev = venda.estoqueLojaId || venda.lojaId;
+  openModal(`
+    <h3>Devolver item</h3>
+    <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)}. O item volta ao estoque e o valor dele é devolvido ao cliente.</p>
+    <div class="field"><label>Item devolvido</label>
+      <select id="dv_item">${disponiveis.map(x=>`<option value="${x.idx}">${x.it.quantidade}x ${escapeHtml(x.it.produto)}${x.it.metal?' ('+escapeHtml(x.it.metal)+')':''} — R$ ${(Number(x.it.quantidade)*Number(x.it.valorUnitario||0)).toFixed(2)}</option>`).join('')}</select></div>
+    <div class="field"><label>Devolver o valor como</label>
+      <select id="dv_forma">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}">${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito">💳 Crédito do cliente (fica pra próxima compra)</option></select></div>
+    <div class="field"><label>Motivo</label><input id="dv_motivo" placeholder="Ex.: cliente desistiu, defeito…"></div>
+    <div id="dv_hint" class="muted" style="margin-top:6px;font-weight:700;"></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="dv_fechar">Voltar</button><button class="btn btn-accent" id="dv_confirmar" style="background:var(--danger);border-color:var(--danger);">Confirmar devolução</button></div>
+  `);
+  const elItem = document.getElementById('dv_item'), elForma = document.getElementById('dv_forma'), elHint = document.getElementById('dv_hint');
+  const valorDoItem = ()=>{ const it = venda.itens[Number(elItem.value)]; return Math.round(Number(it.quantidade)*Number(it.valorUnitario||0)*100)/100; };
+  const atualizarHint = ()=>{ elHint.textContent = 'Valor a devolver: R$ ' + valorDoItem().toFixed(2).replace('.',','); };
+  elItem.addEventListener('input', atualizarHint); atualizarHint();
+  document.getElementById('dv_fechar').addEventListener('click', closeModal);
+  document.getElementById('dv_confirmar').addEventListener('click', async ()=>{
+    const btn = document.getElementById('dv_confirmar'); btn.disabled = true;
+    try{
+      const idx = Number(elItem.value); const item = venda.itens[idx];
+      if(!item || item.trocado || item.devolvido){ showToast('Esse item já foi trocado ou devolvido.'); return; }
+      const valor = valorDoItem(); const forma = elForma.value; const motivo = document.getElementById('dv_motivo').value.trim();
+      if(!(valor>0)){ showToast('Item sem valor — não há o que devolver.'); return; }
+      if(!forma){ showToast('Escolha como devolver o valor.'); return; }
+      let cliente = null;
+      if(forma==='__credito'){
+        cliente = encontrarClienteDaVenda(venda);
+        if(!cliente){ showToast('Pra devolver como crédito, o cliente precisa estar no cadastro.'); return; }
+      } else {
+        // alerta se o valor devolvido em dinheiro passa do que realmente foi recebido nesta venda
+        const trocas = venda.trocas||[];
+        const recebidoLiquido = valorRecebidoDe(venda)
+          + trocas.filter(t=>t.diferenca>0 && t.formaDiferenca!=='__credito' && t.formaDiferenca!=='__fiado').reduce((a,t)=>a+t.diferenca,0)
+          - trocas.filter(t=>t.diferenca<0 && t.formaDiferenca!=='__credito').reduce((a,t)=>a+Math.abs(t.diferenca),0);
+        if(valor > recebidoLiquido + 0.005 && !confirm(`Esta venda recebeu só R$ ${Math.max(0,recebidoLiquido).toFixed(2)} em dinheiro/PIX/cartão (o resto foi fiado ou crédito), mas a devolução é de R$ ${valor.toFixed(2)}.\n\nDevolver mesmo assim?`)) return;
+      }
+      await devolverEstoqueDoItem(venda, item, lojaEstoqueDev);
+      if(cliente){
+        cliente.credito = (Number(cliente.credito)||0) + valor;
+        if(!cliente.creditoMovimentos) cliente.creditoMovimentos = [];
+        cliente.creditoMovimentos.push({ data: hoje(), valor, tipo:'estorno', obs:`Devolução de item — venda ${String(venda.id).slice(-8)}` });
+        await salvarUmCliente(cliente);
+      }
+      const reg = {
+        id: uid('troca'), tipoMov:'devolucao', motivo,
+        itemAntigoDescricao: `${item.quantidade}x ${item.produto}${item.metal?' ('+item.metal+')':''}`, itemAntigoValor: valor,
+        itemNovo: { produto:'(devolução — sem item novo)', metal:'', quantidade:0, valorUnitario:0, produtoEstoqueId:'', estoqueConsumidoItem:{} }, itemNovoValor: 0,
+        diferenca: -valor, formaDiferenca: forma, fiadoDebitoId: null,
+        data: hoje(), feitoPor: currentUser.nome, criadoEm: Date.now(),
+      };
+      item.trocado = true; item.devolvido = true; item.trocaId = reg.id;
+      if(!venda.trocas) venda.trocas = [];
+      venda.trocas.push(reg);
+      const ok = await vendaSalvar(venda);
+      if(ok){ showToast('Devolução registrada.'); closeModal(); renderTabs(); renderView(); }
+    } finally { btn.disabled = false; }
+  });
+}
+
 function abrirTrocaVenda(venda){
   if(!venda || venda.status==='cancelada') return;
   if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem registrar uma troca.'); return; }
@@ -2916,7 +3029,7 @@ function renderVendas(main){
                 <button class="icon-btn" data-view="${v.id}" title="Ver detalhes">👁</button>
                 <button class="icon-btn" data-print="${v.id}" title="Imprimir via">🖨️</button>
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-editar="${v.id}" title="Editar venda">✎</button>` : ''}
-                ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-trocar="${v.id}" title="Registrar troca">🔁</button>` : ''}
+                ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-trocar="${v.id}" title="Registrar troca">🔁</button><button class="icon-btn" data-devolver="${v.id}" title="Devolver item (sem troca)">↩️</button>` : ''}
                 ${!cancelada && podeCancelarVenda() ? `<button class="icon-btn" data-cancelar="${v.id}" title="Cancelar venda">🚫</button>` : ''}
               </td>
             </tr>`;
@@ -2930,6 +3043,7 @@ function renderVendas(main){
     wrap.querySelectorAll('[data-nota]').forEach(b=> b.addEventListener('click', ()=> abrirNotaVenda(vendas.find(x=>x.id===b.dataset.nota)) ));
     wrap.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditarVenda(vendas.find(x=>x.id===b.dataset.editar)) ));
     wrap.querySelectorAll('[data-trocar]').forEach(b=> b.addEventListener('click', ()=> abrirTrocaVenda(vendas.find(x=>x.id===b.dataset.trocar)) ));
+    wrap.querySelectorAll('[data-devolver]').forEach(b=> b.addEventListener('click', ()=> abrirDevolucaoItem(vendas.find(x=>x.id===b.dataset.devolver)) ));
     wrap.querySelectorAll('[data-cancelar]').forEach(b=> b.addEventListener('click', ()=> abrirCancelarVenda(vendas.find(x=>x.id===b.dataset.cancelar)) ));
   }
   [fLoja,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
@@ -2957,7 +3071,7 @@ function abrirItensVenda(v){
     <table>
       <thead><tr><th>Produto</th><th>Metal</th><th>Qtd.</th><th>Valor unit.</th><th>Subtotal</th></tr></thead>
       <tbody>
-        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.55;"':''}><td>${escapeHtml(it.produto)}${it.trocado?' <span class="muted">(trocado)</span>':''}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td><td>R$ ${(Number(it.quantidade)*Number(it.valorUnitario||0)).toFixed(2)}</td></tr>`).join('')}
+        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.55;"':''}><td>${escapeHtml(it.produto)}${it.devolvido?' <span class="muted">(devolvido)</span>':(it.trocado?' <span class="muted">(trocado)</span>':'')}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td><td>R$ ${(Number(it.quantidade)*Number(it.valorUnitario||0)).toFixed(2)}</td></tr>`).join('')}
       </tbody>
     </table>
     <div class="modal-actions">
@@ -3076,10 +3190,13 @@ function abrirFormularioEdicaoRestrita(v, avisoExtra){
     const cliente = document.getElementById('ed_cliente').value.trim();
     if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+    const dataAntigaV = v.data;
     v.lojaId = lojaId;
     v.loja = loja ? loja.nome : v.loja;
     v.vendedora = vendedora;
+    v.vendedoraId = vendedoraIdPorNome(vendedora);
     v.data = data;
+    if(Array.isArray(v.pagamentos) && v.pagamentos.length) v.pagamentos = carimbarPagamentos(v.pagamentos, data, dataAntigaV);
     v.telefone = telefone;
     v.cliente = cliente;
     const ok = await vendaSalvar(v);
@@ -3242,15 +3359,17 @@ function abrirFormularioEdicaoCompleta(v){
       if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteNovo);
     }
 
+    const dataAntigaV = v.data;
     v.lojaId = lojaId;
     v.loja = loja ? loja.nome : v.loja;
     v.vendedora = vendedora;
+    v.vendedoraId = vendedoraIdPorNome(vendedora);
     v.data = data;
     v.telefone = telefone;
     v.cliente = cliente;
     v.itens = itensValidos;
     v.valorTotal = pagHolder.valorTotal;
-    v.pagamentos = pagHolder.pagamentos;
+    v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV);
     v.momentoPagamento = pagHolder.momentoPagamento;
     v.emissaoNota = pagHolder.emissaoNota;
     v.numeroNota = pagHolder.numeroNota || '';
@@ -3283,7 +3402,7 @@ function abrirDetalheVenda(v){
     <table>
       <thead><tr><th>Produto</th><th>Metal</th><th>Qtd.</th><th>Valor unit.</th></tr></thead>
       <tbody>
-        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.55;"':''}><td>${escapeHtml(it.produto)}${it.trocado?' <span class="muted">(trocado)</span>':''}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td></tr>`).join('')}
+        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.55;"':''}><td>${escapeHtml(it.produto)}${it.devolvido?' <span class="muted">(devolvido)</span>':(it.trocado?' <span class="muted">(trocado)</span>':'')}</td><td>${escapeHtml(it.metal||'—')}</td><td>${it.quantidade}</td><td>R$ ${Number(it.valorUnitario||0).toFixed(2)}</td></tr>`).join('')}
       </tbody>
     </table>
     ${(v.trocas&&v.trocas.length>0) ? `
@@ -3291,7 +3410,7 @@ function abrirDetalheVenda(v){
     <table>
       <thead><tr><th>Data</th><th>Novo produto</th><th>Diferença</th><th>Feito por</th></tr></thead>
       <tbody>
-        ${v.trocas.map(t=>`<tr><td>${fmtDate(t.data)}</td><td>${escapeHtml(t.itemNovo.quantidade)}x ${escapeHtml(t.itemNovo.produto)}</td><td style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">R$ ${t.diferenca.toFixed(2)}</td><td>${escapeHtml(t.feitoPor||'—')}</td></tr>`).join('')}
+        ${v.trocas.map(t=>`<tr><td>${fmtDate(t.data)}</td><td>${t.tipoMov==='devolucao' ? '↩️ Devolução: ' + escapeHtml(t.itemAntigoDescricao||'') : escapeHtml(t.itemNovo.quantidade)+'x '+escapeHtml(t.itemNovo.produto)}</td><td style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">R$ ${t.diferenca.toFixed(2)}</td><td>${escapeHtml(t.feitoPor||'—')}</td></tr>`).join('')}
       </tbody>
     </table>
     ` : ''}

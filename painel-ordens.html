@@ -1276,6 +1276,20 @@ async function reverterFiadoECreditoOrdem(order){
   }
   if(mudou) await salvarUmCliente(cliCad);
 }
+/** Código (id no cadastro de funcionários) da vendedora escolhida. Vazio se o nome não bater com exatamente um funcionário.
+ *  Gravado junto com o nome para o DP ligar a ordem à vendedora sem depender de grafia/apelido. */
+function vendedoraIdPorNome(nome){
+  const alvo = String(nome||'').trim().toLowerCase();
+  if(!alvo) return '';
+  const achados = (config.funcionarios||[]).filter(f=> String(f.nome||'').trim().toLowerCase()===alvo || String(f.apelido||'').trim().toLowerCase()===alvo);
+  return achados.length===1 ? achados[0].id : '';
+}
+/** Carimba a data local (AAAA-MM-DD) do recebimento em cada pagamento que ainda não tem. Base do regime de caixa no DP. */
+function carimbarPagamentosOS(pags){
+  const hoje = hojeStr();
+  return (pags||[]).map(p=>{ const q = { ...p }; if(!q.data) q.data = hoje; return q; });
+}
+function dataLocalDeMs(ms){ const d = new Date(ms); if(!ms || isNaN(d)) return hojeStr(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function hojeStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** Aplica o cancelamento em cima do objeto `order` em memória (não salva sozinho —
  * quem chama decide quando persistir, pra poder combinar com outras alterações). */
@@ -3684,6 +3698,7 @@ function renderNovaOrdem(main){
       via: viaInp.value.trim(),
       numeroNota: tempPagHolder.numeroNota || '',
       vendedora: document.getElementById('f_vendedora').value.trim(),
+      vendedoraId: vendedoraIdPorNome(document.getElementById('f_vendedora').value),
       descricao: maiusc(document.getElementById('f_descricao').value),
       lojaId: loja,
       serviceTypeId: sid,
@@ -3692,7 +3707,7 @@ function renderNovaOrdem(main){
       status: STATUS.RASCUNHO,
       encaixe: false, autorizadoPor: null,
       valorTotal: tempPagHolder.valorTotal,
-      pagamentos: tempPagHolder.pagamentos,
+      pagamentos: carimbarPagamentosOS(tempPagHolder.pagamentos),
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
       lojaSaidaId: tempPagHolder.lojaSaidaId || '',
@@ -3812,14 +3827,14 @@ function renderNovaOrdem(main){
     const novaOrdem = {
       id: uid('ord'),
       ...cli,
-      via, numeroNota, vendedora, descricao, lojaId: loja,
+      via, numeroNota, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja,
       serviceTypeId: sid,
       serviceTypeName: st ? st.nome : '',
       data: dt,
       status: STATUS.AGUARDANDO,
       encaixe, autorizadoPor,
       valorTotal: tempPagHolder.valorTotal,
-      pagamentos: tempPagHolder.pagamentos,
+      pagamentos: carimbarPagamentosOS(tempPagHolder.pagamentos),
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
       lojaSaidaId: tempPagHolder.lojaSaidaId || '',
@@ -4059,7 +4074,8 @@ function openEditModalCompleto(order, opts){
   }
   // ── PAGAMENTO COMPLETO (com desconto/acréscimo e nota fiscal) ──
   const editPagHolder = {
-    valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p})),
+    // pagamento antigo sem data fica com a data de criação da ordem (não vira "hoje" só porque a ordem foi editada)
+    valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p, data: p.data || dataLocalDeMs(order.criadoEm)})),
     momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'',
     lojaSaidaId: order.lojaSaidaId||'', lojaPagamentoId: order.lojaPagamentoId||'',
     lojaNotaId: order.lojaNotaId||'', lojaBaixaEstoqueId: order.lojaBaixaEstoqueId||'',
@@ -4286,13 +4302,13 @@ function openEditModalCompleto(order, opts){
     const st = config.serviceTypes.find(s=>s.id===sid);
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
-      via, vendedora, descricao, lojaId: loja, status,
+      via, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
       encaixe, autorizadoPor, recebidoPor, recebidoEm,
       // Itens e pagamento — pegados dos holders se existirem
       itens: editItensHolder ? editItensHolder.itens.filter(it=>it._modo==='ok') : order.itens,
       valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal,
-      pagamentos: editPagHolder ? editPagHolder.pagamentos : order.pagamentos,
+      pagamentos: carimbarPagamentosOS(editPagHolder ? editPagHolder.pagamentos : order.pagamentos),
       momentoPagamento: editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento,
       emissaoNota: editPagHolder ? editPagHolder.emissaoNota : order.emissaoNota,
       lojaSaidaId: editPagHolder ? editPagHolder.lojaSaidaId : order.lojaSaidaId,
