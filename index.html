@@ -2913,8 +2913,8 @@ function abrirGerenciarTiposServicoModal(){
   openModal(`
     <div class="section-label">Tipos de serviço (O.S.)</div>
     <p class="muted" style="margin:-4px 0 14px;">Usados no Painel de O.S. pra limitar quantos por dia e o prazo mínimo de entrega.</p>
-    <div class="config-row" style="border-bottom:none; padding-top:0;">
-      <div class="muted">Nome do serviço</div><div class="muted">Máx. por dia</div><div class="muted">Prazo mínimo (dias)</div><div></div>
+    <div class="config-row" style="border-bottom:none; padding-top:0; grid-template-columns:auto 1fr 120px 140px 34px;">
+      <div class="muted" style="width:158px;">Posição</div><div class="muted">Nome do serviço</div><div class="muted">Máx. por dia</div><div class="muted">Prazo mínimo (dias)</div><div></div>
     </div>
     <div id="gtsRows"></div>
     <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
@@ -2926,7 +2926,8 @@ function abrirGerenciarTiposServicoModal(){
   function renderRows(){
     const wrap = document.getElementById('gtsRows');
     wrap.innerHTML = config.tiposServico.map((s,i)=>`
-      <div class="config-row" data-idx="${i}">
+      <div class="config-row" data-idx="${i}" style="grid-template-columns:auto 1fr 120px 140px 34px;">
+        ${controlesPosicaoHtml(i, config.tiposServico.length)}
         <input value="${escapeHtml(s.nome)}" data-field="nome">
         <input type="number" min="1" value="${s.maxPorDia}" data-field="maxPorDia">
         <input type="number" min="0" value="${s.prazoMinimoDias}" data-field="prazoMinimoDias">
@@ -2934,6 +2935,12 @@ function abrirGerenciarTiposServicoModal(){
       </div>
     `).join('');
     wrap.querySelectorAll('[data-remove]').forEach(b=> b.addEventListener('click', ()=>{ config.tiposServico.splice(Number(b.dataset.remove),1); renderRows(); }));
+    ligarControlesPosicao(wrap, config.tiposServico, '.config-row',
+      ()=>{ wrap.querySelectorAll('.config-row').forEach((row,i)=>{ const t = config.tiposServico[i]; if(!t) return;
+        t.nome = row.querySelector('[data-field="nome"]').value.trim() || t.nome;
+        t.maxPorDia = Math.max(1, parseInt(row.querySelector('[data-field="maxPorDia"]').value)||1);
+        t.prazoMinimoDias = Math.max(0, parseInt(row.querySelector('[data-field="prazoMinimoDias"]').value)||0); }); },
+      ()=> renderRows());
   }
   renderRows();
   document.getElementById('btnAddGts').addEventListener('click', ()=>{
@@ -2967,6 +2974,61 @@ function garantirConfigProduto(){
   if(!config.produtosOtica.proximoCodigo) config.produtosOtica.proximoCodigo = 1;
 }
 
+/* ---------- REORDENAR ITENS DE LISTA (qualquer posição) ----------
+   Em toda lista editável do Cadastro: arrastar pelo ⠿, digitar o número da posição, ou ▲ ▼.
+   A ordem é a ordem gravada na config — é a mesma que aparece nos seletores do app. */
+function moverItemLista(lista, de, para){
+  de = Number(de); para = Number(para);
+  if(!Array.isArray(lista) || isNaN(de) || isNaN(para)) return false;
+  para = Math.max(0, Math.min(lista.length-1, para));
+  if(de===para || de<0 || de>=lista.length) return false;
+  const [item] = lista.splice(de,1);
+  lista.splice(para,0,item);
+  return true;
+}
+/** HTML dos controles de posição de uma linha (i = índice atual, total = tamanho da lista). */
+function controlesPosicaoHtml(i, total){
+  const bt = 'padding:2px 6px; font-size:12px; line-height:1;';
+  return `<span class="pos-ctl" style="display:inline-flex; align-items:center; gap:3px; flex-shrink:0;">
+    <span class="pos-drag" draggable="true" data-posdrag="${i}" title="Arraste para mudar a posição" style="cursor:grab; user-select:none; padding:2px 4px; color:var(--ink-faint,#888); font-size:16px;">⠿</span>
+    <input type="number" class="pos-num" data-posnum="${i}" min="1" max="${total}" value="${i+1}" title="Posição (digite o número e tecle Enter)" style="width:46px; padding:4px 5px; border:1px solid var(--line); border-radius:6px; text-align:center; font-size:12px;">
+    <button type="button" class="icon-btn" data-posup="${i}" title="Subir uma posição" style="${bt}" ${i===0?'disabled':''}>▲</button>
+    <button type="button" class="icon-btn" data-posdown="${i}" title="Descer uma posição" style="${bt}" ${i===total-1?'disabled':''}>▼</button>
+  </span>`;
+}
+/** Liga os controles dentro de `wrap`. `linhaSel` = seletor da linha inteira (para o arrastar).
+ *  `antes()` roda antes de mover (salva o que está digitado); `depois()` roda depois (redesenha / salva). */
+function ligarControlesPosicao(wrap, lista, linhaSel, antes, depois){
+  const mover = async (de, para)=>{
+    if(wrap.__movendo) return;               // evita mover duas vezes com o índice antigo enquanto grava/redesenha
+    wrap.__movendo = true;
+    try{
+      if(antes) antes();
+      if(moverItemLista(lista, de, para) && depois) await depois();
+    } finally { wrap.__movendo = false; }
+  };
+  wrap.querySelectorAll('[data-posup]').forEach(b=> b.addEventListener('click', ()=> mover(Number(b.dataset.posup), Number(b.dataset.posup)-1)));
+  wrap.querySelectorAll('[data-posdown]').forEach(b=> b.addEventListener('click', ()=> mover(Number(b.dataset.posdown), Number(b.dataset.posdown)+1)));
+  wrap.querySelectorAll('[data-posnum]').forEach(inp=>{
+    const aplicar = ()=>{ const de = Number(inp.dataset.posnum); const para = parseInt(inp.value,10); if(isNaN(para)){ inp.value = de+1; return; } if(para-1===de) return; mover(de, para-1); };
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); aplicar(); } });
+    inp.addEventListener('change', aplicar);
+  });
+  wrap.querySelectorAll('[data-posdrag]').forEach(h=>{
+    h.addEventListener('dragstart', e=>{
+      e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', h.dataset.posdrag);
+      const linha = h.closest(linhaSel); if(linha && e.dataTransfer.setDragImage) e.dataTransfer.setDragImage(linha, 12, 12);
+      wrap.__arrastando = Number(h.dataset.posdrag);
+    });
+    h.addEventListener('dragend', ()=>{ wrap.__arrastando = null; wrap.querySelectorAll(linhaSel).forEach(l=>{ l.style.outline=''; }); });
+  });
+  wrap.querySelectorAll(linhaSel).forEach((linha,idx)=>{
+    linha.addEventListener('dragover', e=>{ if(wrap.__arrastando==null) return; e.preventDefault(); e.dataTransfer.dropEffect='move'; linha.style.outline = '2px dashed var(--accent,#7a1f3d)'; });
+    linha.addEventListener('dragleave', ()=>{ linha.style.outline=''; });
+    linha.addEventListener('drop', e=>{ if(wrap.__arrastando==null) return; e.preventDefault(); linha.style.outline=''; const de = wrap.__arrastando; wrap.__arrastando = null; mover(de, idx); });
+  });
+}
+
 /* ---------- GERENCIAR LISTAS (editar, não só cadastrar) — usado pelos "✎" do cadastro de produto ---------- */
 /** Lista de objetos {id,nome,descricao} — categorias e subcategorias. */
 function abrirGerenciarListaObjetos(rotulo, lista, prefixoId, aoFechar){
@@ -2983,7 +3045,8 @@ function abrirGerenciarListaObjetos(rotulo, lista, prefixoId, aoFechar){
   function renderRows(){
     const wrap = document.getElementById('gloRows');
     wrap.innerHTML = lista.length===0 ? `<div class="empty">Nenhum cadastrado ainda.</div>` : lista.map((item,i)=>`
-      <div class="code-list-item" style="gap:8px; flex-wrap:wrap;">
+      <div class="code-list-item glo-linha" style="gap:8px; flex-wrap:wrap;">
+        ${controlesPosicaoHtml(i, lista.length)}
         <input data-glonome="${i}" value="${escapeHtml(item.nome)}" style="flex:1; min-width:120px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
         <input data-glodesc="${i}" value="${escapeHtml(item.descricao||'')}" placeholder="Descrição" style="flex:1; min-width:120px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
         <button type="button" class="icon-btn" data-glodel="${i}" title="Remover">✕</button>
@@ -2992,6 +3055,9 @@ function abrirGerenciarListaObjetos(rotulo, lista, prefixoId, aoFechar){
     wrap.querySelectorAll('[data-glonome]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glonome)].nome = inp.value.trim(); }));
     wrap.querySelectorAll('[data-glodesc]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glodesc)].descricao = inp.value.trim(); }));
     wrap.querySelectorAll('[data-glodel]').forEach(b=> b.addEventListener('click', ()=>{ lista.splice(Number(b.dataset.glodel),1); renderRows(); }));
+    ligarControlesPosicao(wrap, lista, '.glo-linha',
+      ()=>{ wrap.querySelectorAll('[data-glonome]').forEach(inp=>{ lista[Number(inp.dataset.glonome)].nome = inp.value.trim(); }); wrap.querySelectorAll('[data-glodesc]').forEach(inp=>{ lista[Number(inp.dataset.glodesc)].descricao = inp.value.trim(); }); },
+      ()=> renderRows());
   }
   renderRows();
   document.getElementById('glo_add').addEventListener('click', ()=>{
@@ -3021,13 +3087,17 @@ function abrirGerenciarListaStrings(rotulo, lista, aoFechar){
   function renderRows(){
     const wrap = document.getElementById('glsRows');
     wrap.innerHTML = lista.length===0 ? `<div class="empty">Nenhum cadastrado ainda.</div>` : lista.map((v,i)=>`
-      <div class="code-list-item" style="gap:8px;">
+      <div class="code-list-item gls-linha" style="gap:8px;">
+        ${controlesPosicaoHtml(i, lista.length)}
         <input data-glsval="${i}" value="${escapeHtml(v)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
         <button type="button" class="icon-btn" data-glsdel="${i}" title="Remover">✕</button>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-glsval]').forEach(inp=> inp.addEventListener('change', ()=>{ lista[Number(inp.dataset.glsval)] = inp.value.trim(); }));
     wrap.querySelectorAll('[data-glsdel]').forEach(b=> b.addEventListener('click', ()=>{ lista.splice(Number(b.dataset.glsdel),1); renderRows(); }));
+    ligarControlesPosicao(wrap, lista, '.gls-linha',
+      ()=>{ wrap.querySelectorAll('[data-glsval]').forEach(inp=>{ lista[Number(inp.dataset.glsval)] = inp.value.trim(); }); },
+      ()=> renderRows());
   }
   renderRows();
   document.getElementById('gls_add').addEventListener('click', ()=>{
@@ -4345,7 +4415,8 @@ function renderTiposOrdemTab(main){
     wrap.innerHTML = config.tiposServico.length===0
       ? `<div class="empty">Nenhum tipo de ordem cadastrado.</div>`
       : config.tiposServico.map((t,i)=>`
-        <div class="code-list-item" style="flex-wrap:wrap; gap:8px;">
+        <div class="code-list-item tord-linha" style="flex-wrap:wrap; gap:8px;">
+          ${controlesPosicaoHtml(i, config.tiposServico.length)}
           <input data-tordnome="${i}" value="${escapeHtml(t.nome)}" placeholder="Nome"
             style="flex:2; min-width:140px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
           <input data-tordprazo="${i}" type="number" min="0" step="1" value="${Number(t.prazoMinimoDias)||0}"
@@ -4388,6 +4459,7 @@ function renderTiposOrdemTab(main){
       config.tiposServico.splice(Number(b.dataset.deltord),1);
       await configSave(); renderRows(); showToast('Tipo de ordem removido.');
     }));
+    ligarControlesPosicao(wrap, config.tiposServico, '.tord-linha', null, async ()=>{ const ok = await configSave(); renderRows(); if(ok) showToast('Ordem dos tipos de ordem salva.'); });
   }
   renderRows();
   document.getElementById('btnAddTord').addEventListener('click', async ()=>{
@@ -4419,7 +4491,7 @@ function renderPagamentoTab(main){
   function renderRows(){
     const wrap = document.getElementById('payRows');
     wrap.innerHTML = config.formasPagamento.length===0 ? `<div class="empty">Nenhuma forma de pagamento cadastrada.</div>` : config.formasPagamento.map((pt,i)=>`
-      <div class="code-list-item"><input data-payi="${i}" value="${escapeHtml(pt.nome)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;"><button class="icon-btn" data-del="${i}">✕</button></div>
+      <div class="code-list-item pay-linha">${controlesPosicaoHtml(i, config.formasPagamento.length)}<input data-payi="${i}" value="${escapeHtml(pt.nome)}" style="flex:1; padding:6px 9px; border:1px solid var(--line); border-radius:7px;"><button class="icon-btn" data-del="${i}">✕</button></div>
     `).join('');
     wrap.querySelectorAll('[data-payi]').forEach(inp=> inp.addEventListener('change', async ()=>{
       const nome = inp.value.trim();
@@ -4431,6 +4503,7 @@ function renderPagamentoTab(main){
     wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
       config.formasPagamento.splice(Number(b.dataset.del),1); await configSave(); renderRows(); showToast('Forma de pagamento removida.');
     }));
+    ligarControlesPosicao(wrap, config.formasPagamento, '.pay-linha', null, async ()=>{ const ok = await configSave(); renderRows(); if(ok) showToast('Ordem das formas de pagamento salva.'); });
   }
   renderRows();
   document.getElementById('btnAddPay').addEventListener('click', async ()=>{
@@ -4677,10 +4750,7 @@ function renderStatusOrcamentoTab(main){
     const wrap = document.getElementById('statusRows');
     wrap.innerHTML = config.statusOrcamento.map((s,i)=>`
       <div class="card" style="padding:14px 16px; margin-bottom:10px; background:var(--surface-2);">
-        <div style="display:flex; justify-content:flex-end; gap:4px; margin-bottom:8px;">
-          <button class="icon-btn" data-smove="up" data-si="${i}" title="Mover pra cima" ${i===0?'disabled style="opacity:.35;"':''}>▲</button>
-          <button class="icon-btn" data-smove="down" data-si="${i}" title="Mover pra baixo" ${i===config.statusOrcamento.length-1?'disabled style="opacity:.35;"':''}>▼</button>
-        </div>
+        <div class="st-pos" style="display:flex; justify-content:flex-end; gap:4px; margin-bottom:8px;">${controlesPosicaoHtml(i, config.statusOrcamento.length)}</div>
         <div class="grid-2">
           <div class="field"><label>Nome do status</label><input data-scampo="nome" data-si="${i}" value="${escapeHtml(s.nome)}"></div>
           <div style="display:flex; align-items:flex-end; gap:16px; padding-bottom:10px;">
@@ -4714,16 +4784,9 @@ function renderStatusOrcamentoTab(main){
         }
       });
     });
-    wrap.querySelectorAll('[data-smove]').forEach(b=>{
-      b.addEventListener('click', ()=>{
-        const i = Number(b.dataset.si);
-        const alvo = b.dataset.smove==='up' ? i-1 : i+1;
-        if(alvo<0 || alvo>=config.statusOrcamento.length) return;
-        const arr = config.statusOrcamento;
-        [arr[i], arr[alvo]] = [arr[alvo], arr[i]];
-        renderRows();
-      });
-    });
+    // a linha inteira do status é o bloco que contém os controles; o arrastar usa esse bloco
+    wrap.querySelectorAll('.st-pos').forEach(p=>{ const bloco = p.parentElement; if(bloco) bloco.classList.add('st-linha'); });
+    ligarControlesPosicao(wrap, config.statusOrcamento, '.st-linha', null, ()=> renderRows());
     wrap.querySelectorAll('[data-sdel]').forEach(b=>{
       b.addEventListener('click', ()=>{
         if(config.statusOrcamento.length<=1){ showToast('Deixe pelo menos um status cadastrado.'); return; }
