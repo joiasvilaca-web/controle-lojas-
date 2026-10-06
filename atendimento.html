@@ -86,6 +86,21 @@ button{cursor:pointer;}
 .toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:9px 14px;border-radius:999px;font-size:13px;display:none;z-index:99;}
 .zoom{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:60;cursor:zoom-out;}
 .zoom img{max-width:95vw;max-height:95vh;}
+.sep-dia{align-self:center;background:var(--surface);color:var(--ink-faint);font-size:11px;font-weight:700;border-radius:999px;padding:3px 12px;margin:6px 0;box-shadow:0 1px 1px rgba(0,0,0,.05);}
+.mais-antigas{align-self:center;}
+.bubble a.lnk{color:#1D4ED8;word-break:break-all;}
+.bubble .meta .lida{color:#1D8FE1;font-weight:700;}
+.espera{display:inline-block;font-size:10.5px;font-weight:700;border-radius:999px;padding:1px 7px;margin-right:4px;background:var(--wait-soft);color:var(--wait);}
+.espera.alta{background:var(--danger-soft);color:var(--danger);}
+.sugestoes{border:1px solid var(--line);border-radius:10px;margin-bottom:6px;overflow:hidden;background:var(--surface);}
+.sugestoes button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:var(--surface);padding:7px 10px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sugestoes button:last-child{border-bottom:0;} .sugestoes button:hover,.sugestoes button:first-child{background:var(--accent-soft);}
+.sugestoes button span{color:var(--ink-soft);}
+.chat.arrastando{outline:3px dashed var(--accent);outline-offset:-8px;}
+.previa{text-align:center;margin-bottom:10px;} .previa img{max-width:100%;max-height:260px;border-radius:8px;}
+.tag-sug{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.tag-sug button{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);}
+.tag-sug button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
 .voltar-lista{display:none;}
 @media(max-width:760px){
   .app.ver-chat .lista{display:none;} .app:not(.ver-chat) .chat{display:none;}
@@ -106,10 +121,12 @@ button{cursor:pointer;}
         <button data-f="finalizadas">Final.</button>
       </div>
       <input class="busca" id="busca" placeholder="Buscar por nome ou número…">
+      <select class="busca" id="filtroCanal" style="display:none;margin-top:6px;"><option value="">Todos os canais</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option></select>
       <div style="display:flex;gap:6px;margin-top:8px;">
         <button class="btn btn-sm" id="btnNova">➕ Nova conversa</button>
         <button class="btn btn-sm" id="btnConfig" style="display:none;">⚙️ Setores / respostas</button>
         <button class="btn btn-sm" id="btnAtualizar" title="Atualizar">↻</button>
+        <button class="btn btn-sm" id="btnSom" title="Aviso sonoro de mensagem nova">🔔</button>
       </div>
     </div>
     <div class="resumo" id="resumo" style="display:none;"></div>
@@ -128,10 +145,11 @@ button{cursor:pointer;}
       <div class="aviso-bloqueado" id="avisoBloqueado" style="display:none;"></div>
       <div class="compose" id="compose">
         <div class="rapidas" id="rapidas"></div>
+        <div class="sugestoes" id="sugestoes" style="display:none;"></div>
         <div class="linha">
           <button class="btn" id="btnAnexo" title="Enviar foto, áudio ou arquivo">📎</button>
           <input type="file" id="arquivo" style="display:none;">
-          <textarea id="texto" placeholder="Escreva a mensagem… (Enter envia, Shift+Enter quebra linha)"></textarea>
+          <textarea id="texto" placeholder="Escreva a mensagem… (Enter envia · Shift+Enter quebra linha · / respostas rápidas)"></textarea>
           <button class="btn btn-accent" id="btnEnviar">Enviar</button>
         </div>
       </div>
@@ -163,7 +181,7 @@ const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 const EMBEDDED = window.parent !== window;
 
 let __gatewaySenha = null, currentUser = null, config = {};
-let estado = { filtro:'minhas', busca:'', conversas:[], atual:null, mensagens:[], gestao:false, meuId:null, meuNome:'', setores:[], respostas:[], instancias:{} };
+let estado = { filtro:'minhas', busca:'', conversas:[], atual:null, mensagens:[], gestao:false, meuId:null, meuNome:'', setores:[], respostas:[], instancias:{}, canal:'', variosCanais:false, limite:80, temAntigas:false, aviso:true };
 let pollTimer = null;
 const urlsMidia = {};
 
@@ -188,9 +206,63 @@ function avatarHtml(c){ return c.contato_foto ? `<img src="${escapeHtml(c.contat
 function nomeConv(c){ return c.contato_nome || fmtTel(c.contato_id); }
 function statusLabel(c){ return c.status==='aguardando' ? 'Na fila' : c.status==='finalizado' ? 'Finalizada' : (c.atendente_nome ? 'Com '+c.atendente_nome : 'Em atendimento'); }
 
+/* ================= AVISOS (som, notificação, título da aba) ================= */
+function prefLer(k, padrao){ try{ const v = localStorage.getItem(k); return v===null ? padrao : v; }catch(e){ return padrao; } }
+function prefGravar(k, v){ try{ localStorage.setItem(k, v); }catch(e){} }
+estado.aviso = prefLer('atd_aviso','1') === '1';
+let audioCtx = null, tituloOriginal = null, vistos = null; const avisados = {};
+function tocarSom(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = audioCtx.currentTime;
+    [880, 1175].forEach((f,i)=>{ const o = audioCtx.createOscillator(), g = audioCtx.createGain(), ini = t + i*0.16; o.type='sine'; o.frequency.value = f; g.gain.setValueAtTime(0.0001, ini); g.gain.exponentialRampToValueAtTime(0.25, ini+0.02); g.gain.exponentialRampToValueAtTime(0.0001, ini+0.15); o.connect(g); g.connect(audioCtx.destination); o.start(ini); o.stop(ini+0.16); });
+  }catch(e){}
+}
+function tituloAba(total){
+  try{ const d = window.top.document; if(tituloOriginal===null) tituloOriginal = d.title.replace(/^\(\d+\)\s*/,''); d.title = total ? `(${total}) ${tituloOriginal}` : tituloOriginal; }catch(e){}
+}
+function avisarNova(c){
+  if(!estado.aviso || !c) return;
+  const k = c.id + '|' + (c.ultima_mensagem_em||''); if(avisados[k]) return; avisados[k] = 1;
+  tocarSom();
+  try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
+  try{
+    if(document.hidden && window.Notification && Notification.permission==='granted'){
+      const n = new Notification('Nova mensagem — ' + nomeConv(c), { body: c.ultima_mensagem_texto || '', tag: 'atd_'+c.id });
+      n.onclick = ()=>{ try{ window.top.focus(); }catch(e){} abrirConversa(c.id); n.close(); };
+    }
+  }catch(e){}
+}
+function detectarNovas(listas){
+  const mapa = {}, novas = [];
+  listas.forEach(l=> (l||[]).forEach(c=>{ if(c.ultima_direcao==='in' && c.nao_lidas && !mapa[c.id]){ mapa[c.id] = c.ultima_mensagem_em || '1'; if(vistos && vistos[c.id] !== mapa[c.id]) novas.push(c); } }));
+  const primeira = !vistos; vistos = mapa;
+  if(primeira) return;
+  novas.forEach(c=>{ if(estado.atual && estado.atual.id===c.id && !document.hidden) return; avisarNova(c); });
+}
+function renderSino(){ const b = document.getElementById('btnSom'); b.textContent = estado.aviso ? '🔔' : '🔕'; b.title = estado.aviso ? 'Avisos de mensagem nova: ligados (clique para desligar)' : 'Avisos de mensagem nova: desligados (clique para ligar)'; }
+function alternarSino(){
+  estado.aviso = !estado.aviso; prefGravar('atd_aviso', estado.aviso ? '1' : '0'); renderSino();
+  if(estado.aviso){ tocarSom(); try{ if(window.Notification && Notification.permission==='default') Notification.requestPermission(); }catch(e){} showToast('Avisos de mensagem nova ligados.'); }
+  else showToast('Avisos de mensagem nova desligados.');
+}
+function canalChip(c){ if(c.canal==='instagram') return '<span class="tagchip" title="Instagram">📷 IG</span>'; return estado.variosCanais ? '<span class="tagchip" title="WhatsApp">WA</span>' : ''; }
+function esperaHtml(c){
+  if(c.status==='finalizado' || c.ultima_direcao!=='in' || !c.ultima_mensagem_em) return '';
+  const min = Math.floor((Date.now() - new Date(c.ultima_mensagem_em).getTime())/60000); if(!(min>=5)) return '';
+  const txt = min<60 ? min+' min' : min<1440 ? Math.floor(min/60)+' h' : Math.floor(min/1440)+' d';
+  return `<span class="espera ${min>=30?'alta':''}" title="Cliente aguardando resposta">⏱ ${txt}</span>`;
+}
+function linkar(html){ return html.replace(/(https?:\/\/[^\s<]+)/g, '<a class="lnk" href="$1" target="_blank" rel="noopener noreferrer">$1</a>'); }
+function rotuloDia(iso){
+  const d = new Date(iso), h = new Date(), o = new Date(); o.setDate(h.getDate()-1);
+  if(d.toDateString()===h.toDateString()) return 'Hoje'; if(d.toDateString()===o.toDateString()) return 'Ontem';
+  return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+
 /* ================= LISTA ================= */
 async function carregarLista(silencioso){
-  const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca });
+  const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca, canal: estado.canal || undefined });
   if(!r){ if(!silencioso) showToast('Erro ao carregar'); return; }
   if(r.error){
     // Sessão expirada: parar polling e pedir novo login
@@ -207,12 +279,17 @@ async function carregarLista(silencioso){
   contadores();
 }
 async function contadores(){
-  const [m, f] = await Promise.all([ api({ op:'listarConversas', filtro:'minhas' }), api({ op:'listarConversas', filtro:'fila' }) ]);
+  // Reaproveita a lista já carregada quando ela é exatamente a de "Minhas" ou a da "Fila" (uma chamada a menos a cada ciclo)
+  const limpa = !estado.busca && !estado.canal;
+  const pronta = f => (limpa && estado.filtro===f) ? Promise.resolve({ data: estado.conversas }) : api({ op:'listarConversas', filtro:f });
+  const [m, f] = await Promise.all([ pronta('minhas'), pronta('fila') ]);
   const nm = (m && m.data) ? m.data.reduce((a,c)=>a+(c.nao_lidas||0),0) : 0;
   const nf = (f && f.data) ? f.data.length : 0;
   document.getElementById('n_minhas').textContent = nm ? nm : '';
   document.getElementById('n_fila').textContent = nf ? nf : '';
   if(EMBEDDED) parent.postMessage({ type:'atendimentoTotal', modulo:'atendimento', total: nm + nf }, '*');
+  tituloAba(nm + nf);
+  if(m && m.data && f && f.data) detectarNovas([m.data, f.data]);
 }
 function renderLista(){
   const wrap = document.getElementById('conversas');
@@ -223,7 +300,7 @@ function renderLista(){
       <div class="info">
         <div class="l1"><span class="nome">${escapeHtml(nomeConv(c))}</span><span class="hora">${fmtHora(c.ultima_mensagem_em)}</span></div>
         <div class="l2"><span class="prev">${c.ultima_direcao==='out'?'✓ ':''}${escapeHtml(c.ultima_mensagem_texto||'')}</span>${c.nao_lidas?`<span class="badge">${c.nao_lidas}</span>`:''}</div>
-        <div class="quem">${escapeHtml(statusLabel(c))}${c.setor?' · '+escapeHtml(c.setor):''} ${(c.tags||[]).map(t=>`<span class="tagchip">${escapeHtml(t)}</span>`).join('')}</div>
+        <div class="quem">${esperaHtml(c)}${canalChip(c)}${escapeHtml(statusLabel(c))}${c.setor?' · '+escapeHtml(c.setor):''} ${(c.tags||[]).map(t=>`<span class="tagchip">${escapeHtml(t)}</span>`).join('')}</div>
       </div>
     </div>`).join('');
   wrap.querySelectorAll('.conv').forEach(el=> el.addEventListener('click', ()=> abrirConversa(el.dataset.id)));
@@ -231,9 +308,10 @@ function renderLista(){
 
 /* ================= CHAT ================= */
 async function abrirConversa(id){
-  const r = await api({ op:'mensagens', conversaId:id, limite:80 });
+  if(!estado.atual || estado.atual.id!==id) estado.limite = 80;
+  const r = await api({ op:'mensagens', conversaId:id, limite: estado.limite });
   if(!r || r.error){ showToast(r && r.error || 'Erro ao abrir'); return; }
-  estado.atual = r.conversa; estado.mensagens = r.data || [];
+  estado.atual = r.conversa; estado.mensagens = r.data || []; estado.temAntigas = estado.mensagens.length >= estado.limite;
   document.getElementById('app').classList.add('ver-chat');
   document.getElementById('chatVazio').style.display='none';
   const area = document.getElementById('chatArea'); area.style.display='flex';
@@ -256,6 +334,7 @@ function renderHead(){
   a.push(`<button class="btn btn-sm" data-a="cliente">👤 Cliente</button>`);
   a.push(`<button class="btn btn-sm" data-a="tags">🏷️ Tags</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm btn-danger" data-a="finalizar">✔ Finalizar</button>`);
+  if(c.status==='finalizado') a.unshift(`<button class="btn btn-sm btn-accent" data-a="reabrir">↩ Reabrir</button>`);
   const wrap = document.getElementById('chAcoes'); wrap.innerHTML = a.join('');
   wrap.querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=> acao(b.dataset.a)));
   const bloq = document.getElementById('avisoBloqueado');
@@ -277,13 +356,16 @@ function bubbleHtml(m){
   } else if(['imagem','audio','video','documento','sticker'].includes(m.tipo) && !m.texto){
     corpo += `<span class="muted">[${m.tipo}] mídia não disponível</span>`;
   }
-  if(m.texto) corpo += escapeHtml(m.texto);
-  const st = m.direcao==='out' ? (m.status==='lida'?' ✓✓':m.status==='entregue'?' ✓✓':m.status==='erro'?' ⚠️':' ✓') : '';
+  if(m.texto) corpo += linkar(escapeHtml(m.texto));
+  const st = m.direcao==='out' ? (m.status==='lida'?' <span class="lida" title="Lida">✓✓</span>':m.status==='entregue'?' ✓✓':m.status==='erro'?' ⚠️':' ✓') : '';
   return `<div class="bubble ${cls}">${m.direcao==='out'&&m.autor_nome?`<div class="autor">${escapeHtml(m.autor_nome)}</div>`:''}${corpo}<div class="meta">${fmtHora(m.enviada_em)}${st}</div></div>`;
 }
 async function renderMsgs(scroll){
   const wrap = document.getElementById('msgs');
-  wrap.innerHTML = estado.mensagens.map(bubbleHtml).join('');
+  let dia = '', html = estado.temAntigas ? `<button class="btn btn-sm mais-antigas" id="btnAntigas">⬆ Carregar mensagens anteriores</button>` : '';
+  estado.mensagens.forEach(m=>{ const k = m.enviada_em ? new Date(m.enviada_em).toDateString() : dia; if(k!==dia){ dia = k; html += `<div class="sep-dia">${rotuloDia(m.enviada_em)}</div>`; } html += bubbleHtml(m); });
+  wrap.innerHTML = html;
+  const ba = document.getElementById('btnAntigas'); if(ba) ba.onclick = carregarAntigas;
   if(scroll) wrap.scrollTop = wrap.scrollHeight;
   wrap.querySelectorAll('[data-path]').forEach(async el=>{
     const path = el.dataset.path; let url = urlsMidia[path];
@@ -293,6 +375,16 @@ async function renderMsgs(scroll){
     else if(el.tagName==='A') el.href = url;
     else el.src = url;
   });
+}
+async function carregarAntigas(){
+  if(!estado.atual) return;
+  const id = estado.atual.id, wrap = document.getElementById('msgs'), antes = wrap.scrollHeight;
+  const b = document.getElementById('btnAntigas'); if(b){ b.disabled = true; b.textContent = 'Carregando…'; }
+  const r = await api({ op:'mensagens', conversaId:id, limite: estado.limite + 200 });
+  if(!estado.atual || estado.atual.id!==id) return;
+  if(!r || r.error){ showToast(r && r.error || 'Erro ao carregar'); renderMsgs(false); return; }
+  estado.limite += 200; estado.mensagens = r.data || []; estado.temAntigas = estado.mensagens.length >= estado.limite;
+  renderMsgs(false); wrap.scrollTop = wrap.scrollHeight - antes;
 }
 async function atualizarMensagens(){
   if(!estado.atual) return;
@@ -304,8 +396,8 @@ async function atualizarMensagens(){
   if(mudouStatus) renderHead();
   const novas = (r.data||[]).filter(m=> !estado.mensagens.some(x=>x.id===m.id));
   if(novas.length && novas.some(m=>m.direcao==='in')){
-    // Vibrar e piscar título no celular
-    try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
+    // Conversa aberta mas aba/janela fora de vista: avisa (som + notificação)
+    if(document.hidden) avisarNova(r.conversa);
   }
   if(novas.length){
     const wrap = document.getElementById('msgs'); const noFim = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
@@ -319,6 +411,7 @@ async function acao(a){
   const c = estado.atual; if(!c) return;
   if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa assumida.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='finalizar'){ if(!confirm('Finalizar este atendimento?')) return; const r = await api({ op:'finalizar', conversaId:c.id }); if(r&&r.ok){ showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='reabrir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='transferir') modalTransferir();
   if(a==='cliente') modalCliente();
   if(a==='tags') modalTags();
@@ -339,8 +432,14 @@ function modalTransferir(){
 }
 function modalTags(){
   abrirModal(`<h2>Tags da conversa</h2><div class="field"><label>Separe por vírgula</label><input id="tTags" value="${escapeHtml((estado.atual.tags||[]).join(', '))}" placeholder="orçamento, aliança, urgente"></div>
+    <div class="tag-sug" id="tSug"></div>
     <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Salvar</button></div>`);
   document.getElementById('mCancel').onclick = fecharModal;
+  // Tags já usadas nas conversas da lista viram botões de um clique
+  const usadas = [...new Set(estado.conversas.flatMap(x=>x.tags||[]).concat(estado.atual.tags||[]))].sort((a,b)=>a.localeCompare(b,'pt-BR')).slice(0,30);
+  const lerTags = ()=> document.getElementById('tTags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  const pintarSug = ()=>{ const at = lerTags(); document.getElementById('tSug').innerHTML = usadas.map((t,i)=>`<button type="button" data-i="${i}" class="${at.includes(t)?'on':''}">${escapeHtml(t)}</button>`).join(''); document.getElementById('tSug').querySelectorAll('button').forEach(b=> b.onclick = ()=>{ const t = usadas[b.dataset.i]; let l = lerTags(); l = l.includes(t) ? l.filter(x=>x!==t) : l.concat(t); document.getElementById('tTags').value = l.join(', '); pintarSug(); }); };
+  pintarSug(); document.getElementById('tTags').addEventListener('input', pintarSug);
   document.getElementById('mOk').onclick = async ()=>{
     const tags = document.getElementById('tTags').value.split(',').map(t=>t.trim()).filter(Boolean);
     const r = await api({ op:'tags', conversaId: estado.atual.id, tags }); if(r&&r.ok){ fecharModal(); await abrirConversa(estado.atual.id); carregarLista(true);} else showToast(r&&r.error||'Erro');
@@ -398,15 +497,46 @@ async function enviarTexto(){
   await atualizarMensagens(); if(!estado.mensagens.some(m=>m.texto===texto && m.direcao==='out')){ estado.mensagens.push({ id:'tmp'+Date.now(), direcao:'out', tipo:'texto', texto, autor_nome:estado.meuNome, status:'enviada', enviada_em:new Date().toISOString() }); renderMsgs(true); }
   carregarLista(true);
 }
-async function enviarArquivo(file){
+function enviarArquivo(file){
   if(!file || !estado.atual) return;
+  if(!podeResponder()){ showToast('Esta conversa está com outro atendente.'); return; }
   if(file.size > 15*1024*1024){ showToast('Arquivo grande demais (máx. 15 MB).'); return; }
-  const legenda = prompt('Legenda (opcional):', '') ;
+  const conversaId = estado.atual.id, ehImg = (file.type||'').startsWith('image/'), url = ehImg ? URL.createObjectURL(file) : '';
+  abrirModal(`<h2>Enviar ${ehImg?'foto':'arquivo'} para ${escapeHtml(nomeConv(estado.atual))}</h2>
+    <div class="previa">${ehImg ? `<img src="${url}" alt="">` : `📎 <b>${escapeHtml(file.name||'Arquivo')}</b> <span class="muted">(${(file.size/1024/1024).toFixed(1)} MB)</span>`}</div>
+    <div class="field"><label>Legenda (opcional)</label><input id="aLeg"></div>
+    <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Enviar</button></div>`);
+  const fechar = ()=>{ if(url) try{ URL.revokeObjectURL(url); }catch(e){} fecharModal(); };
+  const ok = ()=>{ const legenda = document.getElementById('aLeg').value.trim(); fechar(); enviarArquivoAgora(file, legenda, conversaId); };
+  document.getElementById('mCancel').onclick = fechar;
+  document.getElementById('mOk').onclick = ok;
+  const leg = document.getElementById('aLeg'); leg.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); ok(); } }); leg.focus();
+}
+async function enviarArquivoAgora(file, legenda, conversaId){
   const base64 = await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result.split(',')[1]); fr.onerror=rej; fr.readAsDataURL(file); });
   showToast('Enviando…');
-  const r = await api({ op:'enviarMidia', conversaId: estado.atual.id, base64, mimetype: file.type || 'application/octet-stream', nome: file.name, legenda: legenda||'' });
+  const r = await api({ op:'enviarMidia', conversaId, base64, mimetype: file.type || 'application/octet-stream', nome: file.name, legenda: legenda||'' });
   if(!r || !r.ok){ showToast(r && r.error || 'Não enviou'); return; }
-  await abrirConversa(estado.atual.id); carregarLista(true);
+  showToast('Enviado.');
+  if(estado.atual && estado.atual.id===conversaId) await abrirConversa(conversaId);
+  carregarLista(true);
+}
+/* Respostas rápidas pelo teclado: digite "/" no campo da mensagem */
+function atualizarSugestoes(){
+  const t = document.getElementById('texto'), box = document.getElementById('sugestoes'), v = t.value;
+  box._l = [];
+  if(v[0]!=='/' || v.includes('\n') || !estado.respostas.length){ box.style.display='none'; return; }
+  const termo = v.slice(1).toLowerCase();
+  const l = estado.respostas.filter(r=> (r.titulo+' '+r.texto).toLowerCase().includes(termo)).slice(0,6);
+  if(!l.length){ box.style.display='none'; return; }
+  box._l = l;
+  box.innerHTML = l.map((r,i)=>`<button type="button" data-i="${i}"><b>${escapeHtml(r.titulo)}</b> <span>${escapeHtml(r.texto)}</span></button>`).join('');
+  box.style.display = 'block';
+  box.querySelectorAll('button').forEach(b=> b.onclick = ()=> usarSugestao(+b.dataset.i));
+}
+function usarSugestao(i){
+  const t = document.getElementById('texto'), box = document.getElementById('sugestoes'), r = (box._l||[])[i]; if(!r) return false;
+  t.value = r.texto; box._l = []; box.style.display='none'; t.focus(); return true;
 }
 
 /* ================= STATUS / RESUMO ================= */
@@ -418,6 +548,10 @@ async function carregarStatus(){
   const on = inst.some(([,v])=> String(v.estado||'').toLowerCase()==='open');
   con.textContent = inst.length ? (on ? 'WhatsApp conectado' : 'WhatsApp desconectado') : 'WhatsApp: sem status';
   con.className = 'conexao ' + (inst.length ? (on?'on':'off') : '');
+  const canais = new Set(inst.map(([,v])=> v.canal || 'whatsapp'));
+  estado.variosCanais = canais.size > 1;
+  document.getElementById('filtroCanal').style.display = estado.variosCanais ? '' : 'none';
+  if(!estado.variosCanais && estado.canal){ estado.canal = ''; document.getElementById('filtroCanal').value = ''; }
   document.getElementById('btnConfig').style.display = estado.gestao ? '' : 'none';
   if(estado.gestao){
     const s = await api({ op:'resumo' });
@@ -430,7 +564,7 @@ function iniciarPolling(){
   if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
   async function tick(){
     try{ await carregarLista(true); await atualizarMensagens(); }catch(e){ console.error('poll',e); }
-    finally{ pollTimer = setTimeout(tick, 5000); }
+    finally{ pollTimer = setTimeout(tick, document.hidden ? 15000 : 5000); }
   }
   pollTimer = setTimeout(tick, 5000);
 }
@@ -448,7 +582,27 @@ document.getElementById('btnNova').addEventListener('click', modalNova);
 document.getElementById('btnConfig').addEventListener('click', modalConfig);
 document.getElementById('btnAtualizar').addEventListener('click', ()=>{ carregarStatus(); carregarLista(); atualizarMensagens(); });
 document.getElementById('btnEnviar').addEventListener('click', enviarTexto);
-document.getElementById('texto').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); enviarTexto(); } });
+document.getElementById('texto').addEventListener('keydown', e=>{
+  if(e.key==='Escape'){ const box = document.getElementById('sugestoes'); box._l = []; box.style.display='none'; return; }
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); if(!usarSugestao(0)) enviarTexto(); }
+});
+document.getElementById('texto').addEventListener('input', atualizarSugestoes);
+// Colar foto (Ctrl+V) direto no campo da mensagem
+document.getElementById('texto').addEventListener('paste', e=>{
+  const itens = (e.clipboardData && e.clipboardData.items) || [];
+  for(const it of itens){ if(it.kind==='file'){ const f = it.getAsFile(); if(f){ e.preventDefault(); enviarArquivo(f); return; } } }
+});
+// Arrastar arquivo para cima da conversa
+(function(){
+  const chat = document.getElementById('chat'); let n = 0;
+  const temArquivo = e => e.dataTransfer && Array.from(e.dataTransfer.types||[]).includes('Files');
+  chat.addEventListener('dragenter', e=>{ if(!temArquivo(e) || !estado.atual) return; e.preventDefault(); n++; chat.classList.add('arrastando'); });
+  chat.addEventListener('dragover', e=>{ if(temArquivo(e) && estado.atual) e.preventDefault(); });
+  chat.addEventListener('dragleave', ()=>{ n = Math.max(0, n-1); if(!n) chat.classList.remove('arrastando'); });
+  chat.addEventListener('drop', e=>{ if(!temArquivo(e)) return; e.preventDefault(); n = 0; chat.classList.remove('arrastando'); if(estado.atual && e.dataTransfer.files[0]) enviarArquivo(e.dataTransfer.files[0]); });
+})();
+document.getElementById('btnSom').addEventListener('click', alternarSino); renderSino();
+document.getElementById('filtroCanal').addEventListener('change', e=>{ estado.canal = e.target.value; carregarLista(); });
 document.getElementById('btnAnexo').addEventListener('click', ()=> document.getElementById('arquivo').click());
 document.getElementById('arquivo').addEventListener('change', e=>{ enviarArquivo(e.target.files[0]); e.target.value=''; });
 document.getElementById('btnVoltarLista').addEventListener('click', ()=> document.getElementById('app').classList.remove('ver-chat'));
