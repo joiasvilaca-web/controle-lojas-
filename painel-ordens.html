@@ -1240,7 +1240,8 @@ async function saveOrders(){
 function podeCancelarOrdem(){
   return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
 }
-async function reverterFiadoECreditoOrdem(order){
+async function reverterFiadoECreditoOrdem(order, rotulo){
+  rotulo = rotulo || 'Cancelamento';
   const telD = onlyDigits(order.telefone||'');
   const nomeL = (order.cliente||'').trim().toLowerCase();
   // Procura o cliente no servidor (telefone; se não achar, nome) — sem lista completa em memória.
@@ -1257,7 +1258,7 @@ async function reverterFiadoECreditoOrdem(order){
   if(order.creditoUsado > 0){
     cliCad.credito = (Number(cliCad.credito)||0) + order.creditoUsado;
     if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-    cliCad.creditoMovimentos.push({ data: hojeStr(), valor: order.creditoUsado, tipo:'estorno', obs:`Cancelamento O.S. ${order.via||''}` });
+    cliCad.creditoMovimentos.push({ data: hojeStr(), valor: order.creditoUsado, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''}` });
     mudou = true;
   }
   if(order.fiadoDebitoId && Array.isArray(cliCad.fiadoDebitos)){
@@ -1268,7 +1269,7 @@ async function reverterFiadoECreditoOrdem(order){
       if(jaPago > 0){
         if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
         cliCad.credito = (Number(cliCad.credito)||0) + jaPago;
-        cliCad.creditoMovimentos.push({ data: hojeStr(), valor: jaPago, tipo:'estorno', obs:`Cancelamento O.S. ${order.via||''} (parcela de fiado já paga)` });
+        cliCad.creditoMovimentos.push({ data: hojeStr(), valor: jaPago, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''} (parcela de fiado já paga)` });
       }
       cliCad.fiadoDebitos.splice(idx,1);
       mudou = true;
@@ -1326,6 +1327,74 @@ function abrirCancelarOrdem(order){
     showToast('O.S. cancelada.');
     closeModal();
     renderView();
+  });
+}
+/* ============================================================
+   EXCLUSÃO DE O.S. (só gerente/diretoria)
+   - Guarda uma cópia de segurança (painel_ordens_kv, chave os_excluida_<id>) ANTES de apagar;
+     se a cópia falhar, nada é apagado.
+   - Apaga a linha em ordens_servico → a vaga da agenda e os valores recebidos deixam de ser
+     contados (tudo é calculado a partir das O.S. existentes).
+   - Reverte crédito usado e débito de fiado do cliente (igual ao cancelamento), exceto se a
+     O.S. já estava cancelada (nesse caso a reversão já foi feita no cancelamento).
+   - Devolve o número da via à sequência quando ele for o último emitido da loja.
+   ============================================================ */
+async function excluirOrdemDefinitivo(order, motivo){
+  const copia = { ...order, excluidoPor: currentUser.nome, excluidoEm: Date.now(), motivoExclusao: motivo };
+  const okBackup = await storageSet('os_excluida_'+order.id, copia, true);
+  if(!okBackup) throw new Error('Não foi possível guardar a cópia de segurança. Nada foi excluído.');
+  const r = await gatewayCall({ op:'delete', table:'ordens_servico', params:{ column:'id', value: order.id } });
+  if(!r || r.error) throw new Error('Falha ao excluir no servidor: ' + ((r && r.error) || 'sem resposta') + '. Nada foi alterado.');
+  orders = orders.filter(x=>x.id!==order.id);
+  let avisoReversao = '';
+  if(order.status !== 'cancelado'){
+    try{ await reverterFiadoECreditoOrdem(order, 'Exclusão'); }
+    catch(e){ console.error('erro ao reverter fiado/crédito na exclusão', e); avisoReversao = ' Atenção: não foi possível estornar fiado/crédito do cliente automaticamente — confira o cadastro do cliente.'; }
+  }
+  try{
+    const m = /^([A-Za-z]+)(\d+)P$/.exec(String(order.codigoVia||''));
+    if(m) await gatewayCall({ op:'liberarCodigoViaSequence', params:{ tipo:'pedido', lojaAbrev: m[1].toUpperCase(), numero: Number(m[2]) } });
+  }catch(e){ /* melhor esforço: se não for o último número, a sequência segue normalmente */ }
+  return avisoReversao;
+}
+function abrirExcluirOrdem(order){
+  if(!order) return;
+  if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem excluir uma O.S.'); return; }
+  const recebido = valorRecebidoDe(order);
+  const temCredito = order.status!=='cancelado' && Number(order.creditoUsado)>0;
+  const temFiado = order.status!=='cancelado' && !!order.fiadoDebitoId;
+  openModal(`
+    <h3>Excluir pedido / O.S.</h3>
+    <p class="muted">${escapeHtml(order.cliente||'cliente não identificado')} · Via ${escapeHtml(order.via||'—')} · <b>R$ ${(Number(order.valorTotal)||0).toFixed(2)}</b> · ${escapeHtml(statusLabel(order.status))}</p>
+    <p style="color:var(--danger); font-weight:700;">A exclusão é definitiva: o pedido some da lista e da agenda (a vaga é liberada).</p>
+    <ul style="margin:6px 0 10px 18px; font-size:13px;">
+      ${recebido>0 ? `<li>R$ ${recebido.toFixed(2)} já recebidos deixam de contar no caixa/relatórios.</li>` : ''}
+      ${temCredito ? `<li>Crédito usado (R$ ${Number(order.creditoUsado).toFixed(2)}) volta para o cliente.</li>` : ''}
+      ${temFiado ? `<li>O débito de fiado deste pedido é removido do cliente (parcelas já pagas viram crédito).</li>` : ''}
+      <li>Uma cópia de segurança do pedido fica guardada.</li>
+    </ul>
+    ${order.status==='entregue' ? `<p style="color:var(--danger); font-weight:700;">⚠ Este pedido já foi ENTREGUE. Confirme que realmente deve ser excluído.</p>` : ''}
+    <div class="field"><label>Motivo da exclusão <span class="muted">(obrigatório)</span></label><textarea id="ex_motivo" style="min-height:70px;" placeholder="Ex: lançado em duplicidade, erro de digitação..."></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="ex_fechar">Voltar</button>
+      <button class="btn btn-accent" id="ex_confirmar" style="background:var(--danger); border-color:var(--danger);">Excluir definitivamente</button>
+    </div>
+  `);
+  document.getElementById('ex_fechar').addEventListener('click', closeModal);
+  const btn = document.getElementById('ex_confirmar');
+  btn.addEventListener('click', async ()=>{
+    const motivo = maiusc(document.getElementById('ex_motivo').value);
+    if(!motivo){ showToast('Informe o motivo da exclusão.'); return; }
+    btn.disabled = true;
+    try{
+      const aviso = await excluirOrdemDefinitivo(order, motivo);
+      showToast('Pedido excluído.' + aviso);
+      closeModal();
+      renderView();
+    }catch(e){
+      btn.disabled = false;
+      showToast(e.message || 'Erro ao excluir o pedido.');
+    }
   });
 }
 async function saveCodes(){ await storageSet('codes', codes, true); }
@@ -4519,6 +4588,9 @@ function renderPainel(main){
     wrap.querySelectorAll('[data-print]').forEach(b=>{
       b.addEventListener('click', ()=> printOrder(orders.find(x=>x.id===b.dataset.print)) );
     });
+    wrap.querySelectorAll('[data-del]').forEach(b=>{
+      b.addEventListener('click', ()=> abrirExcluirOrdem(orders.find(x=>x.id===b.dataset.del)) );
+    });
   }
 
   function rowHtml(o){
@@ -4555,6 +4627,7 @@ function renderPainel(main){
           <button class="icon-btn" data-view="${o.id}" title="Ver detalhes (somente leitura)">👁</button>
           <button class="icon-btn" data-edit="${o.id}" title="Editar ordem">✎</button>
           <button class="icon-btn" data-print="${o.id}" title="Imprimir ordem">🖨️</button>
+          ${podeCancelarOrdem() ? `<button class="icon-btn" data-del="${o.id}" title="Excluir pedido">🗑️</button>` : ''}
           ${currentUser.nivel!=='oficina' ? `
           <button class="icon-btn icon-btn-wa" data-wa="${o.id}" title="Enviar WhatsApp">${waIconSvg()}</button>
           <button class="icon-btn" data-mail="${o.id}" title="Enviar e-mail">✉️</button>
