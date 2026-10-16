@@ -139,6 +139,26 @@ button{cursor:pointer;}
 .lin input,.lin select{width:100%;box-sizing:border-box}
 .kw{border:1px dashed var(--border,#ccc);border-radius:8px;padding:8px;margin-bottom:8px}
 .prev{white-space:pre-wrap;background:#dcf8c6;color:#111;border-radius:10px;padding:10px 12px;font-size:13px;max-width:380px}
+.int-wrap{display:flex;gap:0;border:1px solid var(--line,#e5e5e5);border-radius:12px;overflow:hidden;height:calc(100vh - 90px);min-height:380px;background:var(--surface,#fff);color:var(--ink,#111)}
+.int-lista{width:260px;max-width:42%;border-right:1px solid var(--line,#e5e5e5);display:flex;flex-direction:column}
+.int-lista .top{padding:10px;border-bottom:1px solid var(--line,#e5e5e5);display:flex;justify-content:space-between;align-items:center;font-weight:700}
+.int-lista .itens{overflow:auto;flex:1}
+.int-it{padding:9px 10px;border-bottom:1px solid var(--line,#eee);cursor:pointer;display:flex;gap:8px;align-items:center}
+.int-it:hover,.int-it.on{background:rgba(37,99,235,.09)}
+.int-it .nm{font-weight:600;font-size:13px}.int-it .pv{font-size:11.5px;color:var(--ink-faint,#777);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.int-it .bd{margin-left:auto;background:#e11d48;color:#fff;border-radius:999px;font-size:11px;padding:1px 7px;font-weight:700}
+.int-conv{flex:1;display:flex;flex-direction:column;min-width:0}
+.int-conv .hd{padding:10px 12px;border-bottom:1px solid var(--line,#e5e5e5);font-weight:700}
+.int-conv .ms{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.int-m{max-width:78%;padding:7px 10px;border-radius:12px;font-size:13.5px;white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.14);align-self:flex-start}
+.int-m.eu{align-self:flex-end;background:#dcf8c6;color:#111}
+.int-m .q{font-size:10.5px;opacity:.7;margin-bottom:2px}
+.int-conv .cp{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line,#e5e5e5)}
+.int-conv .cp textarea{flex:1;min-height:40px;max-height:110px}
+#bannerInt{position:fixed;top:12px;right:12px;z-index:9999;max-width:330px;background:#111827;color:#fff;border-left:5px solid #22c55e;border-radius:10px;padding:12px 14px;box-shadow:0 8px 28px rgba(0,0,0,.35);cursor:pointer;display:none;font-size:14px;animation:binS .25s ease-out}
+#bannerInt b{display:block;margin-bottom:3px;font-size:13px;color:#86efac}
+@keyframes binS{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
+@media(max-width:700px){.int-wrap{flex-direction:column;height:auto}.int-lista{width:auto;max-width:none;max-height:36vh;border-right:0;border-bottom:1px solid var(--line,#e5e5e5)}.int-conv{min-height:50vh}}
 </style>
 </head>
 <body>
@@ -160,6 +180,7 @@ button{cursor:pointer;}
         <button class="mbtn" id="btnPainel" style="display:none;" title="Painel de acompanhamento de todas as conversas"><span class="ic">📊</span>Painel</button>
         <button class="mbtn" id="btnTarefas" title="Minhas tarefas do CRM"><span class="ic">✅</span>Tarefas<span class="n" id="n_tarefas"></span></button>
         <button class="mbtn" id="btnFunil" title="Funil de oportunidades"><span class="ic">🧭</span>Funil</button>
+        <button class="mbtn" id="btnInterno" title="Chat interno entre atendentes e departamentos"><span class="ic">🗨️</span>Interno<span class="n" id="n_chat"></span></button>
         <button class="mbtn" id="btnModelos" title="Mensagens prontas e etiquetas"><span class="ic">💬</span>Modelos</button>
         <button class="mbtn" id="btnConfig" style="display:none;" title="Bots, departamentos, equipe e respostas"><span class="ic">⚙️</span>Administrar</button>
       </div>
@@ -356,7 +377,7 @@ async function abrirConversa(id){
   if(!r || r.error){ showToast(r && r.error || 'Erro ao abrir'); return; }
   estado.atual = r.conversa; estado.mensagens = r.data || []; estado.temAntigas = estado.mensagens.length >= estado.limite;
   document.getElementById('app').classList.add('ver-chat');
-  document.getElementById('chatVazio').style.display='none'; estado.painel=false;
+  document.getElementById('chatVazio').style.display='none'; estado.painel=false; estado.interno=false;
   document.getElementById('btnVoltarPainel').style.display = estado.gestao ? '' : 'none';
   const area = document.getElementById('chatArea'); area.style.display='flex';
   renderHead(); renderMsgs(true); renderLista();
@@ -889,6 +910,109 @@ async function kpiPainel(box){
   const r = await botApi({ op:'kpis', dias:estado.kpiDias }); if(r&&r.ok){ estado.kpis = r.kpis; estado.kpiEm = Date.now(); if(estado.painel && document.getElementById('kpiBox')===el) pintar(); }
 }
 
+
+/* ================= CHAT INTERNO ================= */
+const CHAT_URL = SUPABASE_URL + "/functions/v1/atendimento-chat";
+async function chat(body){
+  try{ const res = await fetch(CHAT_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) }); return await res.json(); }
+  catch(e){ return { error:String(e) }; }
+}
+estado.int = { threads:[], atual:null, msgs:[] };
+estado.chatDesde = null;
+function chatBadge(total){ const el = document.getElementById('n_chat'); if(el) el.textContent = total || ''; }
+function bannerInterno(n){
+  const b = document.getElementById('bannerInt'); if(!b) return;
+  b.innerHTML = `<b>💬 Mensagem interna · ${escapeHtml(n.titulo && n.titulo.startsWith('🏷') ? n.de+' → '+n.titulo.replace('🏷 ','') : n.de||'')}</b>${escapeHtml(String(n.texto||'').slice(0,140))}`;
+  b.style.display = 'block'; b.onclick = ()=>{ b.style.display='none'; abrirInterno(n.chave); };
+  clearTimeout(b._t); b._t = setTimeout(()=>{ b.style.display='none'; }, 12000);
+}
+async function pollChat(){
+  if(!__gatewaySenha) return;
+  const r = await chat({ op:'poll', desde: estado.chatDesde || undefined });
+  if(!r || !r.ok) return;
+  const primeira = !estado.chatDesde; estado.chatDesde = r.agora;
+  chatBadge(r.total);
+  const novas = primeira ? [] : (r.novas||[]);
+  if(novas.length){
+    const aberta = estado.interno && estado.int.atual && !document.hidden;
+    const fora = novas.filter(n=> !(aberta && estado.int.atual.chave===n.chave));
+    if(fora.length){
+      if(estado.aviso) tocarSom();
+      try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
+      const n = fora[fora.length-1]; bannerInterno(n);
+      try{ if(document.hidden && window.Notification && Notification.permission==='granted'){ const nt = new Notification('Mensagem interna — '+(n.de||''), { body:n.texto, tag:'int_'+n.chave }); nt.onclick = ()=>{ try{ window.top.focus(); }catch(e){} abrirInterno(n.chave); nt.close(); }; } }catch(e){}
+    }
+  }
+  if(estado.interno){ await carregarThreads(true); if(estado.int.atual) await carregarMsgsInterno(true); }
+}
+async function carregarThreads(silencio){
+  const r = await chat({ op:'lista' }); if(!r||!r.ok){ if(!silencio) showToast((r&&r.error)||'Erro'); return; }
+  estado.int.threads = r.threads||[]; chatBadge(r.total); if(estado.interno) pintarThreads();
+}
+async function carregarMsgsInterno(silencio){
+  const t = estado.int.atual; if(!t) return;
+  const r = await chat({ op:'mensagens', chave:t.chave }); if(!r||!r.ok){ if(!silencio) showToast((r&&r.error)||'Erro'); return; }
+  const mudou = (r.data||[]).length !== estado.int.msgs.length;
+  estado.int.msgs = r.data||[]; if(mudou || !silencio) pintarMsgsInterno();
+  chatBadge((estado.int.threads||[]).filter(x=>x.chave!==t.chave).reduce((s,x)=>s+x.nao_lidas,0));
+}
+async function abrirInterno(chaveAbrir){
+  estado.interno = true; estado.painel = false; estado.atual = null;
+  document.getElementById('chatArea').style.display='none';
+  const v = document.getElementById('chatVazio'); v.style.display='block'; v.classList.add('painel');
+  document.getElementById('app').classList.add('ver-chat');
+  v.innerHTML = `<div class="int-wrap"><div class="int-lista"><div class="top"><span>🗨️ Chat interno</span><button class="btn btn-sm btn-accent" id="intNova">➕ Nova</button></div><div class="itens" id="intItens"></div></div><div class="int-conv" id="intConv"><div class="chat-vazio" style="flex:1;">Escolha uma conversa ou clique em <b>➕ Nova</b> para falar com uma pessoa ou departamento.</div></div></div>`;
+  document.getElementById('intNova').onclick = novaInterna;
+  await carregarThreads();
+  if(chaveAbrir){ const t = estado.int.threads.find(x=>x.chave===chaveAbrir); if(t) abrirThreadInterno(t); }
+}
+function pintarThreads(){
+  const el = document.getElementById('intItens'); if(!el) return;
+  const at = estado.int.atual && estado.int.atual.chave;
+  el.innerHTML = estado.int.threads.map((t,i)=>`<div class="int-it ${t.chave===at?'on':''}" data-i="${i}"><div style="min-width:0"><div class="nm">${escapeHtml(t.titulo)}</div><div class="pv">${escapeHtml((t.ultima.quem?t.ultima.quem+': ':'')+t.ultima.texto)}</div></div>${t.nao_lidas?`<span class="bd">${t.nao_lidas}</span>`:''}</div>`).join('') || '<div class="muted" style="padding:12px;">Nenhuma conversa ainda.</div>';
+  el.querySelectorAll('.int-it').forEach(d=> d.onclick = ()=> abrirThreadInterno(estado.int.threads[+d.dataset.i]));
+}
+async function abrirThreadInterno(t){
+  estado.int.atual = { chave:t.chave, tipo:t.tipo, outro_id:t.outro_id, titulo:t.titulo }; estado.int.msgs = [];
+  const c = document.getElementById('intConv');
+  c.innerHTML = `<div class="hd">${escapeHtml(t.titulo)}</div><div class="ms" id="intMs"></div><div class="cp"><textarea id="intTxt" placeholder="Escreva a mensagem… (Enter envia)"></textarea><button class="btn btn-accent" id="intEnv">Enviar</button></div>`;
+  document.getElementById('intEnv').onclick = enviarInterno;
+  document.getElementById('intTxt').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); enviarInterno(); } });
+  await carregarMsgsInterno(); await carregarThreads(true);
+  const x = document.getElementById('intTxt'); if(x) x.focus();
+}
+function pintarMsgsInterno(){
+  const ms = document.getElementById('intMs'); if(!ms) return;
+  const eu = estado.meuId; const fim = ms.scrollHeight - ms.scrollTop - ms.clientHeight < 80;
+  ms.innerHTML = estado.int.msgs.map(m=>{ const meu = m.remetente_id===eu; const h = new Date(m.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); return `<div class="int-m ${meu?'eu':''}"><div class="q">${meu?'Você':escapeHtml(m.remetente_nome||'')} · ${h}</div>${escapeHtml(m.texto)}</div>`; }).join('') || '<div class="muted">Sem mensagens ainda. Escreva a primeira.</div>';
+  if(fim || estado.int.msgs.length<=1) ms.scrollTop = ms.scrollHeight;
+}
+async function enviarInterno(){
+  const t = estado.int.atual, x = document.getElementById('intTxt'); if(!t || !x) return;
+  const texto = x.value.trim(); if(!texto) return; x.value='';
+  const r = await chat({ op:'enviar', destino_tipo:t.tipo==='departamento'?'departamento':'pessoa', destino_id:t.outro_id, texto });
+  if(!r||!r.ok){ showToast((r&&r.error)||'Não enviou'); x.value = texto; return; }
+  await carregarMsgsInterno(); await carregarThreads(true);
+}
+function novaInterna(){
+  const pessoas = estado.atendentes.filter(a=>a.funcionario_id!==estado.meuId).slice().sort((a,b)=>(b.online?1:0)-(a.online?1:0)||String(a.nome).localeCompare(String(b.nome),'pt-BR'));
+  const deps = estado.departamentos.filter(d=>d.ativo);
+  abrirModal(`<h2>Nova conversa interna</h2>
+    <div class="field"><label>Falar com</label><select id="inTipo"><option value="pessoa">Uma pessoa</option><option value="departamento">Um departamento</option></select></div>
+    <div class="field"><label>Destinatário</label><select id="inDest"></select></div>
+    <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Abrir conversa</button></div>`);
+  const pintar = ()=>{ const t = document.getElementById('inTipo').value; document.getElementById('inDest').innerHTML = (t==='pessoa' ? pessoas.map(a=>`<option value="${escapeHtml(a.funcionario_id)}">${a.online?'🟢':'⚪'} ${escapeHtml(a.nome)}</option>`) : deps.map(d=>`<option value="${d.id}">${escapeHtml(d.nome)}</option>`)).join(''); };
+  pintar(); document.getElementById('inTipo').onchange = pintar;
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.getElementById('mOk').onclick = ()=>{
+    const tipo = document.getElementById('inTipo').value, id = document.getElementById('inDest').value; if(!id) return;
+    const chave = tipo==='pessoa' ? 'p:'+[estado.meuId,id].sort().join('|') : 'd:'+id;
+    const ex = estado.int.threads.find(x=>x.chave===chave);
+    const titulo = tipo==='pessoa' ? ((pessoas.find(a=>a.funcionario_id===id)||{}).nome||'') : '🏷 '+((deps.find(d=>d.id===id)||{}).nome||'');
+    fecharModal(); abrirThreadInterno(ex || { chave, tipo, outro_id:id, titulo });
+  };
+}
+
 /* ================= CRM ================= */
 const CRM_URL = SUPABASE_URL + "/functions/v1/crm-api";
 async function crm(body){
@@ -1006,7 +1130,7 @@ function filtrarPeloPainel(fx){
   document.getElementById('app').classList.remove('ver-chat'); renderPainel();
 }
 async function abrirPainel(){
-  estado.painel = true; estado.atual = null;
+  estado.painel = true; estado.interno = false; estado.atual = null;
   document.getElementById('chatArea').style.display='none';
   const v = document.getElementById('chatVazio'); v.style.display='block'; v.classList.add('painel');
   document.getElementById('app').classList.add('ver-chat');
@@ -1139,7 +1263,7 @@ async function sincronizarFotos(){
 function iniciarPolling(){
   if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
   async function tick(){
-    try{ await carregarLista(true); await atualizarMensagens(); if(estado.painel) await atualizarPainel(); }catch(e){ console.error('poll',e); }
+    try{ await carregarLista(true); await atualizarMensagens(); if(estado.painel) await atualizarPainel(); await pollChat(); }catch(e){ console.error('poll',e); }
     finally{ pollTimer = setTimeout(tick, document.hidden ? 15000 : 5000); }
   }
   pollTimer = setTimeout(tick, 5000);
@@ -1157,6 +1281,7 @@ let tb; document.getElementById('busca').addEventListener('input', e=>{ clearTim
 document.getElementById('btnNova').addEventListener('click', modalNova);
 document.getElementById('btnConfig').addEventListener('click', ()=> modalAdmin('bots'));
 document.getElementById('btnModelos').addEventListener('click', ()=> modalCatalogo('modelos'));
+document.getElementById('btnInterno').addEventListener('click', ()=>{ try{ if(window.Notification && Notification.permission==='default') Notification.requestPermission(); }catch(e){} abrirInterno(); });
 document.getElementById('btnTarefas').addEventListener('click', ()=> modalTarefas());
 document.getElementById('btnPainel').addEventListener('click', ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); abrirPainel(); });
 document.getElementById('btnVoltarPainel').addEventListener('click', ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); carregarLista(); abrirPainel(); });
@@ -1200,7 +1325,7 @@ window.addEventListener('message', async ev=>{
     currentUser = d.user; __gatewaySenha = currentUser ? currentUser.senha : null; config = d.configCache || {};
     if(!config.funcionarios){ const r = await gateway({ op:'getConfig' }); if(r && r.data) config = r.data; }
     if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'atendimento', tabs:[], active:null }, '*');
-    await carregarStatus(); await carregarLista(); iniciarPolling(); sincronizarFotos(); contarTarefas();
+    await carregarStatus(); await carregarLista(); iniciarPolling(); sincronizarFotos(); contarTarefas(); pollChat();
   }
 });
 window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'ready', modulo:'atendimento' }, '*'); });
@@ -1220,5 +1345,6 @@ window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'re
   });
 })();
 </script>
+<div id="bannerInt"></div>
 </body>
 </html>
