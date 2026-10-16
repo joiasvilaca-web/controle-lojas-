@@ -116,7 +116,8 @@ button{cursor:pointer;}
 .pill{display:inline-block;min-width:34px;padding:2px 8px;border-radius:6px;color:#fff;font-weight:700;font-size:12px;cursor:pointer;} .pill.z{background:transparent;color:var(--ink-faint);font-weight:400;cursor:default;}
 .pill.g{background:#16a34a;} .pill.b{background:#2563eb;} .pill.o{background:#f59e0b;} .pill.r{background:#dc2626;}
 .fx{display:none;margin:6px 0 0;font-size:12px;} .fx button{margin-left:6px;}
-.modal.largo{max-width:760px;}
+.modal.largo{max-width:960px;}
+.tb{width:100%;border-collapse:collapse;font-size:12px;}.tb th,.tb td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top;}.tb th{font-size:11px;color:var(--ink-soft);}
 .abas{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;} .abas button{padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font-size:12.5px;font-weight:700;}
 .abas button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
 .cartao{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:center;justify-content:space-between;}
@@ -181,6 +182,7 @@ button{cursor:pointer;}
         <button class="mbtn" id="btnTarefas" title="Minhas tarefas do CRM"><span class="ic">✅</span>Tarefas<span class="n" id="n_tarefas"></span></button>
         <button class="mbtn" id="btnFunil" title="Funil de oportunidades"><span class="ic">🧭</span>Funil</button>
         <button class="mbtn" id="btnInterno" title="Chat interno entre atendentes e departamentos"><span class="ic">🗨️</span>Interno<span class="n" id="n_chat"></span></button>
+        <button class="mbtn" id="btnFerr" title="Agenda, retornos, programadas, potenciais, relatórios…"><span class="ic">🧰</span>Ferramentas<span class="n" id="n_ret"></span></button>
         <button class="mbtn" id="btnModelos" title="Mensagens prontas e etiquetas"><span class="ic">💬</span>Modelos</button>
         <button class="mbtn" id="btnConfig" style="display:none;" title="Bots, departamentos, equipe e respostas"><span class="ic">⚙️</span>Administrar</button>
       </div>
@@ -338,7 +340,7 @@ async function carregarLista(silencioso){
     if(!silencioso) showToast(r.error || 'Erro ao carregar');
     return;
   }
-  estado.conversas = aplicarFx(r.data || []);
+  estado.conversas = aplicarBl(aplicarFx(r.data || []));
   renderLista();
   contadores();
 }
@@ -392,7 +394,7 @@ function renderHead(){
   const c = estado.atual;
   document.getElementById('chAvatar').innerHTML = avatarHtml(c);
   document.getElementById('chNome').textContent = nomeConv(c);
-  document.getElementById('chSub').textContent = `${fmtTel(c.contato_id)} · ${statusLabel(c)}${c.setor?' · '+c.setor:''}${(estado.bots.length>1&&c.bot_id&&estado.bots.find(x=>x.id===c.bot_id))?' · 🤖 '+estado.bots.find(x=>x.id===c.bot_id).nome:''}${c.cliente_id?' · 👤 cliente vinculado':''}`;
+  document.getElementById('chSub').textContent = `${fmtTel(c.contato_id)} · ${statusLabel(c)}${c.protocolo?' · #'+c.protocolo:''}${c.setor?' · '+c.setor:''}${(estado.bots.length>1&&c.bot_id&&estado.bots.find(x=>x.id===c.bot_id))?' · 🤖 '+estado.bots.find(x=>x.id===c.bot_id).nome:''}${c.cliente_id?' · 👤 cliente vinculado':''}`;
   const a = [];
   if(c.status!=='finalizado' && (!c.atendente_id || (c.atendente_id!==estado.meuId && estado.gestao))) a.push(`<button class="btn btn-sm btn-accent" data-a="assumir">✋ Assumir</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm" data-a="transferir">↪ Transferir</button>`);
@@ -400,7 +402,8 @@ function renderHead(){
   a.push(`<button class="btn btn-sm" data-a="cliente">👤 Cliente</button>`);
   a.push(`<button class="btn btn-sm" data-a="tags">🏷️ Tags</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm btn-danger" data-a="finalizar">✔ Finalizar</button>`);
-  if(c.status==='finalizado') a.unshift(`<button class="btn btn-sm btn-accent" data-a="reabrir">↩ Reabrir</button>`);
+  if(c.status==='finalizado' && temP('reabrir')) a.unshift(`<button class="btn btn-sm btn-accent" data-a="reabrir">↩ Reabrir</button>`);
+  extraAcoes(c, a);
   const wrap = document.getElementById('chAcoes'); wrap.innerHTML = a.join('');
   wrap.querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=> acao(b.dataset.a)));
   const bloq = document.getElementById('avisoBloqueado');
@@ -476,12 +479,17 @@ async function atualizarMensagens(){
 async function acao(a){
   const c = estado.atual; if(!c) return;
   if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa assumida.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
-  if(a==='finalizar'){ if(!confirm('Finalizar este atendimento?')) return; const r = await api({ op:'finalizar', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'finalizou', conversaId:c.id }); showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
-  if(a==='reabrir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='finalizar') return modalFinalizar();
+  if(a==='reabrir'){ const r = await ext({ op:'reabrir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='transferir') modalTransferir();
   if(a==='crm') modalCRM();
   if(a==='cliente') modalCliente();
   if(a==='tags') modalTags();
+  if(a==='retorno') modalRetorno();
+  if(a==='programar') modalProgramar({ conversaId:c.id });
+  if(a==='campos') modalCamposConv();
+  if(a==='modeloOficial') modalTemplate({ conversaId:c.id });
+  if(a==='blacklist') blacklistDaConversa();
 }
 function abrirModal(html){ document.getElementById('modalBox').innerHTML = html; document.getElementById('modalBg').classList.add('show'); }
 function fecharModal(){ document.getElementById('modalBg').classList.remove('show'); document.getElementById('modalBox').classList.remove('largo'); }
@@ -539,6 +547,8 @@ function modalNova(){
     <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Abrir</button></div>`);
   document.getElementById('mCancel').onclick = fecharModal;
   document.getElementById('mOk').onclick = async ()=>{
+    const botSel = (document.getElementById('nBot')||{}).value || (estado.bots.find(b=>b.ativo&&b.canais.some(c=>c.tipo==='whatsapp'))||{}).id; const nNumV = document.getElementById('nNum').value, nNomeV = document.getElementById('nNome').value.trim(); const insO = ofInst(botSel);
+    if(insO){ modalTemplate({ instancia:insO, aviso:'Para iniciar conversa pelo número oficial é preciso um modelo aprovado.', acao: t=> ext({ op:'novaAtiva', botId:botSel, instancia:insO, numero:nNumV, nome:nNomeV, template:t }), aoOk: aposNova }); return; }
     const r = await api({ op:'novaConversa', botId: (document.getElementById('nBot')||{}).value || undefined, numero: document.getElementById('nNum').value, nome: document.getElementById('nNome').value.trim() });
     if(r&&r.ok){ fecharModal(); estado.filtro='minhas'; document.querySelectorAll('#filtros button').forEach(b=>b.classList.toggle('active', b.dataset.f==='minhas')); await carregarLista(true); abrirConversa(r.conversaId); } else showToast(r&&r.error||'Erro');
   };
@@ -622,10 +632,11 @@ function formBot(b){
     <div class="field"><label>📷 Instagram (ID da conta) e usuário</label><div style="display:flex;gap:6px;"><input id="fbIgId" placeholder="ID numérico da conta" value="${escapeHtml(ig.ig_id||'')}"><input id="fbIgUser" placeholder="@usuario" value="${escapeHtml(ig.usuario||'')}"></div>
       <input id="fbIgTok" type="password" placeholder="${b.temTokenInstagram?'Token já salvo — deixe em branco para manter':'Token de acesso do Instagram (deste bot)'}" style="margin-top:6px;" autocomplete="off"></div>
     <div class="field"><label>🌐 Site (endereço)</label><input id="fbSite" value="${escapeHtml(site.url||'')}" placeholder="https://..."></div>
+    ${estado.gestao?`<div class="field"><label>✅ WhatsApp OFICIAL (API da Meta)</label>${b.id?'<div id="fbCloud" class="muted">Carregando…</div>':'<span class="muted">Salve o bot primeiro para cadastrar um número oficial.</span>'}</div>`:''}
     <div class="field"><label>Horário geral do bot</label>${horarioHtml('hb', b.horario, true)}</div>
     <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="fbAtivo" ${b.ativo?'checked':''}> Bot ativo</label>
     <div class="rodape">${b.id?`<button class="btn btn-danger" id="fbDel">Excluir</button>`:''}<button class="btn" id="fbVoltar">Voltar</button><button class="btn btn-accent" id="fbOk">Salvar</button></div>`;
-  ligarHorario('hb');
+  ligarHorario('hb'); if(b.id && estado.gestao) cloudUi(b);
   document.getElementById('fbVoltar').onclick = ()=> abaBots();
   if(document.getElementById('fbNovoNum')) document.getElementById('fbNovoNum').onclick = async ()=>{
     const nome = prompt('Nome da nova instância (só letras e números, ex.: vilacaloja2):'); if(!nome) return;
@@ -637,6 +648,7 @@ function formBot(b){
   document.getElementById('fbOk').onclick = async ()=>{
     const canais = [];
     document.querySelectorAll('#fbWa input:checked').forEach(i=> canais.push({ tipo:'whatsapp', instancia:i.value }));
+    (b.canais||[]).filter(x=>x.tipo==='whatsapp' && String(x.instancia||'').startsWith('wa_')).forEach(x=> canais.push({ tipo:'whatsapp', instancia:x.instancia }));
     const igId = document.getElementById('fbIgId').value.trim(); if(igId) canais.push({ tipo:'instagram', ig_id:igId, usuario:document.getElementById('fbIgUser').value.trim() });
     const url = document.getElementById('fbSite').value.trim(); if(url) canais.push({ tipo:'site', url });
     const r = await api({ op:'botSalvar', id:b.id, nome:document.getElementById('fbNome').value, descricao:document.getElementById('fbDesc').value, ativo:document.getElementById('fbAtivo').checked, canais, horario:horarioLer('hb',true), config:(b.config||{}), instagramToken: document.getElementById('fbIgTok').value.trim() || undefined });
@@ -655,6 +667,7 @@ function abaDeps(){
     `<button class="btn btn-accent" id="dNovo">➕ Novo departamento</button>`;
   c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formDep(estado.departamentos.find(x=>x.id===b.dataset.e)));
   document.getElementById('dNovo').onclick = ()=> formDep(null);
+  notasMediasUi('departamentos');
 }
 function formDep(d){
   d = d || { nome:'', ativo:true, bot_id:'', horario:null };
@@ -679,6 +692,7 @@ function abaEquipe(){
     `<div class="field" style="margin-top:10px;"><label>Adicionar atendente</label><select id="eAdd"><option value="">Escolha um funcionário…</option>${estado.funcionarios.filter(f=>!estado.atendentes.some(a=>a.funcionario_id===f.id)).map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select></div>`;
   c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formAtendente(b.dataset.e));
   document.getElementById('eAdd').onchange = e=>{ if(e.target.value) formAtendente(e.target.value); };
+  notasMediasUi('atendentes');
 }
 function formAtendente(fid){
   const a = estado.atendentes.find(x=>x.funcionario_id===fid) || { funcionario_id:fid, departamentos:[], permissoes:{}, horario:null };
@@ -691,6 +705,7 @@ function formAtendente(fid){
       <label><input type="checkbox" id="fpAg" ${p.verAgenda?'checked':''}> Ver a agenda de contatos</label>
       <label><input type="checkbox" id="fpAt" ${p.criarAtivo?'checked':''}> Criar atendimento ativo</label>
       <label><input type="checkbox" id="fpRe" ${p.reabrir?'checked':''}> Reabrir atendimento</label></div></div>
+    <div class="field"><label>Supervisiona os departamentos (vê e redistribui as conversas deles)</label><div class="dep-chk" id="feSup">${estado.departamentos.map(d=>`<label><input type="checkbox" value="${d.id}" ${(p.supervisor||[]).includes(d.id)?'checked':''}> ${escapeHtml(d.nome)}</label>`).join('') || '<span class="muted">Crie departamentos primeiro.</span>'}</div></div>
     <div class="field"><label>Horário do atendente</label>${horarioHtml('ha', a.horario, true)}</div>
     <div class="rodape">${estado.atendentes.some(x=>x.funcionario_id===fid)?`<button class="btn btn-danger" id="feDel">Remover</button>`:''}<button class="btn" id="feVoltar">Voltar</button><button class="btn btn-accent" id="feOk">Salvar</button></div>`;
   ligarHorario('ha');
@@ -698,7 +713,7 @@ function formAtendente(fid){
   document.getElementById('feOk').onclick = async ()=>{
     const departamentos = [...document.querySelectorAll('#feDeps input:checked')].map(i=>i.value);
     const r = await api({ op:'atendenteSalvar', funcionarioId:fid, departamentos, permissoes:{ removerPotenciais:document.getElementById('fpRem').checked, verAgenda:document.getElementById('fpAg').checked, criarAtivo:document.getElementById('fpAt').checked, reabrir:document.getElementById('fpRe').checked }, horario:horarioLer('ha',true) });
-    if(r&&r.ok){ showToast('Atendente salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
+    if(r&&r.ok){ const r2 = await ext({ op:'permissoesSalvar', funcionarioId:fid, verHistorico:!!p.verHistorico, supervisor:[...document.querySelectorAll('#feSup input:checked')].map(i=>i.value) }); if(r2 && r2.error) showToast(r2.error); else showToast('Atendente salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
   };
   if(document.getElementById('feDel')) document.getElementById('feDel').onclick = async ()=>{ if(!confirm('Remover este atendente da equipe?')) return; const r = await api({ op:'atendenteRemover', funcionarioId:fid }); if(r&&r.ok){ showToast('Removido.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro'); };
 }
@@ -773,14 +788,16 @@ function abaFluxo(){
       <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="flAss" ${f.avisar_assumiu?'checked':''}> Avisar o cliente quando um atendente assumir</label>
       <div class="field"><label>Distribuição das conversas</label><select id="flDist"><option value="manual" ${f.distribuicao!=='online'?'selected':''}>Manual: fica na fila do departamento até alguém assumir</option><option value="online" ${f.distribuicao==='online'?'selected':''}>Automática: vai para quem está online no departamento (menos conversas)</option></select></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input type="checkbox" id="flEnq" ${f.enquete&&f.enquete.ativa?'checked':''}> Pedir nota de 1 a 5 (enquete de satisfação) ao finalizar</label></div></details>
+    ${fluxoExtraHtml(f)}
     <details class="sec"><summary>👁 Pré-visualização</summary><div><div class="prev" id="flPrev"></div></div></details>
     <div class="rodape"><button class="btn btn-accent" id="flSalvar">Salvar</button></div>`;
-  const ler = ()=>{
+  const ler0 = ()=>{
     const msgs = {}; c.querySelectorAll('[data-m]').forEach(t=>{ msgs[t.dataset.m] = t.value; });
     const menu = [...c.querySelectorAll('.fm')].map(r=>({ n:r.querySelector('.mn').value.trim(), departamento_id:r.querySelector('.md').value, rotulo:r.querySelector('.mr').value.trim() })).filter(x=>x.n&&x.departamento_id);
     const palavras = [...c.querySelectorAll('.fp')].map(r=>({ chaves:r.querySelector('.pk').value.split(',').map(x=>x.trim()).filter(Boolean), resposta:r.querySelector('.pr').value, departamento_id:r.querySelector('.pd').value||null })).filter(x=>x.chaves.length&&(x.resposta||x.departamento_id));
     return { ativo:document.getElementById('flAtivo').checked, empresa:document.getElementById('flEmp').value, voltar_digito:document.getElementById('flVoltar').value, reenviar_apos_horas:Number(document.getElementById('flHoras').value)||12, enviar_encerramento:document.getElementById('flEnc').checked, enquete:{ ativa:document.getElementById('flEnq').checked }, avisar_assumiu:document.getElementById('flAss').checked, distribuicao:document.getElementById('flDist').value, msgs, menu, palavras };
   };
+  const ler = ()=> Object.assign(ler0(), lerExtraFluxo(c));
   const prev = ()=>{
     const x = ler(); const v = t=> String(t||'').replace(/\{\{\s*(empresa|client\.name)\s*\}\}/g, x.empresa).replace(/\{\{\s*[\w.]+\s*\}\}/g,'…');
     const lista = x.menu.map(i=>`${i.n} - ${i.rotulo || ((deps.find(d=>d.id===i.departamento_id)||{}).nome||'')}`).join('\n');
@@ -820,7 +837,7 @@ async function usarModelo(r){
   const t = document.getElementById('texto');
   if(msgs.length===1){ t.value = (t.value?t.value+'\n':'') + substModelo(msgs[0]); t.focus(); return; }
   if(!confirm(`Enviar as ${msgs.length} mensagens de “${r.titulo}” agora?`)) return;
-  for(const m of msgs){ const x = await api({ op:'enviarTexto', conversaId:estado.atual.id, texto:substModelo(m) }); if(!x||!x.ok){ showToast((x&&x.error)||'Falhou no envio'); break; } }
+  for(const m of msgs){ const x = await ext({ op:'enviarTexto', conversaId:estado.atual.id, texto:substModelo(m) }); if(!x||!x.ok){ showToast((x&&x.error)||'Falhou no envio'); break; } }
   await atualizarMensagens(); carregarLista(true);
 }
 let catAba = 'modelos';
@@ -1172,8 +1189,9 @@ function renderPainel(){
 async function enviarTexto(){
   const t = document.getElementById('texto'); const texto = t.value.trim(); if(!texto || !estado.atual) return;
   const btn = document.getElementById('btnEnviar'); btn.disabled = true; t.value='';
-  const r = await api({ op:'enviarTexto', conversaId: estado.atual.id, texto });
+  const r = await ext({ op:'enviarTexto', conversaId: estado.atual.id, texto });
   btn.disabled = false;
+  if(r && r.error==='JANELA_24H'){ t.value = texto; modalTemplate({ conversaId: estado.atual.id }); return; }
   if(!r || !r.ok){ showToast(r && r.error || 'Não enviou'); t.value = texto; return; }
   await atualizarMensagens(); if(!estado.mensagens.some(m=>m.texto===texto && m.direcao==='out')){ estado.mensagens.push({ id:'tmp'+Date.now(), direcao:'out', tipo:'texto', texto, autor_nome:estado.meuNome, status:'enviada', enviada_em:new Date().toISOString() }); renderMsgs(true); }
   carregarLista(true);
@@ -1196,7 +1214,9 @@ function enviarArquivo(file){
 async function enviarArquivoAgora(file, legenda, conversaId){
   const base64 = await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result.split(',')[1]); fr.onerror=rej; fr.readAsDataURL(file); });
   showToast('Enviando…');
-  const r = await api({ op:'enviarMidia', conversaId, base64, mimetype: file.type || 'application/octet-stream', nome: file.name, legenda: legenda||'' });
+  const ofc = estado.atual && estado.atual.id===conversaId && ehOficial(estado.atual);
+  const r = await (ofc ? ext : api)({ op: ofc ? 'enviarMidiaCloud' : 'enviarMidia', conversaId, base64, mimetype: file.type || 'application/octet-stream', nome: file.name, legenda: legenda||'' });
+  if(r && r.error==='JANELA_24H'){ modalTemplate({ conversaId }); return; }
   if(!r || !r.ok){ showToast(r && r.error || 'Não enviou'); return; }
   showToast('Enviado.');
   if(estado.atual && estado.atual.id===conversaId) await abrirConversa(conversaId);
@@ -1267,6 +1287,7 @@ function iniciarPolling(){
     finally{ pollTimer = setTimeout(tick, document.hidden ? 15000 : 5000); }
   }
   pollTimer = setTimeout(tick, 5000);
+  extTimers();
 }
 // Reativar polling quando a aba volta ao foco (celular minimizou e voltou)
 document.addEventListener('visibilitychange', ()=>{
@@ -1344,6 +1365,505 @@ window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'re
     document.addEventListener(ev, avisar, { passive:true, capture:true });
   });
 })();
+
+/* ================= RECURSOS EXTRAS (função atendimento-extra) ================= */
+const EXTRA_URL = SUPABASE_URL + "/functions/v1/atendimento-extra";
+async function ext(body){
+  try{
+    const res = await fetch(EXTRA_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
+    return await res.json();
+  }catch(e){ return { error:String(e) }; }
+}
+const ehOficial = c => !!c && c.canal==='whatsapp' && String(c.instancia||'').startsWith('wa_');
+const meuP = ()=> (estado.meuReg && estado.meuReg.permissoes) || {};
+const temP = k => !!estado.gestao || !!meuP()[k];
+const souSup = ()=> !!estado.gestao || (Array.isArray(meuP().supervisor) && meuP().supervisor.length>0);
+const maiu = s => String(s==null?'':s).toUpperCase();
+const nomeDep = id => { const d = estado.departamentos.find(x=>x.id===id); return d ? d.nome : ''; };
+const nomeBot = id => { const b = estado.bots.find(x=>x.id===id); return b ? b.nome : ''; };
+const fmtDH = iso => { if(!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
+const optAt = (sel, vazio) => (vazio?`<option value="">${vazio}</option>`:'') + (estado.atendentes||[]).map(a=>`<option value="${a.funcionario_id}" ${sel===a.funcionario_id?'selected':''}>${escapeHtml(a.nome)}</option>`).join('');
+const optDepAll = (sel, vazio) => (vazio?`<option value="">${vazio}</option>`:'') + estado.departamentos.filter(d=>d.ativo).map(d=>`<option value="${d.id}" ${sel===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('');
+const optBotAll = (sel, vazio) => (vazio?`<option value="">${vazio}</option>`:'') + estado.bots.map(b=>`<option value="${b.id}" ${sel===b.id?'selected':''}>${escapeHtml(b.nome)}</option>`).join('');
+const dtLocal = (ms) => { const d = new Date(Date.now()+ms); d.setSeconds(0,0); const p = n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+function csvBaixar(nome, linhas){
+  const esc = v => { const s = v==null?'':String(v); return /[";\n\r]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+  const txt = '﻿' + linhas.map(l=>l.map(esc).join(';')).join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type:'text/csv;charset=utf-8' })); a.download = nome; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+const fluxoDoBot = id => { const b = estado.bots.find(x=>x.id===id); return (b && b.config && b.config.fluxo) || {}; };
+// número oficial do bot (se o bot só tem número oficial; se tem os dois, pergunta)
+function ofInst(botId){
+  const b = estado.bots.find(x=>x.id===botId); if(!b) return null;
+  const was = b.canais.filter(c=>c.tipo==='whatsapp'); const of = was.filter(c=>String(c.instancia||'').startsWith('wa_'));
+  if(!of.length) return null; if(of.length===was.length) return of[0].instancia;
+  return confirm('Este bot tem número OFICIAL e não oficial.\n\nOK = usar o número oficial (exige modelo aprovado)\nCancelar = usar o não oficial') ? of[0].instancia : null;
+}
+function aposNova(r){ fecharModal(); estado.filtro='minhas'; document.querySelectorAll('#filtros button').forEach(b=>b.classList.toggle('active', b.dataset.f==='minhas')); carregarLista(true).then(()=> abrirConversa(r.conversaId)); }
+
+/* ---------- blacklist escondida na caixa de entrada ---------- */
+estado.bl = new Set();
+async function carregarBl(){ const r = await ext({ op:'blacklistIds' }); if(r && r.ok) estado.bl = new Set(r.ids||[]); }
+function aplicarBl(lista){ return estado.bl && estado.bl.size ? lista.filter(c=>!estado.bl.has(c.canal+':'+c.contato_id)) : lista; }
+
+/* ---------- retornos vencidos + timers ---------- */
+let __extTimer = null, __retVistos = 0;
+async function retornosCheck(){
+  const r = await ext({ op:'retornosResumo' }); if(!r || !r.ok) return;
+  const n = r.devidos||0; const el = document.getElementById('n_ret'); if(el) el.textContent = n || '';
+  if(n > __retVistos){ showToast(`🔁 ${n} retorno(s) para fazer — abra Ferramentas › Retornos`); tocarSom(); }
+  __retVistos = n;
+}
+function extTimers(){
+  if(__extTimer) return;
+  __extTimer = setInterval(()=>{ if(!__gatewaySenha || document.hidden) return; ext({ op:'tick' }); retornosCheck(); }, 60000);
+  retornosCheck(); carregarBl();
+}
+
+/* ---------- finalizar com motivo ---------- */
+function modalFinalizar(){
+  const c = estado.atual; if(!c) return; const fl = fluxoDoBot(c.bot_id); const mot = fl.motivos||[]; const obr = !!fl.motivo_obrigatorio;
+  const campo = mot.length ? `<select id="fiMot"><option value="">— escolha —</option>${mot.map(m=>`<option>${escapeHtml(m)}</option>`).join('')}</select>` : `<input id="fiMot" placeholder="Ex.: VENDA REALIZADA">`;
+  abrirModal(`<h2>Finalizar atendimento</h2><div class="field"><label>Motivo da finalização${obr?' *':' (opcional)'}</label>${campo}</div>
+    <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-danger" id="mOk">✔ Finalizar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.getElementById('mOk').onclick = async ()=>{
+    const motivo = maiu(document.getElementById('fiMot').value).trim();
+    if(obr && !motivo){ showToast('Informe o motivo.'); return; }
+    const r = await ext({ op:'finalizar', conversaId:c.id, motivo });
+    if(r && r.ok){ fecharModal(); showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true); } else showToast(r && r.error || 'Erro');
+  };
+}
+
+/* ---------- modelos aprovados (API oficial) ---------- */
+async function modalTemplate(o){
+  const inst = o.instancia || (estado.atual && estado.atual.instancia);
+  abrirModal(`<h2>Modelo aprovado (WhatsApp oficial)</h2><p class="muted" style="margin-top:0">${escapeHtml(o.aviso || 'Fora da janela de 24 horas só é possível enviar um modelo aprovado pela Meta.')}</p><div id="tpCorpo" class="muted">Carregando modelos…</div><div class="rodape"><button class="btn" id="mCancel">Cancelar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  const r = await ext({ op:'templatesListar', instancia:inst });
+  const box = document.getElementById('tpCorpo'); if(!box) return;
+  if(!r || !r.ok){ box.textContent = (r && r.error) || 'Erro ao buscar os modelos.'; return; }
+  const lista = r.templates||[];
+  if(!lista.length){ box.textContent = 'Nenhum modelo APROVADO neste número. Crie e aprove os modelos no Gerenciador do WhatsApp (Meta).'; return; }
+  box.className = ''; box.innerHTML = lista.map((t,i)=>`<div class="cartao"><div><div class="t">${escapeHtml(t.nome)} <span class="muted">${escapeHtml(t.idioma)} · ${escapeHtml(t.categoria||'')}</span></div><div class="x" style="white-space:pre-wrap;">${escapeHtml(t.corpo)}</div></div><button class="btn btn-sm btn-accent" data-i="${i}">Usar</button></div>`).join('');
+  box.querySelectorAll('[data-i]').forEach(b=> b.onclick = ()=>{
+    const t = lista[b.dataset.i];
+    box.innerHTML = `<div class="t" style="font-weight:700;">${escapeHtml(t.nome)}</div><div class="x muted" id="tpPrev" style="white-space:pre-wrap;margin:6px 0;"></div>` +
+      Array.from({length:t.nvars},(_,k)=>`<div class="field"><label>Variável {{${k+1}}}</label><input data-v="${k}" placeholder="${k===0?'Ex.: nome do cliente':''}"></div>`).join('') +
+      `<div style="display:flex;gap:8px;justify-content:flex-end;"><button class="btn" id="tpVolta">Voltar</button><button class="btn btn-accent" id="tpEnv">Enviar</button></div>`;
+    const ler = ()=> [...box.querySelectorAll('[data-v]')].map(i=>i.value.trim());
+    const prev = ()=>{ let c = t.corpo; ler().forEach((v,k)=>{ c = c.split('{{'+(k+1)+'}}').join(v||'…'); }); document.getElementById('tpPrev').textContent = c; };
+    box.querySelectorAll('[data-v]').forEach(i=> i.oninput = prev); prev();
+    document.getElementById('tpVolta').onclick = ()=> modalTemplate(o);
+    document.getElementById('tpEnv').onclick = async ()=>{
+      const vars = ler(); if(vars.some(v=>!v)){ showToast('Preencha todas as variáveis.'); return; }
+      const tpl = { nome:t.nome, idioma:t.idioma, corpo:t.corpo, variaveis:vars };
+      const rr = o.acao ? await o.acao(tpl) : await ext({ op:'enviarTemplate', conversaId:o.conversaId || (estado.atual && estado.atual.id), template:tpl });
+      if(rr && rr.ok){ if(o.aoOk){ o.aoOk(rr); } else { fecharModal(); showToast('Modelo enviado.'); if(estado.atual){ await abrirConversa(estado.atual.id); } carregarLista(true); } } else showToast(rr && rr.error || 'Erro ao enviar');
+    };
+  });
+}
+
+/* ---------- campos customizados (preenchimento) ---------- */
+function camposHtml(campos, valores){
+  valores = valores||{};
+  return campos.map(c=>{
+    const v = valores[c.id] == null ? '' : valores[c.id];
+    let inp;
+    if(c.tipo==='lista') inp = `<select data-cp="${c.id}"><option value=""></option>${(c.opcoes||[]).map(o=>`<option ${o===v?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select>`;
+    else inp = `<input data-cp="${c.id}" data-t="${c.tipo}" type="${c.tipo==='numero'?'number':c.tipo==='data'?'date':'text'}" value="${escapeHtml(v)}">`;
+    return `<div class="field"><label>${escapeHtml(c.nome)}</label>${inp}</div>`;
+  }).join('');
+}
+function camposLer(root){
+  const o = {}; root.querySelectorAll('[data-cp]').forEach(e=>{ let v = e.value.trim(); if(!v) return; if(e.dataset.t==='texto' || e.dataset.t===undefined && e.tagName==='INPUT') v = maiu(v); o[e.dataset.cp] = v; });
+  return o;
+}
+async function modalCamposConv(){
+  const c = estado.atual; if(!c) return;
+  const r = await ext({ op:'camposLista' }); const campos = ((r && r.data)||[]).filter(x=>x.entidade==='atendimento');
+  if(!campos.length){ showToast('Nenhum campo de atendimento cadastrado (Ferramentas › Campos).'); return; }
+  abrirModal(`<h2>Campos do atendimento</h2><div id="cvCampos">${camposHtml(campos, c.campos)}</div><div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Salvar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.getElementById('mOk').onclick = async ()=>{ const rr = await ext({ op:'camposValores', conversaId:c.id, valores:camposLer(document.getElementById('cvCampos')) }); if(rr && rr.ok){ fecharModal(); showToast('Salvo.'); await abrirConversa(c.id); } else showToast(rr && rr.error || 'Erro'); };
+}
+
+/* ---------- retorno e programação a partir da conversa ---------- */
+function modalRetorno(){
+  const c = estado.atual; if(!c) return;
+  abrirModal(`<h2>Agendar retorno</h2><p class="muted" style="margin-top:0">Lembrete para você falar de novo com ${escapeHtml(nomeConv(c))}.</p>
+    <div class="field"><label>Quando</label><input id="rtQuando" type="datetime-local" value="${dtLocal(3600000)}"></div>
+    <div class="field"><label>Repetir</label><select id="rtRec"><option value="nenhuma">Não repetir</option><option value="diaria">Todo dia</option><option value="semanal">Toda semana</option><option value="mensal">Todo mês</option></select></div>
+    <div class="field"><label>Observação</label><input id="rtObs"></div>
+    <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Salvar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.getElementById('mOk').onclick = async ()=>{
+    const q = document.getElementById('rtQuando').value; if(!q){ showToast('Informe a data e hora.'); return; }
+    const r = await ext({ op:'retornoSalvar', conversaId:c.id, quando:new Date(q).toISOString(), recorrencia:document.getElementById('rtRec').value, observacao:document.getElementById('rtObs').value });
+    if(r && r.ok){ fecharModal(); showToast('Retorno agendado.'); } else showToast(r && r.error || 'Erro');
+  };
+}
+// opts: { conversaId } (conversa existente)  |  {} (contato novo; exige permissão de atendimento ativo)
+function modalProgramar(opts){
+  opts = opts||{}; const c = opts.conversaId ? estado.atual : null;
+  const botsWa = estado.bots.filter(b=>b.ativo && b.canais.some(x=>x.tipo==='whatsapp'));
+  abrirModal(`<h2>Programar mensagem</h2>
+    ${c ? `<p class="muted" style="margin-top:0">Para ${escapeHtml(nomeConv(c))}.</p>` : `<div class="field"><label>Pelo bot / número</label><select id="pgBot">${botsWa.map(b=>`<option value="${b.id}">${escapeHtml(b.nome)}</option>`).join('')}</select></div><div class="field"><label>WhatsApp do cliente (com DDD)</label><input id="pgNum" inputmode="numeric" placeholder="32999998888"></div><div class="field"><label>Nome (opcional)</label><input id="pgNome"></div>`}
+    <div class="field"><label>Enviar em</label><input id="pgQuando" type="datetime-local" value="${dtLocal(3600000)}"></div>
+    <div class="field"><label>Mensagem</label><textarea id="pgTexto" rows="4"></textarea></div>
+    <p class="muted">Número OFICIAL: fora da janela de 24h a mensagem precisa ser um modelo aprovado — use “Programar com modelo”.</p>
+    <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn" id="pgTpl">Programar com modelo</button><button class="btn btn-accent" id="mOk">Programar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  const base = ()=>{
+    const q = document.getElementById('pgQuando').value; if(!q){ showToast('Informe data e hora.'); return null; }
+    const o = { op:'programadaSalvar', quando:new Date(q).toISOString() };
+    if(c) o.conversaId = c.id; else { o.botId = document.getElementById('pgBot').value; o.numero = document.getElementById('pgNum').value; o.nome = document.getElementById('pgNome').value.trim(); }
+    return o;
+  };
+  document.getElementById('mOk').onclick = async ()=>{
+    const o = base(); if(!o) return; o.texto = document.getElementById('pgTexto').value.trim(); if(!o.texto){ showToast('Escreva a mensagem.'); return; }
+    const r = await ext(o); if(r && r.ok){ fecharModal(); showToast('Mensagem programada.'); } else showToast(r && r.error || 'Erro');
+  };
+  document.getElementById('pgTpl').onclick = ()=>{
+    const o = base(); if(!o) return;
+    const inst = c ? c.instancia : ofInst(o.botId); if(!inst || !String(inst).startsWith('wa_')){ showToast('Modelos aprovados só existem no número oficial.'); return; }
+    modalTemplate({ instancia:inst, aviso:'Escolha o modelo que será enviado no horário programado.', acao: t=> ext({ ...o, template:t }), aoOk:()=>{ fecharModal(); showToast('Mensagem programada.'); } });
+  };
+}
+function modalCampanha(){
+  const botsWa = estado.bots.filter(b=>b.ativo && b.canais.some(x=>x.tipo==='whatsapp'));
+  abrirModal(`<h2>Nova campanha</h2>
+    <div class="field"><label>Nome da campanha</label><input id="cpNome"></div>
+    <div class="field"><label>Pelo bot / número</label><select id="cpBot">${botsWa.map(b=>`<option value="${b.id}">${escapeHtml(b.nome)}</option>`).join('')}</select></div>
+    <div class="field"><label>Quem recebe</label><select id="cpOrig"><option value="tag">Contatos com uma tag (conversas do bot)</option><option value="agenda">Agenda de contatos</option></select></div>
+    <div class="field" id="cpTagBox"><label>Tag</label><input id="cpTag" placeholder="Ex.: ALIANÇA"></div>
+    <div class="field" id="cpDepBox" style="display:none;"><label>Departamento (opcional)</label><select id="cpDep">${optDepAll('', 'Todos')}</select></div>
+    <div class="field"><label>Início</label><input id="cpIni" type="datetime-local" value="${dtLocal(600000)}"></div>
+    <div class="field"><label>Intervalo entre envios (segundos, mín. 5)</label><input id="cpInt" type="number" min="5" value="30" style="width:100px;"></div>
+    <div class="field"><label>Mensagem</label><textarea id="cpTexto" rows="4"></textarea></div>
+    <p class="muted">Contatos da blacklist são ignorados. Número OFICIAL: use “Criar com modelo”.</p>
+    <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn" id="cpTpl">Criar com modelo</button><button class="btn btn-accent" id="mOk">Criar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  const o2 = document.getElementById('cpOrig'); o2.onchange = ()=>{ document.getElementById('cpTagBox').style.display = o2.value==='tag'?'':'none'; document.getElementById('cpDepBox').style.display = o2.value==='agenda'?'':'none'; };
+  const base = ()=>{
+    const nome = document.getElementById('cpNome').value.trim(); if(!nome){ showToast('Dê um nome à campanha.'); return null; }
+    return { op:'campanhaCriar', nome, botId:document.getElementById('cpBot').value, origem:o2.value, tag:document.getElementById('cpTag').value.trim() || undefined, departamentoId:document.getElementById('cpDep').value || undefined, inicio:new Date(document.getElementById('cpIni').value || Date.now()).toISOString(), intervaloSeg:Number(document.getElementById('cpInt').value)||30 };
+  };
+  const fim = r=>{ fecharModal(); showToast(`Campanha criada: ${r.total} envio(s) programado(s)${r.ignorados?` (${r.ignorados} ignorado(s))`:''}.`); };
+  document.getElementById('mOk').onclick = async ()=>{
+    const o = base(); if(!o) return; o.texto = document.getElementById('cpTexto').value.trim(); if(!o.texto){ showToast('Escreva a mensagem.'); return; }
+    if(!confirm('Criar a campanha e programar os envios?')) return;
+    const r = await ext(o); if(r && r.ok) fim(r); else showToast(r && r.error || 'Erro');
+  };
+  document.getElementById('cpTpl').onclick = ()=>{
+    const o = base(); if(!o) return; const inst = ofInst(o.botId); if(!inst){ showToast('Este bot não tem número oficial.'); return; }
+    modalTemplate({ instancia:inst, aviso:'Modelo que será enviado a todos da campanha.', acao: t=> ext({ ...o, template:t }), aoOk: fim });
+  };
+}
+async function blacklistDaConversa(){
+  const c = estado.atual; if(!c) return; if(!confirm(`Colocar ${nomeConv(c)} na blacklist? O bot e os atendentes deixam de enviar mensagens a este contato.`)) return;
+  const r = await ext({ op:'blacklistSalvar', canal:c.canal, contato:c.contato_id, nome:c.contato_nome||'' });
+  if(r && r.ok){ showToast('Contato na blacklist.'); await carregarBl(); carregarLista(true); } else showToast(r && r.error || 'Erro');
+}
+function extraAcoes(c, a){
+  if(c.status!=='finalizado'){ a.push(`<button class="btn btn-sm" data-a="retorno" title="Agendar retorno">⏰ Retorno</button>`); a.push(`<button class="btn btn-sm" data-a="programar" title="Programar mensagem">🗓 Programar</button>`); }
+  a.push(`<button class="btn btn-sm" data-a="campos" title="Campos do atendimento">📋 Campos</button>`);
+  if(ehOficial(c) && c.status!=='finalizado') a.push(`<button class="btn btn-sm" data-a="modeloOficial" title="Enviar modelo aprovado">📄 Modelo</button>`);
+  if(souSup()) a.push(`<button class="btn btn-sm" data-a="blacklist" title="Bloquear contato">🚫</button>`);
+}
+
+/* ---------- FERRAMENTAS ---------- */
+let ferrAba = null;
+function modalFerr(aba){
+  const abas = [];
+  if(temP('verAgenda')) abas.push(['agenda','📒 Agenda']);
+  abas.push(['retornos','🔁 Retornos'],['prog','🗓 Programadas'],['pot','🎯 Potenciais'],['recados','📝 Recados']);
+  if(souSup()) abas.push(['sup','👁 Supervisão']);
+  abas.push(['rel','📑 Relatórios']);
+  if(souSup()) abas.push(['bl','🚫 Blacklist']);
+  if(estado.gestao) abas.push(['campos','🧩 Campos']);
+  ferrAba = aba || (abas.some(x=>x[0]===ferrAba) ? ferrAba : abas[0][0]);
+  abrirModal(`<h2>Ferramentas</h2><div class="abas" id="ftAbas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===ferrAba?'on':''}">${t}</button>`).join('')}</div><div id="ftCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
+  document.getElementById('modalBox').classList.add('largo');
+  document.getElementById('mFechar').onclick = fecharModal;
+  document.querySelectorAll('#ftAbas button').forEach(b=> b.onclick = ()=> modalFerr(b.dataset.k));
+  ({ agenda:ftAgenda, retornos:ftRetornos, prog:ftProg, pot:ftPot, recados:ftRecados, sup:ftSup, rel:ftRel, bl:ftBl, campos:ftCampos })[ferrAba]();
+}
+const tabelaHtml = (cab, linhas) => `<div style="overflow:auto;"><table class="tb"><thead><tr>${cab.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${linhas.join('')}</tbody></table></div>`;
+const vazio = (n, txt) => n ? '' : `<p class="muted">${txt||'Nada encontrado.'}</p>`;
+function abrirDaFerr(id){ fecharModal(); abrirConversa(id); document.getElementById('app').classList.add('ver-chat'); }
+
+/* agenda / carteira */
+function ftAgenda(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;margin-bottom:8px;"><div class="field" style="margin:0;"><label>Nome ou telefone</label><input id="agBusca"></div><div class="field" style="margin:0;"><label>Atendente</label><select id="agAt">${optAt('', 'Todos')}</select></div><label style="display:flex;gap:4px;align-items:center;font-weight:400;"><input type="checkbox" id="agCart"> Só carteira</label><button class="btn btn-accent" id="agBuscar">Buscar</button><button class="btn" id="agNovo">➕ Novo contato</button></div><div id="agRes" class="muted">Use “Buscar” para listar os contatos.</div>`;
+  document.getElementById('agNovo').onclick = ()=> ftContatoForm(null);
+  document.getElementById('agBuscar').onclick = async ()=>{
+    const res = document.getElementById('agRes'); res.textContent = 'Buscando…';
+    const r = await ext({ op:'contatosLista', busca:document.getElementById('agBusca').value.trim(), atendenteId:document.getElementById('agAt').value || undefined, carteira:document.getElementById('agCart').checked || undefined });
+    if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Nenhum contato.') + (l.length ? tabelaHtml(['Nome','Telefone','Atendente','Carteira','Obs.',''], l.map((x,i)=>`<tr><td>${escapeHtml(x.nome||'')}</td><td>${escapeHtml(x.canal==='whatsapp'?fmtTel(x.telefone):x.telefone)}</td><td>${escapeHtml(x.atendente_nome||'')}</td><td>${x.carteira?'✔':''}</td><td>${escapeHtml(x.observacao||'')}</td><td><button class="btn btn-sm" data-e="${i}">Editar</button> <button class="btn btn-sm btn-danger" data-d="${i}">✕</button></td></tr>`)) : '');
+    res.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> ftContatoForm(l[b.dataset.e]));
+    res.querySelectorAll('[data-d]').forEach(b=> b.onclick = async ()=>{ const x = l[b.dataset.d]; if(!confirm('Excluir '+(x.nome||x.telefone)+' da agenda?')) return; const rr = await ext({ op:'contatoExcluir', id:x.id }); if(rr && rr.ok){ showToast('Excluído.'); document.getElementById('agBuscar').click(); } else showToast(rr && rr.error || 'Erro'); });
+  };
+}
+async function ftContatoForm(x){
+  x = x || { canal:'whatsapp', carteira:false, campos:{} };
+  const c = document.getElementById('ftCorpo'); const rc = await ext({ op:'camposLista' }); const campos = ((rc && rc.data)||[]).filter(k=>k.entidade==='contato');
+  const podeCart = estado.gestao || souSup();
+  c.innerHTML = `<div class="field"><label>Nome</label><input id="ctNome" value="${escapeHtml(x.nome||'')}"></div>
+    <div class="field"><label>Telefone (com DDD)</label><input id="ctTel" inputmode="numeric" value="${escapeHtml(x.telefone ? (x.canal==='whatsapp'?fmtTel(x.telefone):x.telefone) : '')}" ${x.id?'disabled':''} placeholder="(32) 99999-8888"></div>
+    <div class="field"><label>Atendente responsável</label><select id="ctAt">${optAt(x.atendente_id, '— nenhum —')}</select></div>
+    <div class="field"><label>Departamento</label><select id="ctDep">${optDepAll(x.departamento_id, '— nenhum —')}</select></div>
+    <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="ctCart" ${x.carteira?'checked':''} ${podeCart?'':'disabled'}> Carteira: este contato sempre cai direto para o atendente responsável</label>
+    <div class="field"><label>Observação</label><input id="ctObs" value="${escapeHtml(x.observacao||'')}"></div>
+    <div id="ctCampos">${camposHtml(campos, x.campos)}</div>
+    <div class="rodape"><button class="btn" id="ctVolta">Voltar</button><button class="btn btn-accent" id="ctOk">Salvar</button></div>`;
+  document.getElementById('ctVolta').onclick = ftAgenda;
+  document.getElementById('ctOk').onclick = async ()=>{
+    const r = await ext({ op:'contatoSalvar', id:x.id, canal:x.canal||'whatsapp', telefone:x.telefone || document.getElementById('ctTel').value, nome:document.getElementById('ctNome').value, atendente_id:document.getElementById('ctAt').value || null, departamento_id:document.getElementById('ctDep').value || null, carteira:document.getElementById('ctCart').checked, observacao:document.getElementById('ctObs').value, campos:camposLer(document.getElementById('ctCampos')) });
+    if(r && r.ok){ showToast('Contato salvo.'); ftAgenda(); } else showToast(r && r.error || 'Erro');
+  };
+}
+
+/* retornos */
+function ftRetornos(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;margin-bottom:8px;"><div class="field" style="margin:0;"><label>Situação</label><select id="rtSt"><option value="pendente">Pendentes</option><option value="feito">Feitos</option><option value="cancelado">Cancelados</option><option value="">Todos</option></select></div><button class="btn btn-accent" id="rtBuscar">Buscar</button></div><div id="rtRes" class="muted">Use “Buscar”. Para criar um retorno, abra a conversa e clique em ⏰ Retorno.</div>`;
+  document.getElementById('rtBuscar').onclick = async ()=>{
+    const res = document.getElementById('rtRes'); res.textContent = 'Buscando…';
+    const r = await ext({ op:'retornosLista', status:document.getElementById('rtSt').value || undefined });
+    if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Nenhum retorno.') + (l.length ? tabelaHtml(['Quando','Contato','Atendente','Repete','Obs.',''], l.map((x,i)=>`<tr style="${x.status==='pendente'&&new Date(x.quando)<new Date()?'background:#fef2f2;':''}"><td>${fmtDH(x.quando)}</td><td>${escapeHtml(x.contato_nome||fmtTel(x.contato_id))}</td><td>${escapeHtml(x.atendente_nome||'')}</td><td>${escapeHtml(x.recorrencia==='nenhuma'?'':x.recorrencia)}</td><td>${escapeHtml(x.observacao||'')}</td><td style="white-space:nowrap;"><button class="btn btn-sm" data-o="${i}">Abrir</button>${x.status==='pendente'?` <button class="btn btn-sm btn-accent" data-f="${i}">✔ Feito</button> <button class="btn btn-sm" data-c="${i}">✕</button>`:''}</td></tr>`)) : '');
+    res.querySelectorAll('[data-o]').forEach(b=> b.onclick = ()=> abrirDaFerr(l[b.dataset.o].conversa_id));
+    res.querySelectorAll('[data-f]').forEach(b=> b.onclick = async ()=>{ const rr = await ext({ op:'retornoConcluir', id:l[b.dataset.f].id }); if(rr && rr.ok){ retornosCheck(); document.getElementById('rtBuscar').click(); } else showToast(rr && rr.error || 'Erro'); });
+    res.querySelectorAll('[data-c]').forEach(b=> b.onclick = async ()=>{ const rr = await ext({ op:'retornoCancelar', id:l[b.dataset.c].id }); if(rr && rr.ok){ retornosCheck(); document.getElementById('rtBuscar').click(); } else showToast(rr && rr.error || 'Erro'); });
+  };
+}
+
+/* programadas + campanhas */
+function ftProg(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;margin-bottom:8px;"><div class="field" style="margin:0;"><label>Situação</label><select id="pgSt"><option value="pendente">Pendentes</option><option value="finalizado">Enviadas</option><option value="erro">Com erro</option><option value="cancelado">Canceladas</option><option value="">Todas</option></select></div><div class="field" style="margin:0;"><label>De</label><input type="date" id="pgDe"></div><div class="field" style="margin:0;"><label>Até</label><input type="date" id="pgAte"></div><button class="btn btn-accent" id="pgBuscar">Buscar</button>${temP('criarAtivo')?`<button class="btn" id="pgNova">➕ Programar</button>`:''}${estado.gestao?`<button class="btn" id="pgCamp">📣 Nova campanha</button>`:''}</div><div id="pgRes" class="muted">Use “Buscar”. Para programar para uma conversa aberta, use 🗓 Programar no cabeçalho dela.</div>`;
+  if(document.getElementById('pgNova')) document.getElementById('pgNova').onclick = ()=> modalProgramar({});
+  if(document.getElementById('pgCamp')) document.getElementById('pgCamp').onclick = modalCampanha;
+  document.getElementById('pgBuscar').onclick = async ()=>{
+    const res = document.getElementById('pgRes'); res.textContent = 'Buscando…';
+    const de = document.getElementById('pgDe').value, ate = document.getElementById('pgAte').value;
+    const r = await ext({ op:'programadasLista', status:document.getElementById('pgSt').value || undefined, de: de ? new Date(de+'T00:00:00').toISOString() : undefined, ate: ate ? new Date(ate+'T23:59:59').toISOString() : undefined });
+    if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Nenhuma mensagem programada.') + (l.length ? tabelaHtml(['Quando','Contato','Campanha','Mensagem','Situação',''], l.map((x,i)=>`<tr><td>${fmtDH(x.quando)}</td><td>${escapeHtml(x.contato_nome||fmtTel(x.contato_id))}</td><td>${escapeHtml(x.campanha||'')}</td><td>${escapeHtml(x.template ? '📄 '+x.template.nome : (x.texto||'').slice(0,60))}</td><td>${escapeHtml(x.status)}${x.erro?` <span class="muted" title="${escapeHtml(x.erro)}">⚠ ${escapeHtml(x.erro.slice(0,40))}</span>`:''}</td><td>${['pendente','erro'].includes(x.status)?`<button class="btn btn-sm" data-c="${i}">Cancelar</button>`:''}</td></tr>`)) : '');
+    res.querySelectorAll('[data-c]').forEach(b=> b.onclick = async ()=>{ const rr = await ext({ op:'programadaCancelar', id:l[b.dataset.c].id }); if(rr && rr.ok){ document.getElementById('pgBuscar').click(); } else showToast(rr && rr.error || 'Erro'); });
+  };
+}
+
+/* potenciais */
+function ftPot(){
+  const c = document.getElementById('ftCorpo');
+  const meus = (estado.meuReg && estado.meuReg.departamentos) || [];
+  const deps = estado.gestao ? estado.departamentos.filter(d=>d.ativo) : estado.departamentos.filter(d=>d.ativo && meus.includes(d.id));
+  c.innerHTML = `<p class="muted" style="margin-top:0">Contatos que chamaram, ficaram parados no menu do bot e ninguém atendeu (regra definida em Administrar › Mensagens do bot › Potenciais).</p><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;margin-bottom:8px;"><div class="field" style="margin:0;"><label>Criar atendimento no departamento</label><select id="ptDep">${deps.map(d=>`<option value="${d.id}">${escapeHtml(d.nome)}</option>`).join('')}</select></div><button class="btn btn-accent" id="ptBuscar">Buscar</button></div><div id="ptRes" class="muted">Use “Buscar”.</div>`;
+  document.getElementById('ptBuscar').onclick = async ()=>{
+    const res = document.getElementById('ptRes'); res.textContent = 'Buscando…';
+    const r = await ext({ op:'potenciais' }); if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Nenhum potencial agora.') + (l.length ? tabelaHtml(['Contato','Bot','Última mensagem','Protocolo',''], l.map((x,i)=>`<tr><td>${escapeHtml(x.contato_nome||fmtTel(x.contato_id))}</td><td>${escapeHtml(x.bot||'')}</td><td>${fmtDH(x.data)}</td><td>${x.protocolo||''}</td><td style="white-space:nowrap;"><button class="btn btn-sm btn-accent" data-a="${i}">Criar atendimento</button>${temP('removerPotenciais')?` <button class="btn btn-sm" data-r="${i}">Remover</button>`:''}</td></tr>`)) : '');
+    res.querySelectorAll('[data-a]').forEach(b=> b.onclick = async ()=>{ const rr = await ext({ op:'potencialCriar', conversaId:l[b.dataset.a].id, departamentoId:document.getElementById('ptDep').value || null }); if(rr && rr.ok){ abrirDaFerr(rr.conversaId); carregarLista(true); } else showToast(rr && rr.error || 'Erro'); });
+    res.querySelectorAll('[data-r]').forEach(b=> b.onclick = async ()=>{ const rr = await ext({ op:'potencialRemover', conversaId:l[b.dataset.r].id }); if(rr && rr.ok){ document.getElementById('ptBuscar').click(); } else showToast(rr && rr.error || 'Erro'); });
+  };
+}
+
+/* recados */
+function ftRecados(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Mensagens deixadas fora do horário de atendimento.</p><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;margin-bottom:8px;"><div class="field" style="margin:0;"><label>De</label><input type="date" id="rcDe"></div><div class="field" style="margin:0;"><label>Até</label><input type="date" id="rcAte"></div><div class="field" style="margin:0;"><label>Situação</label><select id="rcSt"><option value="">Todas</option><option value="pendente">Pendentes</option><option value="em atendimento">Em atendimento</option><option value="finalizado">Finalizados</option></select></div><button class="btn btn-accent" id="rcBuscar">Buscar</button></div><div id="rcRes" class="muted">Use “Buscar”.</div>`;
+  document.getElementById('rcBuscar').onclick = async ()=>{
+    const res = document.getElementById('rcRes'); res.textContent = 'Buscando…';
+    const de = document.getElementById('rcDe').value, ate = document.getElementById('rcAte').value;
+    const r = await ext({ op:'recados', situacao:document.getElementById('rcSt').value || undefined, de: de ? new Date(de+'T00:00:00').toISOString() : undefined, ate: ate ? new Date(ate+'T23:59:59').toISOString() : undefined });
+    if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Nenhum recado.') + (l.length ? tabelaHtml(['Contato','Canal','Última mensagem','Situação',''], l.map((x,i)=>`<tr><td>${escapeHtml(x.contato_nome||fmtTel(x.contato_id))}</td><td>${escapeHtml(x.canal)}</td><td>${fmtDH(x.ultima_mensagem_em)}<div class="muted">${escapeHtml((x.ultima_mensagem_texto||'').slice(0,60))}</div></td><td>${escapeHtml(x.situacao)}</td><td><button class="btn btn-sm" data-o="${i}">Abrir</button></td></tr>`)) : '');
+    res.querySelectorAll('[data-o]').forEach(b=> b.onclick = ()=> abrirDaFerr(l[b.dataset.o].id));
+  };
+}
+
+/* supervisão */
+function ftSup(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Conversas abertas dos departamentos que você supervisiona.</p><button class="btn btn-accent" id="spBuscar" style="margin-bottom:8px;">Buscar</button><div id="spRes" class="muted">Use “Buscar”.</div>`;
+  document.getElementById('spBuscar').onclick = async ()=>{
+    const res = document.getElementById('spRes'); res.textContent = 'Buscando…';
+    const r = await ext({ op:'supLista' }); if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Nenhuma conversa aberta.') + (l.length ? tabelaHtml(['Contato','Departamento','Atendente','Última mensagem',''], l.map((x,i)=>`<tr><td>${escapeHtml(x.contato_nome||fmtTel(x.contato_id))}</td><td>${escapeHtml(nomeDep(x.departamento_id)||x.setor||'')}</td><td>${escapeHtml(x.atendente_nome||'— fila —')}</td><td>${fmtDH(x.ultima_mensagem_em)}</td><td><button class="btn btn-sm" data-v="${i}">Ver / atribuir</button></td></tr>`)) : '');
+    res.querySelectorAll('[data-v]').forEach(b=> b.onclick = ()=> spVer(l[b.dataset.v].id));
+  };
+}
+async function spVer(id){
+  const c = document.getElementById('ftCorpo'); c.innerHTML = '<p class="muted">Carregando…</p>';
+  const r = await ext({ op:'supMensagens', conversaId:id }); if(!r || !r.ok){ c.innerHTML = `<p class="muted">${escapeHtml((r && r.error)||'Erro')}</p><button class="btn" id="spV">Voltar</button>`; document.getElementById('spV').onclick = ftSup; return; }
+  const cv = r.conversa;
+  c.innerHTML = `<h3 style="margin:0 0 6px;font-size:14px;">${escapeHtml(cv.contato_nome||fmtTel(cv.contato_id))} <span class="muted">· ${escapeHtml(cv.atendente_nome||'na fila')}</span></h3>
+    <div style="max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--surface-2);">${(r.data||[]).map(m=>`<div style="margin:4px 0;${m.direcao==='out'?'text-align:right;':''}"><span class="muted" style="font-size:11px;">${escapeHtml(m.autor_nome||(m.direcao==='in'?'Cliente':''))} · ${fmtDH(m.enviada_em)}</span><div>${escapeHtml(m.texto||(m.tipo!=='texto'?'['+m.tipo+']':''))}</div></div>`).join('')}</div>
+    <div class="field" style="margin-top:10px;"><label>Atribuir a</label><select id="spAt">${optAt(cv.atendente_id, '— devolver para a fila —')}</select></div>
+    <div class="rodape"><button class="btn" id="spV">Voltar</button><button class="btn btn-accent" id="spOk">Atribuir</button></div>`;
+  document.getElementById('spV').onclick = ftSup;
+  document.getElementById('spOk').onclick = async ()=>{ const rr = await ext({ op:'supAtribuir', conversaId:id, atendenteId:document.getElementById('spAt').value || null }); if(rr && rr.ok){ showToast('Conversa redistribuída.'); ftSup(); carregarLista(true); } else showToast(rr && rr.error || 'Erro'); };
+}
+
+/* relatórios */
+function ftRel(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;margin-bottom:8px;">
+    <div class="field" style="margin:0;"><label>De</label><input type="date" id="rlDe"></div><div class="field" style="margin:0;"><label>Até</label><input type="date" id="rlAte"></div>
+    <div class="field" style="margin:0;"><label>Data de</label><select id="rlDc"><option value="abertura">Abertura</option><option value="finalizacao">Finalização</option></select></div>
+    <div class="field" style="margin:0;"><label>Situação</label><select id="rlSt"><option value="">Todas</option><option value="finalizado">Finalizados</option><option value="aberto">Em aberto</option></select></div>
+    ${estado.gestao||souSup()?`<div class="field" style="margin:0;"><label>Atendente</label><select id="rlAt">${optAt('', 'Todos')}</select></div>`:''}
+    <div class="field" style="margin:0;"><label>Departamento</label><select id="rlDep">${optDepAll('', 'Todos')}</select></div>
+    ${estado.bots.length>1?`<div class="field" style="margin:0;"><label>Bot</label><select id="rlBot">${optBotAll('', 'Todos')}</select></div>`:''}
+    <div class="field" style="margin:0;"><label>Canal</label><select id="rlCanal"><option value="">Todos</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option></select></div>
+    <div class="field" style="margin:0;"><label>Motivo</label><input id="rlMot"></div><div class="field" style="margin:0;"><label>Protocolo</label><input id="rlProto" inputmode="numeric"></div>
+    <div class="field" style="margin:0;"><label>Número</label><input id="rlNum" inputmode="numeric"></div><div class="field" style="margin:0;"><label>Nome</label><input id="rlNome"></div><div class="field" style="margin:0;"><label>Tag</label><input id="rlTag"></div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"><button class="btn btn-accent" id="rlBuscar">Buscar</button><button class="btn" id="rlCsv" disabled>⬇ Exportar CSV</button><button class="btn" id="rlNotas">⭐ Notas médias</button><button class="btn" id="rlCont">👥 Relatório de contatos</button></div><div id="rlRes" class="muted">Use “Buscar”.</div>`;
+  let ultimo = [];
+  const v = id => { const e = document.getElementById(id); return e ? e.value.trim() : ''; };
+  document.getElementById('rlBuscar').onclick = async ()=>{
+    const res = document.getElementById('rlRes'); res.textContent = 'Buscando…';
+    const de = v('rlDe'), ate = v('rlAte');
+    const r = await ext({ op:'relAtendimentos', de: de ? new Date(de+'T00:00:00').toISOString() : undefined, ate: ate ? new Date(ate+'T23:59:59').toISOString() : undefined, dataCampo:v('rlDc'), status:v('rlSt') || undefined, atendenteId:v('rlAt') || undefined, departamentoId:v('rlDep') || undefined, botId:v('rlBot') || undefined, canal:v('rlCanal') || undefined, motivo:v('rlMot') || undefined, protocolo:v('rlProto') || undefined, numero:v('rlNum') || undefined, nome:v('rlNome') || undefined, tag:v('rlTag') || undefined, limite:1000 });
+    if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    ultimo = r.data||[]; res.className = '';
+    document.getElementById('rlCsv').disabled = !ultimo.length;
+    const notas = ultimo.map(x=>x.nota).filter(n=>n!=null); const media = notas.length ? (notas.reduce((a,b)=>a+b,0)/notas.length).toFixed(1) : '—';
+    res.innerHTML = `<p class="muted" style="margin:0 0 6px;">${ultimo.length} atendimento(s) · nota média ${media} (${notas.length} avaliação(ões))</p>` + vazio(ultimo.length, 'Nenhum atendimento no filtro.') + (ultimo.length ? tabelaHtml(['Prot.','Contato','Atendente','Depto','Motivo','Nota','Abertura','Finalização','Situação',''], ultimo.map((x,i)=>`<tr><td>${x.protocolo||''}</td><td>${escapeHtml(x.contato_nome||fmtTel(x.contato_id))}</td><td>${escapeHtml(x.atendente||'')}</td><td>${escapeHtml(x.departamento||'')}</td><td>${escapeHtml(x.motivo||'')}</td><td>${x.nota==null?'':x.nota}</td><td>${fmtDH(x.aberto_em)}</td><td>${fmtDH(x.finalizado_em)}</td><td>${escapeHtml(x.status)}</td><td><button class="btn btn-sm" data-o="${i}">Abrir</button></td></tr>`)) : '');
+    res.querySelectorAll('[data-o]').forEach(b=> b.onclick = ()=> abrirDaFerr(ultimo[b.dataset.o].conversa_id));
+  };
+  document.getElementById('rlCsv').onclick = ()=>{
+    csvBaixar('atendimentos.csv', [['Protocolo','Canal','Bot','Contato','Telefone','Atendente','Departamento','Motivo','Nota','Tags','Abertura','Finalização','Situação','Msgs recebidas','Msgs enviadas']].concat(ultimo.map(x=>[x.protocolo||'', x.canal, x.bot, x.contato_nome||'', x.canal==='whatsapp'?fmtTel(x.contato_id):x.contato_id, x.atendente||'', x.departamento||'', x.motivo||'', x.nota==null?'':x.nota, (x.tags||[]).join(', '), fmtDH(x.aberto_em), fmtDH(x.finalizado_em), x.status, x.msgs_in==null?'':x.msgs_in, x.msgs_out==null?'':x.msgs_out])));
+  };
+  document.getElementById('rlNotas').onclick = async ()=>{
+    const res = document.getElementById('rlRes'); res.textContent = 'Calculando…';
+    const r = await ext({ op:'notasMedias', dias:90 }); if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const la = Object.entries(r.atendentes||{}).sort((a,b)=>b[1].media-a[1].media), ld = Object.entries(r.departamentos||{}).sort((a,b)=>b[1].media-a[1].media);
+    res.className = ''; res.innerHTML = `<p class="muted" style="margin:0 0 6px;">Notas médias dos últimos 90 dias</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;"><div><b>Por atendente</b>${la.length?tabelaHtml(['Atendente','Média','Aval.'], la.map(([n,x])=>`<tr><td>${escapeHtml(n)}</td><td>${x.media}</td><td>${x.n}</td></tr>`)):'<p class="muted">Sem avaliações.</p>'}</div><div><b>Por departamento</b>${ld.length?tabelaHtml(['Departamento','Média','Aval.'], ld.map(([id,x])=>`<tr><td>${escapeHtml(nomeDep(id)||id)}</td><td>${x.media}</td><td>${x.n}</td></tr>`)):'<p class="muted">Sem avaliações.</p>'}</div></div>`;
+  };
+  document.getElementById('rlCont').onclick = async ()=>{
+    const res = document.getElementById('rlRes'); res.textContent = 'Buscando contatos…';
+    const [r, rc] = await Promise.all([ ext({ op:'relContatos' }), ext({ op:'camposLista' }) ]); if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const campos = ((rc && rc.data)||[]).filter(k=>k.entidade==='contato'); const l = r.data||[]; res.className = '';
+    res.innerHTML = `<p class="muted" style="margin:0 0 6px;">${l.length} contato(s) <button class="btn btn-sm" id="rlCsv2">⬇ Exportar CSV</button></p>` + tabelaHtml(['Nome','Telefone','Atendente','Carteira','Atend.','Última'], l.slice(0,300).map(x=>`<tr><td>${escapeHtml(x.nome||'')}</td><td>${escapeHtml(x.canal==='whatsapp'?fmtTel(x.contato_id):x.contato_id)}</td><td>${escapeHtml(x.atendente||'')}</td><td>${x.carteira?'✔':''}</td><td>${x.atendimentos}</td><td>${fmtDH(x.ultima)}</td></tr>`)) + (l.length>300?'<p class="muted">Mostrando 300 — o CSV traz todos.</p>':'');
+    document.getElementById('rlCsv2').onclick = ()=> csvBaixar('contatos.csv', [['Nome','Canal','Telefone','Atendente','Carteira','Observação','Atendimentos','Última mensagem'].concat(campos.map(k=>k.nome))].concat(l.map(x=>[x.nome||'', x.canal, x.canal==='whatsapp'?fmtTel(x.contato_id):x.contato_id, x.atendente||'', x.carteira?'SIM':'', x.observacao||'', x.atendimentos, fmtDH(x.ultima)].concat(campos.map(k=>(x.campos||{})[k.id]||'')))));
+  };
+}
+
+/* blacklist */
+function ftBl(){
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Contatos bloqueados: o bot não responde, atendentes não enviam e campanhas pulam o número. Eles somem da caixa de entrada.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end;margin-bottom:8px;"><div class="field" style="margin:0;"><label>Telefone (com DDD)</label><input id="blNum" inputmode="numeric" placeholder="(32) 99999-8888"></div><div class="field" style="margin:0;"><label>Nome</label><input id="blNome"></div><div class="field" style="margin:0;"><label>Motivo</label><input id="blObs"></div><button class="btn btn-accent" id="blAdd">Bloquear</button><button class="btn" id="blBuscar">Buscar lista</button></div><div id="blRes" class="muted">Use “Buscar lista”.</div>`;
+  document.getElementById('blAdd').onclick = async ()=>{ const r = await ext({ op:'blacklistSalvar', canal:'whatsapp', contato:document.getElementById('blNum').value, nome:document.getElementById('blNome').value, observacao:document.getElementById('blObs').value }); if(r && r.ok){ showToast('Contato bloqueado.'); await carregarBl(); carregarLista(true); ftBl(); } else showToast(r && r.error || 'Erro'); };
+  document.getElementById('blBuscar').onclick = async ()=>{
+    const res = document.getElementById('blRes'); res.textContent = 'Buscando…';
+    const r = await ext({ op:'blacklistLista' }); if(!r || !r.ok){ res.textContent = (r && r.error) || 'Erro'; return; }
+    const l = r.data||[]; res.className = '';
+    res.innerHTML = vazio(l.length, 'Blacklist vazia.') + (l.length ? tabelaHtml(['Contato','Nome','Motivo','Por',''], l.map((x,i)=>`<tr><td>${escapeHtml(x.canal==='whatsapp'?fmtTel(x.contato):x.contato)}</td><td>${escapeHtml(x.nome||'')}</td><td>${escapeHtml(x.observacao||'')}</td><td>${escapeHtml(x.atendente_nome||'')}</td><td><button class="btn btn-sm" data-r="${i}">Liberar</button></td></tr>`)) : '');
+    res.querySelectorAll('[data-r]').forEach(b=> b.onclick = async ()=>{ const rr = await ext({ op:'blacklistExcluir', id:l[b.dataset.r].id }); if(rr && rr.ok){ await carregarBl(); carregarLista(true); document.getElementById('blBuscar').click(); } else showToast(rr && rr.error || 'Erro'); });
+  };
+}
+
+/* campos customizados (cadastro) */
+async function ftCampos(){
+  const c = document.getElementById('ftCorpo'); c.innerHTML = '<p class="muted">Carregando…</p>';
+  const r = await ext({ op:'camposLista' }); if(!r || !r.ok){ c.innerHTML = `<p class="muted">${escapeHtml((r && r.error)||'Erro')}</p>`; return; }
+  const l = r.data||[];
+  c.innerHTML = `<p class="muted" style="margin-top:0">Campos extras que aparecem na ficha do contato (agenda) e no atendimento.</p>` + (l.map((x,i)=>`<div class="cartao"><div><div class="t">${escapeHtml(x.nome)}</div><div class="x">${x.entidade==='contato'?'Contato':'Atendimento'} · ${escapeHtml(x.tipo)}${x.opcoes&&x.opcoes.length?' · '+escapeHtml(x.opcoes.join(', ')):''}</div></div><div style="display:flex;gap:6px;"><button class="btn btn-sm" data-e="${i}">Editar</button><button class="btn btn-sm btn-danger" data-d="${i}">✕</button></div></div>`).join('') || '<p class="muted">Nenhum campo cadastrado.</p>') +
+    `<div style="display:flex;gap:6px;margin-top:8px;"><button class="btn btn-accent" id="cmNovo">➕ Novo campo</button><button class="btn" id="cmPad">Criar campos padrão</button></div>`;
+  c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> ftCampoForm(l[b.dataset.e]));
+  c.querySelectorAll('[data-d]').forEach(b=> b.onclick = async ()=>{ if(!confirm('Excluir este campo? Os valores já preenchidos deixam de aparecer.')) return; const rr = await ext({ op:'campoExcluir', id:l[b.dataset.d].id }); if(rr && rr.ok) ftCampos(); else showToast(rr && rr.error || 'Erro'); });
+  document.getElementById('cmNovo').onclick = ()=> ftCampoForm(null);
+  document.getElementById('cmPad').onclick = async ()=>{ const rr = await ext({ op:'camposPadrao' }); if(rr && rr.ok){ showToast(`${rr.criados} campo(s) criado(s).`); ftCampos(); } else showToast(rr && rr.error || 'Erro'); };
+}
+function ftCampoForm(x){
+  x = x || { entidade:'contato', tipo:'texto' };
+  const c = document.getElementById('ftCorpo');
+  c.innerHTML = `<div class="field"><label>Nome</label><input id="cfNome" value="${escapeHtml(x.nome||'')}"></div>
+    <div class="field"><label>Pertence a</label><select id="cfEnt"><option value="contato" ${x.entidade==='contato'?'selected':''}>Contato (agenda)</option><option value="atendimento" ${x.entidade==='atendimento'?'selected':''}>Atendimento</option></select></div>
+    <div class="field"><label>Tipo</label><select id="cfTipo">${['texto','numero','data','lista'].map(t=>`<option ${x.tipo===t?'selected':''}>${t}</option>`).join('')}</select></div>
+    <div class="field" id="cfOpBox"><label>Opções da lista (separe por vírgula)</label><input id="cfOp" value="${escapeHtml((x.opcoes||[]).join(', '))}"></div>
+    <div class="field"><label>Nome para integração (opcional)</label><input id="cfInt" value="${escapeHtml(x.nome_integracao||'')}" placeholder="ex.: cpf"></div>
+    <div class="rodape"><button class="btn" id="cfV">Voltar</button><button class="btn btn-accent" id="cfOk">Salvar</button></div>`;
+  const t = document.getElementById('cfTipo'); const sh = ()=>{ document.getElementById('cfOpBox').style.display = t.value==='lista'?'':'none'; }; t.onchange = sh; sh();
+  document.getElementById('cfV').onclick = ftCampos;
+  document.getElementById('cfOk').onclick = async ()=>{ const r = await ext({ op:'campoSalvar', id:x.id, nome:document.getElementById('cfNome').value, entidade:document.getElementById('cfEnt').value, tipo:t.value, opcoes:document.getElementById('cfOp').value, nome_integracao:document.getElementById('cfInt').value, ordem:x.ordem||0 }); if(r && r.ok){ showToast('Campo salvo.'); ftCampos(); } else showToast(r && r.error || 'Erro'); };
+}
+
+/* ---------- Administrar: opções extras do bot ---------- */
+function fluxoExtraHtml(f){
+  const enq = f.enquete||{}; const pt = f.potenciais||{};
+  return `<details class="sec"><summary>🧩 Atendimento (nome, finalização, nota, potenciais)</summary><div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="fxNome" ${f.enviar_nome_atendente?'checked':''}> Enviar o nome da atendente no início de cada mensagem (*Nome:*)</label>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="fxMotObr" ${f.motivo_obrigatorio?'checked':''}> Exigir motivo ao finalizar</label>
+    <div class="field"><label>Motivos de finalização (um por linha — vazio = texto livre)</label><textarea id="fxMot" rows="4">${escapeHtml((f.motivos||[]).join('\n'))}</textarea></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="fxCpf" ${f.contato_pode_finalizar?'checked':''}> O próprio cliente pode encerrar digitando uma palavra</label>
+    <div class="field"><label>Palavras que encerram (separe por vírgula)</label><input id="fxPalFin" value="${escapeHtml((f.palavras_finalizar||['sair','encerrar']).join(', '))}"></div>
+    <div class="field"><label>Agrupar mensagens seguidas do cliente (segundos de espera, 0 = desligado)</label><input id="fxAgr" type="number" min="0" max="20" value="${Number(f.agrupar_segundos)||0}" style="width:90px;"></div>
+    <div class="field"><label>Recado: minutos após o primeiro contato fora do horário em que o bot volta a avisar (0 = sempre)</label><input id="fxRec" type="number" min="0" max="1440" value="${Number(f.recado_minutos)||0}" style="width:90px;"></div>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="fxInt" ${f.interativo?'checked':''}> Menu com botões/lista no WhatsApp OFICIAL (nos demais canais segue em texto numerado)</label>
+    <div class="field"><label>Escala da enquete</label><select id="fxEsc"><option value="5" ${enq.escala!=='10'?'selected':''}>1 a 5</option><option value="10" ${enq.escala==='10'?'selected':''}>0 a 10</option></select></div>
+    <div class="field"><label>Tempo para o cliente responder a enquete (minutos, 0 = sem limite)</label><input id="fxEnqT" type="number" min="0" max="1440" value="${Number(enq.tempo_min)||0}" style="width:90px;"></div>
+    <div class="field"><label>Potenciais (quem chamou, parou no menu e ninguém atendeu)</label><select id="fxPot"><option value="nunca" ${pt.modo!=='novos'&&pt.modo!=='msg_sem_atendimento'?'selected':''}>Não listar</option><option value="novos" ${pt.modo==='novos'?'selected':''}>Só contatos novos (nunca atendidos)</option><option value="msg_sem_atendimento" ${pt.modo==='msg_sem_atendimento'?'selected':''}>Qualquer contato sem atendimento</option></select></div>
+    <div class="field"><label>Considerar potencial após (minutos parado)</label><input id="fxPotMin" type="number" min="1" max="1440" value="${Number(pt.minutos)||10}" style="width:90px;"></div>
+  </div></details>`;
+}
+function lerExtraFluxo(c){
+  const g = id => document.getElementById(id);
+  return {
+    enviar_nome_atendente: g('fxNome').checked, motivo_obrigatorio: g('fxMotObr').checked,
+    motivos: g('fxMot').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    contato_pode_finalizar: g('fxCpf').checked, palavras_finalizar: g('fxPalFin').value.split(',').map(s=>s.trim()).filter(Boolean),
+    agrupar_segundos: Number(g('fxAgr').value)||0, recado_minutos: Number(g('fxRec').value)||0, interativo: g('fxInt').checked,
+    enquete: { ativa: g('flEnq').checked, escala: g('fxEsc').value, tempo_min: Number(g('fxEnqT').value)||0 },
+    potenciais: { modo: g('fxPot').value, minutos: Number(g('fxPotMin').value)||10 }
+  };
+}
+
+/* ---------- Administrar: número oficial dentro do bot ---------- */
+async function cloudUi(b){
+  const box = document.getElementById('fbCloud'); if(!box) return;
+  const r = await ext({ op:'cloudLista' }); if(!r || !r.ok){ box.textContent = (r && r.error) || 'Erro'; return; }
+  const meus = (r.data||[]).filter(x=>x.bot_id===b.id);
+  box.className = '';
+  box.innerHTML = `${meus.map(x=>`<div class="cartao"><div><div class="t">${escapeHtml(x.numero||x.phone_number_id)}</div><div class="x">ID ${escapeHtml(x.phone_number_id)} · WABA ${escapeHtml(x.waba_id||'—')} · ${x.temSegredoApp?'assinatura ligada':'sem segredo do app'}</div></div><button class="btn btn-sm btn-danger" data-x="${escapeHtml(x.instancia)}">Remover</button></div>`).join('') || '<p class="muted" style="margin:0 0 6px;">Nenhum número oficial neste bot.</p>'}
+    <details class="sec"><summary>➕ Cadastrar número oficial</summary><div>
+      <p class="muted" style="margin-top:0">1) No painel da Meta (app do WhatsApp) copie o <b>Phone Number ID</b>, o <b>WABA ID</b> e gere um <b>token permanente</b> (usuário do sistema). 2) Em <i>Configuração › Webhook</i> use a URL e o token de verificação abaixo e assine o campo <b>messages</b>.</p>
+      <div class="field"><label>URL do webhook</label><input readonly value="${escapeHtml(r.webhookUrl)}" onclick="this.select()"></div>
+      <div class="field"><label>Token de verificação</label><input readonly value="${escapeHtml(r.verifyToken)}" onclick="this.select()"></div>
+      <div class="field"><label>Phone Number ID</label><input id="cdPn" inputmode="numeric"></div>
+      <div class="field"><label>WABA ID (necessário para listar os modelos)</label><input id="cdWaba" inputmode="numeric"></div>
+      <div class="field"><label>Token de acesso permanente</label><input id="cdTok" type="password" autocomplete="off"></div>
+      <div class="field"><label>Segredo do app (opcional — valida a assinatura das mensagens)</label><input id="cdSec" type="password" autocomplete="off"></div>
+      <button class="btn btn-accent" id="cdOk">Validar e cadastrar</button></div></details>`;
+  box.querySelectorAll('[data-x]').forEach(bt=> bt.onclick = async ()=>{ if(!confirm('Remover este número oficial do bot?')) return; const rr = await ext({ op:'cloudExcluir', instancia:bt.dataset.x }); if(rr && rr.ok){ showToast('Removido.'); recarregarAdmin(); } else showToast(rr && rr.error || 'Erro'); });
+  document.getElementById('cdOk').onclick = async ()=>{
+    const rr = await ext({ op:'cloudSalvar', botId:b.id, phone_number_id:document.getElementById('cdPn').value, waba_id:document.getElementById('cdWaba').value, token:document.getElementById('cdTok').value, app_secret:document.getElementById('cdSec').value });
+    if(rr && rr.ok){ showToast(`Número oficial vinculado: ${rr.numero||rr.instancia}${rr.nomeVerificado?' · '+rr.nomeVerificado:''}`); recarregarAdmin(); } else showToast(rr && rr.error || 'Erro');
+  };
+}
+
+/* ---------- Administrar: notas médias nas abas Equipe/Departamentos ---------- */
+async function notasMediasUi(tipo){
+  const c = document.getElementById('abCorpo'); if(!c) return;
+  const r = await ext({ op:'notasMedias', dias:90 }); if(!r || !r.ok || document.getElementById('abCorpo')!==c) return;
+  const lista = tipo==='atendentes' ? Object.entries(r.atendentes||{}).map(([n,x])=>[n,x]) : Object.entries(r.departamentos||{}).map(([id,x])=>[nomeDep(id)||id,x]);
+  if(!lista.length) return;
+  c.insertAdjacentHTML('afterbegin', `<div class="cartao" style="display:block;"><div class="t">⭐ Notas médias (últimos 90 dias)</div><div class="x">${lista.sort((a,b)=>b[1].media-a[1].media).map(([n,x])=>`${escapeHtml(n)}: <b>${x.media}</b> (${x.n})`).join(' · ')}</div></div>`);
+}
+
+document.getElementById('btnFerr').addEventListener('click', ()=> modalFerr());
 </script>
 <div id="bannerInt"></div>
 </body>
