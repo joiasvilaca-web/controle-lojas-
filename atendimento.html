@@ -137,6 +137,8 @@ button{cursor:pointer;}
         <button class="btn btn-sm" id="btnNova">➕ Nova conversa</button>
         <button class="btn btn-sm" id="btnConfig" style="display:none;">⚙️ Administrar</button>
         <button class="btn btn-sm" id="btnOnline" title="Ficar online/offline para receber atendimentos">⚪ Offline</button>
+        <button class="btn btn-sm" id="btnTarefas" title="Minhas tarefas do CRM">✅ Tarefas<span class="n" id="n_tarefas"></span></button>
+        <button class="btn btn-sm" id="btnFunil" title="Funil de oportunidades">🧭 Funil</button>
         <button class="btn btn-sm" id="btnAtualizar" title="Atualizar">↻</button>
         <button class="btn btn-sm" id="btnSom" title="Aviso sonoro de mensagem nova">🔔</button>
       </div>
@@ -344,6 +346,7 @@ function renderHead(){
   const a = [];
   if(c.status!=='finalizado' && (!c.atendente_id || (c.atendente_id!==estado.meuId && estado.gestao))) a.push(`<button class="btn btn-sm btn-accent" data-a="assumir">✋ Assumir</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm" data-a="transferir">↪ Transferir</button>`);
+  a.push(`<button class="btn btn-sm" data-a="crm">📇 CRM</button>`);
   a.push(`<button class="btn btn-sm" data-a="cliente">👤 Cliente</button>`);
   a.push(`<button class="btn btn-sm" data-a="tags">🏷️ Tags</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm btn-danger" data-a="finalizar">✔ Finalizar</button>`);
@@ -426,6 +429,7 @@ async function acao(a){
   if(a==='finalizar'){ if(!confirm('Finalizar este atendimento?')) return; const r = await api({ op:'finalizar', conversaId:c.id }); if(r&&r.ok){ showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='reabrir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='transferir') modalTransferir();
+  if(a==='crm') modalCRM();
   if(a==='cliente') modalCliente();
   if(a==='tags') modalTags();
 }
@@ -656,6 +660,86 @@ function abaRespostas(){
   };
 }
 
+
+/* ================= CRM ================= */
+const CRM_URL = SUPABASE_URL + "/functions/v1/crm-api";
+async function crm(body){
+  try{ const res = await fetch(CRM_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) }); return await res.json(); }
+  catch(e){ return { error:String(e) }; }
+}
+const ETAPA_NOME = { novo:'Novo', em_negociacao:'Em negociação', orcamento_enviado:'Orçamento enviado', aguardando_pagamento:'Aguardando pagamento', ganho:'Ganho', perdido:'Perdido' };
+const brl = v => (Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const fmtData = d => { if(!d) return ''; const x = new Date(d.length===10 ? d+'T12:00:00' : d); return isNaN(x) ? String(d) : x.toLocaleDateString('pt-BR'); };
+const prazoVencido = t => t.status==='aberta' && t.prazo && new Date(t.prazo) < new Date();
+async function contarTarefas(){ const r = await crm({ op:'minhasTarefas' }); if(r && r.ok){ const n = r.data.filter(prazoVencido).length || ''; document.getElementById('n_tarefas').textContent = n; } }
+let crmFicha = null, crmAba = 'resumo';
+async function modalCRM(aba){
+  crmAba = aba || 'resumo';
+  if(!crmFicha || crmFicha._conv !== estado.atual.id || !aba){ abrirModal('<p class="muted">Carregando ficha…</p>'); document.getElementById('modalBox').classList.add('largo'); const r = await crm({ op:'ficha', conversaId: estado.atual.id }); if(!r || r.error){ abrirModal('<p>'+escapeHtml((r&&r.error)||'Erro ao carregar')+'</p><div class="rodape"><button class="btn" id="mCancel">Fechar</button></div>'); document.getElementById('mCancel').onclick = fecharModal; return; } r._conv = estado.atual.id; crmFicha = r; }
+  const f = crmFicha; const c = f.cliente || {};
+  const abas = [['resumo','📇 Ficha'],['tarefas',`✅ Tarefas (${f.tarefas.filter(t=>t.status==='aberta').length})`],['ops',`🧭 Oportunidades (${f.oportunidades.length})`],['notas',`📝 Notas (${f.notas.length})`]];
+  let corpo = '';
+  if(crmAba==='resumo'){
+    const lista = (tit, arr, fn) => arr.length ? `<h4 style="margin:10px 0 4px;font-size:13px;">${tit} (${arr.length})</h4>` + arr.slice(0,8).map(fn).join('') : '';
+    const linha = (a,b,c2) => `<div class="cartao" style="padding:6px 10px;margin-bottom:4px;"><div class="x">${escapeHtml(a)}</div><div class="x">${escapeHtml(b||'')}</div><div class="t" style="font-size:12.5px;">${escapeHtml(c2||'')}</div></div>`;
+    corpo = `<div class="cartao"><div><div class="t">${escapeHtml(f.nome||'Contato sem cadastro')}</div><div class="x">${f.cliente?'✔ Cliente cadastrado':'⚠ Ainda não está no cadastro de clientes — use "👤 Cliente" para vincular'} ${c.cpf?'· CPF '+escapeHtml(c.cpf):''} ${c.dataNascimento?'· 🎂 '+escapeHtml(fmtData(c.dataNascimento)):''}</div><div class="x">${escapeHtml([c.endereco,c.numero,c.bairro,c.cidade].filter(Boolean).join(', '))}</div></div></div>
+      <div class="resumo" style="border:1px solid var(--line);border-radius:10px;"><span>Compras: <b>${f.resumo.qtdCompras}</b></span><span>Vendas: <b>${brl(f.resumo.totalVendas)}</b></span><span>O.S.: <b>${brl(f.resumo.totalOS)}</b></span><span>Última: <b>${f.resumo.ultimaCompra?fmtData(f.resumo.ultimaCompra):'—'}</b></span></div>` +
+      lista('Vendas', f.historico.vendas, v=>linha(fmtData(v.data)+' · '+(v.codigo||''), v.status+' · '+(v.vendedora||''), brl(v.valor))) +
+      lista('Ordens de serviço', f.historico.os, v=>linha(fmtData(v.data)+' · '+(v.codigo||''), (v.descricao||'').slice(0,60)+' · '+v.status, v.valor?brl(v.valor):'')) +
+      lista('Orçamentos', f.historico.orcamentos, v=>linha(fmtData(v.data), v.status, v.valor?brl(v.valor):'')) +
+      lista('Reformas', f.historico.reformas, v=>linha('R'+String(v.numero).padStart(5,'0'), v.status, fmtData(v.criado))) +
+      (f.conversas.length>1 ? `<h4 style="margin:10px 0 4px;font-size:13px;">Conversas (${f.conversas.length})</h4><div class="muted">${f.conversas.map(x=>(x.canal==='instagram'?'📷':'📱')+' '+escapeHtml(x.status)+' · '+fmtHora(x.ultima_mensagem_em)).join(' &nbsp;|&nbsp; ')}</div>`:'');
+  }
+  if(crmAba==='tarefas'){
+    const funcs = estado.gestao ? (estado.funcionarios||[]) : [];
+    corpo = `<div class="field"><label>Nova tarefa / retorno</label><input id="tkTit" placeholder="Ex.: Ligar para confirmar medida da aliança"><div style="display:flex;gap:6px;margin-top:6px;"><input type="datetime-local" id="tkPrazo">${funcs.length?`<select id="tkResp"><option value="">Eu mesma</option>${funcs.map(x=>`<option value="${x.id}">${escapeHtml(x.nome)}</option>`).join('')}</select>`:''}<button class="btn btn-accent" id="tkAdd">Criar</button></div></div>` +
+      (f.tarefas.map(t=>`<div class="cartao"><div><div class="t" style="${t.status!=='aberta'?'text-decoration:line-through;opacity:.6':''}">${escapeHtml(t.titulo)}</div><div class="x" style="${prazoVencido(t)?'color:#dc2626;font-weight:700':''}">${t.prazo?'⏰ '+fmtHora(t.prazo):'sem prazo'} · ${escapeHtml(t.responsavel_nome||'')}</div></div>${t.status==='aberta'?`<button class="btn btn-sm" data-ok="${t.id}">✔ Feita</button>`:`<span class="muted">${t.status}</span>`}</div>`).join('') || '<p class="muted">Nenhuma tarefa para este cliente.</p>');
+  }
+  if(crmAba==='ops'){
+    corpo = `<div class="field"><label>Nova oportunidade (negócio em andamento)</label><div style="display:flex;gap:6px;"><input id="opTit" placeholder="Ex.: Aliança de ouro 18k"><input id="opVal" type="number" placeholder="Valor" style="max-width:110px;"><button class="btn btn-accent" id="opAdd">Criar</button></div></div>` +
+      (f.oportunidades.map(o=>`<div class="cartao"><div><div class="t">${escapeHtml(o.titulo)} ${o.valor?'· '+brl(o.valor):''}</div><div class="x">${escapeHtml(o.responsavel_nome||'')} · atualizado ${fmtData(o.updated_at)}${o.motivo_perda?' · motivo: '+escapeHtml(o.motivo_perda):''}</div></div><select data-mv="${o.id}">${Object.entries(ETAPA_NOME).map(([k,v])=>`<option value="${k}" ${o.etapa===k?'selected':''}>${v}</option>`).join('')}</select></div>`).join('') || '<p class="muted">Nenhuma oportunidade ainda.</p>');
+  }
+  if(crmAba==='notas'){
+    corpo = `<div class="field"><label>Nova anotação</label><textarea id="ntTxt" rows="3" placeholder="Gosto da cliente, tamanho do dedo, preferências, combinados…"></textarea><div style="text-align:right;margin-top:6px;"><button class="btn btn-accent" id="ntAdd">Salvar nota</button></div></div>` +
+      (f.notas.map(n=>`<div class="cartao" style="display:block;"><div class="x">${escapeHtml(n.autor_nome||'')} · ${fmtHora(n.created_at)}</div><div>${escapeHtml(n.texto).replace(/\n/g,'<br>')}</div></div>`).join('') || '<p class="muted">Sem anotações.</p>');
+  }
+  abrirModal(`<h2>CRM · ${escapeHtml(f.nome||nomeConv(estado.atual))}</h2><div class="abas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===crmAba?'on':''}">${t}</button>`).join('')}</div>${corpo}<div class="rodape"><button class="btn" id="mCancel">Fechar</button></div>`);
+  document.getElementById('modalBox').classList.add('largo');
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.querySelectorAll('.abas button').forEach(b=> b.onclick = ()=> modalCRM(b.dataset.k));
+  const recarregar = async (ab)=>{ crmFicha = null; await modalCRM(ab||crmAba); contarTarefas(); };
+  const alvo = { conversaId: estado.atual.id };
+  if(document.getElementById('tkAdd')) document.getElementById('tkAdd').onclick = async ()=>{ const r = await crm({ op:'tarefaSalvar', ...alvo, titulo:document.getElementById('tkTit').value, prazo: document.getElementById('tkPrazo').value ? new Date(document.getElementById('tkPrazo').value).toISOString() : null, responsavelId: (document.getElementById('tkResp')||{}).value || undefined }); if(r&&r.ok){ showToast('Tarefa criada.'); recarregar('tarefas'); } else showToast((r&&r.error)||'Erro'); };
+  document.querySelectorAll('[data-ok]').forEach(b=> b.onclick = async ()=>{ const r = await crm({ op:'tarefaStatus', id:b.dataset.ok, status:'feita' }); if(r&&r.ok) recarregar('tarefas'); else showToast((r&&r.error)||'Erro'); });
+  if(document.getElementById('opAdd')) document.getElementById('opAdd').onclick = async ()=>{ const r = await crm({ op:'oportunidadeSalvar', ...alvo, titulo:document.getElementById('opTit').value, valor:document.getElementById('opVal').value }); if(r&&r.ok){ showToast('Oportunidade criada.'); recarregar('ops'); } else showToast((r&&r.error)||'Erro'); };
+  document.querySelectorAll('[data-mv]').forEach(sel=> sel.onchange = async ()=>{ let motivo; if(sel.value==='perdido') motivo = prompt('Motivo da perda (opcional):')||''; const r = await crm({ op:'oportunidadeMover', id:sel.dataset.mv, etapa:sel.value, motivo }); if(r&&r.ok) recarregar('ops'); else showToast((r&&r.error)||'Erro'); });
+  if(document.getElementById('ntAdd')) document.getElementById('ntAdd').onclick = async ()=>{ const r = await crm({ op:'notaAdd', ...alvo, texto:document.getElementById('ntTxt').value }); if(r&&r.ok){ showToast('Nota salva.'); recarregar('notas'); } else showToast((r&&r.error)||'Erro'); };
+}
+async function modalTarefas(todas){
+  abrirModal('<p class="muted">Carregando…</p>'); document.getElementById('modalBox').classList.add('largo');
+  const r = await crm({ op:'minhasTarefas', todas: !!todas }); if(!r||r.error){ fecharModal(); showToast((r&&r.error)||'Erro'); return; }
+  const venc = r.data.filter(prazoVencido);
+  abrirModal(`<h2>✅ ${todas?'Tarefas de toda a equipe':'Minhas tarefas'} <span class="muted" style="font-size:12px;">${r.data.length} abertas · ${venc.length} atrasadas</span></h2>${estado.gestao?`<div class="abas"><button class="${todas?'':'on'}" id="tkMinhas">Minhas</button><button class="${todas?'on':''}" id="tkTodas">Equipe</button></div>`:''}` +
+    (r.data.map(t=>`<div class="cartao"><div><div class="t">${escapeHtml(t.titulo)}</div><div class="x" style="${prazoVencido(t)?'color:#dc2626;font-weight:700':''}">${t.prazo?'⏰ '+fmtHora(t.prazo):'sem prazo'} · ${escapeHtml(t.contato_nome||'')} ${todas?'· '+escapeHtml(t.responsavel_nome||''):''}</div></div><div style="display:flex;gap:6px;">${t.conversa_id?`<button class="btn btn-sm" data-ab="${t.conversa_id}">Abrir conversa</button>`:''}<button class="btn btn-sm btn-accent" data-ok="${t.id}">✔</button></div></div>`).join('') || '<p class="muted">Nenhuma tarefa aberta. 🎉</p>') + `<div class="rodape"><button class="btn" id="mCancel">Fechar</button></div>`);
+  document.getElementById('modalBox').classList.add('largo');
+  document.getElementById('mCancel').onclick = fecharModal;
+  if(document.getElementById('tkMinhas')){ document.getElementById('tkMinhas').onclick = ()=>modalTarefas(false); document.getElementById('tkTodas').onclick = ()=>modalTarefas(true); }
+  document.querySelectorAll('[data-ok]').forEach(b=> b.onclick = async ()=>{ const x = await crm({ op:'tarefaStatus', id:b.dataset.ok, status:'feita' }); if(x&&x.ok){ modalTarefas(todas); contarTarefas(); } else showToast((x&&x.error)||'Erro'); });
+  document.querySelectorAll('[data-ab]').forEach(b=> b.onclick = ()=>{ fecharModal(); abrirConversa(b.dataset.ab); });
+}
+async function modalFunil(todas){
+  abrirModal('<p class="muted">Carregando…</p>'); document.getElementById('modalBox').classList.add('largo');
+  const r = await crm({ op:'funil', todas: !!todas }); if(!r||r.error){ fecharModal(); showToast((r&&r.error)||'Erro'); return; }
+  const col = e => r.data.filter(o=>o.etapa===e);
+  abrirModal(`<h2>🧭 Funil de oportunidades</h2>${estado.gestao?`<div class="abas"><button class="${todas?'':'on'}" id="fnMinhas">Minhas</button><button class="${todas?'on':''}" id="fnTodas">Equipe</button></div>`:''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">${r.etapas.map(e=>`<div style="background:var(--surface-2);border-radius:10px;padding:8px;"><div style="font-weight:700;font-size:12px;">${ETAPA_NOME[e]} <span class="muted">(${col(e).length}${col(e).some(o=>o.valor)?' · '+brl(col(e).reduce((s,o)=>s+(Number(o.valor)||0),0)):''})</span></div>${col(e).map(o=>`<div style="background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:6px;font-size:12px;"><b>${escapeHtml(o.titulo)}</b><div class="muted">${escapeHtml(o.contato_nome||'')}${o.valor?' · '+brl(o.valor):''}</div>${todas?`<div class="muted">${escapeHtml(o.responsavel_nome||'')}</div>`:''}<select data-mv="${o.id}" style="width:100%;margin-top:4px;font-size:11px;">${r.etapas.map(k=>`<option value="${k}" ${o.etapa===k?'selected':''}>${ETAPA_NOME[k]}</option>`).join('')}</select>${o.conversa_id?`<button class="btn btn-sm" style="margin-top:4px;" data-ab="${o.conversa_id}">Conversa</button>`:''}</div>`).join('')}</div>`).join('')}</div><div class="rodape"><button class="btn" id="mCancel">Fechar</button></div>`);
+  document.getElementById('modalBox').classList.add('largo');
+  document.getElementById('mCancel').onclick = fecharModal;
+  if(document.getElementById('fnMinhas')){ document.getElementById('fnMinhas').onclick = ()=>modalFunil(false); document.getElementById('fnTodas').onclick = ()=>modalFunil(true); }
+  document.querySelectorAll('[data-mv]').forEach(sel=> sel.onchange = async ()=>{ let motivo; if(sel.value==='perdido') motivo = prompt('Motivo da perda (opcional):')||''; const x = await crm({ op:'oportunidadeMover', id:sel.dataset.mv, etapa:sel.value, motivo }); if(x&&x.ok) modalFunil(todas); else showToast((x&&x.error)||'Erro'); });
+  document.querySelectorAll('[data-ab]').forEach(b=> b.onclick = ()=>{ fecharModal(); abrirConversa(b.dataset.ab); });
+}
+
 /* ================= ENVIO ================= */
 async function enviarTexto(){
   const t = document.getElementById('texto'); const texto = t.value.trim(); if(!texto || !estado.atual) return;
@@ -767,6 +851,8 @@ document.getElementById('filtros').querySelectorAll('button').forEach(b=> b.addE
 let tb; document.getElementById('busca').addEventListener('input', e=>{ clearTimeout(tb); tb=setTimeout(()=>{ estado.busca=e.target.value.trim(); carregarLista(); }, 350); });
 document.getElementById('btnNova').addEventListener('click', modalNova);
 document.getElementById('btnConfig').addEventListener('click', ()=> modalAdmin('bots'));
+document.getElementById('btnTarefas').addEventListener('click', ()=> modalTarefas());
+document.getElementById('btnFunil').addEventListener('click', ()=> modalFunil());
 document.getElementById('btnOnline').addEventListener('click', async ()=>{ const novo = !(estado.meuReg && estado.meuReg.online); const r = await api({ op:'meuStatus', online:novo }); if(r&&r.ok){ estado.meuReg = Object.assign(estado.meuReg||{}, { online:novo }); renderOnline(); showToast(novo?'Você está online.':'Você está offline.'); carregarStatus(); } });
 document.getElementById('filtroBot').addEventListener('change', e=>{ estado.botId = e.target.value; renderFiltrosBotDep(); carregarLista(); carregarStatus(); });
 document.getElementById('filtroDep').addEventListener('change', e=>{ estado.depId = e.target.value; carregarLista(); });
@@ -806,7 +892,7 @@ window.addEventListener('message', async ev=>{
     currentUser = d.user; __gatewaySenha = currentUser ? currentUser.senha : null; config = d.configCache || {};
     if(!config.funcionarios){ const r = await gateway({ op:'getConfig' }); if(r && r.data) config = r.data; }
     if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'atendimento', tabs:[], active:null }, '*');
-    await carregarStatus(); await carregarLista(); iniciarPolling(); sincronizarFotos();
+    await carregarStatus(); await carregarLista(); iniciarPolling(); sincronizarFotos(); contarTarefas();
   }
 });
 window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'ready', modulo:'atendimento' }, '*'); });
