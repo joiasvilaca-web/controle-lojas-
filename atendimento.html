@@ -102,6 +102,16 @@ button{cursor:pointer;}
 .tag-sug button{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);}
 .tag-sug button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
 .voltar-lista{display:none;}
+.chat-vazio.painel{display:block;overflow:auto;text-align:left;padding:14px 18px;color:var(--ink);font-size:13px;}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px;}
+.kpi{background:var(--accent);color:#fff;border-radius:10px;padding:10px 12px;cursor:default;} .kpi b{display:block;font-size:22px;line-height:1.1;margin-top:4px;} .kpi span{font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;opacity:.9;}
+.kpi.cl{cursor:pointer;}
+.ptab{width:100%;border-collapse:collapse;margin-bottom:16px;} .ptab th{font-size:10.5px;text-transform:uppercase;color:var(--ink-soft);text-align:center;padding:6px 4px;border-bottom:1px solid var(--line);} .ptab th:first-child{text-align:left;}
+.ptab td{padding:5px 4px;border-bottom:1px solid var(--line);text-align:center;} .ptab td:first-child{text-align:left;font-weight:700;}
+.ptab tr.lin{cursor:pointer;} .ptab tr.lin:hover{background:var(--surface-2);} .ptab tr.sel{background:var(--surface-2);}
+.pill{display:inline-block;min-width:34px;padding:2px 8px;border-radius:6px;color:#fff;font-weight:700;font-size:12px;cursor:pointer;} .pill.z{background:transparent;color:var(--ink-faint);font-weight:400;cursor:default;}
+.pill.g{background:#16a34a;} .pill.b{background:#2563eb;} .pill.o{background:#f59e0b;} .pill.r{background:#dc2626;}
+.fx{display:none;margin:6px 0 0;font-size:12px;} .fx button{margin-left:6px;}
 .modal.largo{max-width:760px;}
 .abas{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;} .abas button{padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font-size:12.5px;font-weight:700;}
 .abas button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
@@ -137,12 +147,14 @@ button{cursor:pointer;}
         <button class="btn btn-sm" id="btnNova">➕ Nova conversa</button>
         <button class="btn btn-sm" id="btnConfig" style="display:none;">⚙️ Administrar</button>
         <button class="btn btn-sm" id="btnOnline" title="Ficar online/offline para receber atendimentos">⚪ Offline</button>
+        <button class="btn btn-sm" id="btnPainel" style="display:none;" title="Painel de acompanhamento de todas as conversas">📊 Painel</button>
         <button class="btn btn-sm" id="btnTarefas" title="Minhas tarefas do CRM">✅ Tarefas<span class="n" id="n_tarefas"></span></button>
         <button class="btn btn-sm" id="btnFunil" title="Funil de oportunidades">🧭 Funil</button>
         <button class="btn btn-sm" id="btnAtualizar" title="Atualizar">↻</button>
         <button class="btn btn-sm" id="btnSom" title="Aviso sonoro de mensagem nova">🔔</button>
       </div>
     </div>
+    <div class="fx" id="fxInfo"></div>
     <div class="resumo" id="resumo" style="display:none;"></div>
     <div class="conversas" id="conversas"><p class="muted" style="padding:14px;">Carregando…</p></div>
   </aside>
@@ -151,6 +163,7 @@ button{cursor:pointer;}
     <div id="chatArea" style="display:none;flex:1;flex-direction:column;min-height:0;">
       <div class="chat-head">
         <button class="btn btn-sm voltar-lista" id="btnVoltarLista">←</button>
+        <button class="btn btn-sm" id="btnVoltarPainel" style="display:none;" title="Voltar ao painel">📊</button>
         <div class="avatar" id="chAvatar"></div>
         <div class="titulo"><b id="chNome"></b><span class="muted" id="chSub"></span></div>
         <div class="acoes" id="chAcoes"></div>
@@ -195,7 +208,7 @@ const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 const EMBEDDED = window.parent !== window;
 
 let __gatewaySenha = null, currentUser = null, config = {};
-let estado = { filtro:'minhas', busca:'', conversas:[], atual:null, mensagens:[], gestao:false, meuId:null, meuNome:'', setores:[], respostas:[], instancias:{}, canal:'', variosCanais:false, limite:80, temAntigas:false, aviso:true, bots:[], departamentos:[], atendentes:[], funcionarios:[], meuReg:null, botId:'', depId:'' };
+let estado = { filtro:'minhas', busca:'', conversas:[], atual:null, mensagens:[], gestao:false, meuId:null, meuNome:'', setores:[], respostas:[], instancias:{}, canal:'', variosCanais:false, limite:80, temAntigas:false, aviso:true, bots:[], departamentos:[], atendentes:[], funcionarios:[], meuReg:null, botId:'', depId:'', fx:{dep:'',at:'',st:''}, painel:false, todas:[] };
 let pollTimer = null;
 const urlsMidia = {};
 
@@ -289,13 +302,13 @@ async function carregarLista(silencioso){
     if(!silencioso) showToast(r.error || 'Erro ao carregar');
     return;
   }
-  estado.conversas = r.data || [];
+  estado.conversas = aplicarFx(r.data || []);
   renderLista();
   contadores();
 }
 async function contadores(){
   // Reaproveita a lista já carregada quando ela é exatamente a de "Minhas" ou a da "Fila" (uma chamada a menos a cada ciclo)
-  const limpa = !estado.busca && !estado.canal && !estado.botId && !estado.depId;
+  const limpa = !estado.busca && !estado.canal && !estado.botId && !estado.depId && !temFx();
   const pronta = f => (limpa && estado.filtro===f) ? Promise.resolve({ data: estado.conversas }) : api({ op:'listarConversas', filtro:f });
   const [m, f] = await Promise.all([ pronta('minhas'), pronta('fila') ]);
   const nm = (m && m.data) ? m.data.reduce((a,c)=>a+(c.nao_lidas||0),0) : 0;
@@ -328,7 +341,8 @@ async function abrirConversa(id){
   if(!r || r.error){ showToast(r && r.error || 'Erro ao abrir'); return; }
   estado.atual = r.conversa; estado.mensagens = r.data || []; estado.temAntigas = estado.mensagens.length >= estado.limite;
   document.getElementById('app').classList.add('ver-chat');
-  document.getElementById('chatVazio').style.display='none';
+  document.getElementById('chatVazio').style.display='none'; estado.painel=false;
+  document.getElementById('btnVoltarPainel').style.display = estado.gestao ? '' : 'none';
   const area = document.getElementById('chatArea'); area.style.display='flex';
   renderHead(); renderMsgs(true); renderLista();
   if(estado.atual.nao_lidas){ await api({ op:'marcarLida', conversaId:id }); estado.atual.nao_lidas=0; contadores(); }
@@ -740,6 +754,76 @@ async function modalFunil(todas){
   document.querySelectorAll('[data-ab]').forEach(b=> b.onclick = ()=>{ fecharModal(); abrirConversa(b.dataset.ab); });
 }
 
+
+/* ================= PAINEL (DASHBOARD) ================= */
+function temFx(){ const f=estado.fx; return !!(f.dep||f.at||f.st); }
+function aplicarFx(lista){
+  const f = estado.fx; if(!temFx()) return lista;
+  return lista.filter(c=>{
+    if(f.dep) { if(f.dep==='__none' ? !!c.departamento_id : c.departamento_id!==f.dep) return false; }
+    if(f.at) { if(f.at==='__fila' ? !!c.atendente_id : c.atendente_id!==f.at) return false; }
+    if(f.st==='aguardando' && c.status!=='aguardando') return false;
+    if(f.st==='em_atendimento' && c.status!=='em_atendimento') return false;
+    if(f.st==='nao_lidas' && !(c.nao_lidas>0)) return false;
+    return true;
+  });
+}
+function descFx(){
+  const f=estado.fx; const p=[];
+  if(f.dep) p.push(f.dep==='__none'?'sem departamento':(estado.departamentos.find(d=>d.id===f.dep)||{}).nome||'departamento');
+  if(f.at) p.push(f.at==='__fila'?'na fila (sem atendente)':'atendente '+((estado.atendentes.find(a=>a.funcionario_id===f.at)||{}).nome||''));
+  if(f.st) p.push({aguardando:'pendentes',em_atendimento:'em atendimento',nao_lidas:'com mensagens novas'}[f.st]);
+  return p.join(' · ');
+}
+function atualizarFxInfo(){
+  const el=document.getElementById('fxInfo');
+  if(!temFx()){ el.style.display='none'; el.innerHTML=''; return; }
+  el.style.display='block'; el.innerHTML=`<span style="padding:0 12px;">🔎 ${escapeHtml(descFx())}<button class="btn btn-sm" id="fxLimpar">limpar</button></span>`;
+  document.getElementById('fxLimpar').onclick = ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); carregarLista(); if(estado.painel) renderPainel(); };
+}
+function ativarAba(f){ estado.filtro=f; document.querySelectorAll('#filtros button').forEach(x=>x.classList.toggle('active',x.dataset.f===f)); }
+function filtrarPeloPainel(fx){
+  estado.fx = Object.assign({dep:'',at:'',st:''}, fx); ativarAba('todas'); atualizarFxInfo(); carregarLista();
+  document.getElementById('app').classList.remove('ver-chat'); renderPainel();
+}
+async function abrirPainel(){
+  estado.painel = true; estado.atual = null;
+  document.getElementById('chatArea').style.display='none';
+  const v = document.getElementById('chatVazio'); v.style.display='block'; v.classList.add('painel');
+  document.getElementById('app').classList.add('ver-chat');
+  await atualizarPainel();
+}
+async function atualizarPainel(){
+  const r = await api({ op:'listarConversas', filtro:'todas', botId: estado.botId || undefined });
+  if(r && r.ok){ estado.todas = r.data||[]; renderPainel(); }
+}
+function renderPainel(){
+  if(!estado.painel) return;
+  const L = estado.todas, f = estado.fx;
+  const novas = c=>c.nao_lidas||0;
+  const tot = a=>({ novas:a.reduce((s,c)=>s+novas(c),0), ativos:a.filter(c=>c.status==='em_atendimento').length, pend:a.filter(c=>c.status==='aguardando').length });
+  const T = tot(L); const online = estado.atendentes.filter(a=>a.online).length;
+  const pill = (n,cor,fx)=> n ? `<span class="pill ${cor}" data-fx='${JSON.stringify(fx).replace(/'/g,'&#39;')}'>${n}</span>` : `<span class="pill z">0</span>`;
+  const linha = (nome, sub, a, base, sel)=>{ const t=tot(a); return `<tr class="lin ${sel?'sel':''}" data-fx='${JSON.stringify(base).replace(/'/g,'&#39;')}'><td>${escapeHtml(nome)}<div class="muted" style="font-weight:400;font-size:11px;">${sub}</div></td><td>${pill(t.novas,'g',Object.assign({},base,{st:'nao_lidas'}))}</td><td>${pill(t.ativos,'b',Object.assign({},base,{st:'em_atendimento'}))}</td><td>${pill(t.pend,'o',Object.assign({},base,{st:'aguardando'}))}</td></tr>`; };
+  const deps = estado.departamentos.filter(d=>d.ativo);
+  const semDep = L.filter(c=>!c.departamento_id);
+  const ats = estado.atendentes.slice().sort((a,b)=>(b.online?1:0)-(a.online?1:0)||String(a.nome).localeCompare(String(b.nome),'pt-BR'));
+  const filaSem = L.filter(c=>!c.atendente_id);
+  const kp = (rot,val,fx)=>`<div class="kpi ${fx?'cl':''}" ${fx?`data-fx='${JSON.stringify(fx)}'`:''}><span>${rot}</span><b>${val}</b></div>`;
+  const box = document.getElementById('chatVazio');
+  box.innerHTML = `<h2 style="margin:0 0 10px;font-size:16px;">📊 Painel de atendimento <span class="muted" style="font-size:12px;font-weight:400;">· clique em uma linha ou número para ver as conversas ao lado</span></h2>
+    <div class="kpis">${kp('Atendentes online',online)}${kp('Mensagens novas',T.novas,{st:'nao_lidas'})}${kp('Atendimentos ativos',T.ativos,{st:'em_atendimento'})}${kp('Pendentes (fila)',T.pend,{st:'aguardando'})}${kp('Sem atendente',filaSem.length,{at:'__fila'})}${kp('Conversas abertas',L.length,{})}</div>
+    <table class="ptab"><thead><tr><th>Departamento</th><th>Novas msgs</th><th>Ativos</th><th>Pendentes</th></tr></thead><tbody>
+      ${deps.map(d=>linha(d.nome, (estado.bots.find(b=>b.id===d.bot_id)||{}).nome||'todos os bots', L.filter(c=>c.departamento_id===d.id), {dep:d.id}, f.dep===d.id && !f.st)).join('')}
+      ${linha('Sem departamento','ainda não classificadas', semDep, {dep:'__none'}, f.dep==='__none' && !f.st)}
+    </tbody></table>
+    <table class="ptab"><thead><tr><th>Atendente</th><th>Novas msgs</th><th>Ativos</th><th>Pendentes</th></tr></thead><tbody>
+      ${ats.map(a=>linha(a.nome, a.online?'🟢 online':'⚪ offline', L.filter(c=>c.atendente_id===a.funcionario_id), {at:a.funcionario_id}, f.at===a.funcionario_id && !f.st)).join('')}
+      ${linha('Fila (sem atendente)','aguardando alguém assumir', filaSem, {at:'__fila'}, f.at==='__fila' && !f.st)}
+    </tbody></table>`;
+  box.querySelectorAll('[data-fx]').forEach(el=> el.addEventListener('click', ev=>{ ev.stopPropagation(); filtrarPeloPainel(JSON.parse(el.getAttribute('data-fx'))); }));
+}
+
 /* ================= ENVIO ================= */
 async function enviarTexto(){
   const t = document.getElementById('texto'); const texto = t.value.trim(); if(!texto || !estado.atual) return;
@@ -810,7 +894,8 @@ async function carregarStatus(){
   document.getElementById('btnConfig').style.display = estado.gestao ? '' : 'none';
   if(estado.gestao){
     const s = await api({ op:'resumo', botId: estado.botId || undefined });
-    if(s && s.ok){ const box = document.getElementById('resumo'); box.style.display='flex'; box.innerHTML = `<span>Fila: <b>${s.porStatus.aguardando||0}</b></span><span>Em atendimento: <b>${s.porStatus.em_atendimento||0}</b></span><span>Não lidas: <b>${s.naoLidas}</b></span>` + Object.entries(s.porAtendente).filter(([k])=>k!=='(fila)').map(([k,v])=>`<span>${escapeHtml(k)}: <b>${v}</b></span>`).join('') + '<div style="flex-basis:100%;height:0"></div>' + Object.entries(s.porDepartamento||{}).map(([k,v])=>`<span title="ativos / pendentes">🏷 ${escapeHtml(k)}: <b>${v.ativos}</b> / <b style="color:#d97706">${v.pendentes}</b></span>`).join(''); }
+    if(s && s.ok){ const box = document.getElementById('resumo'); box.style.display='flex'; box.innerHTML = `<span>Fila: <b>${s.porStatus.aguardando||0}</b></span><span>Em atendimento: <b>${s.porStatus.em_atendimento||0}</b></span><span>Não lidas: <b>${s.naoLidas}</b></span>`; }
+  document.getElementById('btnPainel').style.display = '';
   }
 }
 
@@ -834,7 +919,7 @@ async function sincronizarFotos(){
 function iniciarPolling(){
   if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
   async function tick(){
-    try{ await carregarLista(true); await atualizarMensagens(); }catch(e){ console.error('poll',e); }
+    try{ await carregarLista(true); await atualizarMensagens(); if(estado.painel) await atualizarPainel(); }catch(e){ console.error('poll',e); }
     finally{ pollTimer = setTimeout(tick, document.hidden ? 15000 : 5000); }
   }
   pollTimer = setTimeout(tick, 5000);
@@ -852,6 +937,8 @@ let tb; document.getElementById('busca').addEventListener('input', e=>{ clearTim
 document.getElementById('btnNova').addEventListener('click', modalNova);
 document.getElementById('btnConfig').addEventListener('click', ()=> modalAdmin('bots'));
 document.getElementById('btnTarefas').addEventListener('click', ()=> modalTarefas());
+document.getElementById('btnPainel').addEventListener('click', ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); abrirPainel(); });
+document.getElementById('btnVoltarPainel').addEventListener('click', ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); carregarLista(); abrirPainel(); });
 document.getElementById('btnFunil').addEventListener('click', ()=> modalFunil());
 document.getElementById('btnOnline').addEventListener('click', async ()=>{ const novo = !(estado.meuReg && estado.meuReg.online); const r = await api({ op:'meuStatus', online:novo }); if(r&&r.ok){ estado.meuReg = Object.assign(estado.meuReg||{}, { online:novo }); renderOnline(); showToast(novo?'Você está online.':'Você está offline.'); carregarStatus(); } });
 document.getElementById('filtroBot').addEventListener('change', e=>{ estado.botId = e.target.value; renderFiltrosBotDep(); carregarLista(); carregarStatus(); });
