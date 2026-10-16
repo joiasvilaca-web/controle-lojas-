@@ -160,6 +160,7 @@ button{cursor:pointer;}
         <button class="mbtn" id="btnPainel" style="display:none;" title="Painel de acompanhamento de todas as conversas"><span class="ic">📊</span>Painel</button>
         <button class="mbtn" id="btnTarefas" title="Minhas tarefas do CRM"><span class="ic">✅</span>Tarefas<span class="n" id="n_tarefas"></span></button>
         <button class="mbtn" id="btnFunil" title="Funil de oportunidades"><span class="ic">🧭</span>Funil</button>
+        <button class="mbtn" id="btnModelos" title="Mensagens prontas e etiquetas"><span class="ic">💬</span>Modelos</button>
         <button class="mbtn" id="btnConfig" style="display:none;" title="Bots, departamentos, equipe e respostas"><span class="ic">⚙️</span>Administrar</button>
       </div>
       <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
@@ -385,7 +386,7 @@ function renderHead(){
   if(!podeResponder()){ bloq.style.display='block'; bloq.textContent = `Esta conversa está com ${c.atendente_nome||'outro atendente'}. Só ele(a) ou a gestão responde.`; document.getElementById('compose').style.display='none'; }
   else { bloq.style.display='none'; document.getElementById('compose').style.display='block'; }
   document.getElementById('rapidas').innerHTML = estado.respostas.map((r,i)=>`<button data-i="${i}" title="${escapeHtml(r.texto)}">${escapeHtml(r.titulo)}</button>`).join('');
-  document.getElementById('rapidas').querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=>{ const t=document.getElementById('texto'); t.value = (t.value?t.value+'\n':'') + estado.respostas[b.dataset.i].texto; t.focus(); }));
+  document.getElementById('rapidas').querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=> usarModelo(estado.respostas[b.dataset.i])));
 }
 function bubbleHtml(m){
   if(m.tipo==='sistema') return `<div class="bubble sis">${escapeHtml(m.texto||'')}</div>`;
@@ -453,9 +454,9 @@ async function atualizarMensagens(){
 /* ================= AÇÕES ================= */
 async function acao(a){
   const c = estado.atual; if(!c) return;
-  if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa assumida.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa assumida.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='finalizar'){ if(!confirm('Finalizar este atendimento?')) return; const r = await api({ op:'finalizar', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'finalizou', conversaId:c.id }); showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
-  if(a==='reabrir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='reabrir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='transferir') modalTransferir();
   if(a==='crm') modalCRM();
   if(a==='cliente') modalCliente();
@@ -484,6 +485,7 @@ function modalTags(){
   const usadas = [...new Set(estado.conversas.flatMap(x=>x.tags||[]).concat(estado.atual.tags||[]))].sort((a,b)=>a.localeCompare(b,'pt-BR')).slice(0,30);
   const lerTags = ()=> document.getElementById('tTags').value.split(',').map(t=>t.trim()).filter(Boolean);
   const pintarSug = ()=>{ const at = lerTags(); document.getElementById('tSug').innerHTML = usadas.map((t,i)=>`<button type="button" data-i="${i}" class="${at.includes(t)?'on':''}">${escapeHtml(t)}</button>`).join(''); document.getElementById('tSug').querySelectorAll('button').forEach(b=> b.onclick = ()=>{ const t = usadas[b.dataset.i]; let l = lerTags(); l = l.includes(t) ? l.filter(x=>x!==t) : l.concat(t); document.getElementById('tTags').value = l.join(', '); pintarSug(); }); };
+  const cat = (estado.tags||[]); if(cat.length){ const bx = document.createElement('div'); bx.className='tag-sug'; bx.innerHTML = '<div class="muted" style="width:100%">Etiquetas cadastradas:</div>' + cat.map((t,i)=>`<button type="button" data-c="${i}" style="border-left:4px solid ${escapeHtml(t.cor)}">${escapeHtml(t.nome)}</button>`).join(''); document.getElementById('tSug').before(bx); bx.querySelectorAll('button').forEach(b=> b.onclick = ()=>{ const n = cat[+b.dataset.c].nome, at = lerTags(); document.getElementById('tTags').value = (at.includes(n) ? at.filter(x=>x!==n) : at.concat(n)).join(', '); pintarSug(); }); }
   pintarSug(); document.getElementById('tTags').addEventListener('input', pintarSug);
   document.getElementById('mOk').onclick = async ()=>{
     const tags = document.getElementById('tTags').value.split(',').map(t=>t.trim()).filter(Boolean);
@@ -568,7 +570,7 @@ function resumoHorario(h){ if(!h||!h.dias) return 'sem restrição (24h)'; const
 let adminAba = 'bots';
 function modalAdmin(aba){
   adminAba = aba || adminAba;
-  const abas = [['bots','🤖 Bots e canais'],['fluxo','💬 Mensagens do bot'],['deps','🏷 Departamentos'],['equipe','👥 Equipe'],['respostas','💬 Respostas rápidas']];
+  const abas = [['bots','🤖 Bots e canais'],['fluxo','💬 Mensagens do bot'],['deps','🏷 Departamentos'],['equipe','👥 Equipe']];
   const box = document.getElementById('modalBox'); box.classList.add('largo');
   abrirModal(`<h2>Administrar Atendimento</h2><div class="abas" id="abAbas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===adminAba?'on':''}">${t}</button>`).join('')}</div><div id="abCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
   document.getElementById('modalBox').classList.add('largo');
@@ -703,7 +705,8 @@ const MSG_PADRAO = {
   encerramento: "Atendimento finalizado. Obrigado por falar com a {{empresa}}! 💎",
   enquete: "De 1 a 5, como você avalia o atendimento que recebeu? (1 = ruim, 5 = excelente)",
   enquete_invalida: "Por favor, responda apenas com um número de 1 a 5.",
-  enquete_obrigado: "Obrigado pela avaliação! 💎"
+  enquete_obrigado: "Obrigado pela avaliação! 💎",
+  atendente_assumiu: "{{atendente}} iniciou o seu atendimento. 😊"
 };
 const MSG_ROTULO = [
   ['boasvindas','Boas-vindas','Primeira mensagem, enviada quando o cliente chama.'],
@@ -717,7 +720,8 @@ const MSG_ROTULO = [
   ['encerramento','Encerramento','Enviada quando o atendente finaliza (se ligado em Opções).'],
   ['enquete','Enquete: pergunta','Pergunta da nota de 1 a 5 após finalizar (se ligada).'],
   ['enquete_invalida','Enquete: resposta inválida',''],
-  ['enquete_obrigado','Enquete: agradecimento','']
+  ['enquete_obrigado','Enquete: agradecimento',''],
+  ['atendente_assumiu','Atendente iniciou','Enviada ao cliente quando um atendente assume (se ligado em Opções).']
 ];
 let fluxoBotId = null;
 function abaFluxo(){
@@ -745,6 +749,8 @@ function abaFluxo(){
       <div class="field"><label>Dígito para voltar ao menu</label><input id="flVoltar" value="${escapeHtml(f.voltar_digito||'9')}" maxlength="3" style="width:80px;"></div>
       <div class="field"><label>Recomeçar com boas-vindas após (horas sem conversa)</label><input id="flHoras" type="number" min="1" max="168" value="${Number(f.reenviar_apos_horas)||12}" style="width:100px;"></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="flEnc" ${f.enviar_encerramento?'checked':''}> Enviar mensagem de encerramento ao finalizar</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="flAss" ${f.avisar_assumiu?'checked':''}> Avisar o cliente quando um atendente assumir</label>
+      <div class="field"><label>Distribuição das conversas</label><select id="flDist"><option value="manual" ${f.distribuicao!=='online'?'selected':''}>Manual: fica na fila do departamento até alguém assumir</option><option value="online" ${f.distribuicao==='online'?'selected':''}>Automática: vai para quem está online no departamento (menos conversas)</option></select></div>
       <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input type="checkbox" id="flEnq" ${f.enquete&&f.enquete.ativa?'checked':''}> Pedir nota de 1 a 5 (enquete de satisfação) ao finalizar</label></div></details>
     <details class="sec"><summary>👁 Pré-visualização</summary><div><div class="prev" id="flPrev"></div></div></details>
     <div class="rodape"><button class="btn btn-accent" id="flSalvar">Salvar</button></div>`;
@@ -752,7 +758,7 @@ function abaFluxo(){
     const msgs = {}; c.querySelectorAll('[data-m]').forEach(t=>{ msgs[t.dataset.m] = t.value; });
     const menu = [...c.querySelectorAll('.fm')].map(r=>({ n:r.querySelector('.mn').value.trim(), departamento_id:r.querySelector('.md').value, rotulo:r.querySelector('.mr').value.trim() })).filter(x=>x.n&&x.departamento_id);
     const palavras = [...c.querySelectorAll('.fp')].map(r=>({ chaves:r.querySelector('.pk').value.split(',').map(x=>x.trim()).filter(Boolean), resposta:r.querySelector('.pr').value, departamento_id:r.querySelector('.pd').value||null })).filter(x=>x.chaves.length&&(x.resposta||x.departamento_id));
-    return { ativo:document.getElementById('flAtivo').checked, empresa:document.getElementById('flEmp').value, voltar_digito:document.getElementById('flVoltar').value, reenviar_apos_horas:Number(document.getElementById('flHoras').value)||12, enviar_encerramento:document.getElementById('flEnc').checked, enquete:{ ativa:document.getElementById('flEnq').checked }, msgs, menu, palavras };
+    return { ativo:document.getElementById('flAtivo').checked, empresa:document.getElementById('flEmp').value, voltar_digito:document.getElementById('flVoltar').value, reenviar_apos_horas:Number(document.getElementById('flHoras').value)||12, enviar_encerramento:document.getElementById('flEnc').checked, enquete:{ ativa:document.getElementById('flEnq').checked }, avisar_assumiu:document.getElementById('flAss').checked, distribuicao:document.getElementById('flDist').value, msgs, menu, palavras };
   };
   const prev = ()=>{
     const x = ler(); const v = t=> String(t||'').replace(/\{\{\s*(empresa|client\.name)\s*\}\}/g, x.empresa).replace(/\{\{\s*[\w.]+\s*\}\}/g,'…');
@@ -770,6 +776,117 @@ function abaFluxo(){
     const r = await botApi({ op:'fluxoSalvar', botId:fluxoBotId, fluxo:x });
     if(r&&r.ok){ showToast(x.ativo?'Salvo. Atendimento automático LIGADO.':'Salvo. Atendimento automático desligado.'); await carregarStatus(); abaFluxo(); } else showToast((r&&r.error)||'Erro ao salvar');
   };
+}
+
+
+/* ================= CATÁLOGO: modelos de mensagem e etiquetas ================= */
+async function carregarCatalogo(){
+  const r = await botApi({ op:'catalogo' });
+  if(r && r.ok){
+    estado.modelos = r.modelos||[]; estado.tags = r.tags||[];
+    const dep = estado.atual ? estado.atual.departamento_id : null;
+    estado.respostas = estado.modelos.filter(m=> !m.departamento_id || !dep || m.departamento_id===dep || true).map(m=>({ id:m.id, titulo:m.titulo, atalho:m.atalho, mensagens:m.mensagens||[], texto:(m.mensagens||[])[0]||'' }));
+    if(estado.atual) renderHead();
+  }
+}
+function substModelo(t){
+  const c = estado.atual || {};
+  return String(t||'').replace(/\{\{\s*([\w.]+)\s*\}\}/g,(_m,k)=>({ contato:c.contato_nome||'', 'contact.name':c.contato_nome||'', atendente:estado.meuNome||'', empresa:'Vilaça Joias', 'client.name':'Vilaça Joias', protocolo:String(c.id||'').slice(0,8).toUpperCase(), 'ticket.id':String(c.id||'').slice(0,8).toUpperCase() })[k]||'');
+}
+async function usarModelo(r){
+  if(!r || !estado.atual) return;
+  const msgs = (r.mensagens && r.mensagens.length) ? r.mensagens : [r.texto];
+  const t = document.getElementById('texto');
+  if(msgs.length===1){ t.value = (t.value?t.value+'\n':'') + substModelo(msgs[0]); t.focus(); return; }
+  if(!confirm(`Enviar as ${msgs.length} mensagens de “${r.titulo}” agora?`)) return;
+  for(const m of msgs){ const x = await api({ op:'enviarTexto', conversaId:estado.atual.id, texto:substModelo(m) }); if(!x||!x.ok){ showToast((x&&x.error)||'Falhou no envio'); break; } }
+  await atualizarMensagens(); carregarLista(true);
+}
+let catAba = 'modelos';
+function modalCatalogo(aba){
+  catAba = aba || catAba;
+  const box = document.getElementById('modalBox'); box.classList.add('largo');
+  abrirModal(`<h2>Modelos e etiquetas</h2><div class="abas" id="catAbas"><button data-k="modelos" class="${catAba==='modelos'?'on':''}">💬 Mensagens prontas</button><button data-k="tags" class="${catAba==='tags'?'on':''}">🏷 Etiquetas</button></div><div id="catCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
+  document.getElementById('modalBox').classList.add('largo');
+  document.getElementById('mFechar').onclick = ()=>{ document.getElementById('modalBox').classList.remove('largo'); fecharModal(); };
+  document.querySelectorAll('#catAbas button').forEach(b=> b.onclick = ()=> modalCatalogo(b.dataset.k));
+  if(catAba==='modelos') abaModelos(); else abaTags();
+}
+const optDepCat = (sel,vazio)=> `<option value="">${vazio}</option>` + estado.departamentos.filter(d=>d.ativo).map(d=>`<option value="${d.id}" ${sel===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('');
+const depNome = id => (estado.departamentos.find(d=>d.id===id)||{}).nome||'';
+function abaModelos(){
+  const c = document.getElementById('catCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">No campo de mensagem, digite <b>/</b> e o atalho (ex.: <b>/endereco</b>). Um modelo com várias mensagens envia todas em sequência. Variáveis: {{contato}} {{atendente}} {{empresa}} {{protocolo}}.</p>` +
+    ((estado.modelos||[]).map(m=>`<div class="cartao"><div><div class="t">${m.atalho?'/'+escapeHtml(m.atalho)+' · ':''}${escapeHtml(m.titulo)} ${(m.mensagens||[]).length>1?'<span class="muted">('+m.mensagens.length+' msgs)</span>':''}</div><div class="x">${escapeHtml((m.mensagens||[])[0]||'').slice(0,120)}</div><div class="x">${m.compartilhada?'👥 compartilhado'+(m.departamento_id?' · '+escapeHtml(depNome(m.departamento_id)):''):'🔒 só meu'}</div></div>${m.meu?`<button class="btn btn-sm" data-e="${m.id}">Editar</button>`:''}</div>`).join('') || '<p class="muted">Nenhum modelo ainda.</p>') +
+    `<button class="btn btn-accent" id="mdNovo">➕ Novo modelo</button>`;
+  c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formModelo(estado.modelos.find(x=>x.id===b.dataset.e)));
+  document.getElementById('mdNovo').onclick = ()=> formModelo(null);
+}
+function formModelo(m){
+  m = m || { titulo:'', atalho:'', mensagens:[''], compartilhada:estado.gestao, departamento_id:null };
+  const c = document.getElementById('catCorpo');
+  const linha = t=>`<div class="kw fmsg"><textarea>${escapeHtml(t)}</textarea><div style="text-align:right;margin-top:4px;"><button class="btn btn-sm" data-x="1">Remover</button></div></div>`;
+  c.innerHTML = `<div class="field"><label>Título</label><input id="fmTit" value="${escapeHtml(m.titulo)}" placeholder="Ex.: Endereço da loja"></div>
+    <div class="field"><label>Atalho (opcional, sem espaços)</label><input id="fmAt" value="${escapeHtml(m.atalho||'')}" placeholder="endereco"></div>
+    <div class="field"><label>Mensagens (uma ou mais; enviadas em sequência)</label><div id="fmMsgs">${m.mensagens.map(linha).join('')}</div><button class="btn btn-sm" id="fmAdd">➕ Mensagem</button></div>
+    ${estado.gestao?`<div class="field"><label>Departamento</label><select id="fmDep">${optDepCat(m.departamento_id,'Todos os departamentos')}</select></div><label style="display:flex;gap:6px;align-items:center;font-weight:400;"><input type="checkbox" id="fmComp" ${m.compartilhada?'checked':''}> Compartilhado com a equipe</label>`:'<p class="muted">Este modelo será só seu.</p>'}
+    <div class="rodape">${m.id?`<button class="btn btn-danger" id="fmDel">Excluir</button>`:''}<button class="btn" id="fmVoltar">Voltar</button><button class="btn btn-accent" id="fmOk">Salvar</button></div>`;
+  const lig = ()=> c.querySelectorAll('#fmMsgs [data-x]').forEach(b=> b.onclick = ()=> { if(c.querySelectorAll('.fmsg').length>1) b.closest('.fmsg').remove(); });
+  lig();
+  document.getElementById('fmAdd').onclick = ()=>{ document.getElementById('fmMsgs').insertAdjacentHTML('beforeend', linha('')); lig(); };
+  document.getElementById('fmVoltar').onclick = ()=> abaModelos();
+  document.getElementById('fmOk').onclick = async ()=>{
+    const r = await botApi({ op:'modeloSalvar', id:m.id, titulo:document.getElementById('fmTit').value, atalho:document.getElementById('fmAt').value, mensagens:[...c.querySelectorAll('.fmsg textarea')].map(t=>t.value), departamento_id:estado.gestao?(document.getElementById('fmDep').value||null):null, compartilhada:estado.gestao?document.getElementById('fmComp').checked:false });
+    if(r&&r.ok){ showToast('Modelo salvo.'); await carregarCatalogo(); abaModelos(); } else showToast((r&&r.error)||'Erro');
+  };
+  if(document.getElementById('fmDel')) document.getElementById('fmDel').onclick = async ()=>{ if(!confirm('Excluir este modelo?')) return; const r = await botApi({ op:'modeloExcluir', id:m.id }); if(r&&r.ok){ await carregarCatalogo(); abaModelos(); } else showToast((r&&r.error)||'Erro'); };
+}
+function abaTags(){
+  const c = document.getElementById('catCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Etiquetas padronizam a classificação das conversas (botão 🏷️ Tags). ${estado.gestao?'Compartilhadas ficam para toda a equipe ou só para um departamento.':'As suas ficam visíveis só para você.'}</p>` +
+    ((estado.tags||[]).map(t=>`<div class="cartao"><div><div class="t"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${escapeHtml(t.cor)};margin-right:6px;"></span>${escapeHtml(t.nome)}</div><div class="x">${t.compartilhada?'👥 compartilhada'+(t.departamento_id?' · '+escapeHtml(depNome(t.departamento_id)):''):'🔒 só minha'}</div></div>${t.meu?`<button class="btn btn-sm" data-e="${t.id}">Editar</button>`:''}</div>`).join('') || '<p class="muted">Nenhuma etiqueta ainda.</p>') +
+    `<button class="btn btn-accent" id="tgNova">➕ Nova etiqueta</button>`;
+  c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formTag(estado.tags.find(x=>x.id===b.dataset.e)));
+  document.getElementById('tgNova').onclick = ()=> formTag(null);
+}
+function formTag(t){
+  t = t || { nome:'', cor:'#2563eb', compartilhada:estado.gestao, departamento_id:null };
+  const c = document.getElementById('catCorpo');
+  c.innerHTML = `<div class="field"><label>Nome</label><input id="ftNome" value="${escapeHtml(t.nome)}" maxlength="40"></div>
+    <div class="field"><label>Cor</label><input id="ftCor" type="color" value="${escapeHtml(t.cor)}" style="width:60px;height:34px;padding:0;"></div>
+    ${estado.gestao?`<div class="field"><label>Departamento</label><select id="ftDep">${optDepCat(t.departamento_id,'Todos os departamentos')}</select></div><label style="display:flex;gap:6px;align-items:center;font-weight:400;"><input type="checkbox" id="ftComp" ${t.compartilhada?'checked':''}> Compartilhada com a equipe</label>`:''}
+    <div class="rodape">${t.id?`<button class="btn btn-danger" id="ftDel">Excluir</button>`:''}<button class="btn" id="ftVoltar">Voltar</button><button class="btn btn-accent" id="ftOk">Salvar</button></div>`;
+  document.getElementById('ftVoltar').onclick = ()=> abaTags();
+  document.getElementById('ftOk').onclick = async ()=>{ const r = await botApi({ op:'tagSalvar', id:t.id, nome:document.getElementById('ftNome').value, cor:document.getElementById('ftCor').value, departamento_id:estado.gestao?(document.getElementById('ftDep').value||null):null, compartilhada:estado.gestao?document.getElementById('ftComp').checked:false }); if(r&&r.ok){ await carregarCatalogo(); abaTags(); } else showToast((r&&r.error)||'Erro'); };
+  if(document.getElementById('ftDel')) document.getElementById('ftDel').onclick = async ()=>{ if(!confirm('Excluir esta etiqueta? As conversas já etiquetadas mantêm o texto.')) return; const r = await botApi({ op:'tagExcluir', id:t.id }); if(r&&r.ok){ await carregarCatalogo(); abaTags(); } else showToast((r&&r.error)||'Erro'); };
+}
+
+/* ================= PAINEL: desempenho (notas, tempos, picos) ================= */
+estado.kpiDias = estado.kpiDias || 30;
+function fmtSeg(s){ if(s==null) return '—'; s=Number(s); if(s<60) return s+' s'; if(s<3600) return Math.round(s/60)+' min'; return (s/3600).toFixed(1).replace('.',',')+' h'; }
+async function kpiPainel(box){
+  if(!estado.gestao) return;
+  let el = document.getElementById('kpiBox');
+  if(!el){ el = document.createElement('div'); el.id='kpiBox'; box.appendChild(el); }
+  const pintar = ()=>{
+    const k = estado.kpis; if(!k){ el.innerHTML = '<div class="muted" style="padding:10px;">Carregando desempenho…</div>'; return; }
+    const hmax = Math.max(1,...(k.por_hora||[]).map(x=>x.q)); const pico = (k.por_hora||[]).slice().sort((a,b)=>b.q-a.q)[0];
+    const DS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']; const dmax = Math.max(1,...(k.por_dia||[]).map(x=>x.q));
+    const barras = (arr,key,lab,max)=> arr.map(x=>`<div style="flex:1;text-align:center;font-size:10px;"><div style="height:50px;display:flex;align-items:flex-end;"><div style="width:100%;background:var(--accent,#2563eb);border-radius:3px 3px 0 0;height:${Math.max(3,Math.round(50*x.q/max))}px;" title="${x.q} mensagens"></div></div>${lab(x[key])}</div>`).join('');
+    const estrelas = Object.entries(k.notas||{}).sort().map(([n,q])=>`${n}★ ${q}`).join(' · ');
+    el.innerHTML = `<div style="margin-top:16px;border-top:1px solid var(--line,#e5e5e5);padding-top:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;"><b>📈 Desempenho</b><select id="kpiDias" class="busca" style="width:auto;">${[7,30,90].map(d=>`<option value="${d}" ${d===estado.kpiDias?'selected':''}>Últimos ${d} dias</option>`).join('')}</select></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:10px 0;">
+        ${[['Conversas',k.conversas],['Mensagens recebidas',k.recebidas],['Respostas da equipe',k.enviadas_humanas],['Tempo médio de resposta',fmtSeg(k.resp_media_seg)],['Tempo mediano',fmtSeg(k.resp_mediana_seg)],['Nota média',k.nota_media!=null?k.nota_media+' ★ ('+k.total_notas+')':'—'],['Horário de pico',pico?pico.h+'h':'—']].map(([t,v])=>`<div class="cartao" style="display:block;padding:8px 10px;"><div class="muted" style="font-size:11px;">${t}</div><div style="font-size:18px;font-weight:700;">${v==null?'—':v}</div></div>`).join('')}</div>
+      ${estrelas?`<div class="muted" style="margin-bottom:8px;">Notas: ${estrelas}</div>`:''}
+      <div class="muted" style="font-size:11px;">Mensagens recebidas por hora</div><div style="display:flex;gap:2px;margin-bottom:10px;">${barras(k.por_hora||[],'h',h=>h,hmax)}</div>
+      <div class="muted" style="font-size:11px;">Por dia da semana</div><div style="display:flex;gap:4px;margin-bottom:10px;">${barras(k.por_dia||[],'d',d=>DS[d],dmax)}</div>
+      <table class="tb" style="width:100%;font-size:12px;border-collapse:collapse;"><thead><tr style="text-align:left;"><th>Atendente</th><th>Respostas</th><th>Tempo médio</th><th>Nota</th></tr></thead><tbody>${(k.por_atendente||[]).map(a=>`<tr><td>${escapeHtml(a.nome)}</td><td>${a.enviadas}</td><td>${fmtSeg(a.resp_seg)}</td><td>${a.nota!=null?a.nota+' ★ ('+a.avaliacoes+')':'—'}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Sem dados no período.</td></tr>'}</tbody></table></div>`;
+    const sel = document.getElementById('kpiDias'); if(sel) sel.onchange = ()=>{ estado.kpiDias = +sel.value; estado.kpis = null; estado.kpiEm = 0; pintar(); kpiPainel(box); };
+  };
+  pintar();
+  if(estado.kpis && Date.now()-(estado.kpiEm||0) < 60000) return;
+  const r = await botApi({ op:'kpis', dias:estado.kpiDias }); if(r&&r.ok){ estado.kpis = r.kpis; estado.kpiEm = Date.now(); if(estado.painel && document.getElementById('kpiBox')===el) pintar(); }
 }
 
 /* ================= CRM ================= */
@@ -924,6 +1041,7 @@ function renderPainel(){
       ${linha('Fila (sem atendente)','aguardando alguém assumir', filaSem, {at:'__fila'}, f.at==='__fila' && !f.st)}
     </tbody></table>`;
   box.querySelectorAll('[data-fx]').forEach(el=> el.addEventListener('click', ev=>{ ev.stopPropagation(); filtrarPeloPainel(JSON.parse(el.getAttribute('data-fx'))); }));
+  kpiPainel(box);
 }
 
 /* ================= ENVIO ================= */
@@ -966,16 +1084,16 @@ function atualizarSugestoes(){
   box._l = [];
   if(v[0]!=='/' || v.includes('\n') || !estado.respostas.length){ box.style.display='none'; return; }
   const termo = v.slice(1).toLowerCase();
-  const l = estado.respostas.filter(r=> (r.titulo+' '+r.texto).toLowerCase().includes(termo)).slice(0,6);
+  const l = estado.respostas.filter(r=> ((r.atalho||'')+' '+r.titulo+' '+r.texto).toLowerCase().includes(termo)).sort((a,b)=> ((b.atalho||'')===termo)-((a.atalho||'')===termo)).slice(0,6);
   if(!l.length){ box.style.display='none'; return; }
   box._l = l;
-  box.innerHTML = l.map((r,i)=>`<button type="button" data-i="${i}"><b>${escapeHtml(r.titulo)}</b> <span>${escapeHtml(r.texto)}</span></button>`).join('');
+  box.innerHTML = l.map((r,i)=>`<button type="button" data-i="${i}"><b>${r.atalho?'/'+escapeHtml(r.atalho)+' · ':''}${escapeHtml(r.titulo)}${(r.mensagens||[]).length>1?' ('+r.mensagens.length+' msgs)':''}</b> <span>${escapeHtml(r.texto)}</span></button>`).join('');
   box.style.display = 'block';
   box.querySelectorAll('button').forEach(b=> b.onclick = ()=> usarSugestao(+b.dataset.i));
 }
 function usarSugestao(i){
   const t = document.getElementById('texto'), box = document.getElementById('sugestoes'), r = (box._l||[])[i]; if(!r) return false;
-  t.value = r.texto; box._l = []; box.style.display='none'; t.focus(); return true;
+  t.value=''; box._l = []; box.style.display='none'; usarModelo(r); return true;
 }
 
 /* ================= STATUS / RESUMO ================= */
@@ -983,7 +1101,7 @@ async function carregarStatus(){
   const r = await api({ op:'status' }); if(!r || r.error) return;
   estado.gestao = !!r.gestao; estado.meuId = r.meuId; estado.meuNome = r.meuNome; estado.setores = r.setores||[]; estado.respostas = r.respostasRapidas||[]; estado.instancias = r.instancias||{};
   estado.bots = r.bots||[]; estado.departamentos = r.departamentos||[]; estado.atendentes = r.atendentes||[]; estado.funcionarios = r.funcionarios||[]; estado.meuReg = r.meuReg||null;
-  renderFiltrosBotDep(); renderOnline();
+  renderFiltrosBotDep(); renderOnline(); carregarCatalogo();
   const inst = Object.entries(estado.instancias);
   const con = document.getElementById('conexao');
   const on = inst.some(([,v])=> String(v.estado||'').toLowerCase()==='open');
@@ -1038,6 +1156,7 @@ document.getElementById('filtros').querySelectorAll('button').forEach(b=> b.addE
 let tb; document.getElementById('busca').addEventListener('input', e=>{ clearTimeout(tb); tb=setTimeout(()=>{ estado.busca=e.target.value.trim(); carregarLista(); }, 350); });
 document.getElementById('btnNova').addEventListener('click', modalNova);
 document.getElementById('btnConfig').addEventListener('click', ()=> modalAdmin('bots'));
+document.getElementById('btnModelos').addEventListener('click', ()=> modalCatalogo('modelos'));
 document.getElementById('btnTarefas').addEventListener('click', ()=> modalTarefas());
 document.getElementById('btnPainel').addEventListener('click', ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); abrirPainel(); });
 document.getElementById('btnVoltarPainel').addEventListener('click', ()=>{ estado.fx={dep:'',at:'',st:''}; atualizarFxInfo(); carregarLista(); abrirPainel(); });
