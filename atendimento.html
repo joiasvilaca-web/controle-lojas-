@@ -102,6 +102,16 @@ button{cursor:pointer;}
 .tag-sug button{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);}
 .tag-sug button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
 .voltar-lista{display:none;}
+.modal.largo{max-width:760px;}
+.abas{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;} .abas button{padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font-size:12.5px;font-weight:700;}
+.abas button.on{background:var(--accent);color:#fff;border-color:var(--accent);}
+.cartao{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:center;justify-content:space-between;}
+.cartao .t{font-weight:700;} .cartao .x{font-size:12px;color:var(--ink-soft);}
+.hor-dia{display:grid;grid-template-columns:90px 1fr 1fr;gap:6px;align-items:center;margin-bottom:4px;font-size:12.5px;}
+.hor-dia input[type=time]{padding:4px 6px;border:1px solid var(--line);border-radius:6px;}
+.dep-chk{display:flex;gap:10px;flex-wrap:wrap;} .dep-chk label{font-weight:400;display:flex;gap:4px;align-items:center;font-size:12.5px;}
+.on-off{padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:700;border:1px solid var(--line);}
+.on-off.on{background:#16a34a;color:#fff;border-color:#16a34a;}
 @media(max-width:760px){
   .app.ver-chat .lista{display:none;} .app:not(.ver-chat) .chat{display:none;}
   .lista{width:100%;} .voltar-lista{display:inline-block;}
@@ -121,10 +131,12 @@ button{cursor:pointer;}
         <button data-f="finalizadas">Final.</button>
       </div>
       <input class="busca" id="busca" placeholder="Buscar por nome ou número…">
+      <div style="display:flex;gap:6px;margin-top:6px;"><select class="busca" id="filtroBot" style="display:none;"><option value="">Todos os bots</option></select><select class="busca" id="filtroDep" style="display:none;"><option value="">Todos os departamentos</option></select></div>
       <select class="busca" id="filtroCanal" style="display:none;margin-top:6px;"><option value="">Todos os canais</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option></select>
       <div style="display:flex;gap:6px;margin-top:8px;">
         <button class="btn btn-sm" id="btnNova">➕ Nova conversa</button>
-        <button class="btn btn-sm" id="btnConfig" style="display:none;">⚙️ Setores / respostas</button>
+        <button class="btn btn-sm" id="btnConfig" style="display:none;">⚙️ Administrar</button>
+        <button class="btn btn-sm" id="btnOnline" title="Ficar online/offline para receber atendimentos">⚪ Offline</button>
         <button class="btn btn-sm" id="btnAtualizar" title="Atualizar">↻</button>
         <button class="btn btn-sm" id="btnSom" title="Aviso sonoro de mensagem nova">🔔</button>
       </div>
@@ -181,7 +193,7 @@ const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 const EMBEDDED = window.parent !== window;
 
 let __gatewaySenha = null, currentUser = null, config = {};
-let estado = { filtro:'minhas', busca:'', conversas:[], atual:null, mensagens:[], gestao:false, meuId:null, meuNome:'', setores:[], respostas:[], instancias:{}, canal:'', variosCanais:false, limite:80, temAntigas:false, aviso:true };
+let estado = { filtro:'minhas', busca:'', conversas:[], atual:null, mensagens:[], gestao:false, meuId:null, meuNome:'', setores:[], respostas:[], instancias:{}, canal:'', variosCanais:false, limite:80, temAntigas:false, aviso:true, bots:[], departamentos:[], atendentes:[], funcionarios:[], meuReg:null, botId:'', depId:'' };
 let pollTimer = null;
 const urlsMidia = {};
 
@@ -246,6 +258,7 @@ function alternarSino(){
   if(estado.aviso){ tocarSom(); try{ if(window.Notification && Notification.permission==='default') Notification.requestPermission(); }catch(e){} showToast('Avisos de mensagem nova ligados.'); }
   else showToast('Avisos de mensagem nova desligados.');
 }
+function botChip(c){ if(estado.bots.length<2||!c.bot_id) return ''; const b=estado.bots.find(x=>x.id===c.bot_id); return b?`<span class="tagchip" title="Bot">🤖 ${escapeHtml(b.nome)}</span>`:''; }
 function canalChip(c){ if(c.canal==='instagram') return '<span class="tagchip" title="Instagram">📷 IG</span>'; return estado.variosCanais ? '<span class="tagchip" title="WhatsApp">WA</span>' : ''; }
 function esperaHtml(c){
   if(c.status==='finalizado' || c.ultima_direcao!=='in' || !c.ultima_mensagem_em) return '';
@@ -262,7 +275,7 @@ function rotuloDia(iso){
 
 /* ================= LISTA ================= */
 async function carregarLista(silencioso){
-  const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca, canal: estado.canal || undefined });
+  const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca, canal: estado.canal || undefined, botId: estado.botId || undefined, departamentoId: estado.depId || undefined });
   if(!r){ if(!silencioso) showToast('Erro ao carregar'); return; }
   if(r.error){
     // Sessão expirada: parar polling e pedir novo login
@@ -280,7 +293,7 @@ async function carregarLista(silencioso){
 }
 async function contadores(){
   // Reaproveita a lista já carregada quando ela é exatamente a de "Minhas" ou a da "Fila" (uma chamada a menos a cada ciclo)
-  const limpa = !estado.busca && !estado.canal;
+  const limpa = !estado.busca && !estado.canal && !estado.botId && !estado.depId;
   const pronta = f => (limpa && estado.filtro===f) ? Promise.resolve({ data: estado.conversas }) : api({ op:'listarConversas', filtro:f });
   const [m, f] = await Promise.all([ pronta('minhas'), pronta('fila') ]);
   const nm = (m && m.data) ? m.data.reduce((a,c)=>a+(c.nao_lidas||0),0) : 0;
@@ -300,7 +313,7 @@ function renderLista(){
       <div class="info">
         <div class="l1"><span class="nome">${escapeHtml(nomeConv(c))}</span><span class="hora">${fmtHora(c.ultima_mensagem_em)}</span></div>
         <div class="l2"><span class="prev">${c.ultima_direcao==='out'?'✓ ':''}${escapeHtml(c.ultima_mensagem_texto||'')}</span>${c.nao_lidas?`<span class="badge">${c.nao_lidas}</span>`:''}</div>
-        <div class="quem">${esperaHtml(c)}${canalChip(c)}${escapeHtml(statusLabel(c))}${c.setor?' · '+escapeHtml(c.setor):''} ${(c.tags||[]).map(t=>`<span class="tagchip">${escapeHtml(t)}</span>`).join('')}</div>
+        <div class="quem">${esperaHtml(c)}${canalChip(c)}${botChip(c)}${escapeHtml(statusLabel(c))}${c.setor?' · '+escapeHtml(c.setor):''} ${(c.tags||[]).map(t=>`<span class="tagchip">${escapeHtml(t)}</span>`).join('')}</div>
       </div>
     </div>`).join('');
   wrap.querySelectorAll('.conv').forEach(el=> el.addEventListener('click', ()=> abrirConversa(el.dataset.id)));
@@ -327,7 +340,7 @@ function renderHead(){
   const c = estado.atual;
   document.getElementById('chAvatar').innerHTML = avatarHtml(c);
   document.getElementById('chNome').textContent = nomeConv(c);
-  document.getElementById('chSub').textContent = `${fmtTel(c.contato_id)} · ${statusLabel(c)}${c.setor?' · '+c.setor:''}${c.cliente_id?' · 👤 cliente vinculado':''}`;
+  document.getElementById('chSub').textContent = `${fmtTel(c.contato_id)} · ${statusLabel(c)}${c.setor?' · '+c.setor:''}${(estado.bots.length>1&&c.bot_id&&estado.bots.find(x=>x.id===c.bot_id))?' · 🤖 '+estado.bots.find(x=>x.id===c.bot_id).nome:''}${c.cliente_id?' · 👤 cliente vinculado':''}`;
   const a = [];
   if(c.status!=='finalizado' && (!c.atendente_id || (c.atendente_id!==estado.meuId && estado.gestao))) a.push(`<button class="btn btn-sm btn-accent" data-a="assumir">✋ Assumir</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm" data-a="transferir">↪ Transferir</button>`);
@@ -417,16 +430,16 @@ async function acao(a){
   if(a==='tags') modalTags();
 }
 function abrirModal(html){ document.getElementById('modalBox').innerHTML = html; document.getElementById('modalBg').classList.add('show'); }
-function fecharModal(){ document.getElementById('modalBg').classList.remove('show'); }
+function fecharModal(){ document.getElementById('modalBg').classList.remove('show'); document.getElementById('modalBox').classList.remove('largo'); }
 function modalTransferir(){
   const funcs = (config.funcionarios||[]).filter(f=>f.id!==estado.meuId);
   abrirModal(`<h2>Transferir conversa</h2>
     <div class="field"><label>Para o atendente</label><select id="tAt"><option value="">— devolver pra fila —</option>${funcs.map(f=>`<option value="${f.id}">${escapeHtml((f.apelido||'').trim()||f.nome)}</option>`).join('')}</select></div>
-    <div class="field"><label>Setor (opcional)</label><select id="tSet"><option value="">—</option>${estado.setores.map(s=>`<option ${estado.atual.setor===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}</select></div>
+    <div class="field"><label>Departamento</label><select id="tDep"><option value="">— manter / nenhum —</option>${estado.departamentos.filter(d=>d.ativo&&(!d.bot_id||!estado.atual.bot_id||d.bot_id===estado.atual.bot_id)).map(d=>`<option value="${d.id}" ${estado.atual.departamento_id===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('')}</select></div>
     <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Transferir</button></div>`);
   document.getElementById('mCancel').onclick = fecharModal;
   document.getElementById('mOk').onclick = async ()=>{
-    const r = await api({ op:'transferir', conversaId: estado.atual.id, atendenteId: document.getElementById('tAt').value || null, setor: document.getElementById('tSet').value });
+    const r = await api({ op:'transferir', conversaId: estado.atual.id, atendenteId: document.getElementById('tAt').value || null, departamentoId: document.getElementById('tDep').value || (estado.atual.departamento_id ? estado.atual.departamento_id : undefined) });
     if(r&&r.ok){ fecharModal(); showToast('Transferida.'); await abrirConversa(estado.atual.id); carregarLista(true); } else showToast(r&&r.error||'Erro');
   };
 }
@@ -465,12 +478,13 @@ function modalCliente(){
 }
 function modalNova(){
   abrirModal(`<h2>Nova conversa</h2>
+    ${estado.bots.filter(b=>b.canais.some(c=>c.tipo==='whatsapp')).length>1?`<div class="field"><label>Pelo bot / número</label><select id="nBot">${estado.bots.filter(b=>b.ativo&&b.canais.some(c=>c.tipo==='whatsapp')).map(b=>`<option value="${b.id}">${escapeHtml(b.nome)}</option>`).join('')}</select></div>`:''}
     <div class="field"><label>WhatsApp do cliente (com DDD)</label><input id="nNum" placeholder="32999998888" inputmode="numeric"></div>
     <div class="field"><label>Nome (opcional)</label><input id="nNome"></div>
     <div class="rodape"><button class="btn" id="mCancel">Cancelar</button><button class="btn btn-accent" id="mOk">Abrir</button></div>`);
   document.getElementById('mCancel').onclick = fecharModal;
   document.getElementById('mOk').onclick = async ()=>{
-    const r = await api({ op:'novaConversa', numero: document.getElementById('nNum').value, nome: document.getElementById('nNome').value.trim() });
+    const r = await api({ op:'novaConversa', botId: (document.getElementById('nBot')||{}).value || undefined, numero: document.getElementById('nNum').value, nome: document.getElementById('nNome').value.trim() });
     if(r&&r.ok){ fecharModal(); estado.filtro='minhas'; document.querySelectorAll('#filtros button').forEach(b=>b.classList.toggle('active', b.dataset.f==='minhas')); await carregarLista(true); abrirConversa(r.conversaId); } else showToast(r&&r.error||'Erro');
   };
 }
@@ -484,6 +498,161 @@ function modalConfig(){
     const setores = document.getElementById('cfSet').value.split('\n').map(s=>s.trim()).filter(Boolean);
     const respostasRapidas = document.getElementById('cfRes').value.split('\n').map(l=>{ const i=l.indexOf('|'); if(i<0) return null; return { titulo:l.slice(0,i).trim(), texto:l.slice(i+1).trim() }; }).filter(r=>r&&r.titulo&&r.texto);
     const r = await api({ op:'salvarConfig', setores, respostasRapidas }); if(r&&r.ok){ estado.setores=setores; estado.respostas=respostasRapidas; fecharModal(); showToast('Salvo.'); if(estado.atual) renderHead(); } else showToast(r&&r.error||'Erro');
+  };
+}
+
+
+/* ================= BOTS · DEPARTAMENTOS · EQUIPE · HORÁRIOS ================= */
+function renderFiltrosBotDep(){
+  const fb = document.getElementById('filtroBot'), fd = document.getElementById('filtroDep');
+  fb.style.display = estado.bots.length>1 ? '' : 'none';
+  fb.innerHTML = '<option value="">Todos os bots</option>' + estado.bots.map(b=>`<option value="${b.id}" ${estado.botId===b.id?'selected':''}>${escapeHtml(b.nome)}</option>`).join('');
+  const deps = estado.departamentos.filter(d=>d.ativo && (!estado.botId || !d.bot_id || d.bot_id===estado.botId));
+  fd.style.display = deps.length ? '' : 'none';
+  fd.innerHTML = '<option value="">Todos os departamentos</option>' + deps.map(d=>`<option value="${d.id}" ${estado.depId===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('');
+  if(estado.depId && !deps.some(d=>d.id===estado.depId)) estado.depId='';
+}
+function renderOnline(){
+  const b = document.getElementById('btnOnline'); const on = !!(estado.meuReg && estado.meuReg.online);
+  b.textContent = on ? '🟢 Online' : '⚪ Offline'; b.className = 'btn btn-sm on-off' + (on?' on':'');
+}
+const DIAS = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+function horarioHtml(pref, h, opcional){
+  const tem = !!(h && h.dias);
+  const base = h && h.dias ? h : { dias: Object.fromEntries([0,1,2,3,4,5,6].map(i=>[String(i),{ativo:i>0,faixas:[['09:00','18:00']]}])) };
+  let html = opcional ? `<label style="display:flex;gap:6px;align-items:center;margin-bottom:6px;font-weight:400;"><input type="checkbox" id="${pref}_usar" ${tem?'checked':''}> Usar horário próprio (senão herda o do nível acima)</label>` : '';
+  html += `<div id="${pref}_box" style="${opcional&&!tem?'display:none':''}">` + [1,2,3,4,5,6,0].map(i=>{ const d = base.dias[String(i)]||{ativo:false,faixas:[]}; const f = (d.faixas&&d.faixas[0])||['09:00','18:00'];
+    return `<div class="hor-dia"><label style="font-weight:400;display:flex;gap:4px;align-items:center;"><input type="checkbox" id="${pref}_a${i}" ${d.ativo?'checked':''}> ${DIAS[i]}</label><input type="time" id="${pref}_i${i}" value="${f[0]}"><input type="time" id="${pref}_f${i}" value="${f[1]}"></div>`; }).join('') + `<div class="muted" style="font-size:11.5px;">00:00 às 00:00 = 24 horas. Dia desmarcado = fechado.</div></div>`;
+  return html;
+}
+function horarioLer(pref, opcional){
+  if(opcional){ const u = document.getElementById(pref+'_usar'); if(!u || !u.checked) return null; }
+  const dias = {}; for(let i=0;i<7;i++){ const a = document.getElementById(`${pref}_a${i}`).checked; const ini = document.getElementById(`${pref}_i${i}`).value||'00:00', fim = document.getElementById(`${pref}_f${i}`).value||'00:00'; dias[String(i)] = { ativo:a, faixas:[[ini,fim]] }; }
+  return { dias };
+}
+function ligarHorario(pref){ const u = document.getElementById(pref+'_usar'); if(u) u.onchange = ()=>{ document.getElementById(pref+'_box').style.display = u.checked ? '' : 'none'; }; }
+function resumoHorario(h){ if(!h||!h.dias) return 'sem restrição (24h)'; const ab = [1,2,3,4,5,6,0].filter(i=>h.dias[String(i)]&&h.dias[String(i)].ativo); return ab.length ? ab.map(i=>DIAS[i].slice(0,3)).join(', ') : 'fechado'; }
+
+let adminAba = 'bots';
+function modalAdmin(aba){
+  adminAba = aba || adminAba;
+  const abas = [['bots','🤖 Bots e canais'],['deps','🏷 Departamentos'],['equipe','👥 Equipe'],['respostas','💬 Respostas rápidas']];
+  const box = document.getElementById('modalBox'); box.classList.add('largo');
+  abrirModal(`<h2>Administrar Atendimento</h2><div class="abas" id="abAbas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===adminAba?'on':''}">${t}</button>`).join('')}</div><div id="abCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
+  document.getElementById('modalBox').classList.add('largo');
+  document.getElementById('mFechar').onclick = ()=>{ document.getElementById('modalBox').classList.remove('largo'); fecharModal(); };
+  document.querySelectorAll('#abAbas button').forEach(b=> b.onclick = ()=> modalAdmin(b.dataset.k));
+  if(adminAba==='bots') abaBots(); else if(adminAba==='deps') abaDeps(); else if(adminAba==='equipe') abaEquipe(); else abaRespostas();
+}
+async function recarregarAdmin(){ await carregarStatus(); modalAdmin(adminAba); }
+function canaisTxt(b){ return b.canais.map(c=> c.tipo==='whatsapp' ? '📱 '+(((estado.instancias[c.instancia]||{}).numero)?'+'+estado.instancias[c.instancia].numero:c.instancia) : c.tipo==='instagram' ? '📷 '+(c.usuario||c.ig_id) : '🌐 '+c.url).join(' · ') || 'sem canais'; }
+function abaBots(){
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Cada bot reúne os canais de um negócio/loja: número de WhatsApp, Instagram e site. Crie quantos precisar.</p>` +
+    (estado.bots.map(b=>`<div class="cartao"><div><div class="t">${escapeHtml(b.nome)} ${b.ativo?'':'<span class="muted">(inativo)</span>'}</div><div class="x">${escapeHtml(canaisTxt(b))}</div><div class="x">Horário: ${escapeHtml(resumoHorario(b.horario))}</div></div><div style="display:flex;gap:6px;"><button class="btn btn-sm" data-e="${b.id}">Editar</button></div></div>`).join('') || '<p class="muted">Nenhum bot ainda.</p>') +
+    `<button class="btn btn-accent" id="bNovo">➕ Novo bot</button>`;
+  c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formBot(estado.bots.find(x=>x.id===b.dataset.e)));
+  document.getElementById('bNovo').onclick = ()=> formBot(null);
+}
+function formBot(b){
+  b = b || { nome:'', descricao:'', ativo:true, canais:[], horario:null };
+  const wa = b.canais.filter(x=>x.tipo==='whatsapp').map(x=>x.instancia), ig = b.canais.find(x=>x.tipo==='instagram')||{}, site = b.canais.find(x=>x.tipo==='site')||{};
+  const usadas = new Set(estado.bots.filter(x=>x.id!==b.id).flatMap(x=>x.canais.filter(c=>c.tipo==='whatsapp').map(c=>c.instancia)));
+  const insts = Object.entries(estado.instancias).filter(([k,v])=>(v.canal||'whatsapp')==='whatsapp' && !usadas.has(k));
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<div class="field"><label>Nome do bot</label><input id="fbNome" value="${escapeHtml(b.nome)}" placeholder="Ex.: REFORMA JOIAS"></div>
+    <div class="field"><label>Descrição</label><input id="fbDesc" value="${escapeHtml(b.descricao||'')}"></div>
+    <div class="field"><label>📱 Números de WhatsApp deste bot</label><div class="dep-chk" id="fbWa">${insts.map(([k,v])=>`<label><input type="checkbox" value="${escapeHtml(k)}" ${wa.includes(k)?'checked':''}> ${escapeHtml(k)}${v.numero?' (+'+escapeHtml(v.numero)+')':''} <span class="muted">${String(v.estado||'')==='open'?'conectado':'desconectado'}</span></label>`).join('') || '<span class="muted">Nenhum número livre.</span>'}</div>
+      ${estado.gestao?`<button class="btn btn-sm" id="fbNovoNum" style="margin-top:6px;">➕ Conectar novo número (QR code)</button><div id="fbQr"></div>`:''}</div>
+    <div class="field"><label>📷 Instagram (ID da conta) e usuário</label><div style="display:flex;gap:6px;"><input id="fbIgId" placeholder="ID numérico da conta" value="${escapeHtml(ig.ig_id||'')}"><input id="fbIgUser" placeholder="@usuario" value="${escapeHtml(ig.usuario||'')}"></div>
+      <input id="fbIgTok" type="password" placeholder="${b.temTokenInstagram?'Token já salvo — deixe em branco para manter':'Token de acesso do Instagram (deste bot)'}" style="margin-top:6px;" autocomplete="off"></div>
+    <div class="field"><label>🌐 Site (endereço)</label><input id="fbSite" value="${escapeHtml(site.url||'')}" placeholder="https://..."></div>
+    <div class="field"><label>Horário geral do bot</label>${horarioHtml('hb', b.horario, true)}</div>
+    <label style="display:flex;gap:6px;align-items:center;font-weight:400;margin-bottom:8px;"><input type="checkbox" id="fbAtivo" ${b.ativo?'checked':''}> Bot ativo</label>
+    <div class="rodape">${b.id?`<button class="btn btn-danger" id="fbDel">Excluir</button>`:''}<button class="btn" id="fbVoltar">Voltar</button><button class="btn btn-accent" id="fbOk">Salvar</button></div>`;
+  ligarHorario('hb');
+  document.getElementById('fbVoltar').onclick = ()=> abaBots();
+  if(document.getElementById('fbNovoNum')) document.getElementById('fbNovoNum').onclick = async ()=>{
+    const nome = prompt('Nome da nova instância (só letras e números, ex.: vilacaloja2):'); if(!nome) return;
+    const r = await api({ op:'criarInstancia', nome }); if(!r || r.error){ showToast((r&&r.error)||'Erro'); return; }
+    const q = document.getElementById('fbQr'); q.innerHTML = r.qr ? `<p class="muted">Abra o WhatsApp do número novo → Aparelhos conectados → Conectar aparelho e leia:</p><img src="${r.qr}" style="width:220px;height:220px;"><p class="muted">Depois de conectar, volte e marque o número <b>${escapeHtml(r.instancia)}</b>.</p>` : '<p class="muted">Instância criada, mas o QR não veio — tente de novo em alguns segundos.</p>';
+    estado.instancias[r.instancia] = { canal:'whatsapp', estado:'connecting' };
+    document.getElementById('fbWa').insertAdjacentHTML('beforeend', `<label><input type="checkbox" value="${escapeHtml(r.instancia)}" checked> ${escapeHtml(r.instancia)} <span class="muted">aguardando QR</span></label>`);
+  };
+  document.getElementById('fbOk').onclick = async ()=>{
+    const canais = [];
+    document.querySelectorAll('#fbWa input:checked').forEach(i=> canais.push({ tipo:'whatsapp', instancia:i.value }));
+    const igId = document.getElementById('fbIgId').value.trim(); if(igId) canais.push({ tipo:'instagram', ig_id:igId, usuario:document.getElementById('fbIgUser').value.trim() });
+    const url = document.getElementById('fbSite').value.trim(); if(url) canais.push({ tipo:'site', url });
+    const r = await api({ op:'botSalvar', id:b.id, nome:document.getElementById('fbNome').value, descricao:document.getElementById('fbDesc').value, ativo:document.getElementById('fbAtivo').checked, canais, horario:horarioLer('hb',true), instagramToken: document.getElementById('fbIgTok').value.trim() || undefined });
+    if(r&&r.ok){ showToast('Bot salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
+  };
+  if(document.getElementById('fbDel')) document.getElementById('fbDel').onclick = async ()=>{
+    let r = await api({ op:'botExcluir', id:b.id });
+    if(r && r.abertas){ if(!confirm(r.error+'\n\nExcluir mesmo assim? As conversas ficam sem bot.')) return; r = await api({ op:'botExcluir', id:b.id, forcar:true }); }
+    if(r&&r.ok){ showToast('Bot excluído.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
+  };
+}
+function abaDeps(){
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Departamentos recebem as conversas e podem ter horário próprio (vale no lugar do horário do bot).</p>` +
+    (estado.departamentos.map(d=>{ const b = estado.bots.find(x=>x.id===d.bot_id); return `<div class="cartao"><div><div class="t">${escapeHtml(d.nome)} ${d.ativo?'':'<span class="muted">(inativo)</span>'}</div><div class="x">${b?'🤖 '+escapeHtml(b.nome):'todos os bots'} · horário: ${d.horario?escapeHtml(resumoHorario(d.horario)):'herda do bot'}</div></div><button class="btn btn-sm" data-e="${d.id}">Editar</button></div>`; }).join('') || '<p class="muted">Nenhum departamento ainda.</p>') +
+    `<button class="btn btn-accent" id="dNovo">➕ Novo departamento</button>`;
+  c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formDep(estado.departamentos.find(x=>x.id===b.dataset.e)));
+  document.getElementById('dNovo').onclick = ()=> formDep(null);
+}
+function formDep(d){
+  d = d || { nome:'', ativo:true, bot_id:'', horario:null };
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<div class="field"><label>Nome</label><input id="fdNome" value="${escapeHtml(d.nome)}" placeholder="Ex.: LOJA JARDIM NORTE"></div>
+    <div class="field"><label>Bot</label><select id="fdBot"><option value="">Todos os bots</option>${estado.bots.map(b=>`<option value="${b.id}" ${d.bot_id===b.id?'selected':''}>${escapeHtml(b.nome)}</option>`).join('')}</select></div>
+    <div class="field"><label>Horário do departamento</label>${horarioHtml('hd', d.horario, true)}</div>
+    <label style="display:flex;gap:6px;align-items:center;font-weight:400;"><input type="checkbox" id="fdAtivo" ${d.ativo?'checked':''}> Ativo</label>
+    <div class="rodape">${d.id?`<button class="btn btn-danger" id="fdDel">Excluir</button>`:''}<button class="btn" id="fdVoltar">Voltar</button><button class="btn btn-accent" id="fdOk">Salvar</button></div>`;
+  ligarHorario('hd');
+  document.getElementById('fdVoltar').onclick = ()=> abaDeps();
+  document.getElementById('fdOk').onclick = async ()=>{
+    const r = await api({ op:'depSalvar', id:d.id, nome:document.getElementById('fdNome').value, botId:document.getElementById('fdBot').value||null, ativo:document.getElementById('fdAtivo').checked, horario:horarioLer('hd',true) });
+    if(r&&r.ok){ showToast('Departamento salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
+  };
+  if(document.getElementById('fdDel')) document.getElementById('fdDel').onclick = async ()=>{ if(!confirm('Excluir este departamento?')) return; const r = await api({ op:'depExcluir', id:d.id }); if(r&&r.ok){ showToast('Excluído.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro'); };
+}
+function abaEquipe(){
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<p class="muted" style="margin-top:0">Quem atende, em quais departamentos, e o que pode fazer. Cada pessoa liga/desliga o próprio "Online" no topo da lista.</p>` +
+    (estado.atendentes.map(a=>`<div class="cartao"><div><div class="t">${escapeHtml(a.nome)} <span class="on-off ${a.online?'on':''}">${a.online?'online':'offline'}</span></div><div class="x">${(a.departamentos||[]).map(id=>{const d=estado.departamentos.find(x=>x.id===id);return d?escapeHtml(d.nome):''}).filter(Boolean).join(', ')||'sem departamento'}</div></div><button class="btn btn-sm" data-e="${a.funcionario_id}">Editar</button></div>`).join('') || '<p class="muted">Nenhum atendente cadastrado.</p>') +
+    `<div class="field" style="margin-top:10px;"><label>Adicionar atendente</label><select id="eAdd"><option value="">Escolha um funcionário…</option>${estado.funcionarios.filter(f=>!estado.atendentes.some(a=>a.funcionario_id===f.id)).map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select></div>`;
+  c.querySelectorAll('[data-e]').forEach(b=> b.onclick = ()=> formAtendente(b.dataset.e));
+  document.getElementById('eAdd').onchange = e=>{ if(e.target.value) formAtendente(e.target.value); };
+}
+function formAtendente(fid){
+  const a = estado.atendentes.find(x=>x.funcionario_id===fid) || { funcionario_id:fid, departamentos:[], permissoes:{}, horario:null };
+  const f = estado.funcionarios.find(x=>x.id===fid) || { nome: a.nome||fid }; const p = a.permissoes||{};
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<h3 style="margin:0 0 8px;font-size:14px;">${escapeHtml(a.nome||f.nome)}</h3>
+    <div class="field"><label>Departamentos em que atende</label><div class="dep-chk" id="feDeps">${estado.departamentos.map(d=>`<label><input type="checkbox" value="${d.id}" ${(a.departamentos||[]).includes(d.id)?'checked':''}> ${escapeHtml(d.nome)}</label>`).join('') || '<span class="muted">Crie departamentos primeiro.</span>'}</div></div>
+    <div class="field"><label>Permissões</label><div class="dep-chk" style="flex-direction:column;gap:4px;">
+      <label><input type="checkbox" id="fpRem" ${p.removerPotenciais?'checked':''}> Remover contatos dos potenciais</label>
+      <label><input type="checkbox" id="fpAg" ${p.verAgenda?'checked':''}> Ver a agenda de contatos</label>
+      <label><input type="checkbox" id="fpAt" ${p.criarAtivo?'checked':''}> Criar atendimento ativo</label>
+      <label><input type="checkbox" id="fpRe" ${p.reabrir?'checked':''}> Reabrir atendimento</label></div></div>
+    <div class="field"><label>Horário do atendente</label>${horarioHtml('ha', a.horario, true)}</div>
+    <div class="rodape">${estado.atendentes.some(x=>x.funcionario_id===fid)?`<button class="btn btn-danger" id="feDel">Remover</button>`:''}<button class="btn" id="feVoltar">Voltar</button><button class="btn btn-accent" id="feOk">Salvar</button></div>`;
+  ligarHorario('ha');
+  document.getElementById('feVoltar').onclick = ()=> abaEquipe();
+  document.getElementById('feOk').onclick = async ()=>{
+    const departamentos = [...document.querySelectorAll('#feDeps input:checked')].map(i=>i.value);
+    const r = await api({ op:'atendenteSalvar', funcionarioId:fid, departamentos, permissoes:{ removerPotenciais:document.getElementById('fpRem').checked, verAgenda:document.getElementById('fpAg').checked, criarAtivo:document.getElementById('fpAt').checked, reabrir:document.getElementById('fpRe').checked }, horario:horarioLer('ha',true) });
+    if(r&&r.ok){ showToast('Atendente salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
+  };
+  if(document.getElementById('feDel')) document.getElementById('feDel').onclick = async ()=>{ if(!confirm('Remover este atendente da equipe?')) return; const r = await api({ op:'atendenteRemover', funcionarioId:fid }); if(r&&r.ok){ showToast('Removido.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro'); };
+}
+function abaRespostas(){
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<div class="field"><label>Respostas rápidas — uma por linha, no formato <b>Título | texto</b></label><textarea id="cfRes" rows="9">${escapeHtml(estado.respostas.map(r=>r.titulo+' | '+r.texto).join('\n'))}</textarea></div><div class="rodape"><button class="btn btn-accent" id="cfOk">Salvar</button></div>`;
+  document.getElementById('cfOk').onclick = async ()=>{
+    const respostasRapidas = document.getElementById('cfRes').value.split('\n').map(l=>{ const i=l.indexOf('|'); if(i<0) return null; return { titulo:l.slice(0,i).trim(), texto:l.slice(i+1).trim() }; }).filter(r=>r&&r.titulo&&r.texto);
+    const r = await api({ op:'salvarConfig', respostasRapidas }); if(r&&r.ok){ estado.respostas=respostasRapidas; showToast('Salvo.'); if(estado.atual) renderHead(); } else showToast(r&&r.error||'Erro');
   };
 }
 
@@ -543,6 +712,8 @@ function usarSugestao(i){
 async function carregarStatus(){
   const r = await api({ op:'status' }); if(!r || r.error) return;
   estado.gestao = !!r.gestao; estado.meuId = r.meuId; estado.meuNome = r.meuNome; estado.setores = r.setores||[]; estado.respostas = r.respostasRapidas||[]; estado.instancias = r.instancias||{};
+  estado.bots = r.bots||[]; estado.departamentos = r.departamentos||[]; estado.atendentes = r.atendentes||[]; estado.funcionarios = r.funcionarios||[]; estado.meuReg = r.meuReg||null;
+  renderFiltrosBotDep(); renderOnline();
   const inst = Object.entries(estado.instancias);
   const con = document.getElementById('conexao');
   const on = inst.some(([,v])=> String(v.estado||'').toLowerCase()==='open');
@@ -554,8 +725,8 @@ async function carregarStatus(){
   if(!estado.variosCanais && estado.canal){ estado.canal = ''; document.getElementById('filtroCanal').value = ''; }
   document.getElementById('btnConfig').style.display = estado.gestao ? '' : 'none';
   if(estado.gestao){
-    const s = await api({ op:'resumo' });
-    if(s && s.ok){ const box = document.getElementById('resumo'); box.style.display='flex'; box.innerHTML = `<span>Fila: <b>${s.porStatus.aguardando||0}</b></span><span>Em atendimento: <b>${s.porStatus.em_atendimento||0}</b></span><span>Não lidas: <b>${s.naoLidas}</b></span>` + Object.entries(s.porAtendente).filter(([k])=>k!=='(fila)').map(([k,v])=>`<span>${escapeHtml(k)}: <b>${v}</b></span>`).join(''); }
+    const s = await api({ op:'resumo', botId: estado.botId || undefined });
+    if(s && s.ok){ const box = document.getElementById('resumo'); box.style.display='flex'; box.innerHTML = `<span>Fila: <b>${s.porStatus.aguardando||0}</b></span><span>Em atendimento: <b>${s.porStatus.em_atendimento||0}</b></span><span>Não lidas: <b>${s.naoLidas}</b></span>` + Object.entries(s.porAtendente).filter(([k])=>k!=='(fila)').map(([k,v])=>`<span>${escapeHtml(k)}: <b>${v}</b></span>`).join('') + '<div style="flex-basis:100%;height:0"></div>' + Object.entries(s.porDepartamento||{}).map(([k,v])=>`<span title="ativos / pendentes">🏷 ${escapeHtml(k)}: <b>${v.ativos}</b> / <b style="color:#d97706">${v.pendentes}</b></span>`).join(''); }
   }
 }
 
@@ -579,7 +750,10 @@ document.addEventListener('visibilitychange', ()=>{
 document.getElementById('filtros').querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=>{ estado.filtro=b.dataset.f; document.querySelectorAll('#filtros button').forEach(x=>x.classList.toggle('active',x===b)); carregarLista(); }));
 let tb; document.getElementById('busca').addEventListener('input', e=>{ clearTimeout(tb); tb=setTimeout(()=>{ estado.busca=e.target.value.trim(); carregarLista(); }, 350); });
 document.getElementById('btnNova').addEventListener('click', modalNova);
-document.getElementById('btnConfig').addEventListener('click', modalConfig);
+document.getElementById('btnConfig').addEventListener('click', ()=> modalAdmin('bots'));
+document.getElementById('btnOnline').addEventListener('click', async ()=>{ const novo = !(estado.meuReg && estado.meuReg.online); const r = await api({ op:'meuStatus', online:novo }); if(r&&r.ok){ estado.meuReg = Object.assign(estado.meuReg||{}, { online:novo }); renderOnline(); showToast(novo?'Você está online.':'Você está offline.'); carregarStatus(); } });
+document.getElementById('filtroBot').addEventListener('change', e=>{ estado.botId = e.target.value; renderFiltrosBotDep(); carregarLista(); carregarStatus(); });
+document.getElementById('filtroDep').addEventListener('change', e=>{ estado.depId = e.target.value; carregarLista(); });
 document.getElementById('btnAtualizar').addEventListener('click', ()=>{ carregarStatus(); carregarLista(); atualizarMensagens(); });
 document.getElementById('btnEnviar').addEventListener('click', enviarTexto);
 document.getElementById('texto').addEventListener('keydown', e=>{
