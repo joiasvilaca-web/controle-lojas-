@@ -131,6 +131,14 @@ button{cursor:pointer;}
   .lista{width:100%;} .voltar-lista{display:inline-block;}
   .bubble{max-width:88%;}
 }
+.field textarea{width:100%;box-sizing:border-box;border:1px solid var(--border,#d9d9d9);border-radius:8px;padding:8px 10px;font:inherit;min-height:64px;resize:vertical;background:var(--surface,#fff);color:inherit}
+.sec{border:1px solid var(--border,#e5e5e5);border-radius:10px;margin:10px 0;overflow:hidden}
+.sec>summary{cursor:pointer;padding:10px 12px;font-weight:600;background:rgba(127,127,127,.08)}
+.sec>div{padding:10px 12px}
+.lin{display:grid;grid-template-columns:56px 1fr 1fr 32px;gap:6px;margin-bottom:6px;align-items:center}
+.lin input,.lin select{width:100%;box-sizing:border-box}
+.kw{border:1px dashed var(--border,#ccc);border-radius:8px;padding:8px;margin-bottom:8px}
+.prev{white-space:pre-wrap;background:#dcf8c6;color:#111;border-radius:10px;padding:10px 12px;font-size:13px;max-width:380px}
 </style>
 </head>
 <body>
@@ -446,7 +454,7 @@ async function atualizarMensagens(){
 async function acao(a){
   const c = estado.atual; if(!c) return;
   if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa assumida.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
-  if(a==='finalizar'){ if(!confirm('Finalizar este atendimento?')) return; const r = await api({ op:'finalizar', conversaId:c.id }); if(r&&r.ok){ showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='finalizar'){ if(!confirm('Finalizar este atendimento?')) return; const r = await api({ op:'finalizar', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'finalizou', conversaId:c.id }); showToast('Atendimento finalizado.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='reabrir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='transferir') modalTransferir();
   if(a==='crm') modalCRM();
@@ -560,13 +568,13 @@ function resumoHorario(h){ if(!h||!h.dias) return 'sem restrição (24h)'; const
 let adminAba = 'bots';
 function modalAdmin(aba){
   adminAba = aba || adminAba;
-  const abas = [['bots','🤖 Bots e canais'],['deps','🏷 Departamentos'],['equipe','👥 Equipe'],['respostas','💬 Respostas rápidas']];
+  const abas = [['bots','🤖 Bots e canais'],['fluxo','💬 Mensagens do bot'],['deps','🏷 Departamentos'],['equipe','👥 Equipe'],['respostas','💬 Respostas rápidas']];
   const box = document.getElementById('modalBox'); box.classList.add('largo');
   abrirModal(`<h2>Administrar Atendimento</h2><div class="abas" id="abAbas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===adminAba?'on':''}">${t}</button>`).join('')}</div><div id="abCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
   document.getElementById('modalBox').classList.add('largo');
   document.getElementById('mFechar').onclick = ()=>{ document.getElementById('modalBox').classList.remove('largo'); fecharModal(); };
   document.querySelectorAll('#abAbas button').forEach(b=> b.onclick = ()=> modalAdmin(b.dataset.k));
-  if(adminAba==='bots') abaBots(); else if(adminAba==='deps') abaDeps(); else if(adminAba==='equipe') abaEquipe(); else abaRespostas();
+  if(adminAba==='bots') abaBots(); else if(adminAba==='fluxo') abaFluxo(); else if(adminAba==='deps') abaDeps(); else if(adminAba==='equipe') abaEquipe(); else abaRespostas();
 }
 async function recarregarAdmin(){ await carregarStatus(); modalAdmin(adminAba); }
 function canaisTxt(b){ return b.canais.map(c=> c.tipo==='whatsapp' ? '📱 '+(((estado.instancias[c.instancia]||{}).numero)?'+'+estado.instancias[c.instancia].numero:c.instancia) : c.tipo==='instagram' ? '📷 '+(c.usuario||c.ig_id) : '🌐 '+c.url).join(' · ') || 'sem canais'; }
@@ -608,7 +616,7 @@ function formBot(b){
     document.querySelectorAll('#fbWa input:checked').forEach(i=> canais.push({ tipo:'whatsapp', instancia:i.value }));
     const igId = document.getElementById('fbIgId').value.trim(); if(igId) canais.push({ tipo:'instagram', ig_id:igId, usuario:document.getElementById('fbIgUser').value.trim() });
     const url = document.getElementById('fbSite').value.trim(); if(url) canais.push({ tipo:'site', url });
-    const r = await api({ op:'botSalvar', id:b.id, nome:document.getElementById('fbNome').value, descricao:document.getElementById('fbDesc').value, ativo:document.getElementById('fbAtivo').checked, canais, horario:horarioLer('hb',true), instagramToken: document.getElementById('fbIgTok').value.trim() || undefined });
+    const r = await api({ op:'botSalvar', id:b.id, nome:document.getElementById('fbNome').value, descricao:document.getElementById('fbDesc').value, ativo:document.getElementById('fbAtivo').checked, canais, horario:horarioLer('hb',true), config:(b.config||{}), instagramToken: document.getElementById('fbIgTok').value.trim() || undefined });
     if(r&&r.ok){ showToast('Bot salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
   };
   if(document.getElementById('fbDel')) document.getElementById('fbDel').onclick = async ()=>{
@@ -681,10 +689,98 @@ function abaRespostas(){
 }
 
 
+
+/* ================= BOT: mensagens, menu, palavras-chave, enquete ================= */
+const MSG_PADRAO = {
+  boasvindas: "Olá!\n\nSeja bem-vindo(a) à {{empresa}}!\n\nPara começarmos, digite o número correspondente a sua localidade:",
+  escolha: "Digite o *NÚMERO* correspondente a sua localidade.",
+  voltar: "Digite 9 para voltar ao menu principal.",
+  invalida: "Opção inválida. Por favor, digite apenas o número de uma das opções abaixo.",
+  transferindo: "Perfeito! Você será atendido(a) por *{{departamento}}*. Aguarde um instante que já vamos lhe responder. 😊\nProtocolo: {{protocolo}}",
+  fora_bot: "Olá! No momento estamos fora do horário de atendimento.\n{{horario}}\nDeixe sua mensagem que responderemos assim que possível. 🙏",
+  fora_departamento: "O setor *{{departamento}}* está fora do horário de atendimento agora.\n{{horario}}\nSua mensagem foi registrada e responderemos assim que abrirmos. 🙏\nProtocolo: {{protocolo}}",
+  recado_ok: "Recebemos sua mensagem! Responderemos assim que possível. 🙏",
+  encerramento: "Atendimento finalizado. Obrigado por falar com a {{empresa}}! 💎",
+  enquete: "De 1 a 5, como você avalia o atendimento que recebeu? (1 = ruim, 5 = excelente)",
+  enquete_invalida: "Por favor, responda apenas com um número de 1 a 5.",
+  enquete_obrigado: "Obrigado pela avaliação! 💎"
+};
+const MSG_ROTULO = [
+  ['boasvindas','Boas-vindas','Primeira mensagem, enviada quando o cliente chama.'],
+  ['escolha','Escolha das opções','Vai logo abaixo da lista do menu.'],
+  ['voltar','Voltar ao menu','Aviso de como voltar (o dígito é definido em Opções).'],
+  ['invalida','Opção inválida','Quando o cliente digita algo que não está no menu.'],
+  ['transferindo','Ao escolher o departamento','Confirmação enviada depois que o cliente escolhe.'],
+  ['fora_bot','Fora do horário do bot','Cliente chama fora do horário geral do bot (Bots e canais → Horário).'],
+  ['fora_departamento','Departamento fora do horário','Cliente escolheu um departamento que está fechado agora.'],
+  ['recado_ok','Recado recebido','Resposta única quando o cliente deixa recado fora do horário.'],
+  ['encerramento','Encerramento','Enviada quando o atendente finaliza (se ligado em Opções).'],
+  ['enquete','Enquete: pergunta','Pergunta da nota de 1 a 5 após finalizar (se ligada).'],
+  ['enquete_invalida','Enquete: resposta inválida',''],
+  ['enquete_obrigado','Enquete: agradecimento','']
+];
+let fluxoBotId = null;
+function abaFluxo(){
+  const c = document.getElementById('abCorpo');
+  if(!estado.bots.length){ c.innerHTML = '<p class="muted">Crie um bot primeiro na aba “Bots e canais”.</p>'; return; }
+  if(!fluxoBotId || !estado.bots.find(b=>b.id===fluxoBotId)) fluxoBotId = estado.bots[0].id;
+  const bot = estado.bots.find(b=>b.id===fluxoBotId);
+  const f = (bot.config && bot.config.fluxo) || {};
+  const m = Object.assign({}, MSG_PADRAO, Object.fromEntries(Object.entries(f.msgs||{}).filter(([k,v])=>v)));
+  const deps = estado.departamentos.filter(d=>d.ativo);
+  const optDep = (sel,vazio)=> (vazio?`<option value="">${vazio}</option>`:'') + deps.map(d=>`<option value="${d.id}" ${sel===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('');
+  const menu = (f.menu && f.menu.length) ? f.menu : [];
+  const pal = f.palavras || [];
+  const linMenu = (it)=>`<div class="lin fm"><input class="mn" value="${escapeHtml(it.n||'')}" placeholder="Nº" maxlength="3"><select class="md">${optDep(it.departamento_id)}</select><input class="mr" value="${escapeHtml(it.rotulo||'')}" placeholder="Texto (vazio = nome do departamento)"><button class="btn btn-sm" data-x="1" title="Remover">✕</button></div>`;
+  const linPal = (it)=>`<div class="kw fp"><input class="pk" value="${escapeHtml((it.chaves||[]).join(', '))}" placeholder="Palavras separadas por vírgula (ex.: preço, valor, quanto custa)" style="width:100%;box-sizing:border-box;margin-bottom:6px;"><textarea class="pr" placeholder="Resposta automática">${escapeHtml(it.resposta||'')}</textarea><div style="display:flex;gap:6px;margin-top:6px;"><select class="pd" style="flex:1;">${optDep(it.departamento_id,'Só responder (não encaminhar)')}</select><button class="btn btn-sm" data-x="1">Remover</button></div></div>`;
+  c.innerHTML = `${estado.bots.length>1?`<div class="field"><label>Bot</label><select id="flBot">${estado.bots.map(b=>`<option value="${b.id}" ${b.id===fluxoBotId?'selected':''}>${escapeHtml(b.nome)}</option>`).join('')}</select></div>`:`<p class="muted" style="margin-top:0">Bot: <b>${escapeHtml(bot.nome)}</b></p>`}
+    <label style="display:flex;gap:8px;align-items:center;font-weight:600;margin:6px 0 4px;"><input type="checkbox" id="flAtivo" ${f.ativo?'checked':''}> Atendimento automático ligado (boas-vindas + menu)</label>
+    <p class="muted" style="margin:0 0 8px;">Desligado, o bot não envia nada: as conversas só caem na fila. Horário do bot: <b>${escapeHtml(resumoHorario(bot.horario))}</b> (muda em “Bots e canais”).</p>
+    <div class="field"><label>Nome da empresa nas mensagens</label><input id="flEmp" value="${escapeHtml(f.empresa||'Vilaça Joias')}"></div>
+    <details class="sec" open><summary>📋 Menu de opções (localidade / departamento)</summary><div><div id="flMenu">${menu.map(linMenu).join('')}</div><button class="btn btn-sm" id="flMenuAdd">➕ Opção</button><p class="muted">O cliente digita o número e a conversa vai direto para o departamento escolhido, respeitando o horário dele.</p></div></details>
+    <details class="sec"><summary>✉️ Mensagens</summary><div><p class="muted" style="margin-top:0">Variáveis: <b>{{empresa}}</b> <b>{{contato}}</b> <b>{{protocolo}}</b> <b>{{departamento}}</b> <b>{{atendente}}</b> <b>{{horario}}</b>. Também aceito {{client.name}}, {{contact.name}} e {{ticket.id}}.</p>
+      ${MSG_ROTULO.map(([k,t,h])=>`<div class="field"><label>${t}</label><textarea data-m="${k}">${escapeHtml(m[k])}</textarea>${h?`<div class="muted">${h}</div>`:''}</div>`).join('')}</div></details>
+    <details class="sec"><summary>🔑 Palavras-chave</summary><div><div id="flPal">${pal.map(linPal).join('')}</div><button class="btn btn-sm" id="flPalAdd">➕ Palavra-chave</button><p class="muted">Se a mensagem do cliente contiver uma das palavras, o bot responde na hora (e pode encaminhar ao departamento).</p></div></details>
+    <details class="sec"><summary>⚙️ Opções</summary><div>
+      <div class="field"><label>Dígito para voltar ao menu</label><input id="flVoltar" value="${escapeHtml(f.voltar_digito||'9')}" maxlength="3" style="width:80px;"></div>
+      <div class="field"><label>Recomeçar com boas-vindas após (horas sem conversa)</label><input id="flHoras" type="number" min="1" max="168" value="${Number(f.reenviar_apos_horas)||12}" style="width:100px;"></div>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;margin-bottom:6px;"><input type="checkbox" id="flEnc" ${f.enviar_encerramento?'checked':''}> Enviar mensagem de encerramento ao finalizar</label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input type="checkbox" id="flEnq" ${f.enquete&&f.enquete.ativa?'checked':''}> Pedir nota de 1 a 5 (enquete de satisfação) ao finalizar</label></div></details>
+    <details class="sec"><summary>👁 Pré-visualização</summary><div><div class="prev" id="flPrev"></div></div></details>
+    <div class="rodape"><button class="btn btn-accent" id="flSalvar">Salvar</button></div>`;
+  const ler = ()=>{
+    const msgs = {}; c.querySelectorAll('[data-m]').forEach(t=>{ msgs[t.dataset.m] = t.value; });
+    const menu = [...c.querySelectorAll('.fm')].map(r=>({ n:r.querySelector('.mn').value.trim(), departamento_id:r.querySelector('.md').value, rotulo:r.querySelector('.mr').value.trim() })).filter(x=>x.n&&x.departamento_id);
+    const palavras = [...c.querySelectorAll('.fp')].map(r=>({ chaves:r.querySelector('.pk').value.split(',').map(x=>x.trim()).filter(Boolean), resposta:r.querySelector('.pr').value, departamento_id:r.querySelector('.pd').value||null })).filter(x=>x.chaves.length&&(x.resposta||x.departamento_id));
+    return { ativo:document.getElementById('flAtivo').checked, empresa:document.getElementById('flEmp').value, voltar_digito:document.getElementById('flVoltar').value, reenviar_apos_horas:Number(document.getElementById('flHoras').value)||12, enviar_encerramento:document.getElementById('flEnc').checked, enquete:{ ativa:document.getElementById('flEnq').checked }, msgs, menu, palavras };
+  };
+  const prev = ()=>{
+    const x = ler(); const v = t=> String(t||'').replace(/\{\{\s*(empresa|client\.name)\s*\}\}/g, x.empresa).replace(/\{\{\s*[\w.]+\s*\}\}/g,'…');
+    const lista = x.menu.map(i=>`${i.n} - ${i.rotulo || ((deps.find(d=>d.id===i.departamento_id)||{}).nome||'')}`).join('\n');
+    document.getElementById('flPrev').textContent = [v(x.msgs.boasvindas), lista, v(x.msgs.escolha)].filter(Boolean).join('\n\n');
+  };
+  const ligar = ()=>{ c.querySelectorAll('[data-x]').forEach(b=> b.onclick = ()=>{ b.closest('.fm,.fp').remove(); prev(); }); c.querySelectorAll('input,textarea,select').forEach(e=>{ e.oninput = prev; e.onchange = prev; }); };
+  document.getElementById('flMenuAdd').onclick = ()=>{ const n = c.querySelectorAll('.fm').length+1; document.getElementById('flMenu').insertAdjacentHTML('beforeend', linMenu({ n:String(n), departamento_id:'' })); ligar(); prev(); };
+  document.getElementById('flPalAdd').onclick = ()=>{ document.getElementById('flPal').insertAdjacentHTML('beforeend', linPal({})); ligar(); };
+  if(document.getElementById('flBot')) document.getElementById('flBot').onchange = e=>{ fluxoBotId = e.target.value; abaFluxo(); };
+  ligar(); prev();
+  document.getElementById('flSalvar').onclick = async ()=>{
+    const x = ler();
+    if(x.ativo && !x.menu.length && !confirm('O menu está vazio: o bot só enviará a mensagem de boas-vindas. Continuar?')) return;
+    const r = await botApi({ op:'fluxoSalvar', botId:fluxoBotId, fluxo:x });
+    if(r&&r.ok){ showToast(x.ativo?'Salvo. Atendimento automático LIGADO.':'Salvo. Atendimento automático desligado.'); await carregarStatus(); abaFluxo(); } else showToast((r&&r.error)||'Erro ao salvar');
+  };
+}
+
 /* ================= CRM ================= */
 const CRM_URL = SUPABASE_URL + "/functions/v1/crm-api";
 async function crm(body){
   try{ const res = await fetch(CRM_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) }); return await res.json(); }
+  catch(e){ return { error:String(e) }; }
+}
+const BOT_URL = SUPABASE_URL + "/functions/v1/atendimento-bot";
+async function botApi(body){
+  try{ const res = await fetch(BOT_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) }); return await res.json(); }
   catch(e){ return { error:String(e) }; }
 }
 const ETAPA_NOME = { novo:'Novo', em_negociacao:'Em negociação', orcamento_enviado:'Orçamento enviado', aguardando_pagamento:'Aguardando pagamento', ganho:'Ganho', perdido:'Perdido' };
