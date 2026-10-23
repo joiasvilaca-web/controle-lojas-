@@ -49,6 +49,9 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
 .alerta.ok{background:var(--ok-soft);color:var(--ok);}
 .muted{color:var(--ink-faint);font-size:12px;}
 .rodape{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;}
+.acoes{display:flex;gap:6px;justify-content:flex-end;}
+.btn-sm{padding:5px 10px;font-size:12px;}
+.btn-danger{color:var(--danger);} .btn-danger:hover{border-color:var(--danger);}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:8px;font-weight:600;display:none;z-index:50;}
 #bloqueio{padding:40px;text-align:center;color:var(--ink-soft);}
 </style>
@@ -68,8 +71,12 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
 
   <!-- VENDEDORAS -->
   <section data-sec="vendedoras">
-    <div class="card">
-      <h2>Lançamento por vendedora</h2>
+    <div class="rodape" style="margin:0 0 14px">
+      <span class="muted" id="contVend"></span>
+      <button class="btn btn-accent" id="btnIncluirVend">+ Incluir lançamento</button>
+    </div>
+    <div class="card" id="formVend" style="display:none">
+      <h2 id="tituloFormVend">Novo lançamento</h2>
       <div style="max-width:320px;margin-bottom:12px">
         <label class="lb">Vendedora</label>
         <select id="selVend" style="width:100%"></select>
@@ -82,11 +89,14 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
       </div>
       <div class="rodape">
         <span class="muted" id="infoVend"></span>
-        <button class="btn btn-accent" id="salvarVend">Salvar</button>
+        <div class="acoes">
+          <button class="btn" id="cancelarVend">Cancelar</button>
+          <button class="btn btn-accent" id="salvarVend">Salvar</button>
+        </div>
       </div>
     </div>
     <div class="card">
-      <h2>Resumo do mês — saldo por vendedora</h2>
+      <h2>Lançamentos do mês — saldo por vendedora</h2>
       <div class="scroll"><table id="tbResumoVend"></table></div>
     </div>
   </section>
@@ -143,6 +153,7 @@ const CATEGORIAS = [
 
 let __senha = null, currentUser = null;
 let dadosMes = { vendedora:{}, loja:{} }; // chave → {dados, atualizado_por, updated_at}
+let editandoVend = null; // null = formulário fechado · '' = novo lançamento · nome = editando
 
 /* ---------- utilitários ---------- */
 function mensagemConfiavel(ev){
@@ -183,7 +194,7 @@ async function carregarMes(){
   if(r.error){ toast('Erro: '+r.error); return; }
   dadosMes = { vendedora:{}, loja:{} };
   (r.data||[]).forEach(x=>{ dadosMes[x.tipo][x.chave] = x; });
-  renderVendedora(); renderResumoVend(); renderLoja(); renderConferencia();
+  fecharFormVend(); renderResumoVend(); renderLoja(); renderConferencia();
 }
 
 /* totais das vendedoras por loja */
@@ -198,9 +209,33 @@ function somaVendedorasPorLoja(){
 }
 
 /* ---------- VENDEDORAS ---------- */
+/* cada vendedora tem um único lançamento por mês: "Incluir" só oferece quem ainda não lançou */
+function vendedorasPendentes(){ return VENDEDORAS.filter(v=> !dadosMes.vendedora[v]); }
+function abrirFormVend(nome){
+  const sel = document.getElementById('selVend');
+  if(nome){
+    sel.innerHTML = `<option value="${nome}">${nome}</option>`; sel.disabled = true;
+    document.getElementById('tituloFormVend').textContent = 'Editar lançamento — '+nome;
+  }else{
+    const pend = vendedorasPendentes();
+    if(!pend.length){ toast('Todas as vendedoras já lançaram neste mês.'); return; }
+    sel.innerHTML = pend.map(v=>`<option value="${v}">${v}</option>`).join(''); sel.disabled = false;
+    document.getElementById('tituloFormVend').textContent = 'Novo lançamento';
+  }
+  editandoVend = nome || '';
+  document.getElementById('formVend').style.display = '';
+  document.getElementById('btnIncluirVend').style.display = 'none';
+  renderVendedora();
+  document.getElementById('formVend').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+function fecharFormVend(){
+  editandoVend = null;
+  document.getElementById('formVend').style.display = 'none';
+  document.getElementById('btnIncluirVend').style.display = vendedorasPendentes().length ? '' : 'none';
+}
 function renderVendedora(){
   const v = document.getElementById('selVend').value;
-  const reg = dadosMes.vendedora[v];
+  const reg = editandoVend ? dadosMes.vendedora[v] : null;
   const lj = (reg && reg.dados && reg.dados.lojas) || {};
   const tb = document.getElementById('tbVend');
   tb.innerHTML = LOJAS.map(l=>`<tr data-loja="${l}">
@@ -211,7 +246,7 @@ function renderVendedora(){
     `<tr class="tot"><td>TOTAL</td><td class="num" id="vTotVenda"></td><td class="num" id="vTotDev"></td><td class="num" id="vTotSaldo"></td></tr>`;
   tb.querySelectorAll('input.din').forEach(i=> ligarFormatoDinheiro(i, recalcVendedora));
   recalcVendedora();
-  document.getElementById('infoVend').textContent = quando(reg);
+  document.getElementById('infoVend').textContent = reg ? quando(reg) : '';
 }
 function lerVendedora(){
   const lojas = {};
@@ -233,25 +268,45 @@ function recalcVendedora(){
 async function salvarVendedora(){
   const btn = document.getElementById('salvarVend'); btn.disabled=true;
   const mes = document.getElementById('mes').value, chave = document.getElementById('selVend').value;
-  const r = await api({ op:'salvar', mes, tipo:'vendedora', chave, dados: lerVendedora() });
+  if(!chave){ btn.disabled=false; return; }
+  const novo = !editandoVend;
+  if(novo && dadosMes.vendedora[chave]){ btn.disabled=false; toast(chave+' já tem lançamento neste mês — use Editar.'); return; }
+  const r = await api({ op:'salvar', mes, tipo:'vendedora', chave, dados: lerVendedora(), novo });
   btn.disabled=false;
   if(r.error){ toast('Erro: '+r.error); return; }
-  dadosMes.vendedora[chave] = r.data; toast('Salvo ✔');
-  document.getElementById('infoVend').textContent = quando(r.data);
+  dadosMes.vendedora[chave] = r.data; toast(novo ? 'Lançamento incluído ✔' : 'Lançamento atualizado ✔');
+  fecharFormVend();
+  renderResumoVend(); renderConferencia(); if(document.getElementById('selLoja').value) recalcLoja();
+}
+async function excluirVendedora(chave){
+  const mes = document.getElementById('mes').value;
+  if(!confirm('Excluir o lançamento de '+chave+' em '+mes.split('-').reverse().join('/')+'?')) return;
+  const r = await api({ op:'excluir', mes, tipo:'vendedora', chave });
+  if(r.error){ toast('Erro: '+r.error); return; }
+  delete dadosMes.vendedora[chave]; toast('Lançamento excluído');
+  if(editandoVend===chave) fecharFormVend(); else if(editandoVend==null) fecharFormVend();
   renderResumoVend(); renderConferencia(); if(document.getElementById('selLoja').value) recalcLoja();
 }
 function renderResumoVend(){
   const tab = document.getElementById('tbResumoVend');
   const totLoja = {}; LOJAS.forEach(l=> totLoja[l]=0); let totGeral = 0;
-  const linhas = VENDEDORAS.map(v=>{
-    const lj = (dadosMes.vendedora[v] && dadosMes.vendedora[v].dados.lojas) || {};
+  const lancadas = VENDEDORAS.filter(v=> dadosMes.vendedora[v]);
+  const pend = vendedorasPendentes();
+  document.getElementById('contVend').textContent = `${lancadas.length} de ${VENDEDORAS.length} vendedoras lançadas` + (pend.length ? ` · faltam: ${pend.join(', ')}` : ' ✔');
+  if(!lancadas.length){ tab.innerHTML = `<tbody><tr><td class="muted">Nenhum lançamento neste mês. Use “+ Incluir lançamento”.</td></tr></tbody>`; return; }
+  const linhas = lancadas.map(v=>{
+    const reg = dadosMes.vendedora[v];
+    const lj = (reg.dados && reg.dados.lojas) || {};
     let t = 0;
     const cels = LOJAS.map(l=>{ const s = r2((Number((lj[l]||{}).venda)||0) - (Number((lj[l]||{}).devolucao)||0)); t+=s; totLoja[l]+=s; return `<td class="num">${s?fmt(s):'—'}</td>`; }).join('');
     totGeral += t;
-    return `<tr><td>${v}${dadosMes.vendedora[v]?'':' <span class="muted">(sem lançamento)</span>'}</td>${cels}<td class="num"><b>${fmt(t)}</b></td></tr>`;
+    return `<tr><td>${v}<div class="muted">${quando(reg).replace('Última edição: ','')}</div></td>${cels}<td class="num"><b>${fmt(t)}</b></td>
+      <td><div class="acoes"><button class="btn btn-sm" data-editar="${v}">✏️ Editar</button><button class="btn btn-sm btn-danger" data-excluir="${v}">🗑 Excluir</button></div></td></tr>`;
   }).join('');
-  tab.innerHTML = `<thead><tr><th>Vendedora</th>${LOJAS.map(l=>`<th>${LOJA_LABEL[l]}</th>`).join('')}<th>Total</th></tr></thead><tbody>${linhas}
-    <tr class="tot"><td>TOTAL</td>${LOJAS.map(l=>`<td class="num">${fmt(totLoja[l])}</td>`).join('')}<td class="num">${fmt(totGeral)}</td></tr></tbody>`;
+  tab.innerHTML = `<thead><tr><th>Vendedora</th>${LOJAS.map(l=>`<th>${LOJA_LABEL[l]}</th>`).join('')}<th>Total</th><th></th></tr></thead><tbody>${linhas}
+    <tr class="tot"><td>TOTAL</td>${LOJAS.map(l=>`<td class="num">${fmt(totLoja[l])}</td>`).join('')}<td class="num">${fmt(totGeral)}</td><td></td></tr></tbody>`;
+  tab.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirFormVend(b.dataset.editar)));
+  tab.querySelectorAll('[data-excluir]').forEach(b=> b.addEventListener('click', ()=> excluirVendedora(b.dataset.excluir)));
 }
 
 /* ---------- LOJAS ---------- */
@@ -326,13 +381,14 @@ function renderConferencia(){
 /* ---------- init ---------- */
 function iniciarUI(){
   document.getElementById('mes').value = mesAtual();
-  document.getElementById('selVend').innerHTML = VENDEDORAS.map(v=>`<option value="${v}">${v}</option>`).join('');
   document.getElementById('selLoja').innerHTML = LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
   document.getElementById('mes').addEventListener('change', carregarMes);
   document.getElementById('selVend').addEventListener('change', renderVendedora);
   document.getElementById('selLoja').addEventListener('change', renderLoja);
   ['lBruto','lDev'].forEach(id=> ligarFormatoDinheiro(document.getElementById(id), recalcLoja));
   document.getElementById('salvarVend').addEventListener('click', salvarVendedora);
+  document.getElementById('btnIncluirVend').addEventListener('click', ()=> abrirFormVend(null));
+  document.getElementById('cancelarVend').addEventListener('click', fecharFormVend);
   document.getElementById('salvarLoja').addEventListener('click', salvarLoja);
   document.querySelectorAll('#tabs button').forEach(b=> b.addEventListener('click', ()=>{
     document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active', x===b));
