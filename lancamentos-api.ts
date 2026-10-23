@@ -1,8 +1,10 @@
 // lancamentos-api — módulo temporário "Lançamentos" (vendas mensais por vendedora × loja
 // e fechamento detalhado de cada loja). Independente dos outros módulos.
 // Só diretoria/gerente. POST { senha, op, ... }
-//   op:'listar'  { mes:'YYYY-MM' } → { data: lançamentos atuais, historico: cada salvamento }
-//   op:'salvar'  { mes, tipo:'vendedora'|'loja', chave, dados, novo? } → upsert + registro no histórico
+//   op:'listar'  { mes:'YYYY-MM' } → { data: lançamentos atuais, historico: cada salvamento,
+//                fatores: tabelas de fator salvas até esse mês (mais recente primeiro) }
+//   op:'salvar'  { mes, tipo:'vendedora'|'loja'|'fator', chave, dados, novo? } → upsert + histórico
+//                fator: chave = loja, dados { faixas:[{valor, percentual}] } — vale do mês em diante
 //                novo:true recusa (409) se já existe lançamento dessa chave no mês
 //   op:'excluir' { mes, tipo, chave } → apaga o lançamento do mês + registro no histórico
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -14,6 +16,7 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 
 const LOJAS = ["MARECHAL", "JOAO BERALDO", "JARDIM NORTE", "REFORMA"];
 const VENDEDORAS = ["PATRICIA", "GISLAINE CRISTINA", "MARIANA", "PAMELA", "GI", "TIRZA", "TANIA", "FLAVIA", "EDILENE", "MEIRIELI", "AMANDA", "CAMILA", "LARYSSA", "PHABRINNE", "FELIPE"];
+const FATOR_LOJAS = ["MARECHAL", "JOAO BERALDO", "JARDIM NORTE"];
 const CATEGORIAS = ["ALIANCA", "FABRICACAO", "SERVICO", "REPRES_OURO", "REPRES_PRATA", "RELOGIO"];
 
 function sessaoValida(u: any, senha: string): boolean {
@@ -31,6 +34,13 @@ const num = (v: any) => { const n = Number(v); return isFinite(n) ? Math.round(n
 
 function limparDados(tipo: string, d: any) {
   d = d || {};
+  if (tipo === "fator") {
+    const faixas = (Array.isArray(d.faixas) ? d.faixas : []).slice(0, 30)
+      .map((f: any) => ({ valor: num(f && f.valor), percentual: Math.min(100, Math.max(0, num(f && f.percentual))) }))
+      .filter((f: any) => f.valor > 0 || f.percentual > 0)
+      .sort((a: any, b: any) => a.valor - b.valor);
+    return { faixas };
+  }
   if (tipo === "vendedora") {
     const lojas: any = {};
     for (const l of LOJAS) { const x = (d.lojas || {})[l] || {}; lojas[l] = { venda: num(x.venda), devolucao: num(x.devolucao) }; }
@@ -41,7 +51,8 @@ function limparDados(tipo: string, d: any) {
   return { bruto: num(d.bruto), devolucao: num(d.devolucao), categorias };
 }
 function chaveInvalida(tipo: string, chave: string): string | null {
-  if (tipo !== "vendedora" && tipo !== "loja") return "tipo inválido";
+  if (tipo !== "vendedora" && tipo !== "loja" && tipo !== "fator") return "tipo inválido";
+  if (tipo === "fator" && !FATOR_LOJAS.includes(chave)) return "loja sem fator";
   if (tipo === "vendedora" && !VENDEDORAS.includes(chave)) return "vendedora inválida";
   if (tipo === "loja" && !LOJAS.includes(chave)) return "loja inválida";
   return null;
@@ -59,13 +70,15 @@ Deno.serve(async (req: Request) => {
     if (!/^\d{4}-\d{2}$/.test(mes)) return json({ error: "mês inválido" }, 400);
 
     if (b.op === "listar") {
-      const [atual, hist] = await Promise.all([
+      const [atual, hist, fat] = await Promise.all([
         admin.from("lancamentos_mensais").select("tipo, chave, dados, atualizado_por, updated_at").eq("mes", mes),
         admin.from("lancamentos_historico").select("id, tipo, chave, dados, atualizado_por, created_at").eq("mes", mes).order("created_at", { ascending: false }).limit(500),
+        admin.from("lancamentos_mensais").select("mes, chave, dados, atualizado_por, updated_at").eq("tipo", "fator").lte("mes", mes).order("mes", { ascending: false }).limit(500),
       ]);
       if (atual.error) throw atual.error;
       if (hist.error) throw hist.error;
-      return json({ ok: true, data: atual.data || [], historico: hist.data || [] });
+      if (fat.error) throw fat.error;
+      return json({ ok: true, data: (atual.data || []).filter((x: any) => x.tipo !== "fator"), historico: hist.data || [], fatores: fat.data || [] });
     }
     if (b.op === "salvar") {
       const tipo = String(b.tipo || "");

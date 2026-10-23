@@ -28,8 +28,10 @@ button,input,select{font-family:inherit;font-size:13.5px;}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
 .card h2{margin:0 0 10px;font-size:15px;padding-bottom:6px;border-bottom:2px solid var(--accent-soft);}
 label.lb{font-size:12px;font-weight:700;color:var(--ink-soft);display:block;margin-bottom:4px;}
-select,input[type=month],input.din{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;}
-input.din{width:100%;text-align:right;font-variant-numeric:tabular-nums;}
+select,input[type=month],input.din,input.pct{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+input.din,input.pct{width:100%;text-align:right;font-variant-numeric:tabular-nums;}
+table.comissao th:nth-child(2),table.comissao td:nth-child(2){text-align:left;}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--surface-2);color:var(--ink-soft);}
 input.din:focus,select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent);}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;}
@@ -61,12 +63,13 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
   <div class="topo">
     <h1>🧮 Lançamentos</h1>
     <label class="lb" style="margin:0">Mês</label>
-    <input type="month" id="mes">
+    <select id="mes"></select>
   </div>
   <div class="tabs" id="tabs">
     <button data-tab="vendedoras" class="active">Vendedoras</button>
     <button data-tab="lojas">Lojas</button>
     <button data-tab="conferencia">Conferência</button>
+    <button data-tab="fator">Fator</button>
   </div>
 
   <!-- VENDEDORAS -->
@@ -133,6 +136,34 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
       <p class="muted">Em vermelho: o valor lançado na loja não bate com a soma lançada pelas vendedoras naquela loja.</p>
     </div>
   </section>
+
+  <!-- FATOR -->
+  <section data-sec="fator" style="display:none">
+    <div class="card">
+      <h2>Fator por loja</h2>
+      <div style="max-width:320px;margin-bottom:12px">
+        <label class="lb">Loja</label>
+        <select id="selFatorLoja" style="width:100%"></select>
+      </div>
+      <p class="muted" style="margin:0 0 10px">Cada faixa: valor de venda líquida (soma de todas as lojas) que a vendedora precisa alcançar → percentual que ela recebe sobre o total. Vale a maior faixa alcançada.</p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Faixa</th><th>Venda a partir de (R$)</th><th>Fator (%)</th><th></th></tr></thead>
+          <tbody id="tbFator"></tbody>
+        </table>
+      </div>
+      <button class="btn btn-sm" id="addFaixa" style="margin-top:10px">+ Adicionar faixa</button>
+      <div class="rodape">
+        <span class="muted" id="infoFator"></span>
+        <button class="btn btn-accent" id="salvarFator">Salvar</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Fator do mês — valor bruto por vendedora</h2>
+      <div class="scroll"><table id="tbComissao" class="comissao"></table></div>
+      <p class="muted">Total = tudo o que a vendedora vendeu no mês em todas as lojas (venda − devolução). O fator aplicado é o da loja a que ela pertence.</p>
+    </div>
+  </section>
 </div>
 <div id="bloqueio" style="display:none"></div>
 <div class="toast" id="toast"></div>
@@ -146,6 +177,15 @@ const EMBEDDED = window.parent !== window;
 const LOJAS = ["MARECHAL","JOAO BERALDO","JARDIM NORTE","REFORMA"];
 const LOJA_LABEL = { "MARECHAL":"Marechal", "JOAO BERALDO":"João Beraldo", "JARDIM NORTE":"Jardim Norte", "REFORMA":"Reforma" };
 const VENDEDORAS = ["PATRICIA","GISLAINE CRISTINA","MARIANA","PAMELA","GI","TIRZA","TANIA","FLAVIA","EDILENE","MEIRIELI","AMANDA","CAMILA","LARYSSA","PHABRINNE","FELIPE"];
+/* loja a que cada vendedora pertence (define o fator dela). Quem não está aqui tem função própria — fator a definir */
+const LOJA_DA_VENDEDORA = {
+  "PATRICIA":"MARECHAL", "GISLAINE CRISTINA":"MARECHAL", "MARIANA":"MARECHAL",
+  "PAMELA":"JOAO BERALDO", "GI":"JOAO BERALDO", "TIRZA":"JOAO BERALDO",
+  "TANIA":"JARDIM NORTE", "FLAVIA":"JARDIM NORTE", "EDILENE":"JARDIM NORTE", "MEIRIELI":"JARDIM NORTE",
+};
+const FUNCAO_ESPECIAL = { "CAMILA":"Gerente MC/JB", "LARYSSA":"Gerente JN", "AMANDA":"Administrativo", "FELIPE":"Sócio", "PHABRINNE":"Sócia" };
+const FATOR_LOJAS = ["MARECHAL","JOAO BERALDO","JARDIM NORTE"];
+const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
 const CATEGORIAS = [
   { id:"ALIANCA", label:"ALIANÇA" }, { id:"FABRICACAO", label:"FABRICAÇÃO" }, { id:"SERVICO", label:"SERVIÇO" },
   { id:"REPRES_OURO", label:"REPRES OURO" }, { id:"REPRES_PRATA", label:"REPRES PRATA" }, { id:"RELOGIO", label:"RELÓGIO" },
@@ -153,6 +193,7 @@ const CATEGORIAS = [
 
 let __senha = null, currentUser = null;
 let dadosMes = { vendedora:{}, loja:{} }; // chave → {dados, atualizado_por, updated_at}
+let fatoresAte = []; // tabelas de fator salvas até o mês selecionado, mais recente primeiro
 let editandoVend = null; // null = formulário fechado · '' = novo lançamento · nome = editando
 
 /* ---------- utilitários ---------- */
@@ -170,6 +211,7 @@ function parseBR(s){
 }
 function toast(t){ const el=document.getElementById('toast'); el.textContent=t; el.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(()=>el.style.display='none',2500); }
 function quando(r){ if(!r || !r.updated_at) return 'Ainda não lançado neste mês.'; return 'Última edição: '+(r.atualizado_por||'—')+' em '+new Date(r.updated_at).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}); }
+function nomeMes(m){ const [a,n]=String(m).split('-'); return MESES[Number(n)-1]+'/'+a; }
 function mesAtual(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 function ligarFormatoDinheiro(inp, aoMudar){
   inp.addEventListener('focus', ()=>{ const v=parseBR(inp.value); inp.value = v ? String(v).replace('.',',') : ''; inp.select(); });
@@ -193,8 +235,9 @@ async function carregarMes(){
   const r = await api({ op:'listar', mes });
   if(r.error){ toast('Erro: '+r.error); return; }
   dadosMes = { vendedora:{}, loja:{} };
-  (r.data||[]).forEach(x=>{ dadosMes[x.tipo][x.chave] = x; });
-  fecharFormVend(); renderResumoVend(); renderLoja(); renderConferencia();
+  (r.data||[]).forEach(x=>{ if(dadosMes[x.tipo]) dadosMes[x.tipo][x.chave] = x; });
+  fatoresAte = r.fatores || [];
+  fecharFormVend(); renderResumoVend(); renderLoja(); renderConferencia(); renderFator(); renderComissao();
 }
 
 /* totais das vendedoras por loja */
@@ -276,16 +319,16 @@ async function salvarVendedora(){
   if(r.error){ toast('Erro: '+r.error); return; }
   dadosMes.vendedora[chave] = r.data; toast(novo ? 'Lançamento incluído ✔' : 'Lançamento atualizado ✔');
   fecharFormVend();
-  renderResumoVend(); renderConferencia(); if(document.getElementById('selLoja').value) recalcLoja();
+  renderResumoVend(); renderConferencia(); renderComissao(); if(document.getElementById('selLoja').value) recalcLoja();
 }
 async function excluirVendedora(chave){
   const mes = document.getElementById('mes').value;
-  if(!confirm('Excluir o lançamento de '+chave+' em '+mes.split('-').reverse().join('/')+'?')) return;
+  if(!confirm('Excluir o lançamento de '+chave+' em '+nomeMes(mes)+'?')) return;
   const r = await api({ op:'excluir', mes, tipo:'vendedora', chave });
   if(r.error){ toast('Erro: '+r.error); return; }
   delete dadosMes.vendedora[chave]; toast('Lançamento excluído');
   if(editandoVend===chave) fecharFormVend(); else if(editandoVend==null) fecharFormVend();
-  renderResumoVend(); renderConferencia(); if(document.getElementById('selLoja').value) recalcLoja();
+  renderResumoVend(); renderConferencia(); renderComissao(); if(document.getElementById('selLoja').value) recalcLoja();
 }
 function renderResumoVend(){
   const tab = document.getElementById('tbResumoVend');
@@ -378,9 +421,89 @@ function renderConferencia(){
     <tbody>${linhas}<tr class="tot"><td>TOTAL</td><td class="num">${fmt(tB)}</td><td class="num">${fmt(tBV)}</td><td class="num">${fmt(r2(tB-tBV))}</td><td class="num">${fmt(tL)}</td><td class="num">${fmt(tSV)}</td><td class="num">${fmt(r2(tL-tSV))}</td><td></td></tr></tbody>`;
 }
 
+/* ---------- FATOR ---------- */
+/* o fator salvo num mês vale dali em diante, até ser salvo de novo */
+function fatorVigente(loja){ return fatoresAte.find(f=> f.chave===loja) || null; }
+function faixaAlcancada(total, faixas){
+  let achou = null;
+  (faixas||[]).forEach(f=>{ if(total >= f.valor && (!achou || f.valor >= achou.valor)) achou = f; });
+  return achou;
+}
+function linhaFaixa(f){
+  return `<tr><td class="muted"></td>
+    <td><input class="din" data-f="valor" value="${fmt(f && f.valor)}"></td>
+    <td style="width:22%"><input class="pct" data-f="percentual" value="${f && f.percentual ? String(f.percentual).replace('.',',') : ''}" placeholder="0"></td>
+    <td style="width:60px"><button class="btn btn-sm btn-danger" data-del>✕</button></td></tr>`;
+}
+function numerarFaixas(){ document.querySelectorAll('#tbFator tr').forEach((tr,i)=> tr.cells[0].textContent = (i+1)+'ª'); }
+function ligarFaixa(tr){
+  ligarFormatoDinheiro(tr.querySelector('[data-f=valor]'));
+  tr.querySelector('[data-del]').addEventListener('click', ()=>{ tr.remove(); numerarFaixas(); });
+}
+function renderFator(){
+  const loja = document.getElementById('selFatorLoja').value;
+  const fv = fatorVigente(loja);
+  const faixas = (fv && fv.dados && fv.dados.faixas) || [];
+  const tb = document.getElementById('tbFator');
+  tb.innerHTML = (faixas.length ? faixas : [null,null,null]).map(linhaFaixa).join('');
+  tb.querySelectorAll('tr').forEach(ligarFaixa); numerarFaixas();
+  const mes = document.getElementById('mes').value;
+  document.getElementById('infoFator').textContent = !fv ? 'Nenhum fator cadastrado para esta loja ainda.'
+    : (fv.mes===mes ? 'Definido neste mês' : 'Valendo desde '+nomeMes(fv.mes)+' — salvar aqui cria nova tabela a partir de '+nomeMes(mes))
+      + ' · '+(fv.atualizado_por||'—')+' em '+new Date(fv.updated_at).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'});
+}
+function adicionarFaixa(){
+  const tb = document.getElementById('tbFator');
+  tb.insertAdjacentHTML('beforeend', linhaFaixa(null)); ligarFaixa(tb.lastElementChild); numerarFaixas();
+  tb.lastElementChild.querySelector('[data-f=valor]').focus();
+}
+async function salvarFator(){
+  const faixas = [...document.querySelectorAll('#tbFator tr')].map(tr=>({
+    valor: parseBR(tr.querySelector('[data-f=valor]').value), percentual: parseBR(tr.querySelector('[data-f=percentual]').value) }))
+    .filter(f=> f.valor || f.percentual);
+  const valores = faixas.map(f=>f.valor);
+  if(new Set(valores).size !== valores.length){ toast('Há duas faixas com o mesmo valor.'); return; }
+  if(faixas.some(f=> f.percentual > 100)){ toast('Percentual acima de 100%.'); return; }
+  const btn = document.getElementById('salvarFator'); btn.disabled=true;
+  const mes = document.getElementById('mes').value, chave = document.getElementById('selFatorLoja').value;
+  const r = await api({ op:'salvar', mes, tipo:'fator', chave, dados:{ faixas } });
+  btn.disabled=false;
+  if(r.error){ toast('Erro: '+r.error); return; }
+  fatoresAte = [r.data, ...fatoresAte.filter(f=> !(f.chave===chave && f.mes===mes))].sort((a,b)=> a.mes<b.mes?1:-1);
+  toast('Fator salvo ✔ — vale de '+nomeMes(mes)+' em diante');
+  renderFator(); renderComissao();
+}
+function renderComissao(){
+  const tab = document.getElementById('tbComissao');
+  let tTotal=0, tBruto=0;
+  const linhas = VENDEDORAS.filter(v=> dadosMes.vendedora[v]).map(v=>{
+    const lj = dadosMes.vendedora[v].dados.lojas || {};
+    const total = r2(LOJAS.reduce((a,l)=> a + (Number((lj[l]||{}).venda)||0) - (Number((lj[l]||{}).devolucao)||0), 0));
+    tTotal += total;
+    const loja = LOJA_DA_VENDEDORA[v];
+    if(!loja) return `<tr><td>${v}</td><td><span class="tag">${FUNCAO_ESPECIAL[v]||'—'}</span></td><td class="num">${fmt(total)}</td><td class="muted" colspan="2" style="text-align:right">fator próprio — a definir</td></tr>`;
+    const fv = fatorVigente(loja);
+    if(!fv || !(fv.dados.faixas||[]).length) return `<tr><td>${v}</td><td>${LOJA_LABEL[loja]}</td><td class="num">${fmt(total)}</td><td class="muted" colspan="2" style="text-align:right">loja sem fator cadastrado</td></tr>`;
+    const f = faixaAlcancada(total, fv.dados.faixas);
+    const pct = f ? f.percentual : 0, bruto = r2(total * pct / 100);
+    tBruto += bruto;
+    return `<tr><td>${v}</td><td>${LOJA_LABEL[loja]}</td><td class="num">${fmt(total)}</td>
+      <td class="num">${f ? String(pct).replace('.',',')+'%' : '<span class="muted">não atingiu a 1ª faixa</span>'}</td><td class="num"><b>${fmt(bruto)}</b></td></tr>`;
+  }).join('');
+  if(!linhas){ tab.innerHTML = `<tbody><tr><td class="muted">Nenhum lançamento de vendedora neste mês.</td></tr></tbody>`; return; }
+  tab.innerHTML = `<thead><tr><th>Vendedora</th><th>Loja</th><th>Total vendido (líquido)</th><th>Fator</th><th>Valor bruto</th></tr></thead><tbody>${linhas}
+    <tr class="tot"><td>TOTAL</td><td></td><td class="num">${fmt(r2(tTotal))}</td><td></td><td class="num">${fmt(r2(tBruto))}</td></tr></tbody>`;
+}
+
 /* ---------- init ---------- */
 function iniciarUI(){
+  const ano = new Date().getFullYear();
+  document.getElementById('mes').innerHTML = MESES.map((m,i)=>`<option value="${ano}-${String(i+1).padStart(2,'0')}">${m} ${ano}</option>`).join('');
   document.getElementById('mes').value = mesAtual();
+  document.getElementById('selFatorLoja').innerHTML = FATOR_LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
+  document.getElementById('selFatorLoja').addEventListener('change', renderFator);
+  document.getElementById('addFaixa').addEventListener('click', adicionarFaixa);
+  document.getElementById('salvarFator').addEventListener('click', salvarFator);
   document.getElementById('selLoja').innerHTML = LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
   document.getElementById('mes').addEventListener('change', carregarMes);
   document.getElementById('selVend').addEventListener('change', renderVendedora);
