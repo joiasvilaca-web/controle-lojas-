@@ -1,6 +1,7 @@
 // lancamentos-api — módulo temporário "Lançamentos" (vendas mensais por vendedora × loja
 // e fechamento detalhado de cada loja). Independente dos outros módulos.
 // Só diretoria/gerente. POST { senha, op, ... }
+//   op:'meses'   {} → { data: [{mes, tipo, chave, dados}] de vendedoras e lojas, para os cards de cada mês
 //   op:'listar'  { mes:'YYYY-MM' } → { data: lançamentos atuais, historico: cada salvamento,
 //                fatores: tabelas de fator salvas até esse mês (mais recente primeiro) }
 //   op:'salvar'  { mes, tipo:'vendedora'|'loja'|'fator', chave, dados, novo? } → upsert + histórico
@@ -66,6 +67,11 @@ Deno.serve(async (req: Request) => {
     const user = await usuarioValido(b.senha);
     if (!user) return json({ error: "não autorizado" }, 401);
     if (user.nivel !== "diretoria" && user.nivel !== "gerente") return json({ error: "sem permissão (só diretoria/gerente)" }, 403);
+    if (b.op === "meses") {
+      const { data, error } = await admin.from("lancamentos_mensais").select("mes, tipo, chave, dados").in("tipo", ["vendedora", "loja"]).order("mes", { ascending: false }).limit(5000);
+      if (error) throw error;
+      return json({ ok: true, data: data || [] });
+    }
     const mes = String(b.mes || "");
     if (!/^\d{4}-\d{2}$/.test(mes)) return json({ error: "mês inválido" }, 400);
 

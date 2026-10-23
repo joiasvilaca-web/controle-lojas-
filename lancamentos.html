@@ -54,16 +54,38 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
 .acoes{display:flex;gap:6px;justify-content:flex-end;}
 .btn-sm{padding:5px 10px;font-size:12px;}
 .btn-danger{color:var(--danger);} .btn-danger:hover{border-color:var(--danger);}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;}
+.mcard{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;padding:14px;cursor:pointer;text-align:left;box-shadow:0 1px 2px rgba(0,0,0,.04);font:inherit;color:inherit;}
+.mcard:hover{border-color:var(--accent);box-shadow:0 2px 8px rgba(0,0,0,.08);}
+.mcard h3{margin:0 0 8px;font-size:16px;}
+.mcard .val{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;margin-bottom:8px;}
+.mcard .st{font-size:12px;color:var(--ink-soft);margin-top:3px;}
+.mcard .st b{color:var(--ink);}
+.vazio{padding:30px;text-align:center;color:var(--ink-faint);background:var(--surface);border:1px dashed var(--line);border-radius:10px;}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:40;padding:16px;}
+.modal{background:var(--surface);border-radius:12px;padding:18px;width:100%;max-width:360px;box-shadow:0 10px 30px rgba(0,0,0,.2);}
+.modal h2{margin:0 0 14px;font-size:16px;}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:8px;font-weight:600;display:none;z-index:50;}
 #bloqueio{padding:40px;text-align:center;color:var(--ink-soft);}
 </style>
 </head>
 <body>
 <div class="wrap" id="app" style="display:none">
+  <input type="hidden" id="mes">
+  <!-- MESES (tela inicial) -->
+  <div id="home">
+    <div class="topo">
+      <h1>🧮 Lançamentos</h1>
+      <button class="btn btn-accent" id="btnIniciar">+ Iniciar lançamento</button>
+    </div>
+    <div class="cards" id="gridMeses"></div>
+  </div>
+
+  <!-- UM MÊS -->
+  <div id="viewMes" style="display:none">
   <div class="topo">
-    <h1>🧮 Lançamentos</h1>
-    <label class="lb" style="margin:0">Mês</label>
-    <select id="mes"></select>
+    <button class="btn" id="btnVoltar">← Meses</button>
+    <h1 id="tituloMes"></h1>
   </div>
   <div class="tabs" id="tabs">
     <button data-tab="vendedoras" class="active">Vendedoras</button>
@@ -164,9 +186,23 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
       <p class="muted">Total = tudo o que a vendedora vendeu no mês em todas as lojas (venda − devolução). O fator aplicado é o da loja a que ela pertence.</p>
     </div>
   </section>
+  </div>
 </div>
 <div id="bloqueio" style="display:none"></div>
 <div class="toast" id="toast"></div>
+<div class="modal-bg" id="modalMes">
+  <div class="modal">
+    <h2>Iniciar lançamento</h2>
+    <div class="grid2" style="gap:10px">
+      <div><label class="lb">Mês</label><select id="novoMes" style="width:100%"></select></div>
+      <div><label class="lb">Ano</label><select id="novoAno" style="width:100%"></select></div>
+    </div>
+    <div class="rodape" style="justify-content:flex-end">
+      <button class="btn" id="cancelarMes">Cancelar</button>
+      <button class="btn btn-accent" id="abrirNovoMes">Abrir</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
@@ -212,7 +248,6 @@ function parseBR(s){
 function toast(t){ const el=document.getElementById('toast'); el.textContent=t; el.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(()=>el.style.display='none',2500); }
 function quando(r){ if(!r || !r.updated_at) return 'Ainda não lançado neste mês.'; return 'Última edição: '+(r.atualizado_por||'—')+' em '+new Date(r.updated_at).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}); }
 function nomeMes(m){ const [a,n]=String(m).split('-'); return MESES[Number(n)-1]+'/'+a; }
-function mesAtual(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 function ligarFormatoDinheiro(inp, aoMudar){
   inp.addEventListener('focus', ()=>{ const v=parseBR(inp.value); inp.value = v ? String(v).replace('.',',') : ''; inp.select(); });
   inp.addEventListener('blur', ()=>{ inp.value = fmt(parseBR(inp.value)); aoMudar && aoMudar(); });
@@ -495,17 +530,68 @@ function renderComissao(){
     <tr class="tot"><td>TOTAL</td><td></td><td class="num">${fmt(r2(tTotal))}</td><td></td><td class="num">${fmt(r2(tBruto))}</td></tr></tbody>`;
 }
 
+/* ---------- MESES (cards) ---------- */
+async function irParaMeses(){
+  document.getElementById('viewMes').style.display = 'none';
+  document.getElementById('home').style.display = '';
+  const grid = document.getElementById('gridMeses');
+  grid.innerHTML = '<div class="vazio">Carregando…</div>';
+  const r = await api({ op:'meses' });
+  if(r.error){ grid.innerHTML = '<div class="vazio">Erro: '+r.error+'</div>'; return; }
+  const porMes = {};
+  (r.data||[]).forEach(x=>{
+    const m = porMes[x.mes] || (porMes[x.mes] = { vend:0, lojas:0, venda:0, saldo:0 });
+    if(x.tipo==='vendedora'){
+      m.vend++;
+      const lj = (x.dados && x.dados.lojas) || {};
+      LOJAS.forEach(l=>{ const v=Number((lj[l]||{}).venda)||0, d=Number((lj[l]||{}).devolucao)||0; m.venda+=v; m.saldo+=v-d; });
+    }else if(x.tipo==='loja') m.lojas++;
+  });
+  const meses = Object.keys(porMes).sort().reverse();
+  if(!meses.length){ grid.innerHTML = '<div class="vazio">Nenhum mês lançado ainda. Use “+ Iniciar lançamento”.</div>'; return; }
+  grid.innerHTML = meses.map(k=>{ const m = porMes[k]; return `<button class="mcard" data-mes="${k}">
+      <h3>${nomeMes(k).replace('/',' ')}</h3>
+      <div class="muted">Total líquido das vendedoras</div>
+      <div class="val">R$ ${fmt(m.saldo)}</div>
+      <div class="st">Vendedoras: <b>${m.vend} de ${VENDEDORAS.length}</b></div>
+      <div class="st">Lojas fechadas: <b>${m.lojas} de ${LOJAS.length}</b></div>
+    </button>`; }).join('');
+  grid.querySelectorAll('[data-mes]').forEach(b=> b.addEventListener('click', ()=> abrirMes(b.dataset.mes)));
+}
+async function abrirMes(mes){
+  document.getElementById('mes').value = mes;
+  document.getElementById('tituloMes').textContent = nomeMes(mes).replace('/',' ');
+  document.getElementById('home').style.display = 'none';
+  document.getElementById('viewMes').style.display = '';
+  document.querySelector('#tabs [data-tab=vendedoras]').click();
+  await carregarMes();
+}
+function abrirModalMes(){
+  const hoje = new Date();
+  document.getElementById('novoMes').value = String(hoje.getMonth()+1).padStart(2,'0');
+  document.getElementById('novoAno').value = String(hoje.getFullYear());
+  document.getElementById('modalMes').style.display = 'flex';
+}
+function fecharModalMes(){ document.getElementById('modalMes').style.display = 'none'; }
+
 /* ---------- init ---------- */
 function iniciarUI(){
   const ano = new Date().getFullYear();
-  document.getElementById('mes').innerHTML = MESES.map((m,i)=>`<option value="${ano}-${String(i+1).padStart(2,'0')}">${m} ${ano}</option>`).join('');
-  document.getElementById('mes').value = mesAtual();
+  document.getElementById('novoMes').innerHTML = MESES.map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}">${m}</option>`).join('');
+  document.getElementById('novoAno').innerHTML = [ano-2, ano-1, ano, ano+1].map(a=>`<option value="${a}">${a}</option>`).join('');
+  document.getElementById('btnIniciar').addEventListener('click', abrirModalMes);
+  document.getElementById('cancelarMes').addEventListener('click', fecharModalMes);
+  document.getElementById('modalMes').addEventListener('click', e=>{ if(e.target.id==='modalMes') fecharModalMes(); });
+  document.getElementById('abrirNovoMes').addEventListener('click', ()=>{
+    const mes = document.getElementById('novoAno').value+'-'+document.getElementById('novoMes').value;
+    fecharModalMes(); abrirMes(mes);
+  });
+  document.getElementById('btnVoltar').addEventListener('click', irParaMeses);
   document.getElementById('selFatorLoja').innerHTML = FATOR_LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
   document.getElementById('selFatorLoja').addEventListener('change', renderFator);
   document.getElementById('addFaixa').addEventListener('click', adicionarFaixa);
   document.getElementById('salvarFator').addEventListener('click', salvarFator);
   document.getElementById('selLoja').innerHTML = LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
-  document.getElementById('mes').addEventListener('change', carregarMes);
   document.getElementById('selVend').addEventListener('change', renderVendedora);
   document.getElementById('selLoja').addEventListener('change', renderLoja);
   ['lBruto','lDev'].forEach(id=> ligarFormatoDinheiro(document.getElementById(id), recalcLoja));
@@ -534,7 +620,7 @@ window.addEventListener('message', async ev=>{
     }
     document.getElementById('bloqueio').style.display='none';
     document.getElementById('app').style.display='';
-    await carregarMes();
+    await irParaMeses();
   }
 });
 iniciarUI();
