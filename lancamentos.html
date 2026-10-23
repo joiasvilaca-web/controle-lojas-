@@ -61,6 +61,14 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
 .mcard .val{font-size:18px;font-weight:800;font-variant-numeric:tabular-nums;margin-bottom:8px;}
 .mcard .st{font-size:12px;color:var(--ink-soft);margin-top:3px;}
 .mcard .st b{color:var(--ink);}
+table.folha th,table.folha td{font-size:12.5px;padding:6px 6px;}
+table.folha th:first-child,table.folha td:first-child{position:sticky;left:0;background:var(--surface);z-index:1;}
+table.folha tr.tot td:first-child{background:var(--surface-2);}
+table.folha input.din{width:92px;padding:5px 6px;font-size:12.5px;}
+table.folha td.liq{font-weight:800;color:var(--accent);}
+table.folha tr.baixo td{background:var(--danger-soft);}
+table.ger input.din,table.ger input.pct{width:96px;padding:5px 6px;font-size:12.5px;}
+.gridp{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;}
 .vazio{padding:30px;text-align:center;color:var(--ink-faint);background:var(--surface);border:1px dashed var(--line);border-radius:10px;}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:40;padding:16px;}
 .modal{background:var(--surface);border-radius:12px;padding:18px;width:100%;max-width:360px;box-shadow:0 10px 30px rgba(0,0,0,.2);}
@@ -92,6 +100,7 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
     <button data-tab="lojas">Lojas</button>
     <button data-tab="conferencia">Conferência</button>
     <button data-tab="fator">Fator</button>
+    <button data-tab="folha">Folha de PG</button>
   </div>
 
   <!-- VENDEDORAS -->
@@ -189,6 +198,32 @@ tr.tot td{font-weight:800;background:var(--surface-2);}
       <p class="muted">Total = tudo o que a vendedora vendeu no mês em todas as lojas (venda − devolução). O fator aplicado é o da loja a que ela pertence.</p>
     </div>
   </section>
+
+  <!-- FOLHA DE PG -->
+  <section data-sec="folha" style="display:none">
+    <div class="card">
+      <h2>Folha de pagamento do mês</h2>
+      <p class="muted" style="margin:0 0 10px">Total = líquido vendido × fator (gerentes: fixo + % das lojas · Amanda: fixo). O total é dividido em salário, comissão, DSR, assiduidade, prêmio e hora extra. “Extra” soma no total: metade vai pro VR e metade pro prêmio.</p>
+      <div class="scroll"><table id="tbFolha" class="folha"></table></div>
+      <div id="folhaAvisos"></div>
+      <div class="rodape">
+        <span class="muted" id="infoFolha"></span>
+        <div class="acoes">
+          <button class="btn" id="copiarFolha">📋 Copiar tabela</button>
+          <button class="btn btn-accent" id="salvarFolha">Salvar folha</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Gerentes e fixos</h2>
+      <div class="scroll"><table id="tbGerentes" class="ger"></table></div>
+      <p class="muted" id="baseLojas"></p>
+    </div>
+    <div class="card">
+      <h2>Regras de divisão</h2>
+      <div class="gridp" id="folhaParams"></div>
+    </div>
+  </section>
   </div>
 </div>
 <div id="bloqueio" style="display:none"></div>
@@ -231,7 +266,7 @@ const CATEGORIAS = [
 ];
 
 let __senha = null, currentUser = null;
-let dadosMes = { vendedora:{}, loja:{} }; // chave → {dados, atualizado_por, updated_at}
+let dadosMes = { vendedora:{}, loja:{}, folha:{} }; // chave → {dados, atualizado_por, updated_at}
 let fatoresAte = []; // tabelas de fator salvas até o mês selecionado, mais recente primeiro
 let editandoVend = null; // null = formulário fechado · '' = novo lançamento · nome = editando
 
@@ -272,10 +307,11 @@ async function carregarMes(){
   const mes = document.getElementById('mes').value;
   const r = await api({ op:'listar', mes });
   if(r.error){ toast('Erro: '+r.error); return; }
-  dadosMes = { vendedora:{}, loja:{} };
+  dadosMes = { vendedora:{}, loja:{}, folha:{} };
   (r.data||[]).forEach(x=>{ if(dadosMes[x.tipo]) dadosMes[x.tipo][x.chave] = x; });
   fatoresAte = r.fatores || [];
   fecharFormVend(); renderResumoVend(); renderLoja(); renderConferencia(); renderFator(); renderComissao();
+  carregarEstadoFolha(); renderFolha();
 }
 
 /* totais das vendedoras por loja */
@@ -357,7 +393,7 @@ async function salvarVendedora(){
   if(r.error){ toast('Erro: '+r.error); return; }
   dadosMes.vendedora[chave] = r.data; toast(novo ? 'Lançamento incluído ✔' : 'Lançamento atualizado ✔');
   fecharFormVend();
-  renderResumoVend(); renderConferencia(); renderComissao(); if(document.getElementById('selLoja').value) recalcLoja();
+  renderResumoVend(); renderConferencia(); renderComissao(); renderFolha(); if(document.getElementById('selLoja').value) recalcLoja();
 }
 async function excluirVendedora(chave){
   const mes = document.getElementById('mes').value;
@@ -366,7 +402,7 @@ async function excluirVendedora(chave){
   if(r.error){ toast('Erro: '+r.error); return; }
   delete dadosMes.vendedora[chave]; toast('Lançamento excluído');
   if(editandoVend===chave) fecharFormVend(); else if(editandoVend==null) fecharFormVend();
-  renderResumoVend(); renderConferencia(); renderComissao(); if(document.getElementById('selLoja').value) recalcLoja();
+  renderResumoVend(); renderConferencia(); renderComissao(); renderFolha(); if(document.getElementById('selLoja').value) recalcLoja();
 }
 function renderResumoVend(){
   const tab = document.getElementById('tbResumoVend');
@@ -438,7 +474,7 @@ async function salvarLoja(){
   dadosMes.loja[chave] = r.data; toast('Salvo ✔');
   document.getElementById('infoLoja').textContent = quando(r.data);
   document.getElementById('excluirLoja').style.display = '';
-  renderConferencia();
+  renderConferencia(); renderFolha();
 }
 async function excluirLoja(){
   const mes = document.getElementById('mes').value, chave = document.getElementById('selLoja').value;
@@ -446,7 +482,7 @@ async function excluirLoja(){
   const r = await api({ op:'excluir', mes, tipo:'loja', chave });
   if(r.error){ toast('Erro: '+r.error); return; }
   delete dadosMes.loja[chave]; toast('Fechamento excluído');
-  renderLoja(); renderConferencia();
+  renderLoja(); renderConferencia(); renderFolha();
 }
 
 /* ---------- CONFERÊNCIA ---------- */
@@ -519,7 +555,7 @@ async function salvarFator(){
   if(r.error){ toast('Erro: '+r.error); return; }
   fatoresAte = [r.data, ...fatoresAte.filter(f=> !(f.chave===chave && f.mes===mes))].sort((a,b)=> a.mes<b.mes?1:-1);
   toast('Fator salvo ✔ — vale de '+nomeMes(mes)+' em diante');
-  renderFator(); renderComissao();
+  renderFator(); renderComissao(); renderFolha();
 }
 function renderComissao(){
   const tab = document.getElementById('tbComissao');
@@ -541,6 +577,209 @@ function renderComissao(){
   if(!linhas){ tab.innerHTML = `<tbody><tr><td class="muted">Nenhum lançamento de vendedora neste mês.</td></tr></tbody>`; return; }
   tab.innerHTML = `<thead><tr><th>Vendedora</th><th>Loja</th><th>Total vendido (líquido)</th><th>Fator</th><th>Valor bruto</th></tr></thead><tbody>${linhas}
     <tr class="tot"><td>TOTAL</td><td></td><td class="num">${fmt(r2(tTotal))}</td><td></td><td class="num">${fmt(r2(tBruto))}</td></tr></tbody>`;
+}
+
+/* ---------- FOLHA DE PG ---------- */
+/* quem entra na folha (GI, TIRZA, MEIRIELI, PHABRINNE e FELIPE ficam de fora por enquanto) */
+const FOLHA_ORDEM = ["PATRICIA","GISLAINE CRISTINA","MARIANA","PAMELA","CAMILA","EDILENE","FLAVIA","TANIA","LARYSSA","AMANDA"];
+const FOLHA_GERENTES = ["CAMILA","LARYSSA"];
+const FOLHA_FIXOS = ["AMANDA"];
+const PARAMS_LABEL = {
+  salario:"Salário base (R$)", vr:"VR (R$)", pctComissao:"Comissão (% do restante)", pctPool:"Prêmio / assiduidade / H. extra (% do restante)",
+  diasDsr:"Dias do mês p/ DSR", domingos:"Domingos/feriados (DSR)", pctAssid:"Assiduidade (% do bloco 45%)"
+};
+function folhaPadrao(){
+  return {
+    params:{ salario:1730, vr:500, pctComissao:10, pctPool:45, diasDsr:26, domingos:4, pctAssid:70 },
+    pessoas:{},
+    gerentes:{
+      CAMILA:{ fixo:3000, pct:{ "MARECHAL":0.5, "JOAO BERALDO":0.5, "JARDIM NORTE":0, "REFORMA":0 } },
+      LARYSSA:{ fixo:3000, pct:{ "MARECHAL":0, "JOAO BERALDO":0, "JARDIM NORTE":1, "REFORMA":0 } },
+    },
+    fixos:{ AMANDA:2300 },
+  };
+}
+let folhaEstado = folhaPadrao();
+function carregarEstadoFolha(){
+  const base = folhaPadrao();
+  const reg = dadosMes.folha && dadosMes.folha.GERAL;
+  const d = (reg && reg.dados) || {};
+  const ger = n => ({ fixo: (((d.gerentes||{})[n]||{}).fixo ?? base.gerentes[n].fixo), pct:{ ...base.gerentes[n].pct, ...((((d.gerentes||{})[n]||{}).pct)||{}) } });
+  folhaEstado = {
+    params:{ ...base.params, ...(d.params||{}) },
+    pessoas: JSON.parse(JSON.stringify(d.pessoas||{})),
+    gerentes:{ CAMILA: ger("CAMILA"), LARYSSA: ger("LARYSSA") },
+    fixos:{ ...base.fixos, ...(d.fixos||{}) },
+  };
+  document.getElementById('infoFolha').textContent = reg ? quando(reg) : 'Folha ainda não salva neste mês (valores calculados na tela).';
+}
+/* líquido da loja: fechamento da loja se já lançado; senão a soma das vendedoras */
+function baseLoja(l){
+  const reg = dadosMes.loja[l];
+  if(reg && reg.dados) return r2((Number(reg.dados.bruto)||0) - (Number(reg.dados.devolucao)||0));
+  return somaVendedorasPorLoja()[l].saldo;
+}
+function brutoVendedora(v){
+  const lj = (dadosMes.vendedora[v] && dadosMes.vendedora[v].dados.lojas) || {};
+  const total = r2(LOJAS.reduce((a,l)=> a + (Number((lj[l]||{}).venda)||0) - (Number((lj[l]||{}).devolucao)||0), 0));
+  const loja = LOJA_DA_VENDEDORA[v];
+  const fv = loja && fatorVigente(loja);
+  if(!loja || !fv || !(fv.dados.faixas||[]).length) return { total, loja, pct:0, bruto:0, aviso:'loja sem fator cadastrado (aba Fator)' };
+  const f = faixaAlcancada(total, fv.dados.faixas);
+  const pct = f ? f.percentual : 0;
+  return { total, loja, pct, bruto: r2(total*pct/100), aviso: f ? '' : 'não atingiu a 1ª faixa do fator' };
+}
+/* divide o total C nas verbas, igual à planilha FOLHA do financeiro */
+function distribuirFolha(C, p, diaEx, extra, vale){
+  const J = Number(p.salario)||0, VR = Number(p.vr)||0;
+  const resto = Math.max(0, C - VR - J);
+  const K = resto * (Number(p.pctComissao)||0) / 100;
+  const L = (Number(p.diasDsr)>0) ? K / Number(p.diasDsr) * (Number(p.domingos)||0) : 0;
+  const pool = resto * (Number(p.pctPool)||0) / 100;
+  const X = pool - L;
+  const pa = (Number(p.pctAssid)||0) / 100;
+  const R = {
+    salario:r2(J), comissao:r2(K), dsr:r2(L),
+    assid:r2(Math.max(0, X*pa - diaEx/2)), premio:r2(Math.max(0, pool - diaEx/2)),
+    diaEx:r2(diaEx), hextra:r2(X*(1-pa)),
+  };
+  R.abaixo = C < J + VR;
+  if(!R.abaixo){ /* fecha os centavos no prêmio, pra o bruto bater com o total */
+    const soma = R.salario+R.comissao+R.dsr+R.assid+R.premio+R.diaEx+R.hextra+r2(VR);
+    R.premio = r2(R.premio + (r2(C) - soma));
+  }
+  R.premio = r2(R.premio + extra/2);   /* metade do extra no prêmio… */
+  R.vr = r2(VR + extra/2);             /* …e metade no VR */
+  R.extra = r2(extra);
+  R.bruto = r2(R.salario+R.comissao+R.dsr+R.assid+R.premio+R.diaEx+R.hextra+R.vr);
+  R.semVr = r2(R.bruto - R.vr);
+  R.vale = r2(vale);
+  R.liquido = r2(R.bruto - R.vale - R.vr);
+  return R;
+}
+function modeloFolha(){
+  const p = folhaEstado.params;
+  const linhas = [], semLanc = [];
+  FOLHA_ORDEM.forEach(nome=>{
+    let C = 0, vendido = null, loja = '', fator = null, aviso = '', tipo = 'vend';
+    if(FOLHA_GERENTES.includes(nome)){
+      tipo = 'ger'; const g = folhaEstado.gerentes[nome];
+      const variavel = LOJAS.reduce((a,l)=> a + baseLoja(l) * (Number(g.pct[l])||0) / 100, 0);
+      C = r2((Number(g.fixo)||0) + variavel); loja = FUNCAO_ESPECIAL[nome]||'Gerente';
+    }else if(FOLHA_FIXOS.includes(nome)){
+      tipo = 'fixo'; C = r2(Number(folhaEstado.fixos[nome])||0); loja = FUNCAO_ESPECIAL[nome]||'Fixo';
+    }else{
+      if(!dadosMes.vendedora[nome]){ semLanc.push(nome); return; }
+      const b = brutoVendedora(nome); C = b.bruto; vendido = b.total; fator = b.pct; aviso = b.aviso; loja = LOJA_LABEL[b.loja]||'';
+    }
+    const inp = folhaEstado.pessoas[nome] || {};
+    linhas.push({ nome, tipo, loja, vendido, fator, aviso, C, inp, calc: distribuirFolha(C, p, Number(inp.diaEx)||0, Number(inp.extra)||0, Number(inp.vale)||0) });
+  });
+  return { linhas, semLanc };
+}
+const COLS_CALC = ['salario','comissao','dsr','assid','premio','diaEx','hextra','vr','bruto','liquido'];
+function renderFolha(){
+  const tab = document.getElementById('tbFolha'); if(!tab) return;
+  const m = modeloFolha();
+  if(!m.linhas.length){
+    tab.innerHTML = `<tbody><tr><td class="muted">Nenhuma vendedora lançada neste mês ainda.</td></tr></tbody>`;
+  }else{
+    tab.innerHTML = `<thead><tr><th>Nome</th><th>Loja / função</th><th>Líquido vendido</th><th>Fator</th><th>Total</th><th>Extra</th><th>Salário</th><th>Comissão</th><th>DSR</th><th>Assiduidade</th><th>Prêmio</th><th>Dia extra</th><th>H. extra</th><th>VR</th><th>Total bruto</th><th>Vale</th><th>Líquido a receber</th></tr></thead><tbody>` +
+      m.linhas.map(l=>`<tr data-nome="${l.nome}"><td><b>${l.nome}</b></td>
+        <td style="text-align:left">${l.loja}${l.aviso?`<div class="muted" style="color:var(--danger)">⚠ ${l.aviso}</div>`:''}</td>
+        <td class="num" data-c="vendido"></td><td class="num" data-c="fator"></td><td class="num" data-c="C"></td>
+        <td><input class="din" data-in="extra" value="${fmt(l.inp.extra)}"></td>
+        <td class="num" data-c="salario"></td><td class="num" data-c="comissao"></td><td class="num" data-c="dsr"></td><td class="num" data-c="assid"></td><td class="num" data-c="premio"></td>
+        <td><input class="din" data-in="diaEx" value="${fmt(l.inp.diaEx)}"></td>
+        <td class="num" data-c="hextra"></td><td class="num" data-c="vr"></td><td class="num" data-c="bruto"></td>
+        <td><input class="din" data-in="vale" value="${fmt(l.inp.vale)}"></td><td class="num liq" data-c="liquido"></td></tr>`).join('') +
+      `<tr class="tot" id="folhaTot"><td>TOTAL</td><td></td><td></td><td></td><td class="num" data-t="C"></td><td class="num" data-t="extra"></td>${COLS_CALC.slice(0,6).map(c=>`<td class="num" data-t="${c}"></td>`).join('')}<td class="num" data-t="hextra"></td><td class="num" data-t="vr"></td><td class="num" data-t="bruto"></td><td class="num" data-t="vale"></td><td class="num" data-t="liquido"></td></tr></tbody>`;
+    tab.querySelectorAll('tr[data-nome]').forEach(tr=>{
+      tr.querySelectorAll('input.din').forEach(inp=> ligarFormatoDinheiro(inp, ()=>{
+        const n = tr.dataset.nome; folhaEstado.pessoas[n] = folhaEstado.pessoas[n] || {};
+        folhaEstado.pessoas[n][inp.dataset.in] = parseBR(inp.value); recalcFolha();
+      }));
+    });
+  }
+  renderGerentes(); renderParams(); recalcFolha();
+}
+/* atualiza só os números (não recria os campos, pra não perder o foco de quem está digitando) */
+function recalcFolha(){
+  const m = modeloFolha();
+  const tot = { C:0, extra:0, vale:0 }; COLS_CALC.forEach(c=> tot[c]=0);
+  m.linhas.forEach(l=>{
+    const tr = document.querySelector(`#tbFolha tr[data-nome="${l.nome}"]`); if(!tr) return;
+    const set = (c,v)=>{ const el = tr.querySelector(`[data-c="${c}"]`); if(el) el.textContent = v; };
+    set('vendido', l.vendido==null ? '—' : fmt(l.vendido));
+    set('fator', l.fator==null ? '—' : String(l.fator).replace('.',',')+'%');
+    set('C', fmt(l.C));
+    COLS_CALC.forEach(c=>{ set(c, fmt(l.calc[c])); tot[c] += l.calc[c]; });
+    tot.C += l.C; tot.extra += l.calc.extra; tot.vale += l.calc.vale;
+    tr.classList.toggle('baixo', l.calc.abaixo);
+  });
+  const trT = document.getElementById('folhaTot');
+  if(trT){
+    trT.querySelectorAll('[data-t]').forEach(td=>{ const k = td.dataset.t; td.textContent = (k in tot) ? fmt(tot[k]) : ''; });
+  }
+  const av = [];
+  if(m.semLanc.length) av.push(`<div class="alerta" style="background:var(--surface-2);color:var(--ink-soft)">Sem lançamento de vendas neste mês (fora da folha): ${m.semLanc.join(', ')}.</div>`);
+  const baixas = m.linhas.filter(l=>l.calc.abaixo).map(l=>l.nome);
+  if(baixas.length) av.push(`<div class="alerta erro">⚠️ Total abaixo de salário + VR (${fmt((Number(folhaEstado.params.salario)||0)+(Number(folhaEstado.params.vr)||0))}): ${baixas.join(', ')}. Ficam só com salário + VR.</div>`);
+  document.getElementById('folhaAvisos').innerHTML = av.join('');
+  /* gerentes: valor variável e total */
+  document.querySelectorAll('#tbGerentes tr[data-g]').forEach(tr=>{
+    const n = tr.dataset.g, g = folhaEstado.gerentes[n]; if(!g) return;
+    const variavel = r2(LOJAS.reduce((a,l)=> a + baseLoja(l) * (Number(g.pct[l])||0) / 100, 0));
+    tr.querySelector('[data-c=variavel]').textContent = fmt(variavel);
+    tr.querySelector('[data-c=totalg]').textContent = fmt(r2((Number(g.fixo)||0) + variavel));
+  });
+  document.getElementById('baseLojas').textContent = 'Base dos percentuais (líquido de cada loja no mês): ' + LOJAS.map(l=> LOJA_LABEL[l]+' R$ '+fmt(baseLoja(l))).join(' · ');
+}
+function renderGerentes(){
+  const tab = document.getElementById('tbGerentes');
+  const gl = FOLHA_GERENTES.map(n=>{
+    const g = folhaEstado.gerentes[n];
+    return `<tr data-g="${n}"><td><b>${n}</b> <span class="muted">${FUNCAO_ESPECIAL[n]||''}</span></td>
+      <td><input class="din" data-gf="fixo" value="${fmt(g.fixo)}"></td>
+      ${LOJAS.map(l=>`<td><input class="pct" data-gp="${l}" value="${g.pct[l] ? String(g.pct[l]).replace('.',',') : ''}" placeholder="0"></td>`).join('')}
+      <td class="num" data-c="variavel"></td><td class="num" data-c="totalg"></td></tr>`;
+  }).join('');
+  const fl = FOLHA_FIXOS.map(n=>`<tr data-fx="${n}"><td><b>${n}</b> <span class="muted">${FUNCAO_ESPECIAL[n]||''} — valor fixo</span></td>
+      <td><input class="din" data-fx value="${fmt(folhaEstado.fixos[n])}"></td><td colspan="${LOJAS.length+2}" class="muted" style="text-align:left">sem percentual de loja</td></tr>`).join('');
+  tab.innerHTML = `<thead><tr><th>Nome</th><th>Fixo (R$)</th>${LOJAS.map(l=>`<th>% ${LOJA_LABEL[l]}</th>`).join('')}<th>Variável (R$)</th><th>Total</th></tr></thead><tbody>${gl}${fl}</tbody>`;
+  tab.querySelectorAll('tr[data-g]').forEach(tr=>{
+    const n = tr.dataset.g;
+    ligarFormatoDinheiro(tr.querySelector('[data-gf=fixo]'), ()=>{ folhaEstado.gerentes[n].fixo = parseBR(tr.querySelector('[data-gf=fixo]').value); recalcFolha(); });
+    tr.querySelectorAll('input.pct').forEach(inp=> inp.addEventListener('input', ()=>{ folhaEstado.gerentes[n].pct[inp.dataset.gp] = parseBR(inp.value); recalcFolha(); }));
+  });
+  tab.querySelectorAll('tr[data-fx]').forEach(tr=>{
+    const n = tr.dataset.fx;
+    ligarFormatoDinheiro(tr.querySelector('input'), ()=>{ folhaEstado.fixos[n] = parseBR(tr.querySelector('input').value); recalcFolha(); });
+  });
+}
+function renderParams(){
+  const box = document.getElementById('folhaParams');
+  box.innerHTML = Object.keys(PARAMS_LABEL).map(k=>`<div><label class="lb">${PARAMS_LABEL[k]}</label><input class="pct" data-p="${k}" value="${String(folhaEstado.params[k]).replace('.',',')}"></div>`).join('');
+  box.querySelectorAll('input').forEach(inp=> inp.addEventListener('input', ()=>{ folhaEstado.params[inp.dataset.p] = parseBR(inp.value); recalcFolha(); }));
+}
+async function salvarFolha(){
+  const btn = document.getElementById('salvarFolha'); btn.disabled = true;
+  const mes = document.getElementById('mes').value;
+  const r = await api({ op:'salvar', mes, tipo:'folha', chave:'GERAL', dados: folhaEstado });
+  btn.disabled = false;
+  if(r.error){ toast('Erro: '+r.error); return; }
+  dadosMes.folha.GERAL = r.data; toast('Folha salva ✔');
+  document.getElementById('infoFolha').textContent = quando(r.data);
+}
+/* copia no formato da planilha FOLHA (colar direto no Excel) */
+function copiarFolha(){
+  const m = modeloFolha(); const n = v => String(v.toFixed(2)).replace('.',',');
+  const linhas = [['NOME','LOJA','SALARIO','COMISSAO','DSR','ASSIDUIDADE','PREMIO','DIA EX','H EXTRA','TOTAL BRUTO','VR','SEM VR','VALE','LIQUIDO']];
+  m.linhas.forEach(l=>{ const c = l.calc; linhas.push([l.nome, l.loja, n(c.salario), n(c.comissao), n(c.dsr), n(c.assid), n(c.premio), n(c.diaEx), n(c.hextra), n(c.bruto), n(c.vr), n(c.semVr), n(c.vale), n(c.liquido)]); });
+  const txt = linhas.map(r=>r.join('\t')).join('\n');
+  const ok = ()=> toast('Tabela copiada — cole no Excel ✔');
+  const fallback = ()=>{ const ta = document.createElement('textarea'); ta.value = txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); ok(); }catch(e){ toast('Não consegui copiar.'); } ta.remove(); };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, fallback); else fallback();
 }
 
 /* ---------- MESES (cards) ---------- */
@@ -613,11 +852,14 @@ function iniciarUI(){
   document.getElementById('cancelarVend').addEventListener('click', fecharFormVend);
   document.getElementById('salvarLoja').addEventListener('click', salvarLoja);
   document.getElementById('excluirLoja').addEventListener('click', excluirLoja);
+  document.getElementById('salvarFolha').addEventListener('click', salvarFolha);
+  document.getElementById('copiarFolha').addEventListener('click', copiarFolha);
   document.querySelectorAll('#tabs button').forEach(b=> b.addEventListener('click', ()=>{
     document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active', x===b));
     document.querySelectorAll('section[data-sec]').forEach(s=> s.style.display = s.dataset.sec===b.dataset.tab ? '' : 'none');
     if(b.dataset.tab==='conferencia') renderConferencia();
     if(b.dataset.tab==='lojas') recalcLoja();
+    if(b.dataset.tab==='folha') renderFolha();
   }));
 }
 
