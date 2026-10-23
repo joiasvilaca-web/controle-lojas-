@@ -222,6 +222,7 @@ table.ger input.din,table.ger input.pct{width:96px;padding:5px 6px;font-size:12.
     <div class="card">
       <h2>Regras de divisão</h2>
       <div class="gridp" id="folhaParams"></div>
+      <div id="calDsr" style="margin-top:10px"></div>
     </div>
   </section>
   </div>
@@ -586,11 +587,11 @@ const FOLHA_GERENTES = ["CAMILA","LARYSSA"];
 const FOLHA_FIXOS = ["AMANDA"];
 const PARAMS_LABEL = {
   salario:"Salário base (R$)", vr:"VR (R$)", pctComissao:"Comissão (% do restante)", pctPool:"Prêmio / assiduidade / H. extra (% do restante)",
-  diasDsr:"Dias do mês p/ DSR", domingos:"Domingos/feriados (DSR)", pctAssid:"Assiduidade (% do bloco 45%)"
+  pctAssid:"Assiduidade (% do bloco 45%)"
 };
 function folhaPadrao(){
   return {
-    params:{ salario:1730, vr:500, pctComissao:10, pctPool:45, diasDsr:26, domingos:4, pctAssid:70 }, /* lógica da planilha FOLHA; ajustável em “Regras de divisão” */
+    params:{ salario:1730, vr:500, pctComissao:10, pctPool:45, pctAssid:70 }, feriados:null, /* DSR vem do calendário do mês; lógica da planilha FOLHA; ajustável em “Regras de divisão” */
     pessoas:{},
     gerentes:{
       CAMILA:{ fixo:3000, pct:{ "MARECHAL":0.5, "JOAO BERALDO":0.5, "JARDIM NORTE":0, "REFORMA":0 } },
@@ -607,6 +608,7 @@ function carregarEstadoFolha(){
   const ger = n => ({ fixo: (((d.gerentes||{})[n]||{}).fixo ?? base.gerentes[n].fixo), pct:{ ...base.gerentes[n].pct, ...((((d.gerentes||{})[n]||{}).pct)||{}) } });
   folhaEstado = {
     params:{ ...base.params, ...(d.params||{}) },
+    feriados: Array.isArray(d.feriados) ? d.feriados.slice() : null,
     pessoas: JSON.parse(JSON.stringify(d.pessoas||{})),
     gerentes:{ CAMILA: ger("CAMILA"), LARYSSA: ger("LARYSSA") },
     fixos:{ ...base.fixos, ...(d.fixos||{}) },
@@ -630,7 +632,37 @@ function brutoVendedora(v){
   return { total, loja, pct, bruto: r2(total*pct/100), aviso: f ? '' : 'não atingiu a 1ª faixa do fator' };
 }
 /* divide o total C nas verbas, igual à planilha FOLHA do financeiro */
-function regrasOk(p){ return (Number(p.salario)||0) > 0 && (Number(p.diasDsr)||0) > 0 && ((Number(p.pctComissao)||0) + (Number(p.pctPool)||0)) > 0; }
+/* ---- CALENDÁRIO DO MÊS (DSR) ---- */
+function pascoa(ano){ /* algoritmo de Meeus/Jones/Butcher */
+  const a=ano%19,b=Math.floor(ano/100),c=ano%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451);
+  const mes=Math.floor((h+l-7*m+114)/31), dia=((h+l-7*m+114)%31)+1; return new Date(ano,mes-1,dia);
+}
+/* feriados automáticos do mês: nacionais + Juiz de Fora (Corpus Christi e Santo Antônio). Pontos facultativos NÃO entram. */
+function feriadosAuto(mes){
+  const [ano,mm]=mes.split('-').map(Number); const lista=[];
+  const add=(d,m,nome)=>{ if(m===mm) lista.push({dia:d,nome}); };
+  add(1,1,'Confraternização Universal'); add(21,4,'Tiradentes'); add(1,5,'Dia do Trabalho');
+  add(7,9,'Independência'); add(12,10,'N. Sra. Aparecida'); add(2,11,'Finados'); add(15,11,'Proclamação da República');
+  add(20,11,'Consciência Negra'); add(25,12,'Natal'); add(13,6,'Santo Antônio (Juiz de Fora)');
+  const pa=pascoa(ano); const mv=(n)=>{ const x=new Date(pa); x.setDate(x.getDate()+n); return x; };
+  const sx=mv(-2), cc=mv(60);
+  add(sx.getDate(), sx.getMonth()+1, 'Sexta-feira Santa'); add(cc.getDate(), cc.getMonth()+1, 'Corpus Christi (Juiz de Fora)');
+  return lista.sort((a,b)=>a.dia-b.dia);
+}
+/* dias úteis = dias do mês − domingos − feriados (sábado conta como útil, como na planilha: 30 − 4 = 26) */
+function calendarioMes(mes, manual){
+  const [ano,mm]=mes.split('-').map(Number); const diasMes=new Date(ano,mm,0).getDate();
+  let domingos=0; for(let d=1;d<=diasMes;d++) if(new Date(ano,mm-1,d).getDay()===0) domingos++;
+  const auto=feriadosAuto(mes);
+  let dias = Array.isArray(manual) ? manual.filter(d=>d>=1&&d<=diasMes) : auto.map(f=>f.dia);
+  dias = [...new Set(dias)].sort((a,b)=>a-b);
+  const noDomingo = dias.filter(d=> new Date(ano,mm-1,d).getDay()===0);
+  const feriados = dias.length - noDomingo.length;   /* feriado em domingo não conta duas vezes */
+  const nomes = dias.map(d=>{ const f=auto.find(x=>x.dia===d); return String(d).padStart(2,'0')+'/'+String(mm).padStart(2,'0')+(f?' '+f.nome:'')+(noDomingo.includes(d)?' (domingo)':''); });
+  const diasUteis = diasMes - domingos - feriados;
+  return { diasMes, domingos, feriados, diasUteis, descanso: domingos+feriados, nomes, manual:Array.isArray(manual), auto };
+}
+function regrasOk(p){ return (Number(p.salario)||0) > 0 && ((Number(p.pctComissao)||0) + (Number(p.pctPool)||0)) > 0; }
 function distribuirFolha(C, p, diaEx, extra, vale){
   if(!regrasOk(p)){ /* regras ainda não preenchidas: não divide */
     return { salario:0, comissao:0, dsr:0, assid:0, premio:0, diaEx:r2(diaEx), hextra:0, vr:0, extra:r2(extra), bruto:0, semVr:0, vale:r2(vale), liquido:0, abaixo:false, semRegras:true };
@@ -662,7 +694,8 @@ function distribuirFolha(C, p, diaEx, extra, vale){
   return R;
 }
 function modeloFolha(){
-  const p = folhaEstado.params;
+  const cal = calendarioMes(document.getElementById('mes').value, folhaEstado.feriados);
+  const p = { ...folhaEstado.params, diasDsr: cal.diasUteis, domingos: cal.descanso };  /* DSR = comissão ÷ dias úteis × (domingos + feriados) */
   const linhas = [], semLanc = [];
   FOLHA_ORDEM.forEach(nome=>{
     let C = 0, vendido = null, loja = '', fator = null, aviso = '', tipo = 'vend';
@@ -726,7 +759,7 @@ function recalcFolha(){
     trT.querySelectorAll('[data-t]').forEach(td=>{ const k = td.dataset.t; td.textContent = (k in tot) ? fmt(tot[k]) : ''; });
   }
   const av = [];
-  if(!regrasOk(folhaEstado.params)) av.push(`<div class="alerta erro">⚠️ Preencha as “Regras de divisão” (salário, VR, percentuais, dias de DSR) mais abaixo — enquanto estiverem vazias o total não é dividido.</div>`);
+  if(!regrasOk(folhaEstado.params)) av.push(`<div class="alerta erro">⚠️ Preencha as “Regras de divisão” (salário, VR, percentuais) mais abaixo — enquanto estiverem vazias o total não é dividido.</div>`);
   if(m.semLanc.length) av.push(`<div class="alerta" style="background:var(--surface-2);color:var(--ink-soft)">Sem lançamento de vendas neste mês (fora da folha): ${m.semLanc.join(', ')}.</div>`);
   const baixas = m.linhas.filter(l=>l.calc.abaixo).map(l=>l.nome);
   if(baixas.length) av.push(`<div class="alerta erro">⚠️ Total abaixo de salário + VR (${fmt((Number(folhaEstado.params.salario)||0)+(Number(folhaEstado.params.vr)||0))}): ${baixas.join(', ')}. Ficam só com salário + VR.</div>`);
@@ -766,6 +799,20 @@ function renderParams(){
   const box = document.getElementById('folhaParams');
   box.innerHTML = Object.keys(PARAMS_LABEL).map(k=>`<div><label class="lb">${PARAMS_LABEL[k]}</label><input class="pct" data-p="${k}" value="${folhaEstado.params[k] ? String(folhaEstado.params[k]).replace('.',',') : ''}" placeholder="0"></div>`).join('');
   box.querySelectorAll('input').forEach(inp=> inp.addEventListener('input', ()=>{ folhaEstado.params[inp.dataset.p] = parseBR(inp.value); recalcFolha(); }));
+  const cb = document.getElementById('calDsr'); if(!cb) return;
+  const cal = calendarioMes(document.getElementById('mes').value, folhaEstado.feriados);
+  const diasTxt = (folhaEstado.feriados || cal.auto.map(f=>f.dia)).join(', ');
+  cb.innerHTML = `<div><label class="lb">Feriados do mês (dias, separados por vírgula)</label><input id="feriadosIn" value="${diasTxt}" placeholder="ex.: 4, 13"> <button class="btn" id="feriadosAuto" type="button">Voltar ao automático</button></div>
+    <div class="muted" id="calResumo"></div>`;
+  const resumo = ()=>{ const c = calendarioMes(document.getElementById('mes').value, folhaEstado.feriados);
+    document.getElementById('calResumo').innerHTML = `<b>DSR do mês</b> = comissão ÷ <b>${c.diasUteis}</b> dias úteis × <b>${c.descanso}</b> (${c.domingos} domingo${c.domingos===1?'':'s'} + ${c.feriados} feriado${c.feriados===1?'':'s'}). Mês com ${c.diasMes} dias.${c.nomes.length?'<br>Feriados: '+c.nomes.join(' · '):'<br>Sem feriados neste mês.'}${c.manual?'<br><i>(lista editada à mão)</i>':'<br><i>(calendário automático: nacionais + Juiz de Fora; pontos facultativos não entram — digite os dias acima se quiser incluir)</i>'}`; };
+  resumo();
+  document.getElementById('feriadosIn').addEventListener('input', e=>{
+    const v = e.target.value.trim();
+    folhaEstado.feriados = v==='' ? [] : v.split(/[^0-9]+/).filter(Boolean).map(Number);
+    resumo(); recalcFolha();
+  });
+  document.getElementById('feriadosAuto').addEventListener('click', ()=>{ folhaEstado.feriados = null; renderParams(); recalcFolha(); });
 }
 async function salvarFolha(){
   const btn = document.getElementById('salvarFolha'); btn.disabled = true;
