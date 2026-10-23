@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lançamentos</title>
+<!-- Módulo TEMPORÁRIO e independente: vendas mensais por vendedora × loja e fechamento
+     detalhado de cada loja, com conferência entre os dois. Backend: Edge Function
+     lancamentos-api + tabela lancamentos_mensais. Só diretoria/gerente. -->
+<style>
+:root{
+  --bg:#F4F6F8;--surface:#FFFFFF;--surface-2:#F1F4F7;--ink:#1A1D24;--ink-soft:#4B5566;--ink-faint:#7C8592;
+  --line:#E1E5EA;--accent:#662344;--accent-soft:#F3E6D8;--ok:#17794A;--ok-soft:#E3F5EA;--danger:#B91C1C;--danger-soft:#FBEAEA;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;}
+button,input,select{font-family:inherit;font-size:13.5px;}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;}
+.topo{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:14px;}
+.topo h1{margin:0;font-size:18px;flex:1;min-width:160px;}
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;cursor:pointer;}
+.btn:hover{border-color:var(--accent);} .btn:disabled{opacity:.5;cursor:default;}
+.btn-accent{background:var(--accent);color:#fff;border-color:var(--accent);}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;}
+.tabs button{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 14px;font-weight:700;color:var(--ink-soft);cursor:pointer;}
+.tabs button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+.card h2{margin:0 0 10px;font-size:15px;padding-bottom:6px;border-bottom:2px solid var(--accent-soft);}
+label.lb{font-size:12px;font-weight:700;color:var(--ink-soft);display:block;margin-bottom:4px;}
+select,input[type=month],input.din{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+input.din{width:100%;text-align:right;font-variant-numeric:tabular-nums;}
+input.din:focus,select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent);}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;}
+th:first-child,td:first-child{text-align:left;}
+th{font-size:11.5px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.3px;}
+tr.tot td{font-weight:800;background:var(--surface-2);}
+.num{font-variant-numeric:tabular-nums;}
+.scroll{overflow-x:auto;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+@media(max-width:760px){.grid2{grid-template-columns:1fr;}}
+.linha{display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin-bottom:8px;}
+.linha .calc{text-align:right;font-weight:800;padding:8px 10px;background:var(--surface-2);border-radius:8px;font-variant-numeric:tabular-nums;}
+.diverge{color:var(--danger)!important;background:var(--danger-soft)!important;font-weight:800;}
+.bate{color:var(--ok);font-weight:800;}
+.alerta{padding:10px 12px;border-radius:8px;margin-top:10px;font-size:13px;font-weight:600;}
+.alerta.erro{background:var(--danger-soft);color:var(--danger);}
+.alerta.ok{background:var(--ok-soft);color:var(--ok);}
+.muted{color:var(--ink-faint);font-size:12px;}
+.rodape{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap;}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:8px;font-weight:600;display:none;z-index:50;}
+#bloqueio{padding:40px;text-align:center;color:var(--ink-soft);}
+</style>
+</head>
+<body>
+<div class="wrap" id="app" style="display:none">
+  <div class="topo">
+    <h1>🧮 Lançamentos</h1>
+    <label class="lb" style="margin:0">Mês</label>
+    <input type="month" id="mes">
+  </div>
+  <div class="tabs" id="tabs">
+    <button data-tab="vendedoras" class="active">Vendedoras</button>
+    <button data-tab="lojas">Lojas</button>
+    <button data-tab="conferencia">Conferência</button>
+  </div>
+
+  <!-- VENDEDORAS -->
+  <section data-sec="vendedoras">
+    <div class="card">
+      <h2>Lançamento por vendedora</h2>
+      <div style="max-width:320px;margin-bottom:12px">
+        <label class="lb">Vendedora</label>
+        <select id="selVend" style="width:100%"></select>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Loja</th><th>Venda</th><th>Devolução</th><th>Saldo</th></tr></thead>
+          <tbody id="tbVend"></tbody>
+        </table>
+      </div>
+      <div class="rodape">
+        <span class="muted" id="infoVend"></span>
+        <button class="btn btn-accent" id="salvarVend">Salvar</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Resumo do mês — saldo por vendedora</h2>
+      <div class="scroll"><table id="tbResumoVend"></table></div>
+    </div>
+  </section>
+
+  <!-- LOJAS -->
+  <section data-sec="lojas" style="display:none">
+    <div class="card">
+      <h2>Fechamento da loja</h2>
+      <div style="max-width:320px;margin-bottom:12px">
+        <label class="lb">Loja</label>
+        <select id="selLoja" style="width:100%"></select>
+      </div>
+      <div class="grid2">
+        <div>
+          <div class="linha"><label class="lb">TOTAL BRUTO</label><input class="din" id="lBruto"></div>
+          <div class="linha"><label class="lb">DEVOLUÇÃO</label><input class="din" id="lDev"></div>
+          <div class="linha"><label class="lb">TOTAL LÍQUIDO</label><div class="calc" id="lLiq">0,00</div></div>
+        </div>
+        <div id="lCats"></div>
+      </div>
+      <div id="lAlertas"></div>
+      <div class="rodape">
+        <span class="muted" id="infoLoja"></span>
+        <button class="btn btn-accent" id="salvarLoja">Salvar</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONFERÊNCIA -->
+  <section data-sec="conferencia" style="display:none">
+    <div class="card">
+      <h2>Lojas × soma das vendedoras</h2>
+      <div class="scroll"><table id="tbConf"></table></div>
+      <p class="muted">Em vermelho: o valor lançado na loja não bate com a soma lançada pelas vendedoras naquela loja.</p>
+    </div>
+  </section>
+</div>
+<div id="bloqueio" style="display:none"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+const API_URL = SUPABASE_URL + "/functions/v1/lancamentos-api";
+const EMBEDDED = window.parent !== window;
+
+const LOJAS = ["MARECHAL","JOAO BERALDO","JARDIM NORTE","REFORMA"];
+const LOJA_LABEL = { "MARECHAL":"Marechal", "JOAO BERALDO":"João Beraldo", "JARDIM NORTE":"Jardim Norte", "REFORMA":"Reforma" };
+const VENDEDORAS = ["PATRICIA","GISLAINE CRISTINA","MARIANA","PAMELA","GI","TIRZA","TANIA","FLAVIA","EDILENE","MEIRIELI","AMANDA","CAMILA","LARYSSA","PHABRINNE","FELIPE"];
+const CATEGORIAS = [
+  { id:"ALIANCA", label:"ALIANÇA" }, { id:"FABRICACAO", label:"FABRICAÇÃO" }, { id:"SERVICO", label:"SERVIÇO" },
+  { id:"REPRES_OURO", label:"REPRES OURO" }, { id:"REPRES_PRATA", label:"REPRES PRATA" }, { id:"RELOGIO", label:"RELÓGIO" },
+];
+
+let __senha = null, currentUser = null;
+let dadosMes = { vendedora:{}, loja:{} }; // chave → {dados, atualizado_por, updated_at}
+
+/* ---------- utilitários ---------- */
+function mensagemConfiavel(ev){
+  try{ if(ev.origin && ev.origin !== 'null' && ev.origin !== window.location.origin) return false; return true; }catch(e){ return false; }
+}
+const r2 = n => Math.round((Number(n)||0)*100)/100;
+function fmt(n){ return (Number(n)||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function parseBR(s){
+  s = String(s==null?'':s).trim().replace(/[R$\s]/g,'');
+  if(!s) return 0;
+  if(s.includes(',')) s = s.replace(/\./g,'').replace(',', '.');
+  else if((s.match(/\./g)||[]).length>1) s = s.replace(/\./g,'');
+  const n = Number(s); return isFinite(n) ? r2(n) : 0;
+}
+function toast(t){ const el=document.getElementById('toast'); el.textContent=t; el.style.display='block'; clearTimeout(toast._t); toast._t=setTimeout(()=>el.style.display='none',2500); }
+function quando(r){ if(!r || !r.updated_at) return 'Ainda não lançado neste mês.'; return 'Última edição: '+(r.atualizado_por||'—')+' em '+new Date(r.updated_at).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}); }
+function mesAtual(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function ligarFormatoDinheiro(inp, aoMudar){
+  inp.addEventListener('focus', ()=>{ const v=parseBR(inp.value); inp.value = v ? String(v).replace('.',',') : ''; inp.select(); });
+  inp.addEventListener('blur', ()=>{ inp.value = fmt(parseBR(inp.value)); aoMudar && aoMudar(); });
+  inp.addEventListener('input', ()=> aoMudar && aoMudar());
+  inp.addEventListener('keydown', e=>{ if(e.key==='Enter') inp.blur(); });
+}
+
+async function api(body){
+  try{
+    const res = await fetch(API_URL, { method:'POST', headers:{ 'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __senha, ...body }) });
+    const j = await res.json();
+    if(res.status===401 && EMBEDDED) parent.postMessage({ type:'sessaoExpirada', modulo:'lancamentos' }, '*');
+    return j;
+  }catch(e){ return { error: String(e) }; }
+}
+
+/* ---------- carga ---------- */
+async function carregarMes(){
+  const mes = document.getElementById('mes').value;
+  const r = await api({ op:'listar', mes });
+  if(r.error){ toast('Erro: '+r.error); return; }
+  dadosMes = { vendedora:{}, loja:{} };
+  (r.data||[]).forEach(x=>{ dadosMes[x.tipo][x.chave] = x; });
+  renderVendedora(); renderResumoVend(); renderLoja(); renderConferencia();
+}
+
+/* totais das vendedoras por loja */
+function somaVendedorasPorLoja(){
+  const out = {}; LOJAS.forEach(l=> out[l]={ venda:0, devolucao:0 });
+  Object.values(dadosMes.vendedora).forEach(r=>{
+    const lj = (r.dados && r.dados.lojas) || {};
+    LOJAS.forEach(l=>{ out[l].venda += Number((lj[l]||{}).venda)||0; out[l].devolucao += Number((lj[l]||{}).devolucao)||0; });
+  });
+  LOJAS.forEach(l=>{ out[l].venda=r2(out[l].venda); out[l].devolucao=r2(out[l].devolucao); out[l].saldo=r2(out[l].venda-out[l].devolucao); });
+  return out;
+}
+
+/* ---------- VENDEDORAS ---------- */
+function renderVendedora(){
+  const v = document.getElementById('selVend').value;
+  const reg = dadosMes.vendedora[v];
+  const lj = (reg && reg.dados && reg.dados.lojas) || {};
+  const tb = document.getElementById('tbVend');
+  tb.innerHTML = LOJAS.map(l=>`<tr data-loja="${l}">
+      <td><b>${LOJA_LABEL[l]}</b></td>
+      <td style="width:28%"><input class="din" data-campo="venda" value="${fmt((lj[l]||{}).venda)}"></td>
+      <td style="width:28%"><input class="din" data-campo="devolucao" value="${fmt((lj[l]||{}).devolucao)}"></td>
+      <td class="num saldo" style="width:20%"></td></tr>`).join('') +
+    `<tr class="tot"><td>TOTAL</td><td class="num" id="vTotVenda"></td><td class="num" id="vTotDev"></td><td class="num" id="vTotSaldo"></td></tr>`;
+  tb.querySelectorAll('input.din').forEach(i=> ligarFormatoDinheiro(i, recalcVendedora));
+  recalcVendedora();
+  document.getElementById('infoVend').textContent = quando(reg);
+}
+function lerVendedora(){
+  const lojas = {};
+  document.querySelectorAll('#tbVend tr[data-loja]').forEach(tr=>{
+    lojas[tr.dataset.loja] = { venda: parseBR(tr.querySelector('[data-campo=venda]').value), devolucao: parseBR(tr.querySelector('[data-campo=devolucao]').value) };
+  });
+  return { lojas };
+}
+function recalcVendedora(){
+  const d = lerVendedora(); let tv=0, td=0;
+  document.querySelectorAll('#tbVend tr[data-loja]').forEach(tr=>{
+    const x = d.lojas[tr.dataset.loja]; tv+=x.venda; td+=x.devolucao;
+    tr.querySelector('.saldo').textContent = fmt(x.venda - x.devolucao);
+  });
+  document.getElementById('vTotVenda').textContent = fmt(tv);
+  document.getElementById('vTotDev').textContent = fmt(td);
+  document.getElementById('vTotSaldo').textContent = fmt(tv-td);
+}
+async function salvarVendedora(){
+  const btn = document.getElementById('salvarVend'); btn.disabled=true;
+  const mes = document.getElementById('mes').value, chave = document.getElementById('selVend').value;
+  const r = await api({ op:'salvar', mes, tipo:'vendedora', chave, dados: lerVendedora() });
+  btn.disabled=false;
+  if(r.error){ toast('Erro: '+r.error); return; }
+  dadosMes.vendedora[chave] = r.data; toast('Salvo ✔');
+  document.getElementById('infoVend').textContent = quando(r.data);
+  renderResumoVend(); renderConferencia(); if(document.getElementById('selLoja').value) recalcLoja();
+}
+function renderResumoVend(){
+  const tab = document.getElementById('tbResumoVend');
+  const totLoja = {}; LOJAS.forEach(l=> totLoja[l]=0); let totGeral = 0;
+  const linhas = VENDEDORAS.map(v=>{
+    const lj = (dadosMes.vendedora[v] && dadosMes.vendedora[v].dados.lojas) || {};
+    let t = 0;
+    const cels = LOJAS.map(l=>{ const s = r2((Number((lj[l]||{}).venda)||0) - (Number((lj[l]||{}).devolucao)||0)); t+=s; totLoja[l]+=s; return `<td class="num">${s?fmt(s):'—'}</td>`; }).join('');
+    totGeral += t;
+    return `<tr><td>${v}${dadosMes.vendedora[v]?'':' <span class="muted">(sem lançamento)</span>'}</td>${cels}<td class="num"><b>${fmt(t)}</b></td></tr>`;
+  }).join('');
+  tab.innerHTML = `<thead><tr><th>Vendedora</th>${LOJAS.map(l=>`<th>${LOJA_LABEL[l]}</th>`).join('')}<th>Total</th></tr></thead><tbody>${linhas}
+    <tr class="tot"><td>TOTAL</td>${LOJAS.map(l=>`<td class="num">${fmt(totLoja[l])}</td>`).join('')}<td class="num">${fmt(totGeral)}</td></tr></tbody>`;
+}
+
+/* ---------- LOJAS ---------- */
+function renderLoja(){
+  const l = document.getElementById('selLoja').value;
+  const reg = dadosMes.loja[l];
+  const d = (reg && reg.dados) || {};
+  document.getElementById('lBruto').value = fmt(d.bruto);
+  document.getElementById('lDev').value = fmt(d.devolucao);
+  const cats = d.categorias || {};
+  document.getElementById('lCats').innerHTML = CATEGORIAS.map(c=>
+    `<div class="linha"><label class="lb">${c.label}</label><input class="din" data-cat="${c.id}" value="${fmt(cats[c.id])}"></div>`).join('') +
+    `<div class="linha"><label class="lb">TOTAL ITENS</label><div class="calc" id="lTotItens">0,00</div></div>`;
+  document.querySelectorAll('#lCats input.din').forEach(i=> ligarFormatoDinheiro(i, recalcLoja));
+  recalcLoja();
+  document.getElementById('infoLoja').textContent = quando(reg);
+}
+function lerLoja(){
+  const categorias = {};
+  document.querySelectorAll('#lCats input[data-cat]').forEach(i=> categorias[i.dataset.cat] = parseBR(i.value));
+  return { bruto: parseBR(document.getElementById('lBruto').value), devolucao: parseBR(document.getElementById('lDev').value), categorias };
+}
+function recalcLoja(){
+  const l = document.getElementById('selLoja').value; if(!l || !document.getElementById('lTotItens')) return;
+  const d = lerLoja();
+  const liq = r2(d.bruto - d.devolucao);
+  const itens = r2(Object.values(d.categorias).reduce((a,b)=>a+b,0));
+  document.getElementById('lLiq').textContent = fmt(liq);
+  const elItens = document.getElementById('lTotItens');
+  elItens.textContent = fmt(itens);
+  elItens.classList.toggle('diverge', itens !== liq);
+  const sv = somaVendedorasPorLoja()[l];
+  const msgs = [];
+  if(itens !== liq) msgs.push(`Total dos itens (${fmt(itens)}) ≠ Total líquido (${fmt(liq)}) — diferença ${fmt(itens-liq)}`);
+  if(d.bruto !== sv.venda) msgs.push(`Total bruto da loja (${fmt(d.bruto)}) ≠ soma das vendas das vendedoras (${fmt(sv.venda)}) — diferença ${fmt(d.bruto-sv.venda)}`);
+  if(liq !== sv.saldo) msgs.push(`Total líquido da loja (${fmt(liq)}) ≠ soma dos saldos das vendedoras (${fmt(sv.saldo)}) — diferença ${fmt(liq-sv.saldo)}`);
+  document.getElementById('lAlertas').innerHTML = msgs.length
+    ? msgs.map(m=>`<div class="alerta erro">⚠️ ${m}</div>`).join('')
+    : `<div class="alerta ok">✔ Tudo batendo com as vendedoras (bruto ${fmt(sv.venda)} · saldo ${fmt(sv.saldo)}).</div>`;
+}
+async function salvarLoja(){
+  const btn = document.getElementById('salvarLoja'); btn.disabled=true;
+  const mes = document.getElementById('mes').value, chave = document.getElementById('selLoja').value;
+  const r = await api({ op:'salvar', mes, tipo:'loja', chave, dados: lerLoja() });
+  btn.disabled=false;
+  if(r.error){ toast('Erro: '+r.error); return; }
+  dadosMes.loja[chave] = r.data; toast('Salvo ✔');
+  document.getElementById('infoLoja').textContent = quando(r.data);
+  renderConferencia();
+}
+
+/* ---------- CONFERÊNCIA ---------- */
+function renderConferencia(){
+  const sv = somaVendedorasPorLoja();
+  let tB=0,tBV=0,tL=0,tSV=0;
+  const linhas = LOJAS.map(l=>{
+    const d = (dadosMes.loja[l] && dadosMes.loja[l].dados) || null;
+    const bruto = d ? r2(d.bruto) : 0, liq = d ? r2(d.bruto - d.devolucao) : 0;
+    const itens = d ? r2(Object.values(d.categorias||{}).reduce((a,b)=>a+(Number(b)||0),0)) : 0;
+    tB+=bruto; tBV+=sv[l].venda; tL+=liq; tSV+=sv[l].saldo;
+    const dB = r2(bruto - sv[l].venda), dL = r2(liq - sv[l].saldo);
+    const c = v => v ? 'class="num diverge"' : 'class="num bate"';
+    return `<tr><td><b>${LOJA_LABEL[l]}</b>${d?'':' <span class="muted">(loja sem lançamento)</span>'}</td>
+      <td class="num">${fmt(bruto)}</td><td class="num">${fmt(sv[l].venda)}</td><td ${c(dB)}>${dB?fmt(dB):'✔'}</td>
+      <td class="num">${fmt(liq)}</td><td class="num">${fmt(sv[l].saldo)}</td><td ${c(dL)}>${dL?fmt(dL):'✔'}</td>
+      <td ${itens!==liq?'class="num diverge"':'class="num"'}>${fmt(itens)}</td></tr>`;
+  }).join('');
+  document.getElementById('tbConf').innerHTML = `<thead><tr><th>Loja</th><th>Bruto loja</th><th>Vendas vendedoras</th><th>Dif.</th><th>Líquido loja</th><th>Saldo vendedoras</th><th>Dif.</th><th>Total itens</th></tr></thead>
+    <tbody>${linhas}<tr class="tot"><td>TOTAL</td><td class="num">${fmt(tB)}</td><td class="num">${fmt(tBV)}</td><td class="num">${fmt(r2(tB-tBV))}</td><td class="num">${fmt(tL)}</td><td class="num">${fmt(tSV)}</td><td class="num">${fmt(r2(tL-tSV))}</td><td></td></tr></tbody>`;
+}
+
+/* ---------- init ---------- */
+function iniciarUI(){
+  document.getElementById('mes').value = mesAtual();
+  document.getElementById('selVend').innerHTML = VENDEDORAS.map(v=>`<option value="${v}">${v}</option>`).join('');
+  document.getElementById('selLoja').innerHTML = LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
+  document.getElementById('mes').addEventListener('change', carregarMes);
+  document.getElementById('selVend').addEventListener('change', renderVendedora);
+  document.getElementById('selLoja').addEventListener('change', renderLoja);
+  ['lBruto','lDev'].forEach(id=> ligarFormatoDinheiro(document.getElementById(id), recalcLoja));
+  document.getElementById('salvarVend').addEventListener('click', salvarVendedora);
+  document.getElementById('salvarLoja').addEventListener('click', salvarLoja);
+  document.querySelectorAll('#tabs button').forEach(b=> b.addEventListener('click', ()=>{
+    document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active', x===b));
+    document.querySelectorAll('section[data-sec]').forEach(s=> s.style.display = s.dataset.sec===b.dataset.tab ? '' : 'none');
+    if(b.dataset.tab==='conferencia') renderConferencia();
+    if(b.dataset.tab==='lojas') recalcLoja();
+  }));
+}
+
+window.addEventListener('message', async ev=>{
+  if(!mensagemConfiavel(ev)) return;
+  const d = ev.data || {};
+  if(d.type==='auth'){
+    currentUser = d.user; __senha = currentUser ? currentUser.senha : null;
+    if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'lancamentos', tabs:[], active:null }, '*');
+    if(!currentUser || (currentUser.nivel!=='diretoria' && currentUser.nivel!=='gerente')){
+      document.getElementById('app').style.display='none';
+      const b = document.getElementById('bloqueio'); b.style.display=''; b.textContent='Acesso restrito à diretoria e gerência.';
+      return;
+    }
+    document.getElementById('bloqueio').style.display='none';
+    document.getElementById('app').style.display='';
+    await carregarMes();
+  }
+});
+iniciarUI();
+window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'ready', modulo:'lancamentos' }, '*'); });
+
+/* mantém a sessão viva enquanto há uso aqui dentro */
+(function(){
+  var ultimo = 0;
+  function avisar(){ var a=Date.now(); if(a-ultimo<5000) return; ultimo=a; try{ if(window.parent!==window) window.parent.postMessage({ type:'atividade' }, '*'); }catch(e){} }
+  ['click','keydown','touchstart','scroll'].forEach(function(e){ document.addEventListener(e, avisar, { passive:true, capture:true }); });
+})();
+</script>
+</body>
+</html>
