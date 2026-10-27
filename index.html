@@ -1838,7 +1838,7 @@ window.addEventListener('message', (ev)=>{
   function acharIframe(mod){
     if(iframesCriados[mod]) return iframesCriados[mod];
     if(mod==='os' && iframesCriados['vendas_os']) return iframesCriados['vendas_os'];
-    if(mod==='vendas' && iframesCriados['vendas_pdv']) return iframesCriados['vendas_pdv'];
+    if((mod==='vendas'||mod==='pdv') && iframesCriados['vendas_pdv']) return iframesCriados['vendas_pdv'];
     if(mod==='orcamentos' && iframesCriados['vendas_orc']) return iframesCriados['vendas_orc'];
     if(mod==='transferencias' && iframesCriados['vendas_transf']) return iframesCriados['vendas_transf'];
     if(mod==='gravacoes' && iframesCriados['vendas_grav']) return iframesCriados['vendas_grav'];
@@ -1877,7 +1877,15 @@ window.addEventListener('message', (ev)=>{
     // iframe já existe e está autenticado) ou assim que ele mandar 'ready'.
     const jaExistia = !!acharIframe(d.alvo);
     selecionarModulo(d.alvo);
-    if(d.registroId || d.tab){
+    if(d.converterOrcamento){
+      // Orçamento → Venda/Pedido: entrega o id do orçamento ao módulo de destino, que
+      // carrega cliente e itens e liga os dois registros ao salvar.
+      const msgC = { type:'converterOrcamento', id:String(d.converterOrcamento) };
+      const permAlvo = d.alvo==='pdv' ? 'vendas' : d.alvo;
+      const iframeC = acharIframe(permAlvo);
+      if(jaExistia && iframeC && iframeC.contentWindow) iframeC.contentWindow.postMessage(msgC, '*');
+      else pendingAbrirRegistro = { permModulo:permAlvo, id:null, tab:null, msg:msgC };
+    } else if(d.registroId || d.tab){
       const msg = d.registroId ? { type:'abrirRegistro', id:d.registroId } : { type:'gotoTab', tabId:d.tab };
       const iframeAlvo = acharIframe(d.alvo);
       if(jaExistia && iframeAlvo && iframeAlvo.contentWindow) iframeAlvo.contentWindow.postMessage(msg, '*');
@@ -1896,7 +1904,10 @@ window.addEventListener('message', (ev)=>{
     if(!iframe || !ev.source) return;
     const permMod = (currentPermissoes && currentPermissoes[d.modulo]) || {};
     ev.source.postMessage({ type:'auth', user: currentUser, abas: permMod.abas || null, configCache: config || null }, '*');
-    if(pendingAbrirRegistro && pendingAbrirRegistro.permModulo === d.modulo){
+    if(pendingAbrirRegistro && pendingAbrirRegistro.permModulo === d.modulo && pendingAbrirRegistro.msg){
+      const m = pendingAbrirRegistro.msg; pendingAbrirRegistro = null;
+      setTimeout(()=>{ try{ ev.source.postMessage(m, '*'); }catch(e){} }, 400);
+    } else if(pendingAbrirRegistro && pendingAbrirRegistro.permModulo === d.modulo){
       if(pendingAbrirRegistro.id) ev.source.postMessage({ type:'abrirRegistro', id: pendingAbrirRegistro.id }, '*');
       else if(pendingAbrirRegistro.tab) setTimeout(()=>{ try{ ev.source.postMessage({ type:'gotoTab', tabId: pendingAbrirRegistro && pendingAbrirRegistro.tab }, '*'); }catch(e){} pendingAbrirRegistro = null; }, 600);
       if(pendingAbrirRegistro && pendingAbrirRegistro.id) pendingAbrirRegistro = null;

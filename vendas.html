@@ -492,6 +492,83 @@ async function produtoEstoqueAtualizar(produto){
 }
 function unidadeEstoqueLabel(u){ return u==='g' ? 'g' : u==='kg' ? 'kg' : 'un'; }
 
+/* ============================================================
+   ESTOQUE-API — reservas ativas (Pedidos/O.S. e Transferências).
+   A peça reservada continua no saldo da loja, mas já está prometida:
+   disponível = em estoque − reservado. Cache por loja, recarregado quando
+   o módulo abre, a loja muda ou depois de uma venda.
+   ============================================================ */
+const ESTOQUE_API_URL = SUPABASE_URL + "/functions/v1/estoque-api";
+async function estoqueApi(op, params){
+  try{
+    const res = await fetch(ESTOQUE_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({ senha: __gatewaySenha, op, ...(params||{}) }),
+    });
+    return await res.json();
+  }catch(e){
+    console.error('erro ao falar com estoque-api', e);
+    return { error: 'Não foi possível conectar. Verifique sua internet.' };
+  }
+}
+let __reservadasPorLoja = {};      // lojaId -> { produtoId: qtdReservada }
+let __reservadasCarregando = {};   // lojaId -> Promise
+let __reservadasFalhou = {};       // lojaId -> true (não tenta de novo em loop)
+function reservadasMapaDeLinhas(linhas, lojaId){
+  const mapa = {};
+  (linhas||[]).forEach(x=>{
+    if(!x || !x.produto_id) return;
+    if(lojaId && x.loja_id && String(x.loja_id)!==String(lojaId)) return;
+    mapa[x.produto_id] = (mapa[x.produto_id]||0) + (Number(x.quantidade)||0);
+  });
+  return mapa;
+}
+function invalidarReservadas(){ __reservadasPorLoja = {}; __reservadasFalhou = {}; }
+function carregarReservadas(lojaId){
+  if(!lojaId) return Promise.resolve(null);
+  if(__reservadasCarregando[lojaId]) return __reservadasCarregando[lojaId];
+  const p = (async ()=>{
+    const r = await estoqueApi('reservadas', { lojaId });
+    if(r && r.ok && Array.isArray(r.data)){
+      __reservadasPorLoja[lojaId] = reservadasMapaDeLinhas(r.data, lojaId);
+      delete __reservadasFalhou[lojaId];
+      return __reservadasPorLoja[lojaId];
+    }
+    console.error('erro ao carregar reservas de estoque', r && r.error);
+    __reservadasFalhou[lojaId] = true;
+    return null;
+  })().finally(()=>{ delete __reservadasCarregando[lojaId]; });
+  __reservadasCarregando[lojaId] = p;
+  return p;
+}
+function reservadoDe(produtoId, lojaId){
+  const m = __reservadasPorLoja[lojaId];
+  return m ? (Number(m[produtoId])||0) : 0;
+}
+
+/* ============================================================
+   CATÁLOGO OBRIGATÓRIO — todo item precisa estar vinculado a um produto
+   do catálogo (produtoEstoqueId) ou marcado como "Item avulso (sem estoque)"
+   com descrição. Registros antigos só são cobrados quando o formulário é salvo.
+   ============================================================ */
+function itemTemConteudo(it){
+  return !!(it && ((it.produto||'').trim() || it.produtoEstoqueId || (it.valorUnitario!=='' && it.valorUnitario!=null && Number(it.valorUnitario)) || it.avulso));
+}
+function itensSemCatalogo(lista){
+  const problemas = [];
+  (lista||[]).forEach((it, i)=>{
+    if(!itemTemConteudo(it)) return;
+    if(it.produtoEstoqueId) return;
+    if(it.avulso && (it.produto||'').trim()) return;
+    problemas.push(it.avulso ? `item avulso sem descrição (linha ${i+1})` : `"${(it.produto||'').trim() || ('item ' + (i+1) + ' sem nome')}"`);
+  });
+  return problemas;
+}
+function mensagemItensSemCatalogo(problemas){
+  return `Itens sem produto do catálogo: ${problemas.join(', ')}. Escolha o produto na lista de busca ou marque "Item avulso (sem estoque)" e descreva o item.`;
+}
+
 /**
  * Planeja o consumo de `quantidadeNecessaria` unidades do produto `produtoId`,
  * explodindo pela composição (receita) em cascata quando falta estoque em
@@ -1512,7 +1589,7 @@ function recalcularValorAjustado(it){
         const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
           ?` (${it.ajusteTipo==='desconto'?'−':'+'}${it.ajustePerc?it.ajustePerc+'%':('R$ '+it.ajusteValR)})`:'';
         __html+=`<div class="venda-item-compact" data-idx="${i}">
-          <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}</span>
+          <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${it.avulso?' <span class="badge" style="background:var(--surface-2,#eee);color:var(--muted,#6b7280);font-size:10px;padding:1px 6px;">avulso</span>':(!it.produtoEstoqueId?' <span class="badge" style="background:var(--wait-soft,#fceedc);color:var(--wait,#b45309);font-size:10px;padding:1px 6px;" title="Escolha o produto do catálogo ou marque como item avulso">⚠️ sem catálogo</span>':'')}</span>
           <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?'R$ '+Number(it.valorUnitario).toFixed(2):''}${escapeHtml(descInfo)}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="${escapeHtml(it.observacaoItem)}">💬</button>`:''}
@@ -1534,7 +1611,9 @@ function recalcularValorAjustado(it){
                      ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${produtoAtual.fator}</span>`:''}
                      <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto">×</button>
                    </div>`
-                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Nome, código, tipo, fornecedor ou bipe o código de barras..." autocomplete="off" spellcheck="false" data-pac="${i}">
+                :it.avulso
+                ?`<input class="prod-ac-input" placeholder="Descrição do item avulso (obrigatório)" autocomplete="off" spellcheck="false" data-avulsodesc="${i}" value="${escapeHtml(it.produto||'')}">`
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Nome, código, tipo, fornecedor ou bipe o código de barras..." autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
                    <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
             </div>
             <div class="item-row-valor">
@@ -1559,7 +1638,7 @@ function recalcularValorAjustado(it){
           </div>
           ${produtoAtual?`
           <div class="item-row-estoque">
-            <span class="muted" style="font-size:12px;">📦 <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} nesta loja</span>
+            <span class="muted" style="font-size:12px;">📦 Nesta loja: <b>${estoqueAqui}</b> ${escapeHtml(unidadeEstoqueLabel(produtoAtual.unidade))} em estoque${__reservadasPorLoja[lojaAtual]?(()=>{ const res=reservadoDe(produtoAtual.id,lojaAtual); const disp=estoqueAqui-res; return ` · <b>${res}</b> reservado · <b style="color:${disp>0?'var(--ok,#17794a)':'var(--danger,#b91c1c)'};">${disp}</b> disponível`; })():''}</span>
             ${outras.length>0?`<span class="muted" style="font-size:12px;">· também tem em: ${outras.join(', ')}</span>`:`<span class="muted" style="font-size:12px;">· sem estoque em outras lojas</span>`}
           </div>
           ${estoqueAqui<=0&&outras.length>0?`
@@ -1568,6 +1647,9 @@ function recalcularValorAjustado(it){
             <div style="font-weight:500;margin-top:3px;">A peça é de outro CNPJ — verifique com a gerência a baixa de estoque correta.</div>
           </div>`:''}
           `:''}
+          <label class="muted" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;margin-top:6px;cursor:pointer;" title="Marque só para itens que não estão no catálogo (ex.: serviço, peça do cliente). Item avulso não mexe no estoque.">
+            <input type="checkbox" data-itavulso="${i}" ${it.avulso?'checked':''} style="width:auto;"> Item avulso (sem estoque)
+          </label>
           <div class="item-row-obs">
             <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)"
               value="${escapeHtml(it.observacaoItem||'')}">
@@ -1576,6 +1658,10 @@ function recalcularValorAjustado(it){
       }
     });
     wrap.innerHTML=__html;
+    if(lojaAtual && !__reservadasPorLoja[lojaAtual] && !__reservadasFalhou[lojaAtual] && !__reservadasCarregando[lojaAtual]
+       && holder.itens.some(x=>x._modo!=='ok'&&x.produtoEstoqueId)){
+      carregarReservadas(lojaAtual).then(m=>{ if(m && container.isConnected) drawRows(); });
+    }
 
     // ── Autocomplete de produto ──
     wrap.querySelectorAll('[data-pac]').forEach(inp=>{
@@ -1593,7 +1679,7 @@ function recalcularValorAjustado(it){
           el.addEventListener('mousedown',e=>{ e.preventDefault(); selecionarProduto(i,pacAchados[Number(el.dataset.pk)]); });
         });
       }
-      inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
+      inp.addEventListener('input',()=>{ holder.itens[i].produto=inp.value; holder.itens[i].produtoEstoqueId=''; clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
         const t=inp.value.toLowerCase().trim();
         if(!t){ fecharDrop(); return; }
         const codigoExato=/^\d{6,}$/.test(inp.value.trim());
@@ -1620,12 +1706,27 @@ function recalcularValorAjustado(it){
       inp.addEventListener('blur',()=>{ setTimeout(fecharDrop,150); });
       inp.focus();
     });
+    // Item avulso (sem estoque): desvincula do catálogo e pede descrição livre
+    wrap.querySelectorAll('[data-itavulso]').forEach(chk=>{
+      chk.addEventListener('change',()=>{
+        const it=holder.itens[Number(chk.dataset.itavulso)];
+        it.avulso=chk.checked;
+        if(it.avulso){ it.produtoEstoqueId=''; }
+        drawRows(); updateTotalHint();
+        if(it.avulso){ const d=wrap.querySelector('[data-avulsodesc="'+chk.dataset.itavulso+'"]'); if(d) d.focus(); }
+      });
+    });
+    wrap.querySelectorAll('[data-avulsodesc]').forEach(inp=>{
+      inp.addEventListener('input',()=>{ holder.itens[Number(inp.dataset.avulsodesc)].produto=inp.value; });
+    });
     // ＋ confirma → compacto + nova linha vazia
     wrap.querySelectorAll('[data-itadd]').forEach(btn=>{
       btn.addEventListener('click',()=>{
         const idx=Number(btn.dataset.itadd);
         const it=holder.itens[idx];
-        if(!it.produtoEstoqueId&&!it.valorUnitario) return;
+        if(!it.produtoEstoqueId&&!it.valorUnitario&&!(it.produto||'').trim()&&!it.avulso) return;
+        if(!it.produtoEstoqueId&&!it.avulso){ showToast('Escolha o produto na lista de busca ou marque "Item avulso (sem estoque)".'); return; }
+        if(it.avulso&&!(it.produto||'').trim()){ showToast('Descreva o item avulso.'); return; }
         it._modo='ok';
         holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
         drawRows(); updateTotalHint();
@@ -1751,7 +1852,7 @@ function recalcularValorAjustado(it){
   // Seleciona produto pelo autocomplete
   function selecionarProduto(idx, produto){
     const it=holder.itens[idx];
-    it.produtoEstoqueId=produto.id; it.produto=produto.nome;
+    it.produtoEstoqueId=produto.id; it.produto=produto.nome; it.avulso=false;
     it.precoOriginal=produto.precoVenda!=null?produto.precoVenda:'';
     if(it.valorUnitario===''||it.valorUnitario==null) it.valorUnitario=it.precoOriginal||'';
     drawRows();
@@ -1801,6 +1902,11 @@ if(EMBEDDED){
       window.__permissoesAbasOverride = ev.data.abas || null;
       await loadAll();
       enterApp();
+    } else if(ev.data.type === 'converterOrcamento'){
+      // Veio do módulo Orçamento ("🛒 Converter em Venda") via shell. Se o app ainda
+      // não terminou de carregar (login/auth), fica pendente e roda no enterApp().
+      pendingConverterOrcId = ev.data.id;
+      processarConverterOrcamentoPendente();
     } else if(ev.data.type === 'pedirRascunho'){
       { const __ov = document.getElementById('modalOverlay'); if(__ov && __ov.classList.contains('show')) closeModal(); }
       if(EMBEDDED) parent.postMessage({ type:'semRascunho', modulo:'vendas' }, '*');
@@ -1825,6 +1931,8 @@ if(EMBEDDED){
       // Shell avisou qual é a loja ativa (módulo Loja) — passa a filtrar a lista
       // de vendas por essa loja e já pré-seleciona ela em "Nova venda".
       window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
+      invalidarReservadas();
+      if(currentUser && window.__lojaAtual.id) carregarReservadas(window.__lojaAtual.id);
       atualizarFaixaLoja();
       if(currentUser && config) renderView();
     }
@@ -1855,6 +1963,7 @@ async function doLogin(){
 document.getElementById('btnLogout').addEventListener('click', ()=>{
   currentUser = null;
   __gatewaySenha = null;
+  __appPronto = false;
   document.getElementById('loginPass').value = '';
   document.getElementById('view-app').style.display = 'none';
   document.getElementById('view-login').style.display = 'flex';
@@ -1880,6 +1989,10 @@ function enterApp(){
     if(alvo) abrirDetalheVenda(alvo);
     pendingAbrirId = null;
   }
+  invalidarReservadas();
+  if(window.__lojaAtual && window.__lojaAtual.id) carregarReservadas(window.__lojaAtual.id);
+  __appPronto = true;
+  if(pendingConverterOrcId) processarConverterOrcamentoPendente();
 }
 
 /* ============================================================
@@ -1928,6 +2041,7 @@ function renderTabs(){
 function renderView(){
   const main = document.getElementById('mainContent');
   main.innerHTML = '';
+  if(!modoNovaVenda) __conversaoOrcamento = null;
   if(modoNovaVenda) renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
   else if(currentTab==='semnota') renderSemNota(main);
@@ -2192,7 +2306,7 @@ function exportarSemNota(lista){
  * tela com a lista: dá pra ver os itens, mudar o status, ou confirmar que um deles
  * é exatamente o que está virando esta venda agora (marca como aprovado).
  */
-function mostrarOrcamentosAbertosModal(cliente){
+function mostrarOrcamentosAbertosModal(cliente, aoConfirmar){
   const abertos = orcamentosAbertosDoCliente(cliente);
   if(abertos.length === 0) return;
   openModal(`
@@ -2241,10 +2355,13 @@ function mostrarOrcamentosAbertosModal(cliente){
     wrap.querySelectorAll('[data-confirmarorc]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         const o = abertos.find(x=>x.id===b.dataset.confirmarorc);
-        const statusAprovado = statusList().find(s=>s.encerra) || statusList()[0];
+        // Carrega os itens do orçamento no carrinho e vincula (o "convertidoEm" é gravado
+        // quando a venda for lançada). Se a pessoa não quiser substituir o carrinho, não faz nada.
+        if(typeof aoConfirmar === 'function' && aoConfirmar(o) === false) return;
+        const statusAprovado = statusAprovadoOrcamento();
         o.status = statusAprovado.id;
         await orcamentoSalvar(o);
-        showToast('Orçamento confirmado como esta venda.');
+        showToast('Orçamento confirmado como esta venda — itens carregados no carrinho.');
         abertos.splice(abertos.indexOf(o),1);
         draw();
       });
@@ -2252,6 +2369,93 @@ function mostrarOrcamentosAbertosModal(cliente){
   }
   draw();
   document.getElementById('btnFecharOrcAbertos').addEventListener('click', closeModal);
+}
+
+/* ============================================================
+   ORÇAMENTO → VENDA
+   ============================================================ */
+let __conversaoOrcamento = null;      // { orcamentoId, orcamento, cliente } — vínculo do formulário de nova venda
+let pendingConverterOrcId = null;     // pedido do shell que chegou antes do app estar pronto
+let __appPronto = false;
+function codigoOrcamento(o){ return (o && (o.codigoVia || o.codigo)) || (o && o.id ? String(o.id).slice(-8) : ''); }
+function statusAprovadoOrcamento(){
+  const lista = statusList();
+  return lista.find(s=>s.id==='aprovado') || lista.find(s=>s.encerra && s.id!=='recusado') || lista.find(s=>s.encerra) || lista[0];
+}
+function itensDoOrcamentoParaVenda(o){
+  return (o.itens||[]).filter(it=>it && (it.produto || it.produtoEstoqueId)).map(it=>{
+    const vinculado = it.produtoEstoqueId && produtosEstoque.some(p=>p.id===it.produtoEstoqueId) ? it.produtoEstoqueId : '';
+    return {
+      id: uid('it'), produto: it.produto||'', metal: it.metal||'', quantidade: Number(it.quantidade)||1,
+      valorUnitario: it.valorUnitario!==undefined && it.valorUnitario!==null ? it.valorUnitario : '',
+      produtoEstoqueId: vinculado, avulso: !vinculado && !!it.avulso,
+      precoOriginal: it.precoOriginal!==undefined && it.precoOriginal!=='' ? it.precoOriginal : (it.valorUnitario!==undefined ? it.valorUnitario : ''),
+      ajusteTipo: it.ajusteTipo||'nenhum', ajusteModo: it.ajusteModo||'percentual', ajusteQtd: it.ajusteQtd!==undefined ? it.ajusteQtd : '',
+      ajustePerc: it.ajustePerc!==undefined ? it.ajustePerc : '', ajusteValR: it.ajusteValR!==undefined ? it.ajusteValR : '',
+      observacaoItem: it.observacaoItem||'', _modo:'ok'
+    };
+  });
+}
+/** Acha o cliente do orçamento no cadastro (id, telefone/CPF); se não achar, usa nome/telefone do orçamento. */
+async function clienteDoOrcamento(o){
+  let c = null;
+  try{
+    if(o.clienteId) c = clientes.find(x=>x.id===o.clienteId) || null;
+    if(!c && (o.telefone || o.cpf)) c = await buscarClientePorTelefoneOuCpf(o.telefone||'', o.cpf||'');
+  }catch(e){ console.error('erro ao localizar cliente do orçamento', e); }
+  if(c) return c;
+  return o.cliente ? { nome: o.cliente, telefone: o.telefone||'', email: o.email||'' } : null;
+}
+/** Shell pediu "Converter em Venda": abre a nova venda já preenchida com o orçamento. */
+async function processarConverterOrcamentoPendente(){
+  const id = pendingConverterOrcId;
+  if(!id || !__appPronto) return;
+  pendingConverterOrcId = null;
+  const lista = await orcamentosGet();
+  if(Array.isArray(lista) && lista.length) orcamentos = lista;
+  const o = orcamentos.find(x=>x.id===id);
+  if(!o){ showToast('Orçamento não encontrado.'); return; }
+  if(o.convertidoEm && !confirm(`Este orçamento já foi convertido em ${o.convertidoEm.tipo==='pedido'?'Pedido':'Venda'} ${o.convertidoEm.codigo||''}. Criar outra venda a partir dele mesmo assim?`)) return;
+  const cliente = await clienteDoOrcamento(o);
+  { const ov = document.getElementById('modalOverlay'); if(ov && ov.classList.contains('show')) closeModal(); }
+  __conversaoOrcamento = { orcamentoId: o.id, orcamento: o, cliente };
+  modoNovaVenda = true;
+  renderView();
+  showToast('Venda a partir do orçamento ' + codigoOrcamento(o) + ' — confira os itens e o pagamento.');
+}
+/** Depois de lançar a venda: orçamento vira "aprovado" e guarda em qual venda foi convertido. */
+async function marcarOrcamentoConvertidoEmVenda(orcamentoId, venda){
+  let o = orcamentos.find(x=>x.id===orcamentoId);
+  if(!o){ const lista = await orcamentosGet(); if(Array.isArray(lista) && lista.length) orcamentos = lista; o = orcamentos.find(x=>x.id===orcamentoId); }
+  if(!o){ console.error('orçamento de origem não encontrado', orcamentoId); return; }
+  o.status = statusAprovadoOrcamento().id;
+  o.convertidoEm = { tipo:'venda', id: venda.id, codigo: venda.codigoVia || String(venda.id).slice(-8), data: new Date().toISOString() };
+  const ok = await orcamentoSalvar(o);
+  if(!ok) showToast('Venda lançada, mas não foi possível marcar o orçamento como convertido.');
+}
+/** Retorna o texto do aviso se a venda vai consumir unidades reservadas (ou '' se não). */
+async function avisoConsumoReservado(reservas, lojaId){
+  const ids = Object.keys(reservas||{}).filter(id=> reservas[id] > 0);
+  if(!lojaId || ids.length===0) return '';
+  const r = await estoqueApi('reservadas', { lojaId, produtoIds: ids });
+  let mapa;
+  if(r && r.ok && Array.isArray(r.data)){ mapa = reservadasMapaDeLinhas(r.data, lojaId); }
+  else if(__reservadasPorLoja[lojaId]){ mapa = __reservadasPorLoja[lojaId]; }
+  else return '';
+  const linhas = [];
+  ids.forEach(id=>{
+    const reservado = Number(mapa[id])||0;
+    if(reservado <= 0) return;
+    const p = produtosEstoque.find(x=>x.id===id);
+    const emEstoque = p ? (Number((p.estoquePorLoja||{})[lojaId])||0) : 0;
+    const disponivel = Math.max(0, emEstoque - reservado);
+    const usar = Number(reservas[id])||0;
+    if(usar <= disponivel + 1e-9) return;
+    const n = Math.min(reservado, usar - disponivel);
+    linhas.push(`${Number(n.toFixed(3))} unidade(s) de "${p ? p.nome : id}" estão reservadas para pedido/transferência.`);
+  });
+  if(linhas.length===0) return '';
+  return linhas.join('\n') + '\n\nVender mesmo assim?';
 }
 
 /* ============================================================
@@ -2291,6 +2495,7 @@ function renderNovaVenda(main){
       </div>
       <input type="hidden" id="v_cliente"><input type="hidden" id="v_telefone">
     </div>
+    <div id="orcOrigemBanner"></div>
     <div class="card"><div id="itensContainerNova"></div></div>
     <div class="card">
       <div class="obs-geral-box">
@@ -2310,9 +2515,17 @@ function renderNovaVenda(main){
     </div>
   `;
   const linkVoltarV = document.getElementById('linkVoltarVendas');
-  if(linkVoltarV) linkVoltarV.addEventListener('click', (e)=>{ e.preventDefault(); modoNovaVenda = false; currentTab = 'vendas'; renderTabs(); renderView(); });
+  if(linkVoltarV) linkVoltarV.addEventListener('click', (e)=>{ e.preventDefault(); __conversaoOrcamento = null; modoNovaVenda = false; currentTab = 'vendas'; renderTabs(); renderView(); });
   const tempItensHolder = { itens:[ { id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'', _modo:'editar' } ] };
   window.__itensHolder = tempItensHolder; // exposto para calcTotalItens() no bloco de pagamento
+  // Venda a partir de um orçamento (Converter em Venda / "✓ É este"): carrega os itens
+  // e guarda o vínculo (orcamentoOrigemId) pra marcar o orçamento como convertido ao salvar.
+  const formState = { orcamentoOrigemId: __conversaoOrcamento ? __conversaoOrcamento.orcamentoId : null };
+  if(__conversaoOrcamento && __conversaoOrcamento.orcamento){
+    tempItensHolder.itens.push(...itensDoOrcamentoParaVenda(__conversaoOrcamento.orcamento));
+  }
+  // Novo formulário = número de reservas fresco (outros módulos podem ter reservado).
+  { const lj = window.__lojaAtual && window.__lojaAtual.id; if(lj){ delete __reservadasPorLoja[lj]; delete __reservadasFalhou[lj]; } }
   const __itensEl = document.getElementById('itensContainerNova');
   const __pagEl = document.getElementById('pagamentoContainerNova');
   if(!__itensEl || !__pagEl){
@@ -2322,6 +2535,30 @@ function renderNovaVenda(main){
     return;
   }
   const itensApi = mountItens(__itensEl, tempItensHolder, ()=> document.getElementById('v_loja').value);
+  function desenharBannerOrcamento(){
+    const el = document.getElementById('orcOrigemBanner');
+    if(!el) return;
+    const o = __conversaoOrcamento && __conversaoOrcamento.orcamento;
+    formState.orcamentoOrigemId = __conversaoOrcamento ? __conversaoOrcamento.orcamentoId : null;
+    if(!o){ el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="card" style="padding:10px 14px; border-left:4px solid var(--accent,#7a1f3d); display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span>📋 Venda a partir do orçamento <b>${escapeHtml(codigoOrcamento(o))}</b> — ${escapeHtml(o.cliente||'')} · ${fmtMoeda(o.valorTotal)} <span class="muted">(${fmtDate(o.data)})</span></span>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnDesvincularOrc" title="Esta venda não vai mais marcar o orçamento como convertido">✕ Desvincular</button>
+    </div>`;
+    document.getElementById('btnDesvincularOrc').addEventListener('click', ()=>{ __conversaoOrcamento = null; desenharBannerOrcamento(); });
+  }
+  desenharBannerOrcamento();
+  /** "✓ É este" no aviso de orçamentos em aberto: carrega os itens do orçamento no carrinho. */
+  function carregarOrcamentoNoCarrinho(o){
+    const temItens = tempItensHolder.itens.some(itemTemConteudo);
+    if(temItens && !confirm('O carrinho já tem itens. Substituir pelos itens deste orçamento?')) return false;
+    __conversaoOrcamento = { orcamentoId: o.id, orcamento: o, cliente: __conversaoOrcamento ? __conversaoOrcamento.cliente : null };
+    const vazia = { id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'', _modo:'editar' };
+    tempItensHolder.itens.splice(0, tempItensHolder.itens.length, vazia, ...itensDoOrcamentoParaVenda(o));
+    itensApi.refreshEstoque();
+    desenharBannerOrcamento();
+    return true;
+  }
   // loja fixa pelo contexto do shell — sem listener de troca
   const tempPagHolder = { valorTotal:null, pagamentos:[] };
   mountPagamentos(__pagEl, tempPagHolder, ()=> document.getElementById('v_loja').value);
@@ -2336,21 +2573,27 @@ function renderNovaVenda(main){
   }, 50);
 
   // Autocomplete inline de cliente
+  const clienteDaConversao = __conversaoOrcamento ? __conversaoOrcamento.cliente : null;
+  if(clienteDaConversao){
+    document.getElementById('v_cliente').value = clienteDaConversao.nome || '';
+    document.getElementById('v_telefone').value = clienteDaConversao.telefone || '';
+  }
   montarClienteAutocomplete(
     document.getElementById('v_clienteAcWrap'),
     (clienteFinal)=>{
       if(clienteFinal){
         document.getElementById('v_cliente').value = clienteFinal.nome || '';
         document.getElementById('v_telefone').value = clienteFinal.telefone || '';
-        mostrarOrcamentosAbertosModal(clienteFinal);
+        mostrarOrcamentosAbertosModal(clienteFinal, carregarOrcamentoNoCarrinho);
       } else {
         document.getElementById('v_cliente').value = '';
         document.getElementById('v_telefone').value = '';
       }
-    }
+    },
+    clienteDaConversao || undefined
   );
 
-  document.getElementById('btnLimparVenda').addEventListener('click', ()=> renderNovaVenda(main) );
+  document.getElementById('btnLimparVenda').addEventListener('click', ()=>{ __conversaoOrcamento = null; renderNovaVenda(main); });
   document.getElementById('btnToggleInfoInterna').addEventListener('click', ()=>{
     const box = document.getElementById('infoInternaBox');
     const btn = document.getElementById('btnToggleInfoInterna');
@@ -2373,6 +2616,7 @@ function renderNovaVenda(main){
 
     if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item vendido.'); return; }
+    { const semCat = itensSemCatalogo(tempItensHolder.itens); if(semCat.length){ showToast(mensagemItensSemCatalogo(semCat)); return; } }
     if(!cliente){ showToast('Informe o cliente antes de lançar a venda.'); return; }
     if(!tempPagHolder.momentoPagamento){ showToast('Informe o momento do pagamento (Pago agora ou Pagar na volta).'); return; }
     if(!tempPagHolder.emissaoNota){ showToast('Informe se haverá nota fiscal (Sim ou Não).'); return; }
@@ -2410,6 +2654,11 @@ function renderNovaVenda(main){
       const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nLançar a venda mesmo assim? O estoque desses itens vai ficar negativo, sinalizando que precisa repor.`);
       if(!prosseguir) return;
     }
+    // Peças reservadas (Pedido/O.S. ou Transferência) continuam no saldo, mas já estão
+    // prometidas — avisa antes de vender o que não está realmente disponível.
+    const avisoReserva = await avisoConsumoReservado(reservas, lojaEstoque);
+    if(avisoReserva && !confirm(avisoReserva)) return;
+    const convOrc = __conversaoOrcamento;
 
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
     // ===== Crédito do cliente / Fiado =====
@@ -2447,6 +2696,7 @@ function renderNovaVenda(main){
       observacaoGeral: observacaoGeral || '',
       infoInterna: infoInterna || '',
     };
+    if(convOrc && convOrc.orcamentoId) venda.orcamentoId = convOrc.orcamentoId;
     // Código de barras da via, gerado só agora que a venda realmente vai ser salva
     // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
     venda.codigoVia = await bumpCodigoVia('venda', venda.lojaId||'');
@@ -2480,6 +2730,10 @@ function renderNovaVenda(main){
       }
       await aplicarConsumosEstoque(reservas, lojaEstoque, venda.id);
       vendas.unshift(venda);
+      if(venda.orcamentoId) await marcarOrcamentoConvertidoEmVenda(venda.orcamentoId, venda);
+      __conversaoOrcamento = null;
+      invalidarReservadas();
+      if(lojaEstoque) carregarReservadas(lojaEstoque);
       showToast('Venda lançada com sucesso.');
       currentTab = 'vendas';
       modoNovaVenda = false;
@@ -3235,7 +3489,7 @@ function abrirFormularioEdicaoCompleta(v){
       <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
     </div>
   `);
-  const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'' })) };
+  const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'' })) };
   const itensApiEd = mountItens(document.getElementById('ed_itensContainer'), itensHolder, ()=> document.getElementById('ed_loja').value);
   document.getElementById('ed_loja').addEventListener('change', ()=> itensApiEd.refreshEstoque());
   const pagHolder = {
@@ -3260,6 +3514,7 @@ function abrirFormularioEdicaoCompleta(v){
     const itensValidos = itensHolder.itens.filter(it=>it.produto);
     if(!lojaId || !vendedora || !data){ showToast('Preencha loja, vendedora e data.'); return; }
     if(itensValidos.length===0){ showToast('Adicione ao menos um item vendido.'); return; }
+    { const semCat = itensSemCatalogo(itensHolder.itens); if(semCat.length){ showToast(mensagemItensSemCatalogo(semCat)); return; } }
     const erroNota = notaEmpresasErro(pagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
 

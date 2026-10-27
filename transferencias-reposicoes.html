@@ -352,6 +352,13 @@
   .item-row-multi .btn-confirmar-item,.item-row-multi .btn-x{flex:0 0 auto;}
   .item-row-multi select,.item-row-multi input{flex:1 1 100px;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:7px;font-size:13px;background:var(--surface-2);color:var(--ink);}
   .item-row-multi select:focus,.item-row-multi input:focus{outline:none;border-color:var(--accent);background:#fff;}
+  .item-catalogo-extra{flex:1 1 100%;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);}
+  .item-catalogo-extra label{display:inline-flex;gap:5px;align-items:center;font-weight:600;cursor:pointer;}
+  .item-row-multi .item-catalogo-extra input[type=checkbox]{flex:0 0 auto;width:auto;}
+  .estoque-info-item{font-weight:600;}
+  .estoque-info-item.baixo{color:var(--erro-ink);}
+  .item-sem-catalogo{color:var(--erro-ink);font-weight:700;}
+  .reserva-ativa-line{margin-top:8px;font-size:12.5px;font-weight:700;color:var(--accent-ink);}
   .btn-x{flex:0 0 auto;border:none;background:var(--erro-bg);color:var(--erro-ink);width:26px;height:26px;border-radius:50%;font-weight:800;font-size:14px;line-height:1;}
   .btn-add-item{font-size:12px;font-weight:700;color:var(--accent-ink);background:none;border:1px dashed var(--accent);padding:6px 10px;border-radius:8px;margin-top:2px;}
   .btn-confirmar-item{border:none;background:var(--ok-line);color:#fff;font-weight:800;}
@@ -866,12 +873,14 @@ function ajudaPonto(texto){
   const ITEM_FIELDS = {
     transferItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
+      {f:"produtoEstoqueId", type:"produtoEstoque"},
       {f:"metal", type:"select", opts:METALS},
       {f:"quantidade", type:"text", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
     ],
     retornoItens: [
       {f:"produto", type:"select", opts:PRODUCTS},
+      {f:"produtoEstoqueId", type:"produtoEstoque"},
       {f:"metal", type:"select", opts:METALS},
       {f:"quantidade", type:"text", ph:"Qtd"},
       {f:"fator", type:"text", ph:"Fator"},
@@ -895,8 +904,8 @@ function ajudaPonto(texto){
     ],
   };
   const ITEM_FACTORIES = {
-    transferItens: ()=>({produto:"",produtoEstoqueId:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
-    retornoItens: ()=>({produto:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
+    transferItens: ()=>({produto:"",produtoEstoqueId:"",avulso:false,descricaoAvulso:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
+    retornoItens: ()=>({produto:"",produtoEstoqueId:"",avulso:false,descricaoAvulso:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
     pedidoItens: ()=>({produto:"",metal:"",quantidade:"",fotoUrl:"",fotoFileId:""}),
     disponibilizadoItens: ()=>({produto:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
     itensEnvio: ()=>({produto:"",metal:"",quantidade:"",fator:"",fotoUrl:"",fotoFileId:""}),
@@ -1963,7 +1972,7 @@ function ajudaPonto(texto){
   function produtoEstoqueOptionsHtml(selected){
     const lista = produtosEstoqueCache || [];
     const vazio = lista.length===0 ? `<option value="" disabled>Nenhum produto cadastrado em Cadastro → Produtos</option>` : "";
-    return `<option value="">— Não vincular ao catálogo —</option>${vazio}` + lista.map(p=>`<option value="${escapeHtml(p.id)}" ${p.id===selected?"selected":""}>${escapeHtml(p.nome)}</option>`).join("");
+    return `<option value="">— Produto do catálogo —</option>${vazio}` + lista.map(p=>`<option value="${escapeHtml(p.id)}" ${p.id===selected?"selected":""}>${escapeHtml(p.nome)}</option>`).join("");
   }
   /** lojaOrigem/lojaDestino são guardados como ABREVIAÇÃO (ex: "MC") por compatibilidade
    * histórica — lojaOrigemId/lojaDestinoId já vêm resolvidos (preenchidos numa migração
@@ -1980,10 +1989,15 @@ function ajudaPonto(texto){
    * Passa pelo Kardex (registrarMovimentoEstoque), então fica registrado o histórico
    * de cada movimento, não só o número final. */
   async function moverEstoqueTransferencia(r, tipoMovimento, sinal){
-    if(r.tipoTransf !== "SAÍDA") return;
+    if(r.tipoTransf !== "SAÍDA") return false;
+    // Baixa na origem: a reserva feita ao salvar a SAÍDA deixa de valer (a peça saiu
+    // de fato) — libera ANTES de movimentar o Kardex. Falha aqui só gera aviso.
+    if(tipoMovimento === "baixa" && sinal < 0){
+      try{ await liberarReservaTransf(r, "baixa na origem"); }catch(e){ console.error(e); }
+    }
     const lojaId = (tipoMovimento==="baixa" ? r.lojaOrigemId : r.lojaDestinoId)
       || lojaIdPorAbreviacao(tipoMovimento==="baixa" ? r.lojaOrigem : r.lojaDestino);
-    if(!lojaId){ showToast(`Não achei a loja de "${tipoMovimento==="baixa"?r.lojaOrigem:r.lojaDestino}" no cadastro — o estoque não foi ajustado automaticamente. Confira manualmente.`); return; }
+    if(!lojaId){ showToast(`Não achei a loja de "${tipoMovimento==="baixa"?r.lojaOrigem:r.lojaDestino}" no cadastro — o estoque não foi ajustado automaticamente. Confira manualmente.`); return false; }
     for(const item of (r.transferItens||[])){
       if(!item.produtoEstoqueId) continue;
       const qtd = Number(item.quantidade)||0;
@@ -2002,6 +2016,236 @@ function ajudaPonto(texto){
         console.error("erro ao mover estoque da transferência", item.produtoEstoqueId, resp && resp.error);
         produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) + sinal*qtd;
       }
+    }
+  }
+
+  /* ================= ESTOQUE: catálogo obrigatório, reservas e disponível =================
+   * Edge Function "estoque-api" (mesma senha/headers do db-gateway). Nenhuma falha aqui
+   * bloqueia a ação do usuário — só mostra um aviso (toast). */
+  const ESTOQUE_API_URL = SUPABASE_URL + "/functions/v1/estoque-api";
+  async function estoqueApi(op, params){
+    try{
+      const res = await fetch(ESTOQUE_API_URL, {
+        method: "POST",
+        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha: __gatewaySenha, op, ...(params||{}) }),
+      });
+      let j = null;
+      try{ j = await res.json(); }catch(e){}
+      if(!res.ok || !j || j.ok === false || j.error) return { ok:false, error: (j && j.error) || ("HTTP " + res.status) };
+      return j;
+    }catch(e){
+      console.error("erro ao falar com estoque-api", e);
+      return { ok:false, error:"sem conexão com o servidor de estoque" };
+    }
+  }
+  const ARRS_ITENS_CATALOGO = ["transferItens","retornoItens"];
+  function itemTemConteudo(it){
+    return !!(it && (it.produto || it.produtoEstoqueId || it.avulso || String(it.quantidade||"").trim() !== ""));
+  }
+  function chaveConteudoItem(it){
+    return JSON.stringify([it.produto||"", it.metal||"", String(it.quantidade||""), String(it.fator||""), it.produtoEstoqueId||"", !!it.avulso, it.descricaoAvulso||""]);
+  }
+  function nomeProdutoCatalogo(id){
+    const p = (produtosEstoqueCache||[]).find(x=>x.id===id);
+    return p ? (p.nome || id) : id;
+  }
+  function descricaoItemCurta(it, n){
+    const partes = [it.produto, it.metal, it.quantidade ? "Qtd " + it.quantidade : ""].filter(Boolean);
+    return `Item ${n}${partes.length ? " (" + partes.join(" · ") + ")" : ""}`;
+  }
+  // Loja de onde a peça daquele array SAI: transferItens sai da origem; retornoItens
+  // (Ciclo 2 da TROCA DIFERENTE) sai da loja de destino.
+  function lojaSaidaDoArr(r, arrKey){
+    return arrKey === "retornoItens"
+      ? (r.lojaDestinoId || lojaIdPorAbreviacao(r.lojaDestino))
+      : (r.lojaOrigemId || lojaIdPorAbreviacao(r.lojaOrigem));
+  }
+  // Itens novos ou alterados nesta gravação. Em registro já finalizado, itens antigos
+  // inalterados (ex.: "Anel" digitado antes da regra) não entram — assim vistos e
+  // confirmações de registros antigos continuam funcionando.
+  function itensNovosOuAlterados(r, antes, arrKey){
+    const lista = (r[arrKey]||[]).map((it, idx)=>({it, idx})).filter(x=>itemTemConteudo(x.it));
+    if(!antes || antes.rascunho || state.unsavedNew.has(r.id)) return lista;
+    const antigos = (antes[arrKey]||[]).map(chaveConteudoItem);
+    return lista.filter(x=>{
+      const i = antigos.indexOf(chaveConteudoItem(x.it));
+      if(i >= 0){ antigos.splice(i,1); return false; }
+      return true;
+    });
+  }
+  function pendenciasCatalogoTransf(r, antes){
+    const faltando = [];
+    ARRS_ITENS_CATALOGO.forEach(arrKey=>{
+      itensNovosOuAlterados(r, antes, arrKey).forEach(({it, idx})=>{
+        if(it.produtoEstoqueId && !it.avulso) return;
+        if(it.avulso && String(it.descricaoAvulso||"").trim()) return;
+        const prefixo = arrKey === "retornoItens" ? "Retorno — " : "";
+        faltando.push("• " + prefixo + descricaoItemCurta(it, idx+1) + (it.avulso ? ": falta a descrição do item avulso" : ": escolha o produto do catálogo ou marque \"Item avulso (sem estoque)\""));
+      });
+    });
+    return faltando;
+  }
+
+  // Reservas ativas por loja (pedidos + transferências), excluindo a própria transferência.
+  const reservadasCache = new Map();
+  function chaveReservadas(lojaId, excluirId){ return lojaId + "|" + (excluirId||""); }
+  function carregarReservadas(lojaId, excluirId, forcar){
+    const k = chaveReservadas(lojaId, excluirId);
+    const atual = reservadasCache.get(k);
+    if(atual && !forcar && atual.status !== "erro") return atual.promise;
+    const entry = { status:"loading", porProduto:{} };
+    entry.promise = (async ()=>{
+      const params = { lojaId };
+      if(excluirId) params.excluirOrigem = { tipo:"transf", id:excluirId };
+      const resp = await estoqueApi("reservadas", params);
+      if(resp && resp.ok !== false && Array.isArray(resp.data)){
+        resp.data.forEach(row=>{
+          if(row.loja_id && row.loja_id !== lojaId) return;
+          entry.porProduto[row.produto_id] = (entry.porProduto[row.produto_id]||0) + (Number(row.quantidade)||0);
+        });
+        entry.status = "ok";
+      }else{
+        entry.status = "erro";
+      }
+      atualizarInfosEstoqueNaTela();
+      return entry;
+    })();
+    reservadasCache.set(k, entry);
+    return entry.promise;
+  }
+  function estoqueLojaProduto(produtoId, lojaId){
+    const p = (produtosEstoqueCache||[]).find(x=>x.id===produtoId);
+    return p && p.estoquePorLoja ? (Number(p.estoquePorLoja[lojaId])||0) : 0;
+  }
+  function textoEstoqueItem(produtoId, lojaId, excluirId, qtd){
+    if(!lojaId) return { texto:"escolha a loja de origem pra ver o estoque", baixo:false };
+    const x = estoqueLojaProduto(produtoId, lojaId);
+    const e = reservadasCache.get(chaveReservadas(lojaId, excluirId));
+    if(!e || e.status === "loading") return { texto:`${x} em estoque · carregando reservas…`, baixo: qtd > x };
+    if(e.status === "erro") return { texto:`${x} em estoque · reservas indisponíveis`, baixo: qtd > x };
+    const res = e.porProduto[produtoId] || 0;
+    const disp = x - res;
+    return { texto:`${x} em estoque · ${res} reservado · ${disp} disponível`, baixo: qtd > 0 && disp < qtd };
+  }
+  function estoqueInfoItemHtml(r, arrKey, it){
+    if(!it.produtoEstoqueId) return "";
+    const lojaId = lojaSaidaDoArr(r, arrKey);
+    if(lojaId && !reservadasCache.has(chaveReservadas(lojaId, r.id))) carregarReservadas(lojaId, r.id);
+    const qtd = Number(it.quantidade)||0;
+    const t = textoEstoqueItem(it.produtoEstoqueId, lojaId, r.id, qtd);
+    return `<span class="estoque-info-item ${t.baixo ? "baixo" : ""}" data-estoque-info="1" data-prod="${escapeHtml(it.produtoEstoqueId)}" data-loja="${escapeHtml(lojaId||"")}" data-excluir="${escapeHtml(r.id)}" data-qtd="${qtd}">📦 ${escapeHtml(t.texto)}</span>`;
+  }
+  function atualizarInfosEstoqueNaTela(){
+    document.querySelectorAll("[data-estoque-info]").forEach(el=>{
+      const t = textoEstoqueItem(el.dataset.prod, el.dataset.loja, el.dataset.excluir, Number(el.dataset.qtd)||0);
+      el.textContent = "📦 " + t.texto;
+      el.classList.toggle("baixo", t.baixo);
+    });
+  }
+  // Antes de salvar (final): avisa se o disponível na loja de saída não cobre a
+  // quantidade pedida. Só avisa — o usuário pode seguir mesmo assim.
+  async function confirmarDisponivelTransf(r, antes){
+    const faltas = [];
+    for(const arrKey of ARRS_ITENS_CATALOGO){
+      const lojaId = lojaSaidaDoArr(r, arrKey);
+      if(!lojaId) continue;
+      const alterados = itensNovosOuAlterados(r, antes, arrKey).filter(x=>x.it.produtoEstoqueId && !x.it.avulso && (Number(x.it.quantidade)||0) > 0);
+      if(!alterados.length) continue;
+      let entry = null;
+      try{ entry = await carregarReservadas(lojaId, r.id, true); }catch(e){}
+      const pedidos = {};
+      (r[arrKey]||[]).forEach(it=>{
+        if(it.produtoEstoqueId && !it.avulso) pedidos[it.produtoEstoqueId] = (pedidos[it.produtoEstoqueId]||0) + (Number(it.quantidade)||0);
+      });
+      const vistos = new Set();
+      alterados.forEach(({it})=>{
+        const pid = it.produtoEstoqueId;
+        if(vistos.has(pid)) return;
+        vistos.add(pid);
+        const x = estoqueLojaProduto(pid, lojaId);
+        const res = entry && entry.status === "ok" ? (entry.porProduto[pid]||0) : 0;
+        const disp = x - res;
+        if(disp < pedidos[pid]) faltas.push(`• ${nomeProdutoCatalogo(pid)}: pedido ${pedidos[pid]}, disponível ${disp} (${x} em estoque · ${res} reservado)`);
+      });
+    }
+    if(!faltas.length) return true;
+    return confirm("Atenção: estoque disponível insuficiente na loja de origem:\n\n" + faltas.join("\n") + "\n\nDeseja salvar mesmo assim?");
+  }
+
+  async function liberarReservaTransf(r, motivo){
+    const resp = await estoqueApi("liberar", { origemTipo:"transf", origemId:r.id, motivo });
+    reservadasCache.clear();
+    if(resp.ok === false){
+      showToast("⚠ Não consegui liberar a reserva de estoque (" + resp.error + "). A ação foi feita; avise o suporte.");
+      return false;
+    }
+    r.reservaAtiva = false;
+    return true;
+  }
+  function itensReservaveisTransf(r){
+    const porProduto = {};
+    (r.transferItens||[]).forEach(it=>{
+      const q = Number(it.quantidade)||0;
+      if(it.produtoEstoqueId && !it.avulso && q > 0) porProduto[it.produtoEstoqueId] = (porProduto[it.produtoEstoqueId]||0) + q;
+    });
+    return Object.keys(porProduto).map(produtoId=>({ produtoId, quantidade: porProduto[produtoId] }));
+  }
+  // SAÍDA final ainda sem baixa na origem → reserva (idempotente, substitui a anterior).
+  // Qualquer outro caso com reserva ativa → libera.
+  async function sincronizarReservaTransf(r){
+    const antes = !!r.reservaAtiva;
+    const deveReservar = r.tipoTransf === "SAÍDA" && !r.rascunho && !r.mercadoriaBaixadaC1 && !r.estoqueBaixaMovida;
+    const itens = deveReservar ? itensReservaveisTransf(r) : [];
+    if(deveReservar && itens.length){
+      const lojaId = r.lojaOrigemId || lojaIdPorAbreviacao(r.lojaOrigem);
+      if(!lojaId){ showToast("⚠ Transferência salva, mas não achei a loja de origem no cadastro — estoque não reservado."); return false; }
+      const resp = await estoqueApi("reservar", { origemTipo:"transf", origemId:r.id, lojaId, itens });
+      reservadasCache.clear();
+      if(resp.ok === false){ showToast("⚠ Transferência salva, mas não consegui reservar o estoque na origem (" + resp.error + ")."); return false; }
+      r.reservaAtiva = true;
+      return !antes;
+    }
+    if(antes || (deveReservar && !itens.length)){
+      // Sem item reservável (ou não é mais caso de reserva): garante que nada fica preso.
+      const ok = await liberarReservaTransf(r, deveReservar ? "sem itens do catálogo" : "transferência sem reserva");
+      return ok && antes;
+    }
+    return false;
+  }
+  // Movimenta o Kardex nas transições dos botões da SAÍDA (C1 = baixa na origem,
+  // C2 = entrada no destino). Flags no registro evitam movimentar duas vezes.
+  async function aplicarMovimentosEstoqueTransf(r, antes){
+    if(r.tipoTransf !== "SAÍDA") return false;
+    let mudou = false;
+    const baixaAntes = !!(antes && antes.mercadoriaBaixadaC1);
+    if(r.mercadoriaBaixadaC1 && !baixaAntes && !r.estoqueBaixaMovida){
+      if(await moverEstoqueTransferencia(r, "baixa", -1) !== false){ r.estoqueBaixaMovida = true; mudou = true; }
+    }else if(!r.mercadoriaBaixadaC1 && baixaAntes && r.estoqueBaixaMovida){
+      if(await moverEstoqueTransferencia(r, "baixa", +1) !== false){ r.estoqueBaixaMovida = false; mudou = true; }
+    }
+    const entradaAntes = !!(antes && antes.mercadoriaBaixadaC2);
+    if(r.mercadoriaBaixadaC2 && !entradaAntes && !r.estoqueEntradaMovida){
+      if(await moverEstoqueTransferencia(r, "entrada", +1) !== false){ r.estoqueEntradaMovida = true; mudou = true; }
+    }else if(!r.mercadoriaBaixadaC2 && entradaAntes && r.estoqueEntradaMovida){
+      if(await moverEstoqueTransferencia(r, "entrada", -1) !== false){ r.estoqueEntradaMovida = false; mudou = true; }
+    }
+    return mudou;
+  }
+  // Roda depois de salvar a transferência (não bloqueia a tela).
+  async function posSalvarEstoqueTransf(r, antes){
+    try{
+      const reservaAntes = !!r.reservaAtiva;
+      const moveu = await aplicarMovimentosEstoqueTransf(r, antes);
+      await sincronizarReservaTransf(r);
+      if(moveu || reservaAntes !== !!r.reservaAtiva){
+        const ok = await saveRecord("transferencias", r);
+        if(!ok) showToast("⚠ Estoque ajustado, mas não consegui gravar o status da reserva — sem internet?");
+        if(state.openIds.has(r.id)) rebuildBody(r); else render();
+      }
+    }catch(e){
+      console.error("erro no pós-salvar do estoque", e);
+      showToast("⚠ Transferência salva, mas houve um erro ao atualizar o estoque/reserva.");
     }
   }
   function showToast(msg){
@@ -2282,6 +2526,8 @@ function ajudaPonto(texto){
 
   function descartarRascunho(tab, id){
     // rascunho descartado pelo próprio autor: sem exigência de senha, conforme combinado
+    const descartado = tab === "transferencias" ? state.transferencias.find(x=>x.id===id) : null;
+    if(descartado && descartado.reservaAtiva) liberarReservaTransf(descartado, "rascunho descartado");
     state[tab] = state[tab].filter(x=>x.id!==id);
     state.pristineSnapshots.delete(id);
     deleteRecord(tab, id);
@@ -2315,6 +2561,8 @@ function ajudaPonto(texto){
             showToast("⚠ Não deu pra excluir agora — sem internet? O registro continua na lista.");
             return;
           }
+          const excluido = tab === "transferencias" ? state.transferencias.find(x=>x.id===id) : null;
+          if(excluido && (excluido.reservaAtiva || excluido.tipoTransf === "SAÍDA")) liberarReservaTransf(excluido, "transferência excluída");
           state[tab] = state[tab].filter(x=>x.id!==id);
           render();
         });
@@ -2993,11 +3241,21 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
       const editando = itemEstaEditando(r, arrKey, idx, it);
       if(editando){
         algumEditando = true;
+        let extraCatalogo = "";
         const cells = fields.map(fc=>{
           if(fc.type === "select"){
             return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}">${fieldOptionsHtml(fc.opts, it[fc.f])}</select>`;
           }
           if(fc.type === "produtoEstoque"){
+            // Catálogo obrigatório: ou vincula a um produto do catálogo, ou marca
+            // explicitamente "Item avulso (sem estoque)" com descrição.
+            extraCatalogo = `<div class="item-catalogo-extra">
+              <label><input type="checkbox" data-item-avulso="1" data-arr="${arrKey}" data-item-idx="${idx}" ${it.avulso ? "checked" : ""}> Item avulso (sem estoque)</label>
+              ${it.avulso
+                ? `<input type="text" placeholder="Descrição do item avulso (obrigatório)" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="descricaoAvulso" value="${escapeHtml(it.descricaoAvulso||"")}">`
+                : estoqueInfoItemHtml(r, arrKey, it)}
+            </div>`;
+            if(it.avulso) return "";
             return `<select data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" title="Vincular a um produto do catálogo movimenta o estoque de verdade quando a baixa/entrada for confirmada">${produtoEstoqueOptionsHtml(it[fc.f])}</select>`;
           }
           return `<input type="text" placeholder="${fc.ph||""}" data-arr="${arrKey}" data-item-idx="${idx}" data-item-f="${fc.f}" value="${escapeHtml(it[fc.f])}">`;
@@ -3007,7 +3265,7 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
         // em linha de resumo) quando o usuário clica nele, nunca sozinho ao digitar.
         // Assim dá tempo de preencher produto, metal, quantidade, fator e foto com
         // calma antes de confirmar.
-        linhasAbertas.push(`<div class="item-row-multi">${cells}${fotoCell}<button class="btn-add-item btn-confirmar-item" type="button" data-action="confirmar-item" data-arr="${arrKey}" data-item-idx="${idx}">✓ Adicionar</button><button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button></div>`);
+        linhasAbertas.push(`<div class="item-row-multi">${cells}${fotoCell}<button class="btn-add-item btn-confirmar-item" type="button" data-action="confirmar-item" data-arr="${arrKey}" data-item-idx="${idx}">✓ Adicionar</button><button class="btn-x" type="button" data-action="remove-item" data-arr="${arrKey}" data-item-idx="${idx}">×</button>${extraCatalogo}</div>`);
         return;
       }
       // Item já confirmado: fecha numa linha limpa de resumo (mesmo formato usado no
@@ -3017,6 +3275,11 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
       if(it.metal) partes.push(escapeHtml(it.metal));
       if(it.quantidade !== "" && it.quantidade !== undefined && it.quantidade !== null) partes.push("Qtd: " + escapeHtml(String(it.quantidade)));
       if(it.fator) partes.push("Fator: " + escapeHtml(String(it.fator)));
+      if(ARRS_ITENS_CATALOGO.includes(arrKey)){
+        if(it.avulso) partes.push("Avulso" + (it.descricaoAvulso ? ": " + escapeHtml(it.descricaoAvulso) : ""));
+        else if(it.produtoEstoqueId) partes.push("🔗 " + escapeHtml(nomeProdutoCatalogo(it.produtoEstoqueId)));
+        else partes.push(`<span class="item-sem-catalogo">⚠ sem catálogo</span>`);
+      }
       const foto = it.fotoUrl ? `<a href="${escapeHtml(it.fotoUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(it.fotoUrl)}" alt="Foto do item" class="item-espelho-foto"></a>` : "";
       linhasFechadas.push(`
         <div class="item-espelho-row item-espelho-row-editavel">
@@ -3420,6 +3683,7 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
           <div class="field"><label>Cliente</label><input type="text" data-f="cliente" placeholder="Nome do cliente (opcional)" value="${escapeHtml(r.cliente)}"></div>
         </div>
         <div class="field" style="margin-top:10px;"><label>Observação</label><input type="text" data-f="observacao" placeholder="Observação (opcional)" value="${escapeHtml(r.observacao)}"></div>
+        ${r.reservaAtiva ? `<div class="reserva-ativa-line" title="Estoque reservado na loja de origem até a baixa ser confirmada">📦 Reservado na origem</div>` : ""}
       </div>
 
       <div class="group">
@@ -3715,11 +3979,22 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
       const precisaRebuild = arr === "transferItens" || arr === "retornoItens";
       el.addEventListener(isSelect ? "change" : "input", ()=>{
         r[arr][idx][f] = el.value;
+        if(f === "produtoEstoqueId" && el.value) r[arr][idx].avulso = false;
         if(!precisaRebuild) patchCard(r);
       });
       if(precisaRebuild){
         el.addEventListener("change", ()=>{ rebuildBody(r); });
       }
+    });
+
+    body.querySelectorAll("[data-item-avulso]").forEach(el=>{
+      el.addEventListener("change", ()=>{
+        const it = r[el.dataset.arr] && r[el.dataset.arr][Number(el.dataset.itemIdx)];
+        if(!it) return;
+        it.avulso = el.checked;
+        if(el.checked) it.produtoEstoqueId = "";
+        rebuildBody(r);
+      });
     });
 
     body.querySelectorAll('[data-action="add-item"]').forEach(btn=>{
@@ -3831,6 +4106,16 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
         const estavaEditando = state.editIds.has(r.id);
         if(estavaEditando){
           const antes = state.editSnapshots.get(r.id);
+          if(state.tab === "transferencias"){
+            // Catálogo obrigatório para gravar a transferência final (rascunho pode
+            // ficar incompleto). Itens antigos inalterados não travam vistos.
+            const pendCat = pendenciasCatalogoTransf(r, antes);
+            if(pendCat.length){
+              alert("Não dá pra concluir: estes itens não estão vinculados ao catálogo de produtos:\n\n" + pendCat.join("\n") + "\n\nEscolha o produto do catálogo em cada item ou marque \"Item avulso (sem estoque)\" e descreva a peça.");
+              return;
+            }
+            if(!(await confirmarDisponivelTransf(r, antes))) return;
+          }
           const rascunhoAntes = r.rascunho;
           const numeroAntes = r.numero;
           // Ao concluir a edição explicitamente, o registro deixa de ser rascunho
@@ -3863,10 +4148,13 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
           // Concluir fecha a tela e volta pra tela anterior (Home/Finalizadas/etc.)
           state.openIds.delete(r.id);
           render();
+          // Reserva/baixa de estoque (SAÍDA) em segundo plano — falhas só geram aviso.
+          if(state.tab === "transferencias") posSalvarEstoqueTransf(r, antes);
           return;
         }else{
           state.editSnapshots.set(r.id, JSON.parse(JSON.stringify(r)));
           state.editIds.add(r.id);
+          reservadasCache.clear();
         }
         rebuildBody(r);
       });
@@ -3897,6 +4185,7 @@ ${r.numero ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/Js
           state.unsavedNew.delete(r.id);
           state.editSnapshots.delete(r.id);
           if(!wasUnsavedNew) deleteRecord(key, r.id);
+          if(!wasUnsavedNew && key === "transferencias" && (r.reservaAtiva || r.tipoTransf === "SAÍDA")) liberarReservaTransf(r, "transferência excluída");
           render();
         });
       });
