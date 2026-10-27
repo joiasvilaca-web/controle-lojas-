@@ -202,6 +202,16 @@ button,input,textarea,select{font-size:14px;}
 .chat-head .titulo b{font-size:16.5px;}
 .chat-head .acoes{gap:6px;}
 .msgs{padding:22px 26px;gap:8px;background:var(--bg);}
+/* identidade da instância: cor de fundo na lista + marca d'água no chat */
+.conv.inst-reforma{background:#F6EEF8;box-shadow:inset 5px 0 0 #7B2D8E;}
+.conv.inst-vilaca{background:#FBF4E2;box-shadow:inset 5px 0 0 #B8892B;}
+.conv.inst-reforma.active{background:#EBDDF0;}.conv.inst-vilaca.active{background:#F5E7C4;}
+.msgs.inst-reforma,.msgs.inst-vilaca{background-repeat:no-repeat;background-position:center;background-size:min(70%,520px) auto;}
+.msgs.inst-reforma{background-color:#FAF6FB;}.msgs.inst-vilaca{background-color:#FDFAF2;}
+.inst-pop{position:fixed;inset:0;background:rgba(20,10,25,.45);display:flex;align-items:center;justify-content:center;z-index:9999;}
+.inst-pop .c{background:#fff;border-radius:16px;padding:26px 28px;max-width:380px;width:90%;text-align:center;border-top:10px solid var(--ic);box-shadow:0 20px 50px rgba(0,0,0,.3);}
+.inst-pop .n{font-size:22px;font-weight:800;color:var(--ic);margin:8px 0 6px;letter-spacing:.5px;}
+.inst-pop button{margin-top:16px;background:var(--ic);color:#fff;border:0;border-radius:10px;padding:10px 26px;font-size:15px;font-weight:700;cursor:pointer;}
 .bubble{max-width:68%;padding:10px 14px;border-radius:16px;font-size:14.5px;line-height:1.5;box-shadow:0 1px 2px rgba(40,20,35,.07);}
 .bubble.in{border-bottom-left-radius:5px;} .bubble.out{border-bottom-right-radius:5px;}
 .bubble.sis{font-size:12.5px;padding:5px 14px;box-shadow:none;}
@@ -403,7 +413,36 @@ function alternarSino(){
   if(estado.aviso){ tocarSom(); try{ if(window.Notification && Notification.permission==='default') Notification.requestPermission(); }catch(e){} showToast('Avisos de mensagem nova ligados.'); }
   else showToast('Avisos de mensagem nova desligados.');
 }
-function botChip(c){ if(estado.bots.length<2||!c.bot_id) return ''; const b=estado.bots.find(x=>x.id===c.bot_id); return b?`<span class="tagchip" title="Bot">🤖 ${escapeHtml(b.nome)}</span>`:''; }
+function botChip(c){ return ''; } // identificação da instância agora é pela cor de fundo (instInfo)
+/* Identidade visual de cada instância: Reforma = roxo, Vilaça = dourado. */
+function instInfo(c){
+  if(!c) return null;
+  const b = estado.bots.find(x=>x.id===c.bot_id);
+  const nome = (b && b.nome) || '';
+  const inst = String(c.instancia||'').toLowerCase();
+  if(/reforma/i.test(nome) || inst.includes('reforma')) return { cls:'inst-reforma', nome:'REFORMA JOIAS', cor:'#7B2D8E' };
+  if(/vila/i.test(nome) || inst.includes('vilaca')) return { cls:'inst-vilaca', nome:'VILAÇA JOIAS', cor:'#B8892B' };
+  return nome ? { cls:'', nome, cor:'#555' } : null;
+}
+function marcaDagua(info){
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='600' height='300'><g transform='rotate(-18 300 150)' fill='${info.cor}' fill-opacity='0.09' font-family='Georgia,serif' text-anchor='middle'><text x='300' y='150' font-size='64' font-weight='700'>${info.nome}</text><text x='300' y='200' font-size='22' letter-spacing='6'>ATENDIMENTO</text></g></svg>`;
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+}
+function aplicarMarcaChat(){
+  const m = document.getElementById('msgs'); if(!m) return;
+  m.classList.remove('inst-reforma','inst-vilaca'); m.style.backgroundImage='';
+  const info = instInfo(estado.atual); if(!info || !info.cls) return;
+  m.classList.add(info.cls); m.style.backgroundImage = marcaDagua(info);
+}
+function popupInstancia(c){
+  const info = instInfo(c); if(!info) return;
+  const canal = c.canal==='instagram' ? 'Instagram' : (c.canal==='messenger' ? 'Facebook Messenger' : 'WhatsApp');
+  const d = document.createElement('div'); d.className='inst-pop';
+  d.innerHTML = `<div class="c" style="--ic:${info.cor}"><div style="font-size:13px;color:#666;">Você está atendendo pela instância</div><div class="n">${escapeHtml(info.nome)}</div><div style="font-size:14px;color:#444;">Canal: <b>${canal}</b><br>Responda em nome da <b>${escapeHtml(info.nome)}</b>.</div><button type="button">Entendi</button></div>`;
+  d.querySelector('button').onclick = ()=> d.remove();
+  d.addEventListener('click', e=>{ if(e.target===d) d.remove(); });
+  document.body.appendChild(d);
+}
 function canalChip(c){ if(c.canal==='instagram') return '<span class="tagchip" title="Instagram">📷 IG</span>'; if(c.canal==='messenger') return '<span class="tagchip" title="Facebook Messenger">💬 FB</span>'; return estado.variosCanais ? '<span class="tagchip" title="WhatsApp">WA</span>' : ''; }
 function esperaHtml(c){
   if(c.status==='finalizado' || c.ultima_direcao!=='in' || !c.ultima_mensagem_em) return '';
@@ -455,7 +494,7 @@ function renderLista(){
   const wrap = document.getElementById('conversas');
   if(!estado.conversas.length){ wrap._h = null; wrap.innerHTML = `<p class="muted" style="padding:20px;">Nenhuma conversa aqui.</p>`; return; }
   const htmlL = estado.conversas.map(c=>`
-    <div class="conv ${estado.atual && estado.atual.id===c.id?'active':''}" data-id="${c.id}">
+    <div class="conv ${(instInfo(c)||{}).cls||''} ${estado.atual && estado.atual.id===c.id?'active':''}" data-id="${c.id}">
       <div class="avatar">${avatarHtml(c)}</div>
       <div class="info">
         <div class="l1"><span class="nome">${escapeHtml(nomeConv(c))}</span><span class="hora">${fmtHora(c.ultima_mensagem_em)}</span></div>
@@ -477,7 +516,7 @@ async function abrirConversa(id){
   document.getElementById('chatVazio').style.display='none'; estado.painel=false; estado.interno=false;
   document.getElementById('btnVoltarPainel').style.display = estado.gestao ? '' : 'none';
   const area = document.getElementById('chatArea'); area.style.display='flex';
-  renderHead(); renderMsgs(true); renderLista();
+  renderHead(); renderMsgs(true); aplicarMarcaChat(); renderLista();
   if(estado.atual.nao_lidas){ await api({ op:'marcarLida', conversaId:id }); estado.atual.nao_lidas=0; contadores(); }
 }
 function podeResponder(){
@@ -574,9 +613,9 @@ async function atualizarMensagens(){
 /* ================= AÇÕES ================= */
 async function acao(a){
   const c = estado.atual; if(!c) return;
-  if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa assumida.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='assumir'){ const r = await api({ op:'assumir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa assumida.'); await abrirConversa(c.id); popupInstancia(estado.atual||c); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='finalizar') return modalFinalizar();
-  if(a==='reabrir'){ const r = await ext({ op:'reabrir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa reaberta com você.'); await abrirConversa(c.id); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
+  if(a==='reabrir'){ const r = await ext({ op:'reabrir', conversaId:c.id }); if(r&&r.ok){ botApi({ op:'assumiu', conversaId:c.id }); showToast('Conversa reaberta com você.'); await abrirConversa(c.id); popupInstancia(estado.atual||c); carregarLista(true);} else showToast(r&&r.error||'Erro'); }
   if(a==='transferir') modalTransferir();
   if(a==='crm') modalCRM();
   if(a==='cliente') modalCliente();
@@ -1532,7 +1571,7 @@ function ofInst(botId){
   if(!of.length) return null; if(of.length===was.length) return of[0].instancia;
   return confirm('Este bot tem número OFICIAL e não oficial.\n\nOK = usar o número oficial (exige modelo aprovado)\nCancelar = usar o não oficial') ? of[0].instancia : null;
 }
-function aposNova(r){ fecharModal(); estado.filtro='minhas'; document.querySelectorAll('#filtros button').forEach(b=>b.classList.toggle('active', b.dataset.f==='minhas')); carregarLista(true).then(()=> abrirConversa(r.conversaId)); }
+function aposNova(r){ fecharModal(); estado.filtro='minhas'; document.querySelectorAll('#filtros button').forEach(b=>b.classList.toggle('active', b.dataset.f==='minhas')); carregarLista(true).then(()=> abrirConversa(r.conversaId)).then(()=>{ if(estado.atual) popupInstancia(estado.atual); }); }
 
 /* ---------- blacklist escondida na caixa de entrada ---------- */
 estado.bl = new Set();
