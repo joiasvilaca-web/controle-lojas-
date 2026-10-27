@@ -1,4 +1,7 @@
-// atendimento-api v6
+// atendimento-api v12
+// v12: PERFIL no Atendimento (users[].permissoes.atendimento.papel/bots: atendente | administrativo | gerente | diretoria
+//      + instâncias liberadas), restrição por instância em listas/leitura/envio/transferência, op botsLista (DP),
+//      notaInterna (direcao 'interna', nunca enviada ao cliente) e clienteCadastrar (cria em clientes_cadastro e vincula).
 // v6: canal FACEBOOK MESSENGER (envio texto/mídia pela Graph API com o token da página do bot — segredos.FB_PAGE_TOKEN),
 //     botSalvar aceita canal messenger + fbPageToken e preserva config.ia/config.fluxo gravados no banco.
 // v5: MÚLTIPLOS BOTS (cada bot = conjunto de canais: WhatsApp/Instagram/site), DEPARTAMENTOS,
@@ -40,6 +43,29 @@ function sessaoValida(u: any, senha: string): boolean {
 function findUserBySenha(config: any, senha: string): any { return (config.users || []).find((u: any) => sessaoValida(u, senha)) || null; }
 function podeAtender(user: any): boolean { const p = user.permissoes && user.permissoes.atendimento; if (p && typeof p.ativo === "boolean") return p.ativo; return true; }
 function ehGestao(user: any): boolean { return user.nivel === "diretoria" || user.nivel === "gerente"; }
+/* ---------- PERFIL NO ATENDIMENTO (v12) ----------
+   Gravado pelo DP › Perfis de Acesso em users[].permissoes.atendimento.{papel,bots}.
+   papel: atendente | administrativo | gerente | diretoria (vazio = pelo nível: diretoria→diretoria, gerente→gerente, demais→atendente).
+   bots: ids das instâncias (atendimento_bots) que pode trabalhar; ausente = todas. Diretoria sempre vê todas.
+   Compatibilidade: gerente SEM papel gravado continua com as configurações do Atendimento como antes. */
+const PAPEIS = ["atendente", "administrativo", "gerente", "diretoria"];
+function perfilAtd(user: any) {
+  const p = (user && user.permissoes && user.permissoes.atendimento) || {};
+  const explicito = PAPEIS.includes(p.papel);
+  const papel: string = explicito ? p.papel : user.nivel === "diretoria" ? "diretoria" : user.nivel === "gerente" ? "gerente" : "atendente";
+  const bots: string[] | null = papel === "diretoria" ? null : (Array.isArray(p.bots) ? p.bots.map(String) : null);
+  const supervisao = papel === "gerente" || papel === "diretoria";
+  const admin = papel === "diretoria" || (!explicito && user.nivel === "gerente");
+  return { papel, bots, supervisao, admin, explicito };
+}
+const botOk = (pf: any, botId: string | null) => !pf.bots || (!!botId && pf.bots.includes(botId));
+function usuarioDoFuncionario(config: any, fid: string) { return (config.users || []).find((u: any) => (u.funcionarioId || u.id) === fid) || null; }
+// pode receber a conversa deste bot por transferência (qualquer papel, desde que liberado na instância)
+function podeReceber(config: any, fid: string, botId: string | null): boolean {
+  const u = usuarioDoFuncionario(config, fid); if (!u) return true; // funcionário sem login: mantém o comportamento antigo
+  if (!podeAtender(u)) return false;
+  return botOk(perfilAtd(u), botId);
+}
 function nomeExibicao(config: any, user: any): string { const f = (config.funcionarios || []).find((x: any) => x.id === user.funcionarioId); return (f && (f.apelido || "").trim()) || (f && f.nome) || user.nome || ""; }
 
 /* ---------- horários ---------- */
@@ -113,7 +139,13 @@ async function messengerEnviar(botId: string | null, psid: string, message: any)
   return r;
 }
 async function conversaOuErro(id: string) { const { data, error } = await admin.from("atendimento_conversas").select("*").eq("id", id).maybeSingle(); if (error) throw error; if (!data) throw new Error("conversa não encontrada"); return data; }
-function podeVerConversa(user: any, c: any): boolean { if (ehGestao(user)) return true; return !c.atendente_id || c.atendente_id === user.funcionarioId; }
+function podeVerConversa(user: any, c: any): boolean {
+  const pf = perfilAtd(user); if (!botOk(pf, c.bot_id)) return false;
+  if (pf.supervisao) return true;
+  const eu = user.funcionarioId || user.id;
+  if (c.atendente_id === eu) return true;
+  return !c.atendente_id && pf.papel !== "administrativo"; // administrativo só recebe por transferência
+}
 async function atualizarConversaAposEnvio(c: any, resumo: string, meuId: string, meuNome: string, agora: string) {
   const upd: any = { ultima_mensagem_em: agora, ultima_mensagem_texto: resumo, ultima_direcao: "out", nao_lidas: 0, updated_at: agora };
   if (!c.atendente_id) { upd.atendente_id = meuId; upd.atendente_nome = meuNome; upd.status = "em_atendimento"; } else if (c.status === "aguardando") upd.status = "em_atendimento";
@@ -132,10 +164,19 @@ Deno.serve(async (req: Request) => {
     const config = await getConfig();
     const user = findUserBySenha(config, senha);
     if (!user) return json({ error: "não autorizado" }, 401);
+    if (op === "botsLista") { // DP › Perfis de Acesso: lista de instâncias para marcar por usuário
+      const pc = user.permissoes && user.permissoes.config;
+      if (user.nivel !== "diretoria" && !(pc && pc.ativo === true)) return json({ error: "só diretoria" }, 403);
+      const { data, error } = await admin.from("atendimento_bots").select("id, nome, ativo").order("created_at"); if (error) throw error;
+      return json({ ok: true, bots: data || [] });
+    }
     if (!podeAtender(user)) return json({ error: "sem permissão para o Atendimento" }, 403);
     const meuId = user.funcionarioId || user.id;
     const meuNome = nomeExibicao(config, user);
-    const gestao = ehGestao(user);
+    const pf = perfilAtd(user);
+    const gestao = pf.supervisao;      // vê tudo (das instâncias liberadas), painel, relatórios
+    const podeAdmin = pf.admin;        // configurações do Atendimento (bots, canais, departamentos, equipe…)
+    const filtrarBots = (q: any) => pf.bots ? q.in("bot_id", pf.bots.length ? pf.bots : ["00000000-0000-0000-0000-000000000000"]) : q;
 
     if (op === "status") {
       const instancias: Record<string, any> = { ...(config.atendimentoInstancias || {}) };
@@ -168,16 +209,21 @@ Deno.serve(async (req: Request) => {
       const { data: ats } = await admin.from("atendimento_atendentes").select("*");
       const meuReg = (ats || []).find((a: any) => a.funcionario_id === meuId) || null;
       const meusDeps = new Set((meuReg && meuReg.departamentos) || []);
-      const botsVis = (bots || []).map(limparBot);
-      const depsVis = (deps || []).filter((d: any) => gestao || meusDeps.has(d.id) || !meuReg);
+      const botsVis = (bots || []).filter((b: any) => botOk(pf, b.id)).map(limparBot);
+      const depsVis = (deps || []).filter((d: any) => (!d.bot_id || botOk(pf, d.bot_id)) && (gestao || meusDeps.has(d.id) || !meuReg));
+      // quem pode receber transferência e em quais instâncias (sem dados sensíveis)
+      const equipeAcesso = (config.funcionarios || []).filter((f: any) => !f.inativo && f.status !== "inativo").map((f: any) => {
+        const u = usuarioDoFuncionario(config, f.id); const p = u ? perfilAtd(u) : null;
+        return { id: f.id, nome: (f.apelido || "").trim() || f.nome, papel: p ? p.papel : null, bots: p ? p.bots : null, ativo: u ? podeAtender(u) : true };
+      });
       const funcionarios = gestao ? (config.funcionarios || []).filter((f: any) => !f.inativo && f.status !== "inativo").map((f: any) => ({ id: f.id, nome: (f.apelido || "").trim() || f.nome })) : [];
       const equipe = (ats || []).map((a: any) => { const f = (config.funcionarios || []).find((x: any) => x.id === a.funcionario_id); return { ...a, nome: f ? ((f.apelido || "").trim() || f.nome) : a.funcionario_id }; });
-      return json({ ok: true, instancias, bots: botsVis, departamentos: depsVis, atendentes: gestao ? equipe : equipe.map((a: any) => ({ funcionario_id: a.funcionario_id, nome: a.nome, online: a.online, departamentos: a.departamentos })), funcionarios, meuReg, setores: config.atendimentoSetores || [], respostasRapidas: config.atendimentoRespostas || [], gestao, meuId, meuNome });
+      return json({ ok: true, instancias, bots: botsVis, departamentos: depsVis, atendentes: gestao ? equipe : equipe.map((a: any) => ({ funcionario_id: a.funcionario_id, nome: a.nome, online: a.online, departamentos: a.departamentos })), funcionarios, meuReg, setores: config.atendimentoSetores || [], respostasRapidas: config.atendimentoRespostas || [], gestao, admin: podeAdmin, papel: pf.papel, botsPermitidos: pf.bots, equipeAcesso, meuId, meuNome });
     }
 
     /* ---------- BOTS / DEPARTAMENTOS / ATENDENTES (gestão) ---------- */
     if (op === "botSalvar") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const nome = String(body.nome || "").trim().toUpperCase(); if (!nome) return json({ error: "nome obrigatório" }, 400);
       const canais = (Array.isArray(body.canais) ? body.canais : []).map((c: any) => {
         if (c.tipo === "whatsapp" && c.instancia) return { tipo: "whatsapp", instancia: String(c.instancia).trim() };
@@ -210,26 +256,26 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, id });
     }
     if (op === "botExcluir") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const { count } = await admin.from("atendimento_conversas").select("id", { count: "exact", head: true }).eq("bot_id", body.id).neq("status", "finalizado");
       if ((count || 0) > 0 && !body.forcar) return json({ error: `este bot tem ${count} conversa(s) abertas — finalize ou confirme a exclusão`, abertas: count }, 409);
       const { error } = await admin.from("atendimento_bots").delete().eq("id", body.id); if (error) throw error;
       return json({ ok: true });
     }
     if (op === "depSalvar") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const nome = String(body.nome || "").trim().toUpperCase(); if (!nome) return json({ error: "nome obrigatório" }, 400);
       const reg: any = { nome, bot_id: body.botId || null, ativo: body.ativo !== false, horario: horarioLimpo(body.horario), ordem: Number(body.ordem) || 0 };
       if (body.id) { const { error } = await admin.from("atendimento_departamentos").update(reg).eq("id", body.id); if (error) throw error; return json({ ok: true, id: body.id }); }
       const { data, error } = await admin.from("atendimento_departamentos").insert(reg).select("id").single(); if (error) throw error; return json({ ok: true, id: data.id });
     }
     if (op === "depExcluir") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const { error } = await admin.from("atendimento_departamentos").delete().eq("id", body.id); if (error) throw error;
       return json({ ok: true });
     }
     if (op === "atendenteSalvar") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const fid = String(body.funcionarioId || ""); if (!fid || !(config.funcionarios || []).some((f: any) => f.id === fid)) return json({ error: "funcionário não encontrado" }, 404);
       const p = body.permissoes || {};
       const reg = { funcionario_id: fid, departamentos: Array.isArray(body.departamentos) ? body.departamentos : [], permissoes: { removerPotenciais: !!p.removerPotenciais, verAgenda: !!p.verAgenda, criarAtivo: !!p.criarAtivo, reabrir: !!p.reabrir }, horario: horarioLimpo(body.horario), updated_at: new Date().toISOString() };
@@ -237,7 +283,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
     if (op === "atendenteRemover") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const { error } = await admin.from("atendimento_atendentes").delete().eq("funcionario_id", body.funcionarioId); if (error) throw error;
       return json({ ok: true });
     }
@@ -255,13 +301,13 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, aberto: emExpediente(bot, dep, at) });
     }
     if (op === "criarInstancia") { // novo número de WhatsApp (Evolution) → devolve QR
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const nome = String(body.nome || "").toLowerCase().replace(/[^a-z0-9]/g, ""); if (nome.length < 3) return json({ error: "nome da instância inválido (use letras/números, mínimo 3)" }, 400);
       const r = await evolution("/instance/create", { instanceName: nome, integration: "WHATSAPP-BAILEYS", qrcode: true, webhook: { enabled: true, url: `${SUPABASE_URL}/functions/v1/atendimento-webhook?t=${WEBHOOK_TOKEN}`, byEvents: false, base64: false, events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"] } });
       return json({ ok: true, instancia: nome, qr: (r && r.qrcode && r.qrcode.base64) || null });
     }
     if (op === "qrInstancia") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const r = await evolution(`/instance/connect/${encodeURIComponent(String(body.instancia || ""))}`, null, "GET");
       return json({ ok: true, qr: (r && r.base64) || null, conectado: !!(r && r.instance && r.instance.state === "open") });
     }
@@ -269,10 +315,13 @@ Deno.serve(async (req: Request) => {
     if (op === "listarConversas") {
       const filtro = body.filtro || "minhas";
       let q = admin.from("atendimento_conversas").select("*").order("ultima_mensagem_em", { ascending: false, nullsFirst: false }).limit(300);
+      const adm = pf.papel === "administrativo"; // só vê o que é dele (recebe por transferência ou iniciou)
+      const minhasOuLivres = (qq: any) => adm ? qq.eq("atendente_id", meuId) : qq.or(`atendente_id.eq.${meuId},atendente_id.is.null`);
       if (filtro === "minhas") q = q.eq("atendente_id", meuId).neq("status", "finalizado");
-      else if (filtro === "fila") q = q.eq("status", "aguardando");
-      else if (filtro === "finalizadas") q = q.eq("status", "finalizado");
-      else if (filtro === "todas") { if (!gestao) q = q.or(`atendente_id.eq.${meuId},atendente_id.is.null`); q = q.neq("status", "finalizado"); }
+      else if (filtro === "fila") { if (adm) return json({ ok: true, data: [] }); q = q.eq("status", "aguardando"); }
+      else if (filtro === "finalizadas") { q = q.eq("status", "finalizado"); if (!gestao) q = minhasOuLivres(q); }
+      else if (filtro === "todas") { if (!gestao) q = minhasOuLivres(q); q = q.neq("status", "finalizado"); }
+      q = filtrarBots(q); // restrição por instância (bots liberados no DP)
       if (body.canal) q = q.eq("canal", body.canal);
       if (body.botId) q = q.eq("bot_id", body.botId);
       if (body.departamentoId) q = q.eq("departamento_id", body.departamentoId);
@@ -283,18 +332,24 @@ Deno.serve(async (req: Request) => {
     if (op === "mensagens") {
       const c = await conversaOuErro(body.conversaId);
       if (!podeVerConversa(user, c)) return json({ error: "sem acesso a esta conversa" }, 403);
-      let q = admin.from("atendimento_mensagens").select("id, direcao, tipo, texto, midia_path, midia_mime, midia_nome, externo_id, autor_nome, status, enviada_em").eq("conversa_id", c.id).order("enviada_em", { ascending: false }).limit(Number(body.limite) || 60);
+      let q = admin.from("atendimento_mensagens").select("id, direcao, tipo, texto, midia_path, midia_mime, midia_nome, externo_id, autor_nome, status, enviada_em, contexto").eq("conversa_id", c.id).order("enviada_em", { ascending: false }).limit(Number(body.limite) || 60);
       if (body.depoisDe) q = q.gt("enviada_em", body.depoisDe);
       const { data, error } = await q; if (error) throw error;
       return json({ ok: true, conversa: c, data: (data || []).reverse() });
     }
     if (op === "midiaUrl") {
       const path = String(body.path || ""); if (!path) return json({ error: "path obrigatório" }, 400);
+      if (pf.bots || !gestao) { // mídia de conversa: só quem pode ver a conversa
+        const { data: mm } = await admin.from("atendimento_mensagens").select("conversa_id").eq("midia_path", path).limit(1).maybeSingle();
+        if (mm) { const cv = await conversaOuErro(mm.conversa_id); if (!podeVerConversa(user, cv)) return json({ error: "sem acesso" }, 403); }
+      }
       const { data, error } = await admin.storage.from(BUCKET).createSignedUrl(path, 60 * 60); if (error) throw error;
       return json({ ok: true, url: data.signedUrl });
     }
     if (op === "assumir") {
       const c = await conversaOuErro(body.conversaId);
+      if (!botOk(pf, c.bot_id)) return json({ error: "você não atende esta instância" }, 403);
+      if (pf.papel === "administrativo" && c.atendente_id !== meuId) return json({ error: "o perfil Administrativo só recebe conversas por transferência" }, 403);
       if (c.atendente_id && c.atendente_id !== meuId && !gestao) return json({ error: "essa conversa já está com " + (c.atendente_nome || "outro atendente") }, 409);
       await admin.from("atendimento_conversas").update({ atendente_id: meuId, atendente_nome: meuNome, status: "em_atendimento", updated_at: new Date().toISOString() }).eq("id", c.id);
       return json({ ok: true });
@@ -308,7 +363,7 @@ Deno.serve(async (req: Request) => {
         if (body.departamentoId) { const { data: d } = await admin.from("atendimento_departamentos").select("id, nome").eq("id", body.departamentoId).maybeSingle(); if (!d) return json({ error: "departamento não encontrado" }, 404); upd.departamento_id = d.id; upd.setor = d.nome; nomeDep = d.nome; }
         else { upd.departamento_id = null; upd.setor = null; }
       }
-      if (body.atendenteId) { const f = (config.funcionarios || []).find((x: any) => x.id === body.atendenteId); if (!f) return json({ error: "atendente não encontrado" }, 404); upd.atendente_id = f.id; upd.atendente_nome = (f.apelido || "").trim() || f.nome; upd.status = "em_atendimento"; }
+      if (body.atendenteId) { const f = (config.funcionarios || []).find((x: any) => x.id === body.atendenteId); if (!f) return json({ error: "atendente não encontrado" }, 404); if (!podeReceber(config, f.id, c.bot_id)) return json({ error: `${(f.apelido || "").trim() || f.nome} não atende esta instância` }, 403); upd.atendente_id = f.id; upd.atendente_nome = (f.apelido || "").trim() || f.nome; upd.status = "em_atendimento"; }
       else { upd.atendente_id = null; upd.atendente_nome = null; upd.status = "aguardando"; }
       if (body.setor !== undefined && body.departamentoId === undefined) upd.setor = body.setor || null;
       await admin.from("atendimento_conversas").update(upd).eq("id", c.id);
@@ -382,14 +437,21 @@ Deno.serve(async (req: Request) => {
       instancia = instancia || Object.keys(config.atendimentoInstancias || {}).find((k) => !k.startsWith("ig_")) || "reformajoias";
       if (!botId) { const { data: bs } = await admin.from("atendimento_bots").select("id, canais"); const b = (bs || []).find((x: any) => (x.canais || []).some((c: any) => c.tipo === "whatsapp" && c.instancia === instancia)); botId = b ? b.id : null; }
       const num = numero.startsWith("55") ? numero : "55" + numero;
-      const { data: ja } = await admin.from("atendimento_conversas").select("id").eq("instancia", instancia).eq("contato_id", num).maybeSingle();
+      if (!botOk(pf, botId)) return json({ error: "você não atende esta instância" }, 403);
+      const { data: ja } = await admin.from("atendimento_conversas").select("id, atendente_id, atendente_nome, status, bot_id").eq("instancia", instancia).eq("contato_id", num).maybeSingle();
+      if (ja && pf.papel === "administrativo" && ja.atendente_id !== meuId) {
+        // administrativo iniciando contato: só pega se a conversa estiver livre (sem atendente ou finalizada)
+        if (ja.atendente_id && ja.status !== "finalizado") return json({ error: "este contato já está em atendimento com " + (ja.atendente_nome || "outra pessoa") }, 409);
+        if (ja.status === "finalizado") await admin.rpc("atendimento_renovar", { p_id: ja.id });
+        await admin.from("atendimento_conversas").update({ atendente_id: meuId, atendente_nome: meuNome, status: "em_atendimento", updated_at: new Date().toISOString() }).eq("id", ja.id);
+      }
       if (ja) return json({ ok: true, conversaId: ja.id, jaExistia: true });
       const { data: nova, error } = await admin.from("atendimento_conversas").insert({ canal: "whatsapp", instancia, bot_id: botId, contato_id: num, contato_nome: body.nome || null, cliente_id: body.clienteId || null, atendente_id: meuId, atendente_nome: meuNome, status: "em_atendimento" }).select("id").single();
       if (error) throw error;
       return json({ ok: true, conversaId: nova.id, jaExistia: false });
     }
     if (op === "salvarConfig") {
-      if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+      if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       if (Array.isArray(body.setores)) config.atendimentoSetores = body.setores.map((s: any) => String(s).trim()).filter(Boolean);
       if (Array.isArray(body.respostasRapidas)) config.atendimentoRespostas = body.respostasRapidas.filter((r: any) => r && r.titulo && r.texto).map((r: any) => ({ titulo: String(r.titulo), texto: String(r.texto) }));
       const { error } = await admin.from("gestao_config").update({ payload: config, updated_at: new Date().toISOString() }).eq("id", "config"); if (error) throw error;
@@ -399,6 +461,7 @@ Deno.serve(async (req: Request) => {
       if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
       let q = admin.from("atendimento_conversas").select("status, atendente_id, atendente_nome, setor, departamento_id, bot_id, nao_lidas, canal");
       if (body.botId) q = q.eq("bot_id", body.botId);
+      q = filtrarBots(q);
       const { data, error } = await q; if (error) throw error;
       const { data: deps } = await admin.from("atendimento_departamentos").select("id, nome");
       const nomeDep: Record<string, string> = {}; for (const d of deps || []) nomeDep[d.id] = d.nome;
@@ -414,6 +477,54 @@ Deno.serve(async (req: Request) => {
         naoLidas += c.nao_lidas || 0;
       }
       return json({ ok: true, porStatus, porAtendente, porCanal, porDepartamento, naoLidas });
+    }
+
+    /* ---------- NOTA INTERNA (v12): fica só no sistema, nunca vai ao cliente ----------
+       Gravada com direcao = 'interna' e tipo = 'interna' (não há CHECK na tabela). Webhook, bot e
+       arquivamento/KPIs só olham direcao 'in'/'out', então ignoram; a prévia da conversa não muda. */
+    if (op === "notaInterna") {
+      const c = await conversaOuErro(body.conversaId);
+      if (!podeVerConversa(user, c)) return json({ error: "sem acesso a esta conversa" }, 403);
+      const texto = String(body.texto || "").trim().slice(0, 4000); if (!texto) return json({ error: "escreva a nota" }, 400);
+      const agora = new Date().toISOString();
+      const { data, error } = await admin.from("atendimento_mensagens").insert({ conversa_id: c.id, canal: c.canal, direcao: "interna", tipo: "interna", texto, externo_id: "int_" + crypto.randomUUID(), autor_funcionario_id: meuId, autor_nome: meuNome, status: "interna", enviada_em: agora }).select("id, direcao, tipo, texto, autor_nome, status, enviada_em").single();
+      if (error) throw error;
+      await admin.from("atendimento_conversas").update({ updated_at: agora }).eq("id", c.id);
+      return json({ ok: true, mensagem: data });
+    }
+
+    /* ---------- CADASTRAR CLIENTE pela conversa (v12) ---------- */
+    if (op === "clienteCadastrar") {
+      const c = await conversaOuErro(body.conversaId);
+      if (!podeVerConversa(user, c)) return json({ error: "sem acesso a esta conversa" }, 403);
+      const dig = (s: any) => String(s || "").replace(/\D/g, "");
+      const nome = String(body.nome || "").trim().toUpperCase().replace(/\s+/g, " ").slice(0, 100);
+      if (nome.length < 3) return json({ error: "informe o nome do cliente" }, 400);
+      let tel = dig(body.telefone); if (tel.length >= 12 && tel.startsWith("55")) tel = tel.slice(2);
+      if (tel && tel.length !== 10 && tel.length !== 11) return json({ error: "telefone inválido — use (XX) XXXXX-XXXX" }, 400);
+      const telFmt = tel.length === 11 ? `(${tel.slice(0, 2)}) ${tel.slice(2, 7)}-${tel.slice(7)}` : tel.length === 10 ? `(${tel.slice(0, 2)}) ${tel.slice(2, 6)}-${tel.slice(6)}` : "";
+      const cpf = dig(body.cpf);
+      const cpfOk = (n: string) => { if (n.length !== 11 || /^(\d)\1{10}$/.test(n)) return false; const dv = (k: number) => { let s = 0; for (let i = 0; i < k; i++) s += Number(n[i]) * (k + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; }; return dv(9) === Number(n[9]) && dv(10) === Number(n[10]); };
+      if (cpf && !cpfOk(cpf)) return json({ error: "CPF inválido" }, 400);
+      const cpfFmt = cpf ? `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}` : "";
+      const email = String(body.email || "").trim().toLowerCase().slice(0, 120);
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: "e-mail inválido" }, 400);
+      const nasc = String(body.aniversario || "").trim();
+      if (nasc && (!/^\d{4}-\d{2}-\d{2}$/.test(nasc) || isNaN(new Date(nasc + "T12:00:00").getTime()))) return json({ error: "data de aniversário inválida" }, 400);
+      const cidade = String(body.cidade || "").trim().toUpperCase().slice(0, 80);
+      if (!tel && !cpf) return json({ error: "informe o telefone ou o CPF" }, 400);
+      // duplicidade: mesmo telefone (DDD + número) ou mesmo CPF
+      {
+        const achados: any[] = [];
+        if (tel) { const { data } = await admin.from("clientes_cadastro").select("id, payload").ilike("payload->>telefone", `%${tel.slice(-8, -4)}%${tel.slice(-4)}%`).limit(30); for (const r of data || []) { let t = dig(r.payload && r.payload.telefone); if (t.length >= 12 && t.startsWith("55")) t = t.slice(2); if (t === tel || (t.length < 10 && t.slice(-8) === tel.slice(-8))) achados.push(r); } }
+        if (cpf) { const { data } = await admin.from("clientes_cadastro").select("id, payload").ilike("payload->>cpf", `%${cpf.slice(0, 3)}%${cpf.slice(3, 6)}%${cpf.slice(6, 9)}%${cpf.slice(9)}%`).limit(10); for (const r of data || []) if (dig(r.payload && r.payload.cpf) === cpf && !achados.some((x) => x.id === r.id)) achados.push(r); }
+        if (achados.length) return json({ error: "já existe cliente com este telefone/CPF", duplicados: achados.slice(0, 5).map((r: any) => ({ id: r.id, nome: (r.payload && r.payload.nome) || "", telefone: (r.payload && r.payload.telefone) || "", cpf: (r.payload && r.payload.cpf) || "" })) }, 409);
+      }
+      const id = "cli_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      const cli = { id, nome, telefone: telFmt, cpf: cpfFmt, email, dataNascimento: nasc, cidade, estado: "", cep: "", endereco: "", numero: "", complemento: "", bairro: "", credito: 0, fiadoDebitos: [], creditoMovimentos: [], criadoEm: Date.now(), origem: "atendimento", criadoPor: meuNome };
+      const { error } = await admin.from("clientes_cadastro").insert({ id, payload: cli }); if (error) throw error;
+      await admin.from("atendimento_conversas").update({ cliente_id: id, contato_nome: nome, updated_at: new Date().toISOString() }).eq("id", c.id);
+      return json({ ok: true, cliente: { id, nome, telefone: telFmt, cpf: cpfFmt } });
     }
     return json({ error: "operação desconhecida" }, 400);
   } catch (e) { console.error(e); return json({ error: String(e) }, 500); }

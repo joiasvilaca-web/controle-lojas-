@@ -1,4 +1,8 @@
-// atendimento-webhook v11 — v11: Facebook MESSENGER (object="page", canal "messenger", instancia fb_<page_id>, token da página por bot)
+// atendimento-webhook v12 — v12: CONTEXTO da mensagem (anúncio/"Saiba mais", resposta a story, post/reel compartilhado,
+//     encaminhada, citação) em atendimento_mensagens.contexto (+ atendimento_conversas.contexto_origem quando veio de anúncio),
+//     miniatura salva no bucket (contexto/...). COMENTÁRIOS em tempo real: Instagram field "comments"/"live_comments" e
+//     Facebook object "page" field "feed" (item "comment") → atendimento_comentarios.
+// v11: Facebook MESSENGER (object="page", canal "messenger", instancia fb_<page_id>, token da página por bot)
 //     e Instagram com token do próprio bot (perfil/nome do contato); conversa nova já nasce com bot_id.
 // v9: Instagram aceita também o formato entry[].changes (field=messages) e loga o corpo recebido.
 // v8: aciona o bot (atendimento-bot) a cada mensagem recebida.
@@ -99,7 +103,7 @@ async function fotoPerfilWa(instancia: string, numero: string): Promise<string |
 
 /* ================= COMUM: conversa + mensagem ================= */
 async function registrar(opts: { canal: string; instancia: string; contatoId: string; fromMe: boolean; nome: string | null; foto: (() => Promise<string | null>) | null;
-  tipo: string; texto: string | null; midia: { path: string; mime: string } | null; mime: string | null; nomeArquivo: string | null; externoId: string | null; ts: Date; payload: any; autorNome: string | null; botId?: string | null }) {
+  tipo: string; texto: string | null; midia: { path: string; mime: string } | null; mime: string | null; nomeArquivo: string | null; externoId: string | null; ts: Date; payload: any; autorNome: string | null; botId?: string | null; contexto?: any }) {
   const resumo = opts.texto || RESUMO_TIPO[opts.tipo] || (opts.tipo === "documento" ? "📎 " + (opts.nomeArquivo || "Documento") : "[mensagem]");
   const { data: existente } = await admin.from("atendimento_conversas").select("id, contato_nome, contato_foto, status, nao_lidas, bot_id").eq("instancia", opts.instancia).eq("contato_id", opts.contatoId).maybeSingle();
   let conversaId: string;
@@ -123,12 +127,163 @@ async function registrar(opts: { canal: string; instancia: string; contatoId: st
     if (!existente.bot_id && opts.botId) upd.bot_id = opts.botId;
     await admin.from("atendimento_conversas").update(upd).eq("id", conversaId);
   }
-  const { error: errMsg } = await admin.from("atendimento_mensagens").upsert({
+  const linha: any = {
     conversa_id: conversaId, canal: opts.canal, direcao: opts.fromMe ? "out" : "in", tipo: opts.tipo, texto: opts.texto,
     midia_path: opts.midia ? opts.midia.path : null, midia_mime: opts.midia ? opts.midia.mime : opts.mime, midia_nome: opts.nomeArquivo,
     externo_id: opts.externoId, autor_nome: opts.autorNome, status: opts.fromMe ? "enviada" : "recebida", enviada_em: opts.ts.toISOString(), payload: opts.payload,
-  }, { onConflict: "conversa_id,externo_id", ignoreDuplicates: true });
+  };
+  if (opts.contexto) linha.contexto = opts.contexto;
+  let { error: errMsg } = await admin.from("atendimento_mensagens").upsert(linha, { onConflict: "conversa_id,externo_id", ignoreDuplicates: true });
+  if (errMsg && opts.contexto && /contexto/i.test(String(errMsg.message || ""))) { delete linha.contexto; ({ error: errMsg } = await admin.from("atendimento_mensagens").upsert(linha, { onConflict: "conversa_id,externo_id", ignoreDuplicates: true })); }
   if (errMsg) console.error("gravar mensagem", errMsg);
+  // conversa que veio de anúncio / link de referência guarda a origem (a mais recente) pro cabeçalho
+  if (opts.contexto && !opts.fromMe && (opts.contexto.tipo === "anuncio" || (opts.contexto.tipo === "link" && opts.contexto.ref))) {
+    const { error } = await admin.from("atendimento_conversas").update({ contexto_origem: { ...opts.contexto, em: opts.ts.toISOString() } }).eq("id", conversaId);
+    if (error) console.error("contexto_origem", error.message);
+  }
+}
+
+/* ================= CONTEXTO (anúncio / story / post / encaminhada / citação) ================= */
+// contexto = { tipo: 'anuncio'|'story'|'post'|'encaminhada'|'citacao'|'link', titulo, texto, imagem, imagem_path, url, origem, ... }
+function limparCtx(c: any): any | null {
+  if (!c || !c.tipo) return null;
+  const o: any = {};
+  for (const [k, v] of Object.entries(c)) if (v !== undefined && v !== null && v !== "") o[k] = typeof v === "string" ? v.slice(0, 1500) : v;
+  return o;
+}
+// miniaturas de anúncio/story vêm de CDN com URL temporária → copia pro bucket (até 5 MB, só imagem)
+async function guardarImagemCtx(ctx: any, chave: string, base64: string | null) {
+  try {
+    let bin: Uint8Array | null = null; let mime = "image/jpeg";
+    if (base64 && typeof base64 === "string" && base64.length > 100 && base64.length < 7_000_000) bin = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    else if (ctx.imagem && /^https?:\/\//.test(ctx.imagem)) {
+      const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 8000);
+      try {
+        const res = await fetch(ctx.imagem, { signal: ac.signal });
+        const ct = (res.headers.get("content-type") || "").split(";")[0];
+        if (!res.ok || !ct.startsWith("image/")) { try { await res.body?.cancel(); } catch { /* */ } return; }
+        const buf = new Uint8Array(await res.arrayBuffer()); if (buf.length > 5_000_000) return;
+        bin = buf; mime = ct;
+      } finally { clearTimeout(t); }
+    }
+    if (!bin) return;
+    const ext = (mime.split("/")[1] || "jpg").replace("jpeg", "jpg");
+    const path = `contexto/${chave.replace(/[^\w.\/-]/g, "_")}.${ext}`;
+    if (await guardarBytes(path, bin, mime)) ctx.imagem_path = path;
+  } catch (e) { console.error("img contexto", e); }
+}
+async function textoPorExterno(id: string | null | undefined): Promise<string | null> {
+  if (!id) return null;
+  const { data } = await admin.from("atendimento_mensagens").select("texto, tipo").eq("externo_id", String(id)).limit(1).maybeSingle();
+  return data ? (data.texto || RESUMO_TIPO[data.tipo] || null) : null;
+}
+function ctxResumo(ctx: any): string | null {
+  if (!ctx) return null;
+  if (ctx.tipo === "anuncio") return "📣 Veio do anúncio" + (ctx.titulo ? ": " + ctx.titulo : "");
+  if (ctx.tipo === "story") return ctx.mencao ? "📖 Mencionou você no story" : "📖 Respondeu ao story";
+  if (ctx.tipo === "post") return "↪️ " + (ctx.titulo || "Post compartilhado");
+  if (ctx.tipo === "link") return "🔗 " + (ctx.titulo || ctx.url || "Link");
+  return null;
+}
+// WhatsApp (Evolution/Baileys): contextInfo fica no data ou dentro do tipo da mensagem (extendedTextMessage, imageMessage…)
+function contextInfoWa(data: any): any {
+  if (data && data.contextInfo && typeof data.contextInfo === "object" && Object.keys(data.contextInfo).length) return data.contextInfo;
+  const m = (data && data.message) || {};
+  for (const k of Object.keys(m)) { const v = m[k]; if (v && typeof v === "object" && v.contextInfo) return v.contextInfo; }
+  return null;
+}
+async function contextoWa(instancia: string, numero: string, data: any): Promise<any | null> {
+  const ci = contextInfoWa(data); if (!ci) return null;
+  const ad = ci.externalAdReply;
+  const fwd = !!ci.isForwarded || Number(ci.forwardingScore || 0) > 0;
+  let ctx: any = null;
+  if (ad && (ad.title || ad.body || ad.sourceUrl || ad.thumbnailUrl || ad.mediaUrl)) {
+    const ehAd = String(ad.sourceType || "").toLowerCase() === "ad" || !!ad.sourceId || !!ci.conversionSource || !!ci.entryPointConversionSource || !!ad.ctwaClid;
+    ctx = { tipo: ehAd ? "anuncio" : "link", titulo: ad.title, texto: ad.body, imagem: ad.thumbnailUrl || ad.originalImageUrl || (ad.mediaType === 1 ? ad.mediaUrl : null), url: ad.sourceUrl || ad.mediaUrl,
+      origem: ci.entryPointConversionApp || ci.conversionSource || ci.entryPointConversionSource || ad.sourceApp || ad.sourceType, ad_id: ad.sourceId, ctwa_clid: ad.ctwaClid };
+    await guardarImagemCtx(ctx, `${instancia}/${numero}/${(data.key && data.key.id) || Date.now()}`, typeof ad.thumbnail === "string" ? ad.thumbnail : null);
+  } else if (ci.quotedMessage || ci.stanzaId) {
+    let t: string | null = null;
+    if (ci.quotedMessage) { const q = extrairConteudo(ci.quotedMessage, ""); t = q.texto || RESUMO_TIPO[q.tipo] || (q.tipo === "documento" ? "📎 " + (q.nome || "Documento") : null); }
+    if (!t && ci.stanzaId) t = await textoPorExterno(ci.stanzaId);
+    ctx = { tipo: "citacao", texto: t, citado_id: ci.stanzaId };
+  } else if (fwd) ctx = { tipo: "encaminhada" };
+  if (ctx && fwd) { ctx.encaminhada = true; if (Number(ci.forwardingScore || 0) >= 5) ctx.muito_encaminhada = true; }
+  return limparCtx(ctx);
+}
+// Instagram / Messenger: referral (anúncio, ig.me/m.me?ref=), reply_to (story ou mensagem), anexos share/story_mention/ig_reel/template
+async function contextoMeta(ev: any, msg: any, chave: string): Promise<any | null> {
+  const ref = (msg && msg.referral) || ev.referral || (ev.postback && ev.postback.referral);
+  let ctx: any = null;
+  if (ref) {
+    const ad = ref.ads_context_data || {};
+    const ehAd = String(ref.source || "").toUpperCase() === "ADS" || !!ref.ad_id || !!ad.ad_title;
+    ctx = { tipo: ehAd ? "anuncio" : "link", titulo: ad.ad_title || (ref.ref ? "Link com referência: " + ref.ref : (ehAd ? null : "Abriu pela referência " + (ref.source || ""))),
+      imagem: ad.photo_url, video: ad.video_url, url: ref.referer_uri || null, origem: ref.source || ref.type, ad_id: ref.ad_id, ref: ref.ref, post_id: ad.post_id, produto_id: ad.product_id };
+  }
+  const rt = msg && msg.reply_to;
+  if (!ctx && rt && rt.story) ctx = { tipo: "story", imagem: rt.story.url, url: rt.story.url, story_id: rt.story.id };
+  else if (!ctx && rt && rt.mid) ctx = { tipo: "citacao", texto: await textoPorExterno(rt.mid), citado_id: rt.mid };
+  if (!ctx && msg) for (const a of Array.isArray(msg.attachments) ? msg.attachments : []) {
+    const t = String(a.type || ""); const p = a.payload || {};
+    if (t === "story_mention") ctx = { tipo: "story", mencao: true, imagem: p.url, url: p.url };
+    else if (["share", "ig_reel", "reel", "ig_post", "post"].includes(t)) ctx = { tipo: "post", titulo: p.title || a.title || (t.includes("reel") ? "Reel compartilhado" : "Post compartilhado"), imagem: (t === "share" || t.includes("post")) ? p.url : null, url: p.url, media_id: p.ig_post_media_id || p.reel_video_id };
+    else if (t === "fallback" || t === "template") { const el = (p.generic && p.generic.elements && p.generic.elements[0]) || (p.elements && p.elements[0]) || {}; ctx = { tipo: "link", titulo: a.title || p.title || el.title, texto: el.subtitle, imagem: el.image_url, url: a.url || p.url || el.item_url || (el.default_action && el.default_action.url) }; }
+    if (ctx) break;
+  }
+  if (ctx && ctx.imagem) await guardarImagemCtx(ctx, chave, null);
+  return limparCtx(ctx);
+}
+
+/* ================= COMENTÁRIOS (tempo real) ================= */
+async function upsertComentario(row: any) {
+  // só colunas vindas da plataforma (resposta/respondido feitos no sistema não são sobrescritos)
+  const { error } = await admin.from("atendimento_comentarios").upsert({ ...row, updated_at: new Date().toISOString() }, { onConflict: "plataforma,externo_id" });
+  if (error) console.error("comentario upsert", error.message);
+}
+async function marcarRespondido(plataforma: string, paiId: string, texto: string | null, autor: string, extId: string | null, ts: Date) {
+  const { error } = await admin.from("atendimento_comentarios").update({ respondido: true, resposta: texto, respondido_por: autor, respondido_em: ts.toISOString(), resposta_externo_id: extId, updated_at: new Date().toISOString() })
+    .eq("plataforma", plataforma).eq("externo_id", paiId).eq("respondido", false);
+  if (error) console.error("comentario respondido", error.message);
+}
+async function postConhecido(plataforma: string, postId: string): Promise<any | null> {
+  const { data } = await admin.from("atendimento_comentarios").select("post_url, post_thumb, post_legenda").eq("plataforma", plataforma).eq("post_id", postId).not("post_url", "is", null).limit(1).maybeSingle();
+  return data || null;
+}
+async function comentarioIg(contaId: string, bot: any, token: string | null, v: any, field: string, ts: Date) {
+  if (!v || !v.id) return;
+  const de = v.from || {};
+  if (String(de.id || "") === contaId) { if (v.parent_id) await marcarRespondido("instagram", String(v.parent_id), v.text || null, "Instagram (app)", String(v.id), ts); return; }
+  const mediaId = v.media && v.media.id ? String(v.media.id) : null;
+  let post: any = mediaId ? await postConhecido("instagram", mediaId) : null;
+  if (!post && mediaId && token) {
+    try {
+      const r = await (await fetch(`https://graph.instagram.com/v21.0/${mediaId}?fields=permalink,media_url,thumbnail_url,caption&access_token=${encodeURIComponent(token)}`)).json();
+      if (r && !r.error) post = { post_url: r.permalink || null, post_thumb: r.thumbnail_url || r.media_url || null, post_legenda: r.caption ? String(r.caption).slice(0, 500) : null };
+    } catch { /* */ }
+  }
+  await upsertComentario({ bot_id: bot ? bot.id : null, plataforma: "instagram", externo_id: String(v.id), pai_externo_id: v.parent_id ? String(v.parent_id) : null, post_id: mediaId,
+    ...(post || {}), autor_nome: de.username ? "@" + de.username : null, autor_id: de.id ? String(de.id) : null, texto: v.text || null, criado_em: ts.toISOString(), raw: { ...v, _field: field } });
+}
+async function comentarioFb(pageId: string, bot: any, token: string | null, v: any) {
+  if (!v || v.item !== "comment" || !v.comment_id) return;
+  const id = String(v.comment_id); const verbo = String(v.verb || "add");
+  if (verbo === "remove") { await admin.from("atendimento_comentarios").update({ removido: true, updated_at: new Date().toISOString() }).eq("plataforma", "facebook").eq("externo_id", id); return; }
+  if (verbo === "hide" || verbo === "unhide") { await admin.from("atendimento_comentarios").update({ oculto: verbo === "hide", updated_at: new Date().toISOString() }).eq("plataforma", "facebook").eq("externo_id", id); return; }
+  const ts = v.created_time ? new Date(Number(v.created_time) < 1e12 ? Number(v.created_time) * 1000 : Number(v.created_time)) : new Date();
+  const de = v.from || {}; const postId = v.post_id ? String(v.post_id) : null;
+  const pai = v.parent_id && String(v.parent_id) !== postId ? String(v.parent_id) : null;
+  if (String(de.id || "") === pageId) { if (pai) await marcarRespondido("facebook", pai, v.message || null, "Facebook (app)", id, ts); return; }
+  let post: any = postId ? await postConhecido("facebook", postId) : null;
+  if (!post && postId && token) {
+    try {
+      const r = await (await fetch(`https://graph.facebook.com/v21.0/${postId}?fields=permalink_url,full_picture,message&access_token=${encodeURIComponent(token)}`)).json();
+      if (r && !r.error) post = { post_url: r.permalink_url || null, post_thumb: r.full_picture || null, post_legenda: r.message ? String(r.message).slice(0, 500) : null };
+    } catch { /* */ }
+  }
+  if (!post && v.post && v.post.permalink_url) post = { post_url: v.post.permalink_url };
+  await upsertComentario({ bot_id: bot ? bot.id : null, plataforma: "facebook", externo_id: id, pai_externo_id: pai, post_id: postId, ...(post || {}),
+    autor_nome: de.name || null, autor_id: de.id ? String(de.id) : null, texto: v.message || null, criado_em: ts.toISOString(), raw: v });
 }
 
 async function processarMensagemWa(instancia: string, data: any) {
@@ -140,8 +295,10 @@ async function processarMensagemWa(instancia: string, data: any) {
   const ts = data.messageTimestamp ? new Date(Number(data.messageTimestamp) * 1000) : new Date();
   let midia: { path: string; mime: string } | null = null;
   if (["imagem", "audio", "video", "documento", "sticker"].includes(c.tipo)) midia = await baixarMidiaWa(instancia, data);
+  let contexto: any = null;
+  try { contexto = await contextoWa(instancia, numero, data); } catch (e) { console.error("contexto wa", e); }
   await registrar({ canal: "whatsapp", instancia, contatoId: numero, fromMe, nome: (!fromMe && data.pushName) ? data.pushName : null, foto: () => fotoPerfilWa(instancia, numero),
-    tipo: c.tipo, texto: c.texto, midia, mime: c.mime, nomeArquivo: c.nome, externoId: key.id || null, ts, payload: data, autorNome: fromMe ? (data.source === "web" ? null : "Celular") : null });
+    tipo: c.tipo, texto: c.texto, midia, mime: c.mime, nomeArquivo: c.nome, externoId: key.id || null, ts, payload: data, autorNome: fromMe ? (data.source === "web" ? null : "Celular") : null, contexto });
   if (!fromMe && c.tipo !== "outro") await acionarBot("whatsapp", instancia, numero);
 }
 async function processarStatusWa(data: any) {
@@ -193,26 +350,39 @@ async function processarInstagram(body: any) {
     const tokenIg: string | null = (botIg && botIg.segredos && botIg.segredos.INSTAGRAM_TOKEN) || null;
     // a Meta entrega em entry.messaging; o botão "Testar" (e alguns casos) usa entry.changes[{field:'messages', value}]
     const eventos: any[] = [...(Array.isArray(entry.messaging) ? entry.messaging : [])];
-    for (const ch of Array.isArray(entry.changes) ? entry.changes : []) if (ch && ch.field === "messages" && ch.value) eventos.push(ch.value);
+    const entTs = entry.time ? new Date(Number(entry.time) < 1e12 ? Number(entry.time) * 1000 : Number(entry.time)) : new Date();
+    for (const ch of Array.isArray(entry.changes) ? entry.changes : []) {
+      if (ch && ch.field === "messages" && ch.value) eventos.push(ch.value);
+      else if (ch && (ch.field === "comments" || ch.field === "live_comments") && ch.value) { try { await comentarioIg(contaId, botIg, tokenIg, ch.value, ch.field, entTs); } catch (e) { console.error("comentario ig", e); } }
+    }
     for (const ev of eventos) {
-      const msg = ev.message; if (!msg) { console.log("ig evento sem message (ignorado)", Object.keys(ev || {}).join(",")); continue; }
-      const fromMe = !!msg.is_echo;
+      const msg = ev.message;
+      // referral sem mensagem (clique em anúncio / ig.me?ref=) vira um registro com o contexto
+      if (!msg && !ev.referral) { console.log("ig evento sem message (ignorado)", Object.keys(ev || {}).join(",")); continue; }
+      const fromMe = !!(msg && msg.is_echo);
       const contatoId = String(fromMe ? (ev.recipient && ev.recipient.id) : (ev.sender && ev.sender.id) || "");
       if (!contatoId || contatoId === contaId) continue;
       const ts = ev.timestamp ? new Date(Number(ev.timestamp) < 1e12 ? Number(ev.timestamp) * 1000 : Number(ev.timestamp)) : new Date();
+      let contexto: any = null;
+      try { contexto = await contextoMeta(ev, msg, `instagram/${contatoId}/${(msg && msg.mid) || ts.getTime()}`); } catch (e) { console.error("contexto ig", e); }
+      if (!msg) {
+        await registrar({ canal: "instagram", instancia, contatoId, fromMe: false, nome: null, foto: async () => (await perfilIg(contatoId, tokenIg)).foto,
+          tipo: "outro", texto: ctxResumo(contexto) || "📣 Abriu a conversa por um link/anúncio", midia: null, mime: null, nomeArquivo: null, externoId: "ref_" + ts.getTime(), ts, payload: ev, autorNome: null, botId: botIg ? botIg.id : null, contexto });
+        continue;
+      }
       const anexos: any[] = Array.isArray(msg.attachments) ? msg.attachments : [];
       if (!anexos.length) {
         await registrar({ canal: "instagram", instancia, contatoId, fromMe, nome: null, foto: fromMe ? null : async () => (await perfilIg(contatoId, tokenIg)).foto,
-          tipo: "texto", texto: msg.text || "[mensagem]", midia: null, mime: null, nomeArquivo: null, externoId: msg.mid || null, ts, payload: ev, autorNome: fromMe ? "Instagram (app)" : null, botId: botIg ? botIg.id : null });
+          tipo: "texto", texto: msg.text || ctxResumo(contexto) || "[mensagem]", midia: null, mime: null, nomeArquivo: null, externoId: msg.mid || null, ts, payload: ev, autorNome: fromMe ? "Instagram (app)" : null, botId: botIg ? botIg.id : null, contexto });
       } else {
         let i = 0;
         for (const a of anexos) {
           const t = String(a.type || ""); const url = a.payload && a.payload.url;
           const tipo = t === "image" ? "imagem" : t === "audio" ? "audio" : t === "video" ? "video" : t === "file" ? "documento" : "outro";
           const midia = (url && ["imagem", "audio", "video", "documento"].includes(tipo)) ? await baixarAnexoIg(url, `${contatoId}/${msg.mid || Date.now()}_${i}`) : null;
-          const texto = (i === 0 && msg.text) ? msg.text : (tipo === "outro" ? `[${t}] ${url || ""}`.trim() : null);
+          const texto = (i === 0 && msg.text) ? msg.text : (tipo === "outro" ? ((i === 0 && ctxResumo(contexto)) || `[${t}] ${url || ""}`.trim()) : null);
           await registrar({ canal: "instagram", instancia, contatoId, fromMe, nome: null, foto: fromMe ? null : async () => (await perfilIg(contatoId, tokenIg)).foto,
-            tipo, texto, midia, mime: midia ? midia.mime : null, nomeArquivo: null, externoId: (msg.mid || "") + (i ? "_" + i : ""), ts, payload: ev, autorNome: fromMe ? "Instagram (app)" : null, botId: botIg ? botIg.id : null });
+            tipo, texto, midia, mime: midia ? midia.mime : null, nomeArquivo: null, externoId: (msg.mid || "") + (i ? "_" + i : ""), ts, payload: ev, autorNome: fromMe ? "Instagram (app)" : null, botId: botIg ? botIg.id : null, contexto: i === 0 ? contexto : null });
           i++;
         }
       }
@@ -244,25 +414,36 @@ async function processarMessenger(body: any) {
     const instancia = "fb_" + pageId;
     const bot = await botDoCanal("messenger", pageId);
     const token: string | null = (bot && bot.segredos && bot.segredos.FB_PAGE_TOKEN) || s.FB_PAGE_TOKEN || null;
+    for (const ch of Array.isArray(entry.changes) ? entry.changes : []) {
+      if (ch && ch.field === "feed" && ch.value && ch.value.item === "comment") { try { await comentarioFb(pageId, bot, token, ch.value); } catch (e) { console.error("comentario fb", e); } }
+    }
     for (const ev of Array.isArray(entry.messaging) ? entry.messaging : []) {
-      const msg = ev.message; if (!msg) { console.log("fb evento sem message (ignorado)", Object.keys(ev || {}).join(",")); continue; }
-      const fromMe = !!msg.is_echo;
+      const msg = ev.message;
+      const referral = ev.referral || (ev.postback && ev.postback.referral);
+      if (!msg && !referral) { console.log("fb evento sem message (ignorado)", Object.keys(ev || {}).join(",")); continue; }
+      const fromMe = !!(msg && msg.is_echo);
       const contatoId = String(fromMe ? (ev.recipient && ev.recipient.id) : (ev.sender && ev.sender.id) || "");
       if (!contatoId || contatoId === pageId) continue;
       const ts = ev.timestamp ? new Date(Number(ev.timestamp) < 1e12 ? Number(ev.timestamp) * 1000 : Number(ev.timestamp)) : new Date();
-      const anexos: any[] = Array.isArray(msg.attachments) ? msg.attachments : [];
       const foto = fromMe ? null : async () => (await perfilFb(contatoId, token)).foto;
+      let contexto: any = null;
+      try { contexto = await contextoMeta(ev, msg, `messenger/${contatoId}/${(msg && msg.mid) || ts.getTime()}`); } catch (e) { console.error("contexto fb", e); }
+      if (!msg) {
+        await registrar({ canal: "messenger", instancia, contatoId, fromMe: false, nome: null, foto, tipo: "outro", texto: ctxResumo(contexto) || "📣 Abriu a conversa por um link/anúncio", midia: null, mime: null, nomeArquivo: null, externoId: "ref_" + ts.getTime(), ts, payload: ev, autorNome: null, botId: bot ? bot.id : null, contexto });
+        continue;
+      }
+      const anexos: any[] = Array.isArray(msg.attachments) ? msg.attachments : [];
       // eco de mensagem enviada por este sistema (já gravada com o mesmo mid) é ignorado pelo upsert; eco enviado pela Caixa de Entrada da Meta entra como "Facebook (app)"
       if (!anexos.length) {
-        await registrar({ canal: "messenger", instancia, contatoId, fromMe, nome: null, foto, tipo: "texto", texto: msg.text || "[mensagem]", midia: null, mime: null, nomeArquivo: null, externoId: msg.mid || null, ts, payload: ev, autorNome: fromMe ? "Facebook (app)" : null, botId: bot ? bot.id : null });
+        await registrar({ canal: "messenger", instancia, contatoId, fromMe, nome: null, foto, tipo: "texto", texto: msg.text || ctxResumo(contexto) || "[mensagem]", midia: null, mime: null, nomeArquivo: null, externoId: msg.mid || null, ts, payload: ev, autorNome: fromMe ? "Facebook (app)" : null, botId: bot ? bot.id : null, contexto });
       } else {
         let i = 0;
         for (const a of anexos) {
           const t = String(a.type || ""); const url = a.payload && a.payload.url;
           const tipo = t === "image" ? "imagem" : t === "audio" ? "audio" : t === "video" ? "video" : t === "file" ? "documento" : "outro";
           const midia = (url && ["imagem", "audio", "video", "documento"].includes(tipo)) ? await baixarAnexoFb(url, `${contatoId}/${msg.mid || Date.now()}_${i}`) : null;
-          const texto = (i === 0 && msg.text) ? msg.text : (tipo === "outro" ? `[${t}] ${url || ""}`.trim() : null);
-          await registrar({ canal: "messenger", instancia, contatoId, fromMe, nome: null, foto, tipo, texto, midia, mime: midia ? midia.mime : null, nomeArquivo: null, externoId: (msg.mid || "") + (i ? "_" + i : ""), ts, payload: ev, autorNome: fromMe ? "Facebook (app)" : null, botId: bot ? bot.id : null });
+          const texto = (i === 0 && msg.text) ? msg.text : (tipo === "outro" ? ((i === 0 && ctxResumo(contexto)) || `[${t}] ${url || ""}`.trim()) : null);
+          await registrar({ canal: "messenger", instancia, contatoId, fromMe, nome: null, foto, tipo, texto, midia, mime: midia ? midia.mime : null, nomeArquivo: null, externoId: (msg.mid || "") + (i ? "_" + i : ""), ts, payload: ev, autorNome: fromMe ? "Facebook (app)" : null, botId: bot ? bot.id : null, contexto: i === 0 ? contexto : null });
           i++;
         }
       }

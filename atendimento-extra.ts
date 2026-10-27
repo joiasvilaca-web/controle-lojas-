@@ -1,4 +1,5 @@
-// atendimento-extra v2 — v2: envio de texto/campanhas/programadas também pelo Facebook MESSENGER (token da página do bot).
+// atendimento-extra v3 — v3: perfil no Atendimento (papel/instâncias do DP) e restrição por instância.
+// v2 — v2: envio de texto/campanhas/programadas também pelo Facebook MESSENGER (token da página do bot).
 // v1: recursos do Atendimento acima do núcleo (atendimento-api):
 // envio com provedor duplo (Evolution = não oficial | Cloud API = oficial) + nome do atendente + blacklist,
 // templates oficiais, finalizar com motivo/protocolo/histórico, reabrir, agenda/carteira, blacklist, campos
@@ -145,6 +146,21 @@ function proxData(d: Date, rec: string): Date | null {
   return n;
 }
 
+/* ---------- perfil no Atendimento (cópia da regra da atendimento-api v12) ---------- */
+const PAPEIS = ["atendente", "administrativo", "gerente", "diretoria"];
+function perfilAtd(user: any) {
+  const p = (user && user.permissoes && user.permissoes.atendimento) || {};
+  const explicito = PAPEIS.includes(p.papel);
+  const papel: string = explicito ? p.papel : user.nivel === "diretoria" ? "diretoria" : user.nivel === "gerente" ? "gerente" : "atendente";
+  const bots: string[] | null = papel === "diretoria" ? null : (Array.isArray(p.bots) ? p.bots.map(String) : null);
+  return { papel, bots, supervisao: papel === "gerente" || papel === "diretoria", admin: papel === "diretoria" || (!explicito && user.nivel === "gerente") };
+}
+function podeReceber(config: any, fid: string, botId: string | null): boolean {
+  const u = (config.users || []).find((x: any) => (x.funcionarioId || x.id) === fid); if (!u) return true;
+  const pa = u.permissoes && u.permissoes.atendimento; if (pa && pa.ativo === false) return false;
+  const pf = perfilAtd(u); return !pf.bots || (!!botId && pf.bots.includes(botId));
+}
+
 /* ---------- tick: programadas ---------- */
 async function tick(limite = 20) {
   const agora = new Date().toISOString();
@@ -178,7 +194,11 @@ Deno.serve(async (req) => {
     const user = (config.users || []).find((u: any) => sessaoValida(u, b.senha));
     if (!user) return json({ error: "não autorizado" }, 401);
     const pAt = user.permissoes && user.permissoes.atendimento; if (pAt && pAt.ativo === false) return json({ error: "sem permissão para o Atendimento" }, 403);
-    const gestao = user.nivel === "diretoria" || user.nivel === "gerente";
+    // v3: perfil no Atendimento (DP › Perfis de Acesso: permissoes.atendimento.papel/bots) — mesma regra da atendimento-api
+    const pf = perfilAtd(user);
+    const gestao = pf.supervisao; const podeAdmin = pf.admin; const adm = pf.papel === "administrativo";
+    const okBot = (botId: string | null) => !pf.bots || (!!botId && pf.bots.includes(botId));
+    const filtrarBots = (q: any, col = "bot_id") => pf.bots ? q.in(col, pf.bots.length ? pf.bots : ["00000000-0000-0000-0000-000000000000"]) : q;
     const meuId = user.funcionarioId || user.id; const nomes = await nomesFuncionarios(config);
     const meuNome = nomes[meuId] || user.nome || "";
     const { data: meuReg } = await admin.from("atendimento_atendentes").select("*").eq("funcionario_id", meuId).maybeSingle();
@@ -187,9 +207,9 @@ Deno.serve(async (req) => {
     const perm = (k: string) => gestao || !!P[k];
     const eSup = (dep: any) => gestao || (!!dep && supDeps.includes(dep));
     const sup = gestao || supDeps.length > 0;
-    const podeVer = (c: any) => gestao || !c.atendente_id || c.atendente_id === meuId || eSup(c.departamento_id);
+    const podeVer = (c: any) => okBot(c.bot_id) && (gestao || c.atendente_id === meuId || (!c.atendente_id && !adm) || eSup(c.departamento_id));
     const conversa = async (id: string) => { const { data } = await admin.from("atendimento_conversas").select("*").eq("id", id).maybeSingle(); if (!data) throw new Erro("conversa não encontrada", 404); return data; };
-    const exigeGestao = () => { if (!gestao) throw new Erro("só diretoria/gerente", 403); };
+    const exigeGestao = () => { if (!podeAdmin) throw new Erro("só a diretoria configura o Atendimento", 403); };
     const op = b.op;
 
     if (op === "tick") return json({ ok: true, ...(await tick()) });
@@ -248,13 +268,20 @@ Deno.serve(async (req) => {
       return json({ ok: true, templates: lista });
     }
     if (op === "novaAtiva") {
-      if (!perm("criarAtivo")) throw new Erro("sem permissão para criar atendimento ativo", 403);
+      if (!adm && !perm("criarAtivo")) throw new Erro("sem permissão para criar atendimento ativo", 403);
+      if (!okBot(b.botId)) throw new Erro("você não atende esta instância", 403);
       const numero = normTel(b.numero); if (numero.length < 12) throw new Erro("número inválido");
       const { data: bot } = await admin.from("atendimento_bots").select("id, canais").eq("id", b.botId).maybeSingle(); if (!bot) throw new Erro("escolha o bot");
       const cans = (bot.canais || []).filter((x: any) => x.tipo === "whatsapp");
       const instancia = b.instancia || (cans[0] && cans[0].instancia); if (!instancia || !cans.some((x: any) => x.instancia === instancia)) throw new Erro("o bot não tem esse número de WhatsApp");
       if (await estaNaBlacklist("whatsapp", numero)) throw new Erro("este contato está na blacklist");
       const conv = await acharOuCriarConversa({ instancia, contatoId: numero, nome: b.nome ? up(b.nome) : null, botId: bot.id, atendenteId: meuId, atendenteNome: meuNome });
+      if (conv.atendente_id !== meuId && !gestao) {
+        if (conv.atendente_id && conv.status !== "finalizado") throw new Erro("este contato já está em atendimento com " + (conv.atendente_nome || "outra pessoa"), 409);
+        if (conv.status === "finalizado") await admin.rpc("atendimento_renovar", { p_id: conv.id });
+        await admin.from("atendimento_conversas").update({ atendente_id: meuId, atendente_nome: meuNome, status: "em_atendimento", updated_at: new Date().toISOString() }).eq("id", conv.id);
+        conv.atendente_id = meuId; conv.atendente_nome = meuNome; conv.status = "em_atendimento";
+      }
       if (b.template || b.texto) { const r = await enviarPara(conv, { texto: b.texto ? txt(b.texto) : undefined, template: b.template }); await gravarSaida(conv, r, meuId, meuNome); }
       else if (ehCloud(conv)) throw new Erro("na API oficial o primeiro contato exige um modelo aprovado");
       return json({ ok: true, conversaId: conv.id });
@@ -349,7 +376,7 @@ Deno.serve(async (req) => {
       let q = admin.from("atendimento_retornos").select("*").order("quando").limit(500);
       if (b.status) q = q.eq("status", b.status); if (b.conversaId) q = q.eq("conversa_id", b.conversaId);
       if (b.de) q = q.gte("quando", b.de); if (b.ate) q = q.lte("quando", b.ate);
-      if (!gestao && !supDeps.length) q = q.eq("atendente_id", meuId);
+      if (!gestao && !supDeps.length) q = q.eq("atendente_id", meuId); q = filtrarBots(q);
       const { data, error } = await q; if (error) throw error; return json({ ok: true, data: data || [] });
     }
     if (op === "retornosResumo") {
@@ -372,7 +399,7 @@ Deno.serve(async (req) => {
       if (!b.texto && !b.template) throw new Erro("escreva a mensagem");
       let reg: any = { quando: quando.toISOString(), texto: b.texto ? txt(b.texto) : null, template: b.template || null, responsavel_id: meuId, responsavel_nome: meuNome };
       if (b.conversaId) { const c = await conversa(b.conversaId); if (!podeVer(c)) throw new Erro("sem acesso", 403); reg = { ...reg, conversa_id: c.id, bot_id: c.bot_id, canal: c.canal, instancia: c.instancia, contato_id: c.contato_id, contato_nome: c.contato_nome }; }
-      else { if (!perm("criarAtivo")) throw new Erro("sem permissão para criar atendimento ativo", 403);
+      else { if (!adm && !perm("criarAtivo")) throw new Erro("sem permissão para criar atendimento ativo", 403); if (!okBot(b.botId)) throw new Erro("você não atende esta instância", 403);
         const { data: bot } = await admin.from("atendimento_bots").select("id, canais").eq("id", b.botId).maybeSingle(); const wa = bot && (bot.canais || []).find((x: any) => x.tipo === "whatsapp" && (!b.instancia || x.instancia === b.instancia)); if (!wa) throw new Erro("escolha o bot/número");
         reg = { ...reg, bot_id: bot!.id, canal: "whatsapp", instancia: wa.instancia, contato_id: normTel(b.numero), contato_nome: up(b.nome, 120) || null }; }
       if (await estaNaBlacklist(reg.canal, reg.contato_id)) throw new Erro("este contato está na blacklist");
@@ -381,7 +408,7 @@ Deno.serve(async (req) => {
     if (op === "programadasLista") {
       let q = admin.from("atendimento_programadas").select("*").order("quando", { ascending: false }).limit(500);
       if (b.status) q = q.eq("status", b.status); if (b.de) q = q.gte("quando", b.de); if (b.ate) q = q.lte("quando", b.ate); if (b.campanha) q = q.eq("campanha", b.campanha);
-      if (!gestao) q = q.eq("responsavel_id", meuId);
+      if (!gestao) q = q.eq("responsavel_id", meuId); else q = filtrarBots(q);
       const { data, error } = await q; if (error) throw error; return json({ ok: true, data: data || [] });
     }
     if (op === "programadaCancelar") {
@@ -390,7 +417,7 @@ Deno.serve(async (req) => {
       await admin.from("atendimento_programadas").update({ status: "cancelado" }).eq("id", p.id).in("status", ["pendente", "erro"]); return json({ ok: true });
     }
     if (op === "campanhaCriar") {
-      exigeGestao(); const nome = up(b.nome, 80); if (!nome) throw new Erro("dê um nome à campanha"); if (!b.texto && !b.template) throw new Erro("escreva a mensagem");
+      if (!gestao) throw new Erro("só diretoria/gerente", 403); if (!okBot(b.botId)) throw new Erro("você não atende esta instância", 403); const nome = up(b.nome, 80); if (!nome) throw new Erro("dê um nome à campanha"); if (!b.texto && !b.template) throw new Erro("escreva a mensagem");
       const inicio = new Date(b.inicio || Date.now()); const inter = Math.min(3600, Math.max(5, Number(b.intervaloSeg) || 30));
       const { data: bot } = await admin.from("atendimento_bots").select("id, canais").eq("id", b.botId).maybeSingle(); const wa = bot && (bot.canais || []).find((x: any) => x.tipo === "whatsapp" && (!b.instancia || x.instancia === b.instancia)); if (!wa) throw new Erro("escolha o bot/número");
       if (!ehCloud({ canal: "whatsapp", instancia: wa.instancia }) && !b.texto) throw new Erro("no WhatsApp não oficial a campanha precisa de texto");
@@ -413,7 +440,7 @@ Deno.serve(async (req) => {
         if (b.canal) q = q.eq("canal", b.canal); if (b.botId) q = q.eq("bot_id", b.botId); if (b.protocolo) q = q.eq("protocolo", Number(b.protocolo) || -1);
         if (b.numero) q = q.ilike("contato_id", `%${digits(b.numero)}%`); if (b.nome) q = q.ilike("contato_nome", `%${String(b.nome).replace(/[%,]/g, " ")}%`);
         if (b.atendenteId) q = q.eq(campos.atend, b.atendenteId); if (b.departamentoId) q = q.eq(campos.dep, b.departamentoId); if (b.motivo) q = q.eq(campos.motivo, up(b.motivo));
-        if (b.tag) q = q.contains("tags", JSON.stringify([b.tag]));
+        if (b.tag) q = q.contains("tags", JSON.stringify([b.tag])); q = filtrarBots(q);
         if (b.campoId && b.campoValor) q = q.contains("campos", JSON.stringify({ [b.campoId]: b.campoValor }));
         const col = b.dataCampo === "finalizacao" ? campos.fim : campos.ini;
         if (b.de) q = q.gte(col, b.de); if (b.ate) q = q.lte(col, b.ate);
@@ -434,7 +461,7 @@ Deno.serve(async (req) => {
     }
     if (op === "relContatos") {
       if (!gestao && !sup && !perm("verAgenda")) throw new Erro("sem permissão", 403);
-      const { data: cv } = await admin.from("atendimento_conversas").select("contato_id, contato_nome, canal, campos, tags, protocolo, atendente_nome, ultima_mensagem_em").order("ultima_mensagem_em", { ascending: false }).limit(5000);
+      const { data: cv } = await filtrarBots(admin.from("atendimento_conversas").select("contato_id, contato_nome, canal, campos, tags, protocolo, atendente_nome, ultima_mensagem_em").order("ultima_mensagem_em", { ascending: false }).limit(5000));
       const { data: ag } = await admin.from("atendimento_contatos").select("*").limit(5000); const mapAg = new Map((ag || []).map((a: any) => [a.canal + ":" + a.telefone, a]));
       const { data: hs } = await admin.from("atendimento_historico").select("contato_id").limit(20000); const qtd: Record<string, number> = {}; for (const h of hs || []) qtd[h.contato_id] = (qtd[h.contato_id] || 0) + 1;
       const vistos = new Set<string>(); const out: any[] = [];
@@ -451,7 +478,7 @@ Deno.serve(async (req) => {
       return json({ ok: true, atendentes: f(at), departamentos: f(dp) });
     }
     if (op === "potenciais") {
-      const { data: bots } = await admin.from("atendimento_bots").select("id, nome, config").eq("ativo", true);
+      const { data: bots } = await filtrarBots(admin.from("atendimento_bots").select("id, nome, config").eq("ativo", true), "id");
       const out: any[] = [];
       for (const bt of bots || []) {
         const pt = bt.config && bt.config.fluxo && bt.config.fluxo.potenciais; const modo = (pt && pt.modo) || "nunca"; if (modo === "nunca") continue;
@@ -465,6 +492,8 @@ Deno.serve(async (req) => {
     }
     if (op === "potencialCriar") {
       const c = await conversa(b.conversaId); const dep = b.departamentoId || null;
+      if (!okBot(c.bot_id)) throw new Erro("você não atende esta instância", 403);
+      if (adm) throw new Erro("o perfil Administrativo só recebe conversas por transferência", 403);
       if (!gestao && !(meuReg && (!dep || (meuReg.departamentos || []).includes(dep)))) throw new Erro("sem acesso", 403);
       await admin.from("atendimento_conversas").update({ status: "em_atendimento", atendente_id: meuId, atendente_nome: meuNome, departamento_id: dep || c.departamento_id, updated_at: new Date().toISOString(), bot_estado: { ...(c.bot_estado || {}), etapa: "atendimento" } }).eq("id", c.id);
       await admin.from("atendimento_mensagens").insert({ conversa_id: c.id, canal: c.canal, direcao: "out", tipo: "sistema", texto: `${meuNome} criou o atendimento a partir de um potencial`, autor_nome: meuNome, status: "enviada" });
@@ -472,7 +501,7 @@ Deno.serve(async (req) => {
     }
     if (op === "potencialRemover") { if (!perm("removerPotenciais")) throw new Erro("sem permissão para remover potenciais", 403); await admin.from("atendimento_conversas").update({ potencial_removido: true }).eq("id", b.conversaId); return json({ ok: true }); }
     if (op === "recados") {
-      let q = admin.from("atendimento_conversas").select("id, canal, contato_nome, contato_id, status, atendente_nome, ultima_mensagem_em, ultima_mensagem_texto, ultima_direcao, bot_id, protocolo").eq("origem", "recado").order("ultima_mensagem_em", { ascending: false }).limit(500);
+      let q = filtrarBots(admin.from("atendimento_conversas").select("id, canal, contato_nome, contato_id, status, atendente_nome, ultima_mensagem_em, ultima_mensagem_texto, ultima_direcao, bot_id, protocolo").eq("origem", "recado")).order("ultima_mensagem_em", { ascending: false }).limit(500);
       if (b.de) q = q.gte("ultima_mensagem_em", b.de); if (b.ate) q = q.lte("ultima_mensagem_em", b.ate); if (b.canal) q = q.eq("canal", b.canal);
       const { data } = await q; let r = (data || []).map((c: any) => ({ ...c, situacao: c.status === "finalizado" ? "finalizado" : (c.atendente_nome ? "em atendimento" : "pendente") }));
       if (b.situacao) r = r.filter((x: any) => x.situacao === b.situacao); return json({ ok: true, data: r });
@@ -482,16 +511,17 @@ Deno.serve(async (req) => {
     if (op === "supLista") {
       if (!sup) throw new Erro("você não é supervisor", 403);
       let q = admin.from("atendimento_conversas").select("*").neq("status", "finalizado").order("ultima_mensagem_em", { ascending: false }).limit(300);
-      if (!gestao) q = q.in("departamento_id", supDeps); const { data } = await q; return json({ ok: true, data: data || [] });
+      if (!gestao) q = q.in("departamento_id", supDeps); q = filtrarBots(q); const { data } = await q; return json({ ok: true, data: data || [] });
     }
     if (op === "supMensagens") {
-      const c = await conversa(b.conversaId); if (!eSup(c.departamento_id)) throw new Erro("sem acesso", 403);
+      const c = await conversa(b.conversaId); if (!eSup(c.departamento_id) || !okBot(c.bot_id)) throw new Erro("sem acesso", 403);
       const { data } = await admin.from("atendimento_mensagens").select("*").eq("conversa_id", c.id).order("enviada_em", { ascending: false }).limit(Math.min(Number(b.limite) || 100, 500));
       return json({ ok: true, conversa: c, data: (data || []).reverse() });
     }
     if (op === "supAtribuir") {
-      const c = await conversa(b.conversaId); if (!eSup(c.departamento_id)) throw new Erro("sem acesso", 403);
-      const para = b.atendenteId || null; const nome = para ? (nomes[para] || "Atendente") : null;
+      const c = await conversa(b.conversaId); if (!eSup(c.departamento_id) || !okBot(c.bot_id)) throw new Erro("sem acesso", 403);
+      const para = b.atendenteId || null;
+      if (para && !podeReceber(config, para, c.bot_id)) throw new Erro(`${nomes[para] || "essa pessoa"} não atende esta instância`, 403); const nome = para ? (nomes[para] || "Atendente") : null;
       await admin.from("atendimento_conversas").update({ atendente_id: para, atendente_nome: nome, status: para ? "em_atendimento" : "aguardando", updated_at: new Date().toISOString() }).eq("id", c.id);
       await admin.from("atendimento_mensagens").insert({ conversa_id: c.id, canal: c.canal, direcao: "out", tipo: "sistema", texto: para ? `${meuNome} redistribuiu para ${nome}` : `${meuNome} devolveu para a fila`, autor_nome: meuNome, status: "enviada" });
       return json({ ok: true });

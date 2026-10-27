@@ -360,7 +360,8 @@ function permissoesDoUsuario(u){
     if(!salvo){ mesclado[moduloId] = padrao[moduloId]; return; }
     const abasPadrao = padrao[moduloId].abas || {};
     const abasSalvas = salvo.abas || {};
-    mesclado[moduloId] = { ativo: salvo.ativo, abas: { ...abasPadrao, ...abasSalvas } };
+    // ...salvo preserva campos extras do módulo (ex.: atendimento.papel / atendimento.bots)
+    mesclado[moduloId] = { ...salvo, ativo: salvo.ativo, abas: { ...abasPadrao, ...abasSalvas } };
   });
   return mesclado;
 }
@@ -390,12 +391,66 @@ function modulosChecklistHtml(permissoes){
         <label style="display:flex; align-items:center; gap:6px; font-weight:700; font-size:13px; text-transform:none; letter-spacing:0;">
           <input type="checkbox" class="chk-modulo" data-modulo="${moduloId}" ${ativo?'checked':''}> ${escapeHtml(mod.nome)}
         </label>
-        <div data-abasslot="${moduloId}" style="display:${ativo?'':'none'};">${abasChecklistHtml(moduloId, permissoes[moduloId])}</div>
+        <div data-abasslot="${moduloId}" style="display:${ativo?'':'none'};">${abasChecklistHtml(moduloId, permissoes[moduloId])}${moduloId==='atendimento'?atendimentoPerfilHtml(permissoes[moduloId]):''}</div>
       </div>
     `;
   }).join('');
 }
+/* ---- Atendimento: perfil (papel) e instâncias (bots) que a pessoa pode trabalhar ----
+   Gravado em users[].permissoes.atendimento.{papel,bots}. papel vazio = automático pelo nível
+   (diretoria→diretoria, gerente→gerente, demais→atendente). bots ausente = todas as instâncias. */
+const PAPEIS_ATD = [
+  ['atendente','Atendente — atende, recebe distribuição automática, vê as suas + fila'],
+  ['administrativo','Administrativo — inicia conversas, recebe só por transferência (nunca na distribuição)'],
+  ['gerente','Gerente/supervisor — vê todas as conversas, painel, CRM e relatórios (sem configurações)'],
+  ['diretoria','Diretoria — acesso total, inclusive configurações do Atendimento'],
+];
+let __botsAtd = null;
+function atendimentoPerfilHtml(p){
+  p = p || {};
+  const papel = PAPEIS_ATD.some(x=>x[0]===p.papel) ? p.papel : '';
+  const bots = Array.isArray(p.bots) ? p.bots : null;
+  return `
+    <div class="atd-perfil" style="margin:6px 0 2px 22px; display:flex; flex-direction:column; gap:8px;" data-atdbots="${escapeHtml(JSON.stringify(bots))}">
+      <label style="font-size:12px; text-transform:none; letter-spacing:0; font-weight:600;">Perfil no Atendimento
+        <select class="atd-papel" style="display:block; margin-top:4px; max-width:100%;">
+          <option value="" ${!papel?'selected':''}>Automático pelo nível (Diretoria → Diretoria · Gerente → Gerente · demais → Atendente)</option>
+          ${PAPEIS_ATD.map(([v,t])=>`<option value="${v}" ${papel===v?'selected':''}>${escapeHtml(t)}</option>`).join('')}
+        </select>
+      </label>
+      <div style="font-size:12px; font-weight:600;">Instâncias que pode atender <span class="muted" style="font-weight:400;">(Diretoria vê todas)</span></div>
+      <div class="atd-bots cargo-checks" style="flex-direction:column; align-items:flex-start; gap:6px;"><span class="muted">Carregando instâncias…</span></div>
+    </div>`;
+}
+async function carregarBotsAtd(container){
+  const box = container.querySelector('.atd-perfil'); if(!box) return;
+  const alvo = box.querySelector('.atd-bots');
+  if(!__botsAtd){
+    try{
+      const res = await fetch(SUPABASE_URL + '/functions/v1/atendimento-api', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, op:'botsLista' }) });
+      const r = await res.json();
+      if(r && r.ok) __botsAtd = r.bots || [];
+      else { alvo.innerHTML = `<span class="muted">Não foi possível carregar as instâncias (${escapeHtml((r&&r.error)||'erro')}). Ao salvar, as instâncias atuais são mantidas.</span>`; alvo.dataset.falhou = '1'; return; }
+    }catch(e){ alvo.innerHTML = '<span class="muted">Sem conexão para carregar as instâncias. Ao salvar, as instâncias atuais são mantidas.</span>'; alvo.dataset.falhou = '1'; return; }
+  }
+  let sel = null; try{ sel = JSON.parse(box.dataset.atdbots || 'null'); }catch(e){ sel = null; }
+  alvo.innerHTML = __botsAtd.length ? __botsAtd.map(b=>`<label><input type="checkbox" class="chk-atd-bot" value="${escapeHtml(b.id)}" ${(!Array.isArray(sel) || sel.includes(b.id))?'checked':''}> ${escapeHtml(b.nome)}${b.ativo===false?' <span class="muted">(inativa)</span>':''}</label>`).join('') : '<span class="muted">Nenhuma instância cadastrada no Atendimento.</span>';
+}
+function lerAtendimentoPerfil(container, base){
+  const box = container.querySelector('.atd-perfil'); if(!box) return base;
+  const out = { ...base };
+  const papel = box.querySelector('.atd-papel').value;
+  if(papel) out.papel = papel;
+  const alvo = box.querySelector('.atd-bots');
+  let anterior = null; try{ anterior = JSON.parse(box.dataset.atdbots || 'null'); }catch(e){}
+  const chks = [...alvo.querySelectorAll('.chk-atd-bot')];
+  if(alvo.dataset.falhou || !chks.length){ if(Array.isArray(anterior)) out.bots = anterior; return out; }
+  const marcados = chks.filter(c=>c.checked).map(c=>c.value);
+  if(marcados.length < chks.length) out.bots = marcados; // todas marcadas = sem restrição (inclui instâncias criadas depois)
+  return out;
+}
 function wirePermissoesChecklist(container){
+  carregarBotsAtd(container);
   container.querySelectorAll('.chk-modulo').forEach(chk=>{
     chk.addEventListener('change', ()=>{
       const slot = container.querySelector(`[data-abasslot="${chk.dataset.modulo}"]`);
@@ -413,6 +468,7 @@ function lerPermissoesDoFormulario(container){
       abas[chkAba.dataset.aba] = chkAba.checked;
     });
     permissoes[moduloId] = MODULOS_APP[moduloId].abas.length ? { ativo, abas } : { ativo };
+    if(moduloId==='atendimento') permissoes[moduloId] = lerAtendimentoPerfil(container, permissoes[moduloId]);
   });
   return permissoes;
 }

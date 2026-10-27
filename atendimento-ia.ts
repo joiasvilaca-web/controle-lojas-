@@ -121,7 +121,7 @@ async function botDe(id: string | null) {
   if (!id) return null; const { data } = await admin.from("atendimento_bots").select("*").eq("id", id).maybeSingle(); return data;
 }
 async function mensagensDe(convId: string, limite = 30, desde?: string) {
-  let q = admin.from("atendimento_mensagens").select("id, direcao, tipo, texto, autor_nome, autor_funcionario_id, enviada_em, externo_id, midia_nome").eq("conversa_id", convId).order("enviada_em", { ascending: false }).limit(limite);
+  let q = admin.from("atendimento_mensagens").select("id, direcao, tipo, texto, autor_nome, autor_funcionario_id, enviada_em, externo_id, midia_nome").eq("conversa_id", convId).neq("direcao", "interna").order("enviada_em", { ascending: false }).limit(limite); // notas internas da equipe nunca entram no contexto da IA (evita vazar para o cliente)
   if (desde) q = q.gte("enviada_em", desde);
   const { data } = await q; return (data || []).reverse();
 }

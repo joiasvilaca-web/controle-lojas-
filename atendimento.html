@@ -215,6 +215,11 @@ button,input,textarea,select{font-size:14px;}
 .bubble{max-width:68%;padding:10px 14px;border-radius:16px;font-size:14.5px;line-height:1.5;box-shadow:0 1px 2px rgba(40,20,35,.07);}
 .bubble.in{border-bottom-left-radius:5px;} .bubble.out{border-bottom-right-radius:5px;}
 .bubble.sis{font-size:12.5px;padding:5px 14px;box-shadow:none;}
+/* nota interna (nunca enviada ao cliente) */
+.bubble.interna{align-self:center;background:#fef9c3;color:#713f12;border:1.5px dashed #ca8a04;max-width:85%;box-shadow:none;}
+.bubble.interna .autor{color:#a16207;font-weight:700;}
+#btnInterna.on{background:#fef08a;border-color:#ca8a04;color:#713f12;}
+#texto.modo-interna{background:#fefce8;border:1.5px dashed #ca8a04;}
 .bubble .meta{font-size:11px;} .bubble .autor{font-size:12px;}
 .compose{padding:14px 20px 16px;border-top:1px solid var(--line);}
 .compose .linha{gap:10px;}
@@ -327,6 +332,7 @@ button,input,textarea,select{font-size:14px;}
         <button class="mbtn" id="btnInterno" title="Chat interno entre atendentes e departamentos"><span class="ic">🗨️</span>Interno<span class="n" id="n_chat"></span></button>
         <button class="mbtn" id="btnFerr" title="Agenda, retornos, programadas, potenciais, relatórios…"><span class="ic">🧰</span>Ferramentas<span class="n" id="n_ret"></span></button>
         <button class="mbtn" id="btnModelos" title="Mensagens prontas e etiquetas"><span class="ic">💬</span>Modelos</button>
+        <button class="mbtn" id="btnComentarios" title="Comentários do Instagram/Facebook e avaliações do Google"><span class="ic">💬</span>Comentários<span class="n" id="n_coment"></span></button>
         <button class="mbtn" id="btnAgenda" title="Falar com a Agenda — seus lembretes pessoais"><span class="ic">📅</span>Agenda</button>
         <button class="mbtn" id="btnConfig" style="display:none;" title="Bots, departamentos, equipe e respostas"><span class="ic">⚙️</span>Administrar</button>
       </div>
@@ -358,6 +364,7 @@ button,input,textarea,select{font-size:14px;}
         <div class="ia-bar" id="iaBar"><button class="btn btn-sm" id="btnIaSug" title="A IA escreve uma sugestão de resposta no campo (você revisa antes de enviar)">✨ Sugerir resposta</button><button class="btn btn-sm" id="btnIaRes" title="Resumo da conversa feito pela IA: interesse, etapa, produtos e próxima ação">📝 Resumo IA</button></div>
         <div class="linha">
           <button class="btn" id="btnAnexo" title="Enviar foto, áudio ou arquivo">📎</button>
+          <button class="btn" id="btnInterna" type="button" title="Nota interna: fica só no sistema, visível para a equipe — NUNCA vai para o cliente">🔒</button>
           <input type="file" id="arquivo" style="display:none;">
           <textarea id="texto" placeholder="Escreva a mensagem… (Enter envia · Shift+Enter quebra linha · / respostas rápidas)"></textarea>
           <button class="btn btn-accent" id="btnEnviar">Enviar</button>
@@ -551,7 +558,7 @@ function renderLista(){
 
 /* ================= CHAT ================= */
 async function abrirConversa(id){
-  if(!estado.atual || estado.atual.id!==id){ estado.limite = 80; iaDescartarSug(); }
+  if(!estado.atual || estado.atual.id!==id){ estado.limite = 80; iaDescartarSug(); if(estado.modoInterna) modoInterna(false); }
   const r = await api({ op:'mensagens', conversaId:id, limite: estado.limite });
   if(!r || r.error){ showToast(r && r.error || 'Erro ao abrir'); return; }
   estado.atual = r.conversa; estado.mensagens = r.data || []; estado.temAntigas = estado.mensagens.length >= estado.limite;
@@ -565,7 +572,8 @@ async function abrirConversa(id){
 function podeResponder(){
   const c = estado.atual; if(!c) return false;
   if(estado.gestao) return true;
-  return !c.atendente_id || c.atendente_id===estado.meuId;
+  if(c.atendente_id===estado.meuId) return true;
+  return !c.atendente_id && estado.papel!=='administrativo'; // administrativo só recebe por transferência
 }
 function renderHead(){
   const c = estado.atual;
@@ -573,7 +581,7 @@ function renderHead(){
   document.getElementById('chNome').textContent = nomeConv(c);
   document.getElementById('chSub').textContent = `${fmtTel(c.contato_id)} · ${statusLabel(c)}${c.protocolo?' · #'+c.protocolo:''}${c.setor?' · '+c.setor:''}${(estado.bots.length>1&&c.bot_id&&estado.bots.find(x=>x.id===c.bot_id))?' · 🤖 '+estado.bots.find(x=>x.id===c.bot_id).nome:''}${c.cliente_id?' · 👤 cliente vinculado':''}`;
   const a = [];
-  if(c.status!=='finalizado' && (!c.atendente_id || (c.atendente_id!==estado.meuId && estado.gestao))) a.push(`<button class="btn btn-sm btn-accent" data-a="assumir">✋ Assumir</button>`);
+  if(c.status!=='finalizado' && estado.papel!=='administrativo' && (!c.atendente_id || (c.atendente_id!==estado.meuId && estado.gestao))) a.push(`<button class="btn btn-sm btn-accent" data-a="assumir">✋ Assumir</button>`);
   if(c.status!=='finalizado') a.push(`<button class="btn btn-sm" data-a="transferir">↪ Transferir</button>`);
   a.push(`<button class="btn btn-sm" data-a="crm">📇 CRM</button>`);
   a.push(`<button class="btn btn-sm" data-a="cliente">👤 Cliente</button>`);
@@ -591,6 +599,7 @@ function renderHead(){
   document.getElementById('rapidas').querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=> usarModelo(estado.respostas[b.dataset.i])));
 }
 function bubbleHtml(m){
+  if(m.direcao==='interna' || m.tipo==='interna') return `<div class="bubble interna" title="Nota interna — o cliente não vê"><div class="autor">🔒 Nota interna · ${escapeHtml(m.autor_nome||'')}</div>${linkar(escapeHtml(m.texto||'')).replace(/\n/g,'<br>')}<div class="meta">${fmtHora(m.enviada_em)}</div></div>`;
   if(m.tipo==='sistema') return `<div class="bubble sis">${escapeHtml(m.texto||'')}</div>`;
   const cls = m.direcao==='out' ? 'out' : 'in';
   let corpo = '';
@@ -605,7 +614,7 @@ function bubbleHtml(m){
   }
   if(m.texto) corpo += linkar(escapeHtml(m.texto));
   const st = m.direcao==='out' ? (m.status==='lida'?' <span class="lida" title="Lida">✓✓</span>':m.status==='entregue'?' ✓✓':m.status==='erro'?' ⚠️':' ✓') : '';
-  return `<div class="bubble ${cls}">${m.direcao==='out'&&m.autor_nome?`<div class="autor">${escapeHtml(m.autor_nome)}</div>`:''}${corpo}<div class="meta">${fmtHora(m.enviada_em)}${st}</div></div>`;
+  return `<div class="bubble ${cls}" data-mid="${escapeHtml(m.id||'')}">${m.direcao==='out'&&m.autor_nome?`<div class="autor">${escapeHtml(m.autor_nome)}</div>`:''}${typeof ctxCardHtml==='function'?ctxCardHtml(m):''}${corpo}<div class="meta">${fmtHora(m.enviada_em)}${st}</div></div>`;
 }
 async function renderMsgs(scroll){
   const wrap = document.getElementById('msgs');
@@ -613,6 +622,7 @@ async function renderMsgs(scroll){
   estado.mensagens.forEach(m=>{ const k = m.enviada_em ? new Date(m.enviada_em).toDateString() : dia; if(k!==dia){ dia = k; html += `<div class="sep-dia">${rotuloDia(m.enviada_em)}</div>`; } html += bubbleHtml(m); });
   wrap.innerHTML = html;
   const ba = document.getElementById('btnAntigas'); if(ba) ba.onclick = carregarAntigas;
+  if(typeof socialCtxRender==='function') socialCtxRender();
   if(scroll) wrap.scrollTop = wrap.scrollHeight;
   wrap.querySelectorAll('[data-path]').forEach(async el=>{
     const path = el.dataset.path; let url = urlsMidia[path];
@@ -672,7 +682,10 @@ async function acao(a){
 function abrirModal(html){ document.getElementById('modalBox').innerHTML = html; document.getElementById('modalBg').classList.add('show'); }
 function fecharModal(){ document.getElementById('modalBg').classList.remove('show'); document.getElementById('modalBox').classList.remove('largo'); }
 function modalTransferir(){
-  const funcs = (config.funcionarios||[]).filter(f=>f.id!==estado.meuId);
+  const botConv = estado.atual && estado.atual.bot_id;
+  const acesso = {}; (estado.equipeAcesso||[]).forEach(x=> acesso[x.id] = x);
+  // só quem tem o Atendimento ligado e a instância desta conversa liberada (regra conferida também no servidor)
+  const funcs = (config.funcionarios||[]).filter(f=>f.id!==estado.meuId && !f.inativo && f.status!=='inativo').filter(f=>{ const x = acesso[f.id]; if(!x) return true; if(x.ativo===false) return false; return !x.bots || (!!botConv && x.bots.includes(botConv)); });
   abrirModal(`<h2>Transferir conversa</h2>
     <div class="field"><label>Para o atendente</label><select id="tAt"><option value="">— devolver pra fila —</option>${funcs.map(f=>`<option value="${f.id}">${escapeHtml((f.apelido||'').trim()||f.nome)}</option>`).join('')}</select></div>
     <div class="field"><label>Departamento</label><select id="tDep"><option value="">— manter / nenhum —</option>${estado.departamentos.filter(d=>d.ativo&&(!d.bot_id||!estado.atual.bot_id||d.bot_id===estado.atual.bot_id)).map(d=>`<option value="${d.id}" ${estado.atual.departamento_id===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('')}</select></div>
@@ -704,8 +717,9 @@ function modalCliente(){
     <div class="field"><label>Buscar cliente (nome, telefone ou CPF)</label><input id="cBusca" placeholder="Digite pelo menos 2 letras" value="${escapeHtml(fmtTel(estado.atual.contato_id).replace(/\D/g,'').slice(-8))}"></div>
     <div id="cLista" class="muted">Buscando…</div>
     <div class="field" style="margin-top:10px;"><label>Ou só ajustar o nome exibido</label><input id="cNome" value="${escapeHtml(estado.atual.contato_nome||'')}"></div>
-    <div class="rodape"><button class="btn" id="mCancel">Fechar</button><button class="btn btn-accent" id="mNome">Salvar nome</button></div>`);
+    <div class="rodape"><button class="btn" id="mCancel">Fechar</button><button class="btn" id="mCadCli" title="Criar o cliente no cadastro geral e vincular a esta conversa">➕ Cadastrar cliente</button><button class="btn btn-accent" id="mNome">Salvar nome</button></div>`);
   document.getElementById('mCancel').onclick = fecharModal;
+  document.getElementById('mCadCli').onclick = ()=> modalCadastrarCliente();
   document.getElementById('mNome').onclick = async ()=>{ const r = await api({ op:'vincularCliente', conversaId: estado.atual.id, clienteId: estado.atual.cliente_id||null, nome: document.getElementById('cNome').value.trim() }); if(r&&r.ok){ fecharModal(); await abrirConversa(estado.atual.id); carregarLista(true);} };
   const buscar = async ()=>{
     const termo = document.getElementById('cBusca').value.trim(); const lista = document.getElementById('cLista');
@@ -716,6 +730,48 @@ function modalCliente(){
     lista.querySelectorAll('button').forEach(b=> b.onclick = async ()=>{ const r2 = await api({ op:'vincularCliente', conversaId: estado.atual.id, clienteId: b.dataset.id, nome: b.dataset.nome }); if(r2&&r2.ok){ fecharModal(); showToast('Cliente vinculado.'); await abrirConversa(estado.atual.id); carregarLista(true);} });
   };
   let t; document.getElementById('cBusca').addEventListener('input', ()=>{ clearTimeout(t); t=setTimeout(buscar, 350); }); buscar();
+}
+/* ➕ Cadastrar cliente direto da conversa (op clienteCadastrar: confere duplicidade por telefone/CPF no servidor) */
+function mascaraTel(v){ let d = String(v||'').replace(/\D/g,''); if(d.length>11 && d.startsWith('55')) d = d.slice(2); d = d.slice(0,11);
+  if(d.length<=2) return d ? '('+d : ''; if(d.length<=6) return `(${d.slice(0,2)}) ${d.slice(2)}`; if(d.length<=10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`; return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`; }
+function mascaraCpf(v){ const d = String(v||'').replace(/\D/g,'').slice(0,11); return d.replace(/^(\d{3})(\d)/,'$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/,'$1.$2.$3').replace(/\.(\d{3})(\d)/,'.$1-$2'); }
+function modalCadastrarCliente(){
+  const c = estado.atual; if(!c) return;
+  const telIni = c.canal==='whatsapp' ? mascaraTel(c.contato_id) : '';
+  abrirModal(`<h2>➕ Cadastrar cliente</h2>
+    <p class="muted" style="margin-top:0">Cria o cliente no cadastro geral e já vincula a esta conversa. Se o telefone ou CPF já existir, mostramos o cadastro para você vincular.</p>
+    <div class="field"><label>Nome completo *</label><input id="ccNome" value="${escapeHtml(maiu(c.contato_nome||''))}" style="text-transform:uppercase;"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;"><div class="field" style="flex:1;min-width:160px;"><label>Telefone (com DDD)</label><input id="ccTel" inputmode="numeric" placeholder="(32) 99999-9999" value="${escapeHtml(telIni)}"></div>
+    <div class="field" style="flex:1;min-width:160px;"><label>CPF (opcional)</label><input id="ccCpf" inputmode="numeric" placeholder="000.000.000-00"></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;"><div class="field" style="flex:1;min-width:160px;"><label>E-mail (opcional)</label><input id="ccEmail" type="email"></div>
+    <div class="field" style="flex:1;min-width:140px;"><label>Aniversário (opcional)</label><input id="ccNasc" type="date"></div></div>
+    <div class="field"><label>Cidade (opcional)</label><input id="ccCid" style="text-transform:uppercase;"></div>
+    <div id="ccDup"></div>
+    <div class="rodape"><button class="btn" id="ccVoltar">Voltar</button><button class="btn btn-accent" id="ccOk">Cadastrar e vincular</button></div>`);
+  const tel = document.getElementById('ccTel'), cpf = document.getElementById('ccCpf');
+  tel.addEventListener('input', ()=>{ tel.value = mascaraTel(tel.value); });
+  cpf.addEventListener('input', ()=>{ cpf.value = mascaraCpf(cpf.value); });
+  document.getElementById('ccVoltar').onclick = modalCliente;
+  const vincular = async (id, nome)=>{ const r2 = await api({ op:'vincularCliente', conversaId: c.id, clienteId:id, nome }); if(r2&&r2.ok){ fecharModal(); showToast('Cliente vinculado.'); await abrirConversa(c.id); carregarLista(true); } else showToast((r2&&r2.error)||'Erro'); };
+  document.getElementById('ccOk').onclick = async ()=>{
+    const nome = maiu(document.getElementById('ccNome').value.trim()), tdig = tel.value.replace(/\D/g,''), cdig = cpf.value.replace(/\D/g,'');
+    if(nome.length<3){ showToast('Informe o nome do cliente.'); return; }
+    if(tdig && tdig.length!==10 && tdig.length!==11){ showToast('Telefone incompleto: (XX) XXXXX-XXXX.'); return; }
+    if(cdig && cdig.length!==11){ showToast('CPF incompleto.'); return; }
+    if(!tdig && !cdig){ showToast('Informe o telefone ou o CPF.'); return; }
+    const b = document.getElementById('ccOk'); b.disabled = true;
+    const r = await api({ op:'clienteCadastrar', conversaId:c.id, nome, telefone:tel.value, cpf:cpf.value, email:document.getElementById('ccEmail').value.trim(), aniversario:document.getElementById('ccNasc').value, cidade:maiu(document.getElementById('ccCid').value.trim()) });
+    b.disabled = false;
+    if(r && r.ok){ fecharModal(); showToast('Cliente cadastrado e vinculado.'); await abrirConversa(c.id); carregarLista(true); return; }
+    if(r && r.duplicados && r.duplicados.length){
+      const box = document.getElementById('ccDup');
+      box.innerHTML = `<div class="muted" style="margin:6px 0;color:#b45309;font-weight:600;">⚠ Já existe cadastro com este telefone/CPF — vincule em vez de duplicar:</div>` + r.duplicados.map(d=>`<div class="res-item"><div><div class="t">${escapeHtml(d.nome)}</div><div class="x">${escapeHtml(d.telefone||'')} ${escapeHtml(d.cpf||'')}</div></div><button class="btn btn-sm btn-accent" data-id="${escapeHtml(d.id)}" data-nome="${escapeHtml(d.nome)}">Vincular</button></div>`).join('');
+      box.querySelectorAll('button').forEach(x=> x.onclick = ()=> vincular(x.dataset.id, x.dataset.nome));
+      return;
+    }
+    showToast((r && r.error) || 'Erro ao cadastrar');
+  };
+  document.getElementById('ccNome').focus();
 }
 function modalNova(){
   abrirModal(`<h2>Nova conversa</h2>
@@ -1401,6 +1457,12 @@ async function enviarTexto(){
   const t = document.getElementById('texto'); const texto = t.value.trim(); if(!texto || !estado.atual) return;
   const sugIA = (estado.iaSug && estado.iaSug.conversaId===estado.atual.id) ? estado.iaSug : null;
   const btn = document.getElementById('btnEnviar'); btn.disabled = true; t.value='';
+  if(estado.modoInterna){
+    const ri = await api({ op:'notaInterna', conversaId: estado.atual.id, texto }); btn.disabled = false;
+    if(!ri || !ri.ok){ showToast((ri && ri.error) || 'Não salvou a nota'); t.value = texto; return; }
+    await atualizarMensagens(); if(ri.mensagem && !estado.mensagens.some(m=>m.id===ri.mensagem.id)){ estado.mensagens.push(ri.mensagem); renderMsgs(true); }
+    showToast('🔒 Nota interna salva (o cliente não vê).'); return;
+  }
   const r = await ext({ op:'enviarTexto', conversaId: estado.atual.id, texto });
   btn.disabled = false;
   if(r && r.error==='JANELA_24H'){ t.value = texto; modalTemplate({ conversaId: estado.atual.id }); return; }
@@ -1456,7 +1518,7 @@ function usarSugestao(i){
 /* ================= STATUS / RESUMO ================= */
 async function carregarStatus(){
   const r = await api({ op:'status' }); if(!r || r.error) return;
-  estado.gestao = !!r.gestao; estado.meuId = r.meuId; estado.meuNome = r.meuNome; estado.setores = r.setores||[]; estado.respostas = r.respostasRapidas||[]; estado.instancias = r.instancias||{};
+  estado.gestao = !!r.gestao; estado.admin = r.admin===undefined ? !!r.gestao : !!r.admin; estado.papel = r.papel || (r.gestao?'gerente':'atendente'); estado.botsPermitidos = r.botsPermitidos||null; estado.equipeAcesso = r.equipeAcesso||[]; estado.meuId = r.meuId; estado.meuNome = r.meuNome; estado.setores = r.setores||[]; estado.respostas = r.respostasRapidas||[]; estado.instancias = r.instancias||{};
   estado.bots = r.bots||[]; estado.departamentos = r.departamentos||[]; estado.atendentes = r.atendentes||[]; estado.funcionarios = r.funcionarios||[]; estado.meuReg = r.meuReg||null;
   renderFiltrosBotDep(); renderOnline(); carregarCatalogo();
   const inst = Object.entries(estado.instancias);
@@ -1468,7 +1530,7 @@ async function carregarStatus(){
   estado.variosCanais = canais.size > 1;
   document.getElementById('filtroCanal').style.display = estado.variosCanais ? '' : 'none';
   if(!estado.variosCanais && estado.canal){ estado.canal = ''; document.getElementById('filtroCanal').value = ''; }
-  document.getElementById('btnConfig').style.display = estado.gestao ? '' : 'none';
+  document.getElementById('btnConfig').style.display = estado.admin ? '' : 'none'; // configurações: só diretoria (gerente vê painel/CRM/relatórios)
   if(estado.gestao){
     api({ op:'resumo', botId: estado.botId || undefined }).then(s=>{
     if(s && s.ok){ const box = document.getElementById('resumo'); box.style.display='flex'; box.innerHTML = `<span>Fila: <b>${s.porStatus.aguardando||0}</b></span><span>Em atendimento: <b>${s.porStatus.em_atendimento||0}</b></span><span>Não lidas: <b>${s.naoLidas}</b></span>`; }
@@ -1578,6 +1640,15 @@ document.getElementById('texto').addEventListener('paste', e=>{
 document.getElementById('btnSom').addEventListener('click', alternarSino); renderSino();
 document.getElementById('filtroCanal').addEventListener('change', e=>{ estado.canal = e.target.value; carregarLista(); });
 document.getElementById('btnAnexo').addEventListener('click', ()=> document.getElementById('arquivo').click());
+/* Nota interna: alterna o campo de mensagem entre "enviar ao cliente" e "nota só da equipe" */
+function modoInterna(on){
+  estado.modoInterna = !!on; const b = document.getElementById('btnInterna'), t = document.getElementById('texto'), e = document.getElementById('btnEnviar');
+  b.classList.toggle('on', estado.modoInterna); t.classList.toggle('modo-interna', estado.modoInterna);
+  b.textContent = estado.modoInterna ? '🔒 Interna' : '🔒';
+  t.placeholder = estado.modoInterna ? 'Nota interna — só a equipe vê, NÃO vai para o cliente (Enter salva)' : 'Escreva a mensagem… (Enter envia · Shift+Enter quebra linha · / respostas rápidas)';
+  e.textContent = estado.modoInterna ? 'Salvar nota' : 'Enviar';
+}
+document.getElementById('btnInterna').addEventListener('click', ()=>{ modoInterna(!estado.modoInterna); document.getElementById('texto').focus(); });
 document.getElementById('arquivo').addEventListener('change', e=>{ enviarArquivo(e.target.files[0]); e.target.value=''; });
 document.getElementById('btnVoltarLista').addEventListener('click', ()=> document.getElementById('app').classList.remove('ver-chat'));
 document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') fecharModal(); });
@@ -1825,7 +1896,7 @@ function modalFerr(aba){
   if(souSup()) abas.push(['sup','👁 Supervisão']);
   abas.push(['rel','📑 Relatórios']);
   if(souSup()) abas.push(['bl','🚫 Blacklist']);
-  if(estado.gestao) abas.push(['campos','🧩 Campos']);
+  if(estado.admin) abas.push(['campos','🧩 Campos']);
   ferrAba = aba || (abas.some(x=>x[0]===ferrAba) ? ferrAba : abas[0][0]);
   abrirModal(`<h2>Ferramentas</h2><div class="abas" id="ftAbas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===ferrAba?'on':''}">${t}</button>`).join('')}</div><div id="ftCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
   document.getElementById('modalBox').classList.add('largo');
@@ -2254,6 +2325,7 @@ async function notasMediasUi(tipo){
 
 document.getElementById('btnFerr').addEventListener('click', ()=> modalFerr());
 </script>
+<script src="atendimento-social.js"></script>
 <div id="bannerInt"></div>
 </body>
 </html>

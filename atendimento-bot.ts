@@ -1,4 +1,4 @@
-// atendimento-bot v6 (v6: Agente de IA fora do horário via atendimento-ia responderAuto, resumo automático ao finalizar, canal Messenger) v5 (v5: provedor duplo Evolution/Cloud API, menus interativos, blacklist, carteira, protocolo sequencial, nota 0-10, motivo/contato finaliza, agrupamento, recado, resolve bot_id) v3 (v3: distribuição entre online, aviso de atendente, KPIs, catálogo de etiquetas/modelos; v2: ops com sessão) — bot de pré-atendimento: boas-vindas, menu por localidade/departamento,
+// atendimento-bot v7 (v7: distribuição/carteira respeitam o perfil do DP — administrativo nunca recebe automático; instâncias liberadas) v6 (v6: Agente de IA fora do horário via atendimento-ia responderAuto, resumo automático ao finalizar, canal Messenger) v5 (v5: provedor duplo Evolution/Cloud API, menus interativos, blacklist, carteira, protocolo sequencial, nota 0-10, motivo/contato finaliza, agrupamento, recado, resolve bot_id) v3 (v3: distribuição entre online, aviso de atendente, KPIs, catálogo de etiquetas/modelos; v2: ops com sessão) — bot de pré-atendimento: boas-vindas, menu por localidade/departamento,
 // palavras-chave, fora do expediente (recado), opção inválida, enquete de satisfação.
 // Chamado pelo webhook a cada mensagem recebida ({canal, instancia, contato_id}) e pela
 // atendimento-api ({acao:"finalizou", conversa_id}). verify_jwt false — protegido por x-bot-token.
@@ -205,6 +205,24 @@ async function rotear(conv: any, bot: any, f: any, deps: any[], dep: any, est: a
   }
   await enviar(conv, bot, tpl(f.msgs.transferindo, v));
 }
+/* v7: perfil no Atendimento (DP › Perfis de Acesso: permissoes.atendimento.papel/bots).
+   Distribuição automática e carteira NUNCA vão para "administrativo" (só recebe por transferência)
+   nem para quem não tem a instância (bot) liberada ou está com o módulo Atendimento desligado. */
+const PAPEIS = ["atendente", "administrativo", "gerente", "diretoria"];
+function perfilAtd(user: any) {
+  const p = (user && user.permissoes && user.permissoes.atendimento) || {};
+  const explicito = PAPEIS.includes(p.papel);
+  const papel: string = explicito ? p.papel : user.nivel === "diretoria" ? "diretoria" : user.nivel === "gerente" ? "gerente" : "atendente";
+  const bots: string[] | null = papel === "diretoria" ? null : (Array.isArray(p.bots) ? p.bots.map(String) : null);
+  return { papel, bots, supervisao: papel === "gerente" || papel === "diretoria", admin: papel === "diretoria" || (!explicito && user.nivel === "gerente") };
+}
+async function configGeral(): Promise<any> { const { data } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle(); return (data && data.payload) || {}; }
+function recebeAutomatico(cfg: any, fid: string, botId: string | null): boolean {
+  const u = (cfg.users || []).find((x: any) => (x.funcionarioId || x.id) === fid); if (!u) return true; // sem login: comportamento antigo
+  const pa = u.permissoes && u.permissoes.atendimento; if (pa && pa.ativo === false) return false;
+  const pf = perfilAtd(u); if (pf.papel === "administrativo") return false;
+  return !pf.bots || (!!botId && pf.bots.includes(botId));
+}
 async function nomesFuncionarios(): Promise<Record<string, string>> {
   const { data } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
   const out: Record<string, string> = {};
@@ -214,7 +232,8 @@ async function nomesFuncionarios(): Promise<Record<string, string>> {
 // atendente online do departamento, no expediente, com menos conversas em andamento
 async function escolherAtendente(dep: any, bot: any): Promise<{ id: string; nome: string } | null> {
   const { data: ats } = await admin.from("atendimento_atendentes").select("*").eq("online", true);
-  const cand = (ats || []).filter((a: any) => Array.isArray(a.departamentos) && a.departamentos.includes(dep.id) && dentroDoHorario(a.horario || dep.horario || bot.horario));
+  const cfg = await configGeral();
+  const cand = (ats || []).filter((a: any) => Array.isArray(a.departamentos) && a.departamentos.includes(dep.id) && dentroDoHorario(a.horario || dep.horario || bot.horario) && recebeAutomatico(cfg, a.funcionario_id, bot.id));
   if (!cand.length) return null;
   const { data: abertas } = await admin.from("atendimento_conversas").select("atendente_id").eq("status", "em_atendimento").not("atendente_id", "is", null);
   const carga: Record<string, number> = {}; for (const c of abertas || []) carga[c.atendente_id] = (carga[c.atendente_id] || 0) + 1;
@@ -257,7 +276,7 @@ async function processar(canal: string, instancia: string, contatoId: string) {
   // carteira: contato fixo de uma atendente vai direto para ela
   if (!conv.atendente_id && conv.status !== "em_atendimento" && !(conv.bot_estado && conv.bot_estado.etapa === "enquete")) {
     const { data: ct } = await admin.from("atendimento_contatos").select("atendente_id, atendente_nome, departamento_id").eq("canal", canal).eq("telefone", contatoId).eq("carteira", true).not("atendente_id", "is", null).maybeSingle();
-    if (ct) {
+    if (ct && recebeAutomatico(await configGeral(), ct.atendente_id, conv.bot_id)) {
       await admin.from("atendimento_conversas").update({ atendente_id: ct.atendente_id, atendente_nome: ct.atendente_nome, status: "em_atendimento", departamento_id: ct.departamento_id || conv.departamento_id, updated_at: new Date().toISOString() }).eq("id", conv.id);
       await admin.from("atendimento_mensagens").insert({ conversa_id: conv.id, canal: conv.canal, direcao: "out", tipo: "sistema", texto: `Carteira: direcionada para ${ct.atendente_nome || "atendente"}`, autor_nome: "🤖 Bot", status: "enviada" });
       conv.atendente_id = ct.atendente_id; conv.atendente_nome = ct.atendente_nome; conv.status = "em_atendimento";
@@ -414,9 +433,9 @@ Deno.serve(async (req) => {
       const { data: cfgRow } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
       const user = ((cfgRow && cfgRow.payload && cfgRow.payload.users) || []).find((u: any) => sessaoValida(u, b.senha));
       if (!user) return json({ error: "não autorizado" }, 401);
-      const gestao = user.nivel === "diretoria" || user.nivel === "gerente";
+      const pf = perfilAtd(user); const gestao = pf.supervisao;
       if (b.op === "fluxoSalvar") {
-        if (!gestao) return json({ error: "só diretoria/gerente" }, 403);
+        if (!pf.admin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
         const { data: bt } = await admin.from("atendimento_bots").select("config").eq("id", b.botId).maybeSingle(); if (!bt) return json({ error: "bot não encontrado" }, 404);
         const fluxo = fluxoLimpo(b.fluxo || {});
         const { error } = await admin.from("atendimento_bots").update({ config: { ...(bt.config || {}), fluxo }, updated_at: new Date().toISOString() }).eq("id", b.botId); if (error) throw error;
