@@ -238,6 +238,18 @@ button,input,textarea,select{font-size:14px;}
 @media(max-width:760px){.voltar-lista{display:inline-flex!important;}}
 @media(max-width:760px){.lista{width:100%;}.msgs{padding:14px;}.modal{padding:20px;}.menu-grid{grid-template-columns:repeat(4,1fr);}.bubble{max-width:90%;}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* ===== Agente de IA ===== */
+.ia-bar{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
+.ia-bar .btn{min-height:30px;padding:4px 11px;font-size:12.5px;border-radius:999px;}
+.compose textarea.ia-sug{border-color:#9b5de5;background:#f7f1fd;}
+.ia-res{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13.5px;margin-bottom:12px;}
+.ia-res b{color:var(--ink-soft);font-size:12px;text-transform:uppercase;letter-spacing:.3px;padding-top:2px;}
+.ia-k{display:block;}
+.ia-k .x{white-space:pre-wrap;max-height:4.5em;overflow:hidden;}
+.ia-pill{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:1px 8px;margin-left:6px;background:var(--surface-2);color:var(--ink-soft);}
+.ia-pill.ap{background:#efe4fb;color:#6b21a8;} .ia-pill.off{background:var(--danger-soft);color:var(--danger);}
+.ia-sw{display:flex;gap:8px;align-items:flex-start;font-weight:400!important;margin-bottom:8px;font-size:13.5px;}
+.ia-sw span{display:block;} .ia-sw small{color:var(--ink-faint);display:block;}
 </style>
 </head>
 <body>
@@ -253,7 +265,7 @@ button,input,textarea,select{font-size:14px;}
       </div>
       <input class="busca" id="busca" placeholder="Buscar por nome ou número…">
       <div style="display:flex;gap:6px;margin-top:6px;"><select class="busca" id="filtroBot" style="display:none;"><option value="">Todos os bots</option></select><select class="busca" id="filtroDep" style="display:none;"><option value="">Todos os departamentos</option></select></div>
-      <select class="busca" id="filtroCanal" style="display:none;margin-top:6px;"><option value="">Todos os canais</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option></select>
+      <select class="busca" id="filtroCanal" style="display:none;margin-top:6px;"><option value="">Todos os canais</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option><option value="messenger">Messenger</option></select>
       <button class="btn btn-accent" id="btnNova" style="width:100%;margin-top:8px;">➕ Nova conversa</button>
       <div class="menu-grid">
         <button class="mbtn" id="btnPainel" style="display:none;" title="Painel de acompanhamento de todas as conversas"><span class="ic">📊</span>Painel</button>
@@ -290,6 +302,7 @@ button,input,textarea,select{font-size:14px;}
       <div class="compose" id="compose">
         <div class="rapidas" id="rapidas"></div>
         <div class="sugestoes" id="sugestoes" style="display:none;"></div>
+        <div class="ia-bar" id="iaBar"><button class="btn btn-sm" id="btnIaSug" title="A IA escreve uma sugestão de resposta no campo (você revisa antes de enviar)">✨ Sugerir resposta</button><button class="btn btn-sm" id="btnIaRes" title="Resumo da conversa feito pela IA: interesse, etapa, produtos e próxima ação">📝 Resumo IA</button></div>
         <div class="linha">
           <button class="btn" id="btnAnexo" title="Enviar foto, áudio ou arquivo">📎</button>
           <input type="file" id="arquivo" style="display:none;">
@@ -391,7 +404,7 @@ function alternarSino(){
   else showToast('Avisos de mensagem nova desligados.');
 }
 function botChip(c){ if(estado.bots.length<2||!c.bot_id) return ''; const b=estado.bots.find(x=>x.id===c.bot_id); return b?`<span class="tagchip" title="Bot">🤖 ${escapeHtml(b.nome)}</span>`:''; }
-function canalChip(c){ if(c.canal==='instagram') return '<span class="tagchip" title="Instagram">📷 IG</span>'; return estado.variosCanais ? '<span class="tagchip" title="WhatsApp">WA</span>' : ''; }
+function canalChip(c){ if(c.canal==='instagram') return '<span class="tagchip" title="Instagram">📷 IG</span>'; if(c.canal==='messenger') return '<span class="tagchip" title="Facebook Messenger">💬 FB</span>'; return estado.variosCanais ? '<span class="tagchip" title="WhatsApp">WA</span>' : ''; }
 function esperaHtml(c){
   if(c.status==='finalizado' || c.ultima_direcao!=='in' || !c.ultima_mensagem_em) return '';
   const min = Math.floor((Date.now() - new Date(c.ultima_mensagem_em).getTime())/60000); if(!(min>=5)) return '';
@@ -456,7 +469,7 @@ function renderLista(){
 
 /* ================= CHAT ================= */
 async function abrirConversa(id){
-  if(!estado.atual || estado.atual.id!==id) estado.limite = 80;
+  if(!estado.atual || estado.atual.id!==id){ estado.limite = 80; iaDescartarSug(); }
   const r = await api({ op:'mensagens', conversaId:id, limite: estado.limite });
   if(!r || r.error){ showToast(r && r.error || 'Erro ao abrir'); return; }
   estado.atual = r.conversa; estado.mensagens = r.data || []; estado.temAntigas = estado.mensagens.length >= estado.limite;
@@ -491,6 +504,7 @@ function renderHead(){
   const bloq = document.getElementById('avisoBloqueado');
   if(!podeResponder()){ bloq.style.display='block'; bloq.textContent = `Esta conversa está com ${c.atendente_nome||'outro atendente'}. Só ele(a) ou a gestão responde.`; document.getElementById('compose').style.display='none'; }
   else { bloq.style.display='none'; document.getElementById('compose').style.display='block'; }
+  iaBarRender(c);
   document.getElementById('rapidas').innerHTML = estado.respostas.map((r,i)=>`<button data-i="${i}" title="${escapeHtml(r.texto)}">${escapeHtml(r.titulo)}</button>`).join('');
   document.getElementById('rapidas').querySelectorAll('button').forEach(b=> b.addEventListener('click', ()=> usarModelo(estado.respostas[b.dataset.i])));
 }
@@ -683,16 +697,16 @@ function resumoHorario(h){ if(!h||!h.dias) return 'sem restrição (24h)'; const
 let adminAba = 'bots';
 function modalAdmin(aba){
   adminAba = aba || adminAba;
-  const abas = [['bots','🤖 Bots e canais'],['fluxo','💬 Mensagens do bot'],['deps','🏷 Departamentos'],['equipe','👥 Equipe']];
+  const abas = [['bots','🤖 Bots e canais'],['fluxo','💬 Mensagens do bot'],['ia','✨ Agente de IA'],['deps','🏷 Departamentos'],['equipe','👥 Equipe']];
   const box = document.getElementById('modalBox'); box.classList.add('largo');
   abrirModal(`<h2>Administrar Atendimento</h2><div class="abas" id="abAbas">${abas.map(([k,t])=>`<button data-k="${k}" class="${k===adminAba?'on':''}">${t}</button>`).join('')}</div><div id="abCorpo"></div><div class="rodape"><button class="btn" id="mFechar">Fechar</button></div>`);
   document.getElementById('modalBox').classList.add('largo');
   document.getElementById('mFechar').onclick = ()=>{ document.getElementById('modalBox').classList.remove('largo'); fecharModal(); };
   document.querySelectorAll('#abAbas button').forEach(b=> b.onclick = ()=> modalAdmin(b.dataset.k));
-  if(adminAba==='bots') abaBots(); else if(adminAba==='fluxo') abaFluxo(); else if(adminAba==='deps') abaDeps(); else if(adminAba==='equipe') abaEquipe(); else abaRespostas();
+  if(adminAba==='bots') abaBots(); else if(adminAba==='fluxo') abaFluxo(); else if(adminAba==='ia') abaIA(); else if(adminAba==='deps') abaDeps(); else if(adminAba==='equipe') abaEquipe(); else abaRespostas();
 }
 async function recarregarAdmin(){ await carregarStatus(); modalAdmin(adminAba); }
-function canaisTxt(b){ return b.canais.map(c=> c.tipo==='whatsapp' ? '📱 '+(((estado.instancias[c.instancia]||{}).numero)?'+'+estado.instancias[c.instancia].numero:c.instancia) : c.tipo==='instagram' ? '📷 '+(c.usuario||c.ig_id) : '🌐 '+c.url).join(' · ') || 'sem canais'; }
+function canaisTxt(b){ return b.canais.map(c=> c.tipo==='whatsapp' ? '📱 '+(((estado.instancias[c.instancia]||{}).numero)?'+'+estado.instancias[c.instancia].numero:c.instancia) : c.tipo==='instagram' ? '📷 '+(c.usuario||c.ig_id) : c.tipo==='messenger' ? '💬 '+(c.nome||('página '+c.page_id)) : '🌐 '+c.url).join(' · ') || 'sem canais'; }
 function abaBots(){
   const c = document.getElementById('abCorpo');
   c.innerHTML = `<p class="muted" style="margin-top:0">Cada bot reúne os canais de um negócio/loja: número de WhatsApp, Instagram e site. Crie quantos precisar.</p>` +
@@ -703,7 +717,7 @@ function abaBots(){
 }
 function formBot(b){
   b = b || { nome:'', descricao:'', ativo:true, canais:[], horario:null };
-  const wa = b.canais.filter(x=>x.tipo==='whatsapp').map(x=>x.instancia), ig = b.canais.find(x=>x.tipo==='instagram')||{}, site = b.canais.find(x=>x.tipo==='site')||{};
+  const wa = b.canais.filter(x=>x.tipo==='whatsapp').map(x=>x.instancia), ig = b.canais.find(x=>x.tipo==='instagram')||{}, site = b.canais.find(x=>x.tipo==='site')||{}, fbp = b.canais.find(x=>x.tipo==='messenger')||{};
   const usadas = new Set(estado.bots.filter(x=>x.id!==b.id).flatMap(x=>x.canais.filter(c=>c.tipo==='whatsapp').map(c=>c.instancia)));
   const insts = Object.entries(estado.instancias).filter(([k,v])=>(v.canal||'whatsapp')==='whatsapp' && !usadas.has(k));
   const c = document.getElementById('abCorpo');
@@ -713,6 +727,9 @@ function formBot(b){
       ${estado.gestao?`<button class="btn btn-sm" id="fbNovoNum" style="margin-top:6px;">➕ Conectar novo número (QR code)</button><div id="fbQr"></div>`:''}</div>
     <div class="field"><label>📷 Instagram (ID da conta) e usuário</label><div style="display:flex;gap:6px;"><input id="fbIgId" placeholder="ID numérico da conta" value="${escapeHtml(ig.ig_id||'')}"><input id="fbIgUser" placeholder="@usuario" value="${escapeHtml(ig.usuario||'')}"></div>
       <input id="fbIgTok" type="password" placeholder="${b.temTokenInstagram?'Token já salvo — deixe em branco para manter':'Token de acesso do Instagram (deste bot)'}" style="margin-top:6px;" autocomplete="off"></div>
+    <div class="field"><label>💬 Facebook Messenger (página do Facebook)</label><div style="display:flex;gap:6px;"><input id="fbPgId" placeholder="ID numérico da página" inputmode="numeric" value="${escapeHtml(fbp.page_id||'')}"><input id="fbPgNome" placeholder="Nome da página" value="${escapeHtml(fbp.nome||'')}"></div>
+      <input id="fbPgTok" type="password" placeholder="${b.temTokenMessenger?'Token da página já salvo — deixe em branco para manter':'Token de acesso da página (Page Access Token)'}" style="margin-top:6px;" autocomplete="off">
+      <div class="muted" style="margin-top:4px;">Na Meta: Webhooks › Page → URL <b>${escapeHtml(SUPABASE_URL)}/functions/v1/atendimento-webhook</b>, assine <b>messages</b> (e <b>message_echoes</b> para ver o que for respondido pelo app da Meta).</div></div>
     <div class="field"><label>🌐 Site (endereço)</label><input id="fbSite" value="${escapeHtml(site.url||'')}" placeholder="https://..."></div>
     ${estado.gestao?`<div class="field"><label>✅ WhatsApp OFICIAL (API da Meta)</label>${b.id?'<div id="fbCloud" class="muted">Carregando…</div>':'<span class="muted">Salve o bot primeiro para cadastrar um número oficial.</span>'}</div>`:''}
     <div class="field"><label>Horário geral do bot</label>${horarioHtml('hb', b.horario, true)}</div>
@@ -733,7 +750,8 @@ function formBot(b){
     (b.canais||[]).filter(x=>x.tipo==='whatsapp' && String(x.instancia||'').startsWith('wa_')).forEach(x=> canais.push({ tipo:'whatsapp', instancia:x.instancia }));
     const igId = document.getElementById('fbIgId').value.trim(); if(igId) canais.push({ tipo:'instagram', ig_id:igId, usuario:document.getElementById('fbIgUser').value.trim() });
     const url = document.getElementById('fbSite').value.trim(); if(url) canais.push({ tipo:'site', url });
-    const r = await api({ op:'botSalvar', id:b.id, nome:document.getElementById('fbNome').value, descricao:document.getElementById('fbDesc').value, ativo:document.getElementById('fbAtivo').checked, canais, horario:horarioLer('hb',true), config:(b.config||{}), instagramToken: document.getElementById('fbIgTok').value.trim() || undefined });
+    const pgId = document.getElementById('fbPgId').value.replace(/\D/g,''); if(pgId) canais.push({ tipo:'messenger', page_id:pgId, nome:document.getElementById('fbPgNome').value.trim() || undefined });
+    const r = await api({ op:'botSalvar', id:b.id, nome:document.getElementById('fbNome').value, descricao:document.getElementById('fbDesc').value, ativo:document.getElementById('fbAtivo').checked, canais, horario:horarioLer('hb',true), config:(b.config||{}), instagramToken: document.getElementById('fbIgTok').value.trim() || undefined, fbPageToken: document.getElementById('fbPgTok').value.trim() || undefined });
     if(r&&r.ok){ showToast('Bot salvo.'); recarregarAdmin(); } else showToast((r&&r.error)||'Erro');
   };
   if(document.getElementById('fbDel')) document.getElementById('fbDel').onclick = async ()=>{
@@ -1144,7 +1162,7 @@ async function modalCRM(aba){
       lista('Ordens de serviço', f.historico.os, v=>linha(fmtData(v.data)+' · '+(v.codigo||''), (v.descricao||'').slice(0,60)+' · '+v.status, v.valor?brl(v.valor):'')) +
       lista('Orçamentos', f.historico.orcamentos, v=>linha(fmtData(v.data), v.status, v.valor?brl(v.valor):'')) +
       lista('Reformas', f.historico.reformas, v=>linha('R'+String(v.numero).padStart(5,'0'), v.status, fmtData(v.criado))) +
-      (f.conversas.length>1 ? `<h4 style="margin:10px 0 4px;font-size:13px;">Conversas (${f.conversas.length})</h4><div class="muted">${f.conversas.map(x=>(x.canal==='instagram'?'📷':'📱')+' '+escapeHtml(x.status)+' · '+fmtHora(x.ultima_mensagem_em)).join(' &nbsp;|&nbsp; ')}</div>`:'');
+      (f.conversas.length>1 ? `<h4 style="margin:10px 0 4px;font-size:13px;">Conversas (${f.conversas.length})</h4><div class="muted">${f.conversas.map(x=>(x.canal==='instagram'?'📷':x.canal==='messenger'?'💬':'📱')+' '+escapeHtml(x.status)+' · '+fmtHora(x.ultima_mensagem_em)).join(' &nbsp;|&nbsp; ')}</div>`:'');
   }
   if(crmAba==='tarefas'){
     const funcs = estado.gestao ? (estado.funcionarios||[]) : [];
@@ -1270,11 +1288,13 @@ function renderPainel(){
 /* ================= ENVIO ================= */
 async function enviarTexto(){
   const t = document.getElementById('texto'); const texto = t.value.trim(); if(!texto || !estado.atual) return;
+  const sugIA = (estado.iaSug && estado.iaSug.conversaId===estado.atual.id) ? estado.iaSug : null;
   const btn = document.getElementById('btnEnviar'); btn.disabled = true; t.value='';
   const r = await ext({ op:'enviarTexto', conversaId: estado.atual.id, texto });
   btn.disabled = false;
   if(r && r.error==='JANELA_24H'){ t.value = texto; modalTemplate({ conversaId: estado.atual.id }); return; }
   if(!r || !r.ok){ showToast(r && r.error || 'Não enviou'); t.value = texto; return; }
+  if(sugIA){ estado.iaSug = null; t.classList.remove('ia-sug'); if(sugIA.logId) ia({ op:'marcarUso', logId:sugIA.logId, usado:true, textoFinal:texto }); }
   await atualizarMensagens(); if(!estado.mensagens.some(m=>m.texto===texto && m.direcao==='out')){ estado.mensagens.push({ id:'tmp'+Date.now(), direcao:'out', tipo:'texto', texto, autor_nome:estado.meuNome, status:'enviada', enviada_em:new Date().toISOString() }); renderMsgs(true); }
   carregarLista(true);
 }
@@ -1422,6 +1442,9 @@ document.getElementById('filtroBot').addEventListener('change', e=>{ estado.botI
 document.getElementById('filtroDep').addEventListener('change', e=>{ estado.depId = e.target.value; carregarLista(); });
 document.getElementById('btnAtualizar').addEventListener('click', ()=>{ carregarStatus(); carregarLista(); atualizarMensagens(); });
 document.getElementById('btnEnviar').addEventListener('click', enviarTexto);
+document.getElementById('btnIaSug').addEventListener('click', ()=> iaSugerir());
+document.getElementById('btnIaRes').addEventListener('click', ()=> modalResumoIA());
+document.getElementById('texto').addEventListener('input', ()=>{ if(estado.iaSug && !document.getElementById('texto').value.trim()) iaDescartarSug(); });
 document.getElementById('texto').addEventListener('keydown', e=>{
   if(e.key==='Escape'){ const box = document.getElementById('sugestoes'); box._l = []; box.style.display='none'; return; }
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); if(!usarSugestao(0)) enviarTexto(); }
@@ -1835,7 +1858,7 @@ function ftRel(){
     ${estado.gestao||souSup()?`<div class="field" style="margin:0;"><label>Atendente</label><select id="rlAt">${optAt('', 'Todos')}</select></div>`:''}
     <div class="field" style="margin:0;"><label>Departamento</label><select id="rlDep">${optDepAll('', 'Todos')}</select></div>
     ${estado.bots.length>1?`<div class="field" style="margin:0;"><label>Bot</label><select id="rlBot">${optBotAll('', 'Todos')}</select></div>`:''}
-    <div class="field" style="margin:0;"><label>Canal</label><select id="rlCanal"><option value="">Todos</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option></select></div>
+    <div class="field" style="margin:0;"><label>Canal</label><select id="rlCanal"><option value="">Todos</option><option value="whatsapp">WhatsApp</option><option value="instagram">Instagram</option><option value="messenger">Messenger</option></select></div>
     <div class="field" style="margin:0;"><label>Motivo</label><input id="rlMot"></div><div class="field" style="margin:0;"><label>Protocolo</label><input id="rlProto" inputmode="numeric"></div>
     <div class="field" style="margin:0;"><label>Número</label><input id="rlNum" inputmode="numeric"></div><div class="field" style="margin:0;"><label>Nome</label><input id="rlNome"></div><div class="field" style="margin:0;"><label>Tag</label><input id="rlTag"></div></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"><button class="btn btn-accent" id="rlBuscar">Buscar</button><button class="btn" id="rlCsv" disabled>⬇ Exportar CSV</button><button class="btn" id="rlNotas">⭐ Notas médias</button><button class="btn" id="rlCont">👥 Relatório de contatos</button></div><div id="rlRes" class="muted">Use “Buscar”.</div>`;
@@ -1938,6 +1961,151 @@ function lerExtraFluxo(c){
     agrupar_segundos: Number(g('fxAgr').value)||0, recado_minutos: Number(g('fxRec').value)||0, interativo: g('fxInt').checked,
     enquete: { ativa: g('flEnq').checked, escala: g('fxEsc').value, tempo_min: Number(g('fxEnqT').value)||0 },
     potenciais: { modo: g('fxPot').value, minutos: Number(g('fxPotMin').value)||10 }
+  };
+}
+
+/* ================= AGENTE DE IA (função atendimento-ia) ================= */
+const IA_URL = SUPABASE_URL + "/functions/v1/atendimento-ia";
+async function ia(body){
+  try{
+    const res = await fetch(IA_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
+    return await res.json();
+  }catch(e){ return { error:String(e) }; }
+}
+const ETAPA_IA = { curioso:'Curioso', orcamento:'Orçamento', negociando:'Negociando', fechado:'Fechado', 'pos-venda':'Pós-venda' };
+const iaCfgBot = id => { const b = estado.bots.find(x=>x.id===id); return (b && b.config && b.config.ia) || {}; };
+function iaBarRender(c){
+  const bar = document.getElementById('iaBar'); if(!bar || !c) return;
+  document.getElementById('btnIaSug').style.display = iaCfgBot(c.bot_id).sugerir===false ? 'none' : '';
+  const d = c.ia_dados || {};
+  document.getElementById('btnIaRes').textContent = '📝 Resumo IA' + (d.etapa && ETAPA_IA[d.etapa] ? ' · ' + ETAPA_IA[d.etapa] : '');
+}
+function iaDescartarSug(){
+  const s = estado.iaSug; estado.iaSug = null;
+  const t = document.getElementById('texto'); if(t) t.classList.remove('ia-sug');
+  if(s && s.logId) ia({ op:'marcarUso', logId:s.logId, usado:false });
+}
+async function iaSugerir(){
+  const c = estado.atual; if(!c) return;
+  const t = document.getElementById('texto'), btn = document.getElementById('btnIaSug');
+  if(t.value.trim() && !estado.iaSug && !confirm('Substituir o texto que já está no campo pela sugestão da IA?')) return;
+  btn.disabled = true; const rot = btn.textContent; btn.textContent = '✨ Pensando…';
+  const r = await ia({ op:'sugerir', conversaId:c.id });
+  btn.disabled = false; btn.textContent = rot;
+  if(!estado.atual || estado.atual.id!==c.id) return;
+  if(!r || !r.ok){ showToast((r && r.error) || 'A IA não respondeu'); return; }
+  if(estado.iaSug && estado.iaSug.logId) ia({ op:'marcarUso', logId:estado.iaSug.logId, usado:false });
+  estado.iaSug = { logId:r.logId, conversaId:c.id, texto:r.sugestao };
+  t.value = r.sugestao; t.classList.add('ia-sug'); t.focus();
+  showToast('Sugestão da IA no campo — revise antes de enviar.');
+}
+async function modalResumoIA(forcar){
+  const c = estado.atual; if(!c) return;
+  const desatualizado = !c.ia_resumo || !c.ia_resumo_em || (c.ultima_mensagem_em && new Date(c.ultima_mensagem_em) > new Date(c.ia_resumo_em));
+  if(forcar || !c.ia_resumo){
+    abrirModal('<h2>📝 Resumo IA</h2><p class="muted">A IA está lendo a conversa…</p>');
+    const r = await ia({ op:'resumir', conversaId:c.id });
+    if(!estado.atual || estado.atual.id!==c.id) return;
+    if(!r || !r.ok){ abrirModal(`<h2>📝 Resumo IA</h2><p>${escapeHtml((r&&r.error)||'Erro ao gerar o resumo')}</p><div class="rodape"><button class="btn" id="mCancel">Fechar</button></div>`); document.getElementById('mCancel').onclick = fecharModal; return; }
+    c.ia_resumo = r.resumo.resumo; c.ia_resumo_em = r.resumo.ia_resumo_em; c.ia_dados = Object.assign({}, c.ia_dados||{}, r.resumo);
+    iaBarRender(c);
+  }
+  const d = c.ia_dados || {}; const atuais = c.tags || [];
+  const sug = (d.etiquetasSugeridas||[]).filter(Boolean);
+  const linha = (rot, v) => v ? `<b>${rot}</b><div>${v}</div>` : '';
+  abrirModal(`<h2>📝 Resumo IA</h2>
+    <div class="ia-res">
+      ${linha('Resumo', escapeHtml(c.ia_resumo||''))}
+      ${linha('Interesse', escapeHtml(d.interesse||''))}
+      ${linha('Etapa', escapeHtml(ETAPA_IA[d.etapa]||d.etapa||''))}
+      ${linha('Produtos', (d.produtos||[]).map(p=>`<span class="tagchip">${escapeHtml(p)}</span>`).join(''))}
+      ${linha('Sentimento', escapeHtml(d.sentimento||''))}
+      ${linha('Próxima ação', escapeHtml(d.proximaAcao||''))}
+    </div>
+    ${sug.length?`<div class="field"><label>Etiquetas sugeridas (clique para marcar/desmarcar)</label><div class="tag-sug" id="iaTags">${sug.map((t,i)=>`<button type="button" data-i="${i}" class="${atuais.includes(t)?'':'on'}">${escapeHtml(t)}${atuais.includes(t)?' ✓':''}</button>`).join('')}</div></div>`:''}
+    <p class="muted" style="margin:0;">${c.ia_resumo_em?'Gerado em '+escapeHtml(fmtDH(c.ia_resumo_em)):''}${desatualizado&&!forcar&&c.ia_resumo?' · há mensagens novas depois deste resumo':''}</p>
+    <div class="rodape"><button class="btn" id="mCancel">Fechar</button><button class="btn" id="iaAtualizar">↻ Atualizar resumo</button>${sug.length?'<button class="btn btn-accent" id="iaAplicar">🏷 Aplicar etiquetas</button>':''}</div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.getElementById('iaAtualizar').onclick = ()=> modalResumoIA(true);
+  const box = document.getElementById('iaTags');
+  if(box) box.querySelectorAll('button').forEach(b=> b.onclick = ()=>{ if(atuais.includes(sug[+b.dataset.i])) return; b.classList.toggle('on'); });
+  const ap = document.getElementById('iaAplicar');
+  if(ap) ap.onclick = async ()=>{
+    const marcadas = [...box.querySelectorAll('button.on')].map(b=> sug[+b.dataset.i]);
+    const tags = [...new Set(atuais.concat(marcadas))];
+    if(tags.length===atuais.length){ showToast('Nenhuma etiqueta nova marcada.'); return; }
+    const r = await api({ op:'tags', conversaId:c.id, tags });
+    if(r && r.ok){ fecharModal(); showToast('Etiquetas aplicadas.'); await abrirConversa(c.id); carregarLista(true); } else showToast((r&&r.error)||'Erro');
+  };
+}
+
+/* ---------- Administrar: aba Agente de IA ---------- */
+let iaBotId = null;
+async function abaIA(){
+  const c = document.getElementById('abCorpo');
+  if(!estado.bots.length){ c.innerHTML = '<p class="muted">Crie um bot primeiro na aba “Bots e canais”.</p>'; return; }
+  if(!iaBotId || !estado.bots.find(b=>b.id===iaBotId)) iaBotId = estado.bots[0].id;
+  const bot = estado.bots.find(b=>b.id===iaBotId);
+  c.innerHTML = '<p class="muted">Carregando…</p>';
+  const [rc, rk] = await Promise.all([ ia({ op:'config', botId:iaBotId }), ia({ op:'conhecimentoLista', botId:iaBotId }) ]);
+  if(document.getElementById('abCorpo')!==c || adminAba!=='ia') return;
+  if(!rc || !rc.ok){ c.innerHTML = `<p>${escapeHtml((rc&&rc.error)||'Erro ao carregar')}</p><p class="muted">A função <b>atendimento-ia</b> precisa estar publicada.</p>`; return; }
+  const x = rc.ia || {}; const itens = (rk && rk.data) || [];
+  const sw = (id, on, t, d) => `<label class="ia-sw"><input type="checkbox" id="${id}" ${on?'checked':''}><span>${t}<small>${d}</small></span></label>`;
+  const semHorario = !bot.horario || !bot.horario.dias;
+  c.innerHTML = `${estado.bots.length>1?`<div class="field"><label>Bot</label><select id="iaBot">${estado.bots.map(b=>`<option value="${b.id}" ${b.id===iaBotId?'selected':''}>${escapeHtml(b.nome)}</option>`).join('')}</select></div>`:`<p class="muted" style="margin-top:0">Bot: <b>${escapeHtml(bot.nome)}</b></p>`}
+    ${rc.temGemini===false?'<div class="aviso-bloqueado" style="border-radius:10px;margin-bottom:10px;">A chave GEMINI_API_KEY não está configurada nas funções — a IA não vai responder.</div>':''}
+    <details class="sec" open><summary>⚙️ Configuração do agente</summary><div>
+      ${sw('iaAtivo', x.ativo, '<b>Agente de IA ligado</b>', 'Liga as ações automáticas abaixo (responder fora do horário e resumo automático).')}
+      ${sw('iaSugerir', x.sugerir!==false, '✨ Sugerir respostas', 'Mostra o botão “Sugerir resposta” nas conversas deste bot (a atendente revisa antes de enviar).')}
+      ${sw('iaResAuto', x.resumoAuto, '📝 Resumo automático', 'Ao finalizar um atendimento, a IA grava o resumo, a etapa e as etiquetas sugeridas.')}
+      ${sw('iaFora', x.foraHorario, '🌙 Responder fora do horário', `Fora do expediente a IA responde com base na base de conhecimento (máx. ${escapeHtml(String(x.maxAuto||6))} respostas por conversa) e sempre avisa que um atendente continua no horário comercial.`)}
+      ${semHorario?`<p class="muted" style="margin:-2px 0 10px 26px;color:var(--wait);">⚠️ Este bot está sem horário definido (24h) — a resposta fora do horário só acontece depois de definir o horário em “Bots e canais”.</p>`:`<p class="muted" style="margin:-2px 0 10px 26px;">Horário do bot: ${escapeHtml(rc.horario||'')}</p>`}
+      <div class="field"><label>Persona / instruções da IA</label><textarea id="iaPersona" rows="5" placeholder="Ex.: Você é a atendente da Vilaça Joias, joalheria em Juiz de Fora. Fale de forma calorosa e elegante, chame o cliente pelo nome, ofereça visita à loja…">${escapeHtml(x.persona||'')}</textarea></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="field" style="flex:2;min-width:200px;"><label>Assinatura das respostas automáticas</label><input id="iaAss" value="${escapeHtml(x.assinatura||'🤖 Assistente Vilaça')}" maxlength="60"></div>
+        <div class="field" style="flex:1;min-width:120px;"><label>Máx. respostas por conversa</label><input id="iaMax" type="number" min="1" max="10" value="${escapeHtml(String(x.maxAuto||6))}"></div>
+      </div>
+      <div class="field"><label>Frase final fora do horário (opcional)</label><input id="iaFim" value="${escapeHtml(x.mensagemFim||'')}" placeholder="Padrão: Um(a) atendente da nossa equipe continua seu atendimento assim que abrirmos (horário). 😊"></div>
+      <button class="btn btn-accent" id="iaSalvar">Salvar configuração</button>
+    </div></details>
+    <details class="sec" open><summary>📚 Base de conhecimento (${itens.length})</summary><div>
+      <p class="muted" style="margin-top:0">A IA só afirma o que estiver aqui (preços, prazos, serviços, pagamento, políticas). Itens “todos os bots” valem para Reforma e Vilaça.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-accent" id="iaNovoK">➕ Novo item</button><button class="btn" id="iaAprender">🧠 Aprender com as conversas (últimos 30 dias)</button></div>
+      <div id="iaLista">${itens.map(k=>`<div class="cartao ia-k"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;"><div class="t">${escapeHtml(k.titulo)}<span class="ia-pill">${k.bot_id?escapeHtml(nomeBot(k.bot_id)||'bot'):'todos os bots'}</span>${k.origem==='aprendido'?'<span class="ia-pill ap">🧠 aprendido</span>':''}${k.ativo?'':'<span class="ia-pill off">inativo</span>'}</div><div style="display:flex;gap:6px;flex-shrink:0;"><button class="btn btn-sm" data-ke="${k.id}">Editar</button><button class="btn btn-sm btn-danger" data-kx="${k.id}">Excluir</button></div></div><div class="x">${escapeHtml(k.conteudo)}</div></div>`).join('') || '<p class="muted">Nenhum item ainda. Adicione manualmente ou use “Aprender com as conversas”.</p>'}</div>
+    </div></details>`;
+  if(document.getElementById('iaBot')) document.getElementById('iaBot').onchange = e=>{ iaBotId = e.target.value; abaIA(); };
+  document.getElementById('iaSalvar').onclick = async ()=>{
+    const g = id => document.getElementById(id);
+    const r = await ia({ op:'configSalvar', botId:iaBotId, ia:{ ativo:g('iaAtivo').checked, persona:g('iaPersona').value, sugerir:g('iaSugerir').checked, resumoAuto:g('iaResAuto').checked, foraHorario:g('iaFora').checked, assinatura:g('iaAss').value.trim(), maxAuto:Number(g('iaMax').value)||6, mensagemFim:g('iaFim').value.trim() } });
+    if(r && r.ok){ bot.config = Object.assign({}, bot.config||{}, { ia:r.ia }); showToast('Agente de IA salvo.'); abaIA(); } else showToast((r&&r.error)||'Erro');
+  };
+  document.getElementById('iaNovoK').onclick = ()=> formConhecimento(null);
+  c.querySelectorAll('[data-ke]').forEach(b=> b.onclick = ()=> formConhecimento(itens.find(k=>String(k.id)===b.dataset.ke)));
+  c.querySelectorAll('[data-kx]').forEach(b=> b.onclick = async ()=>{ if(!confirm('Excluir este item da base de conhecimento?')) return; const r = await ia({ op:'conhecimentoExcluir', id:Number(b.dataset.kx) }); if(r&&r.ok){ showToast('Excluído.'); abaIA(); } else showToast((r&&r.error)||'Erro'); });
+  document.getElementById('iaAprender').onclick = async ()=>{
+    if(!confirm('A IA vai ler as conversas atendidas pela equipe nos últimos 30 dias (Reforma e Vilaça) e criar itens de conhecimento. Revise o que ela aprender. Continuar?')) return;
+    const bt = document.getElementById('iaAprender'); bt.disabled = true; bt.textContent = '🧠 Analisando… (pode levar até 1 minuto)';
+    const r = await ia({ op:'aprender', dias:30 });
+    if(document.getElementById('iaAprender')){ bt.disabled = false; bt.textContent = '🧠 Aprender com as conversas (últimos 30 dias)'; }
+    if(!r || !r.ok){ showToast((r&&r.error)||'Erro ao aprender'); return; }
+    showToast(r.aviso ? r.aviso : `${r.inseridos} item(ns) aprendido(s) de ${r.analisadas} conversa(s)${r.ignorados?' · '+r.ignorados+' repetido(s) ignorado(s)':''}.`);
+    if(adminAba==='ia') abaIA();
+  };
+}
+function formConhecimento(k){
+  k = k || { titulo:'', conteudo:'', bot_id:iaBotId, ativo:true };
+  const c = document.getElementById('abCorpo');
+  c.innerHTML = `<h3 style="margin:0 0 12px;">${k.id?'Editar':'Novo'} item de conhecimento ${k.origem==='aprendido'?'<span class="ia-pill ap">🧠 aprendido</span>':''}</h3>
+    <div class="field"><label>Título / pergunta</label><input id="kTit" maxlength="150" value="${escapeHtml(k.titulo)}" placeholder="Ex.: Prazo de conserto de corrente"></div>
+    <div class="field"><label>Conteúdo / resposta</label><textarea id="kCont" rows="7" placeholder="Ex.: Consertos simples de corrente ficam prontos em até 3 dias úteis…">${escapeHtml(k.conteudo)}</textarea></div>
+    <div class="field"><label>Vale para</label><select id="kBot"><option value="">Todos os bots</option>${estado.bots.map(b=>`<option value="${b.id}" ${k.bot_id===b.id?'selected':''}>${escapeHtml(b.nome)}</option>`).join('')}</select></div>
+    <label style="display:flex;gap:6px;align-items:center;font-weight:400;"><input type="checkbox" id="kAtivo" ${k.ativo!==false?'checked':''}> Ativo (a IA usa este item)</label>
+    <div class="rodape"><button class="btn" id="kVoltar">Voltar</button><button class="btn btn-accent" id="kOk">Salvar</button></div>`;
+  document.getElementById('kVoltar').onclick = ()=> abaIA();
+  document.getElementById('kOk').onclick = async ()=>{
+    const r = await ia({ op:'conhecimentoSalvar', id:k.id, botId:document.getElementById('kBot').value || null, titulo:document.getElementById('kTit').value, conteudo:document.getElementById('kCont').value, ativo:document.getElementById('kAtivo').checked });
+    if(r && r.ok){ showToast('Item salvo.'); abaIA(); } else showToast((r&&r.error)||'Erro');
   };
 }
 
