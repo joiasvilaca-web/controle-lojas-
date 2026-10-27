@@ -148,11 +148,20 @@ function proxData(d: Date, rec: string): Date | null {
 
 /* ---------- perfil no Atendimento (cópia da regra da atendimento-api v12) ---------- */
 const PAPEIS = ["atendente", "administrativo", "gerente", "diretoria"];
+// Loja → instância do Atendimento (as lojas do funcionário definem as instâncias quando não há escolha manual).
+// Vilaça: Marechal, JV (João Beraldo), Jardim Norte, Ecommerce · Reforma: Reforma Joias · Oficina e Up Case: nenhuma.
+const BOT_VILACA = "1ad6780b-07c9-468f-ae72-ec65b5e3b4fd", BOT_REFORMA = "2b59b2d8-afd0-40a3-8827-2cc74b9f55fd";
+const LOJA_BOT: Record<string, string> = { loja_mc: BOT_VILACA, loja_jb: BOT_VILACA, loja_jn: BOT_VILACA, loja_ec: BOT_VILACA, loja_rj: BOT_REFORMA };
+function botsDasLojas(user: any): string[] | null {
+  const lojas: string[] = Array.isArray(user && user.lojas) ? user.lojas.map(String) : [];
+  if (!lojas.length) return null; // cadastro sem lojas: comportamento antigo (todas)
+  return [...new Set(lojas.map((l) => LOJA_BOT[l]).filter(Boolean))];
+}
 function perfilAtd(user: any) {
   const p = (user && user.permissoes && user.permissoes.atendimento) || {};
   const explicito = PAPEIS.includes(p.papel);
   const papel: string = explicito ? p.papel : user.nivel === "diretoria" ? "diretoria" : user.nivel === "gerente" ? "gerente" : "atendente";
-  const bots: string[] | null = papel === "diretoria" ? null : (Array.isArray(p.bots) ? p.bots.map(String) : null);
+  const bots: string[] | null = papel === "diretoria" ? null : (Array.isArray(p.bots) ? p.bots.map(String) : botsDasLojas(user));
   return { papel, bots, supervisao: papel === "gerente" || papel === "diretoria", admin: papel === "diretoria" || (!explicito && user.nivel === "gerente") };
 }
 function podeReceber(config: any, fid: string, botId: string | null): boolean {
