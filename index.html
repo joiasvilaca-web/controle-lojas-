@@ -3930,18 +3930,22 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
    * só cai num padrão (ouro) se ainda não tinha nenhuma referência escolhida. */
   function sincronizarReferenciaPeloMetal(){
     const metal = metalPadraoProduto();
+    const anterior = d.referenciaCompra;
     if(metal==='prata') d.referenciaCompra = 'prataDtvm';
     else if(metal==='ouro') d.referenciaCompra = 'ouroDtvm';
     else if(!d.referenciaCompra) d.referenciaCompra = 'ouroDtvm';
+    // Categoria/subcategoria mudou o metal (ou é a primeira vez) → libera o Custo compra pra
+    // fixar de novo, sem ação do usuário, no próximo salvamento.
+    if(d.referenciaCompra !== anterior) d.custoCompra = null;
     const sel = document.getElementById('pe_referenciaCompra');
     if(sel) sel.value = d.referenciaCompra;
     recalcularCustoCompra();
   }
   /** Custo atualizado = Fator × valor aplicado da referência escolhida (Cadastro → Fator → Compra Metal), sempre ao vivo.
-   * Custo compra fixa esse cálculo no momento do lançamento (primeiro salvamento com fator e cotação
-   * disponíveis) e não recalcula mais sozinho depois disso — só o botão ↻ força uma nova fixação.
-   * Enquanto o produto ainda não foi salvo com um valor fixado, o campo mostra o cálculo ao vivo (igual
-   * ao Custo atualizado), pra não travar num valor errado digitado no meio do preenchimento. */
+   * Custo compra fixa esse cálculo sozinho — sem botão, sem ação manual — no primeiro salvamento em que
+   * fator e cotação estiverem disponíveis, e só volta a ficar livre pra fixar de novo se a categoria ou
+   * a subcategoria mudar o metal do produto (ver sincronizarReferenciaPeloMetal). Até lá, o campo mostra
+   * o cálculo ao vivo (igual ao Custo atualizado) só como prévia — o valor real só é gravado ao salvar. */
   function valorCompraAoVivo(){
     garantirConfigFator();
     const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
@@ -3955,7 +3959,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     if(!campoFixo || !campoAtualizado) return;
     const atualizado = valorCompraAoVivo();
     campoAtualizado.value = atualizado!=null ? atualizado.toFixed(2) : '—';
-    campoFixo.value = d.custoCompra!=null ? Number(d.custoCompra).toFixed(2) + ' (fixado)' : (atualizado!=null ? atualizado.toFixed(2) + ' (será fixado ao salvar)' : 'aguardando fator/cotação');
+    campoFixo.value = d.custoCompra!=null ? Number(d.custoCompra).toFixed(2) : (atualizado!=null ? atualizado.toFixed(2) : '—');
   }
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
@@ -4013,10 +4017,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         </div>
         <div class="grid-2">
           <div class="field"><label>Custo compra (R$) <span class="muted">fixado no cadastro</span></label>
-            <div style="display:flex; gap:6px;">
-              <input type="text" id="pe_custoCompra" disabled style="flex:1;">
-              <button type="button" class="icon-btn" id="btnRecalcularCustoCompra" title="Recalcular com a referência e o fator de agora (normalmente só muda sozinho na primeira vez)">↻</button>
-            </div>
+            <input type="text" id="pe_custoCompra" disabled>
           </div>
           <div class="field"><label>Custo atualizado (R$) <span class="muted">segue a cotação do dia</span></label><input type="text" id="pe_custoAtualizado" disabled></div>
         </div>
@@ -4055,13 +4056,6 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       if(!d.referenciaCompra) sincronizarReferenciaPeloMetal(); else recalcularCustoCompra();
       document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); });
       document.getElementById('pe_referenciaCompra').addEventListener('change', e=>{ d.referenciaCompra = e.target.value; recalcularCustoCompra(); });
-      document.getElementById('btnRecalcularCustoCompra').addEventListener('click', ()=>{
-        const novo = valorCompraAoVivo();
-        if(novo==null){ showToast('Falta fator ou a cotação do dia ainda não carregou.'); return; }
-        d.custoCompra = novo;
-        recalcularCustoCompra();
-        showToast('Custo compra refixado com a referência e o fator de agora — só vale depois de salvar.');
-      });
       recalcularCustoCompra();
       aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
