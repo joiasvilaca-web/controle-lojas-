@@ -3915,6 +3915,32 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     codigoReservadoSeq = seq;
   }
 
+  /** Categoria Relógio: subcategoria vira material da pulseira/caixa (não metal), custo é manual
+   * (não tem cotação de metal pra calcular sozinho), e Preço de venda = Custo compra × Fator. */
+  const SUBCATEGORIAS_RELOGIO = ['Prateado','Dourado','Misto','Couro','Borracha'];
+  function ehCategoriaRelogio(categoriaId){
+    const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
+    const nome = (cat?cat.nome:'').toLowerCase();
+    return nome.includes('relogio') || nome.includes('relógio');
+  }
+  /** Garante que as 5 subcategorias de relógio existem no cadastro geral de subcategorias
+   * (criadas uma vez, por nome — se o Felipe já tiver criado na mão, não duplica). */
+  function garantirSubcategoriasRelogio(){
+    SUBCATEGORIAS_RELOGIO.forEach(nome=>{
+      const existe = (config.produtosOtica.subcategorias||[]).some(s=>(s.nome||'').trim().toLowerCase()===nome.toLowerCase());
+      if(!existe) config.produtosOtica.subcategorias.push({ id: uid('sub'), nome });
+    });
+  }
+  /** Lista de subcategorias a mostrar no seletor: só as 5 de relógio quando a categoria é Relógio,
+   * todas as outras (nunca as de relógio) pro resto — mantém os dois mundos separados. */
+  function subcategoriasParaCategoria(){
+    const relogio = ehCategoriaRelogio(d.categoriaId);
+    if(relogio) garantirSubcategoriasRelogio();
+    return (config.produtosOtica.subcategorias||[]).filter(s=>{
+      const ehDeRelogio = SUBCATEGORIAS_RELOGIO.some(n=>n.toLowerCase()===(s.nome||'').trim().toLowerCase());
+      return relogio ? ehDeRelogio : !ehDeRelogio;
+    });
+  }
   /** Decide ouro ou prata pelo nome da categoria/subcategoria escolhida (sem campo próprio de metal).
    * null quando nenhuma das duas aparece no nome (categoria não ligada a metal, ou nada selecionado). */
   function metalPadraoProduto(){
@@ -3976,15 +4002,37 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         <div class="field" style="margin-bottom:0;"><label>Valor de venda (R$)</label><input type="text" id="pe_valorDeVenda" disabled></div>
       </div>
     `;
-    const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
-    const fator = isNaN(fatorNum) ? null : fatorNum;
+    garantirConfigFator();
+    const tipoCfg = config.fator.tiposVenda.find(t=>t.id===d.tipoVenda);
     const vt = valorVendaFator(d.tipoVenda);
-    const valorProduto = (fator!=null && vt.valor!=null) ? Math.round(fator*vt.valor*100)/100 : null;
+    let valorProduto;
+    if(tipoCfg && tipoCfg.semValor){
+      // Tipo sem valor próprio (ex: Relógio) — "Valor tabela" vem do Preço de venda do próprio
+      // produto (custo × fator calculado individualmente), não de um valor configurado no tipo.
+      const precoNum = (d.precoVenda!=null && d.precoVenda!=='') ? parseFloat(String(d.precoVenda).replace(',','.')) : NaN;
+      valorProduto = isNaN(precoNum) ? null : Math.round(precoNum*100)/100;
+    } else {
+      const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
+      const fator = isNaN(fatorNum) ? null : fatorNum;
+      valorProduto = (fator!=null && vt.valor!=null) ? Math.round(fator*vt.valor*100)/100 : null;
+    }
     // Valor de venda arredonda pro real inteiro (0,50 sobe, abaixo disso desce) — é o preço final.
     const valorDeVenda = valorProduto!=null ? Math.round(valorProduto*(1-vt.desconto/100)) : null;
     document.getElementById('pe_valorProduto').value = valorProduto!=null ? valorProduto.toFixed(2) : '—';
     document.getElementById('pe_descontoAtual').value = String(vt.desconto).replace('.',',') + '%';
     document.getElementById('pe_valorDeVenda').value = valorDeVenda!=null ? valorDeVenda.toFixed(2) : '—';
+  }
+  /** Relógio: Preço de venda = Custo compra × Fator (sempre calculado, nunca manual) — porque o
+   * custo em relógios é digitado na mão (não tem cotação de metal pra calcular sozinho). */
+  function recalcularPrecoVendaRelogio(){
+    const campo = document.getElementById('pe_precoVenda');
+    if(!campo) return;
+    const custoNum = (d.custoCompra!=null && d.custoCompra!=='') ? parseFloat(String(d.custoCompra).replace(',','.')) : NaN;
+    const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
+    const preco = (!isNaN(custoNum) && !isNaN(fatorNum)) ? Math.round(custoNum*fatorNum*100)/100 : null;
+    d.precoVenda = preco!=null ? preco : null;
+    campo.value = preco!=null ? preco.toFixed(2) : '';
+    recalcularTipoVenda();
   }
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
@@ -3996,6 +4044,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
   function renderPeTabBody(){
     const body = document.getElementById('peModalBody');
     if(peTabAtiva==='nomenclatura'){
+      const relogioAtivo = ehCategoriaRelogio(d.categoriaId);
+      if(relogioAtivo && !d.tipoVenda) d.tipoVenda = 'relogio';
+      const subcategoriasOpcoes = subcategoriasParaCategoria();
       body.innerHTML = `
         <div class="section-label">Identificação</div>
         <div class="field"><label>Nome</label><input id="pe_nome" placeholder="Ex: Ouro 18k, Anel Solitário..." value="${escapeHtml(d.nome)}"></div>
@@ -4023,7 +4074,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           </div>
           <div class="field"><label>Subcategoria</label>
             <div style="display:flex; gap:6px;">
-              <select id="pe_subcategoriaId" style="flex:1;"><option value="">Selecione</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+              <select id="pe_subcategoriaId" style="flex:1;"><option value="">Selecione</option>${subcategoriasOpcoes.map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
               <button type="button" class="icon-btn" id="btnEditarSubcategoria" title="Cadastrar/editar subcategorias">✎</button>
             </div>
           </div>
@@ -4034,6 +4085,17 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         </div>
 
         <div class="section-label" style="margin-top:18px;">Compra</div>
+        ${relogioAtivo ? `
+        <div class="grid-2">
+          <div class="field"><label>Fator</label>
+            <input type="text" id="pe_fator" placeholder="Livre" value="${d.fator!=null?escapeHtml(String(d.fator)):''}">
+          </div>
+          <div class="field"><label>Custo Compra</label>
+            <input type="text" inputmode="decimal" id="pe_custoCompra" placeholder="Digite o custo" value="${d.custoCompra!=null?escapeHtml(String(d.custoCompra)):''}" title="Custo de compra do relógio — digitado na mão, sem cotação de metal.">
+          </div>
+        </div>
+        <p class="muted" style="margin:-6px 0 10px; font-size:12px;">Relógio: custo compra é manual. Não há Custo Atual (não segue cotação de metal).</p>
+        ` : `
         <div class="grid-2">
           <div class="field"><label>Fator</label>
             <input type="text" id="pe_fator" placeholder="Livre" value="${d.fator!=null?escapeHtml(String(d.fator)):''}">
@@ -4051,12 +4113,13 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             <input type="text" id="pe_custoAtualizado" disabled title="O mesmo cálculo, sempre ao vivo, acompanhando a cotação do dia.">
           </div>
         </div>
+        `}
 
         <div class="section-label" style="margin-top:18px;">Venda</div>
         <div class="grid-2">
-          <div class="field"><label>Preço de venda (R$)</label><input type="text" inputmode="decimal" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
+          <div class="field"><label>Preço de venda (R$)</label><input type="text" inputmode="decimal" id="pe_precoVenda" ${relogioAtivo?'disabled title="Custo compra × Fator — calculado automaticamente para relógios."':''} value="${d.precoVenda!==null?d.precoVenda:''}"></div>
           <div class="field"><label>Tipo</label>
-            <select id="pe_tipoVenda"><option value="">Nenhum</option>${CAMPOS_VENDA_FATOR.map(c=>`<option value="${c.id}" ${d.tipoVenda===c.id?'selected':''}>${escapeHtml(c.label)}</option>`).join('')}</select>
+            <select id="pe_tipoVenda"><option value="">Nenhum</option>${config.fator.tiposVenda.map(c=>`<option value="${c.id}" ${d.tipoVenda===c.id?'selected':''}>${escapeHtml(c.label)}</option>`).join('')}</select>
           </div>
         </div>
         <p class="muted" style="margin:-6px 0 10px; font-size:12px;">Tipo liga o produto a um tipo de venda do Cadastro → Fator → Venda — ao escolher, calcula o valor de tabela e o de venda abaixo.</p>
@@ -4080,8 +4143,17 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       });
       document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
       document.getElementById('btnEditarUnidade').addEventListener('click', ()=> abrirGerenciarListaStrings('Unidades', config.unidadesProduto, ()=> montarShellModalProduto()));
-      document.getElementById('pe_categoriaId').addEventListener('change', e=>{ d.categoriaId=e.target.value; sincronizarReferenciaPeloMetal(); });
-      document.getElementById('pe_subcategoriaId').addEventListener('change', e=>{ d.subcategoriaId=e.target.value; sincronizarReferenciaPeloMetal(); });
+      document.getElementById('pe_categoriaId').addEventListener('change', e=>{
+        d.categoriaId=e.target.value;
+        d.subcategoriaId=''; // categoria mudou — a lista de subcategorias é outra, não mantém seleção antiga
+        if(ehCategoriaRelogio(d.categoriaId)){ d.referenciaCompra=''; d.custoCompra=null; if(!d.tipoVenda) d.tipoVenda='relogio'; }
+        else { sincronizarReferenciaPeloMetal(); }
+        renderPeTabBody(); renderPeTabs();
+      });
+      document.getElementById('pe_subcategoriaId').addEventListener('change', e=>{
+        d.subcategoriaId=e.target.value;
+        if(!ehCategoriaRelogio(d.categoriaId)) sincronizarReferenciaPeloMetal();
+      });
       document.getElementById('pe_fornecedor').addEventListener('change', e=>{
         d.fornecedor = e.target.value;
         const forn = config.fornecedores.find(f=>f.empresa===d.fornecedor);
@@ -4091,15 +4163,21 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           if(campoFator) campoFator.value = forn.fator;
         }
       });
-      // Só auto-define a referência na abertura do formulário se ele ainda não tiver nenhuma salva
-      // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
-      // o vínculo automático só entra de novo se a categoria/subcategoria for alterada depois.
-      if(!d.referenciaCompra) sincronizarReferenciaPeloMetal(); else recalcularCustoCompra();
-      document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); recalcularTipoVenda(); });
-      document.getElementById('pe_referenciaCompra').addEventListener('change', e=>{ d.referenciaCompra = e.target.value; recalcularCustoCompra(); });
-      recalcularCustoCompra();
-      aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
-      document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
+      if(relogioAtivo){
+        document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularPrecoVendaRelogio(); });
+        document.getElementById('pe_custoCompra').addEventListener('input', e=>{ d.custoCompra = e.target.value===''?null:e.target.value; recalcularPrecoVendaRelogio(); });
+        recalcularPrecoVendaRelogio();
+      } else {
+        // Só auto-define a referência na abertura do formulário se ele ainda não tiver nenhuma salva
+        // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
+        // o vínculo automático só entra de novo se a categoria/subcategoria for alterada depois.
+        if(!d.referenciaCompra) sincronizarReferenciaPeloMetal(); else recalcularCustoCompra();
+        document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); recalcularTipoVenda(); });
+        document.getElementById('pe_referenciaCompra').addEventListener('change', e=>{ d.referenciaCompra = e.target.value; recalcularCustoCompra(); });
+        recalcularCustoCompra();
+        aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
+        document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
+      }
       document.getElementById('pe_tipoVenda').addEventListener('change', e=>{ d.tipoVenda = e.target.value; recalcularTipoVenda(); });
       recalcularTipoVenda();
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
@@ -4647,6 +4725,21 @@ function garantirConfigFator(){
   if(!config.fator.prata) config.fator.prata = null;
   if(!config.fator.compraMetal || typeof config.fator.compraMetal !== 'object') config.fator.compraMetal = {};
   if(!config.fator.venda || typeof config.fator.venda !== 'object') config.fator.venda = {};
+  if(!Array.isArray(config.fator.tiposVenda)){
+    config.fator.tiposVenda = [
+      { id:'joiaRepresentanteOuro', label:'Joia representante ouro' },
+      { id:'joiaRepresentantePrata', label:'Joia representante prata' },
+      { id:'aliancaPrata', label:'Aliança prata' },
+      { id:'aliancaOuro', label:'Aliança ouro' },
+      { id:'joiaVilacaOuro', label:'Joia Vilaça ouro' },
+      { id:'joiaVilacaPrata', label:'Joias Vilaça prata' },
+    ];
+  }
+  // Tipo Relógio: sem Valor próprio — cada produto calcula o seu (custo × fator), só usa o
+  // desconto configurado aqui. Semeado uma vez; se já existir (ex: criado manualmente), não mexe.
+  if(!config.fator.tiposVenda.some(t=>t.id==='relogio')){
+    config.fator.tiposVenda.push({ id:'relogio', label:'Relógio', semValor:true });
+  }
 }
 function hojeSaoPaulo(){
   // Data de hoje no fuso de São Paulo, formato YYYY-MM-DD (evita cair no dia errado por fuso).
@@ -4712,14 +4805,6 @@ function valorVendaFator(id){
     desconto: (des!=null && des!=='' && !isNaN(Number(des))) ? Number(des) : 0,
   };
 }
-const CAMPOS_VENDA_FATOR = [
-  { id:'joiaRepresentanteOuro', label:'Joia representante ouro' },
-  { id:'joiaRepresentantePrata', label:'Joia representante prata' },
-  { id:'aliancaPrata', label:'Aliança prata' },
-  { id:'aliancaOuro', label:'Aliança ouro' },
-  { id:'joiaVilacaOuro', label:'Joia Vilaça ouro' },
-  { id:'joiaVilacaPrata', label:'Joias Vilaça prata' },
-];
 async function renderFatorTab(main){
   garantirConfigFator();
   main.innerHTML = `
@@ -4738,6 +4823,10 @@ async function renderFatorTab(main){
       <div class="section-label">Venda</div>
       <p class="muted" style="margin:-4px 0 16px;font-size:12px;">Preenchido manualmente. Use ponto pra casas decimais (ex: 12.5), nunca vírgula.</p>
       <div id="vendaFields"></div>
+      <div style="display:flex; gap:10px; margin-top:4px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><label>Novo tipo</label><input id="vn_novoTipo" placeholder="Ex: Prata representante"></div>
+        <button class="btn btn-ghost btn-sm" id="btnAddTipoVenda">+ Adicionar tipo</button>
+      </div>
       <button class="btn btn-accent btn-sm" id="btnSalvarVenda" style="margin-top:14px;">Salvar Venda</button>
     </div>
   `;
@@ -4867,21 +4956,58 @@ async function renderFatorTab(main){
     const d = (desconto==null || isNaN(desconto)) ? 0 : desconto;
     return Math.round(valor * (1 - d/100) * 100) / 100;
   }
-  vendaWrap.innerHTML = CAMPOS_VENDA_FATOR.map(c=>{
-    const valorAtual = config.fator.venda[c.id];
-    const descontoAtual = config.fator.venda[c.id+'Desconto'];
-    return `
-    <div style="border-bottom:1px solid var(--line); padding:10px 0;">
-      <div class="muted" style="font-size:12px; font-weight:700; margin-bottom:6px;">${c.label}</div>
-      <div class="grid-3">
-        <div class="field" style="margin-bottom:0;"><label>Valor</label><input type="number" step="0.01" id="vd_${c.id}" placeholder="0.00" value="${valorAtual!=null?valorAtual:''}"></div>
-        <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
-        <div class="field" style="margin-bottom:0;"><label>Valor com desconto</label><input type="text" id="vdc_${c.id}" disabled value="${calcComDesconto(valorAtual, descontoAtual)!=null?calcComDesconto(valorAtual, descontoAtual).toFixed(2):''}"></div>
-      </div>
-    </div>
-  `;}).join('');
+  // Guarda na config (sem salvar no servidor) o que está digitado nos campos antes de um
+  // add/remover tipo, pra não perder edição em andamento ao repintar a lista.
+  function capturarCamposVendaForm(){
+    config.fator.tiposVenda.forEach(c=>{
+      const inpValor = document.getElementById('vd_'+c.id);
+      const inpDesc = document.getElementById('vdd_'+c.id);
+      if(inpValor) config.fator.venda[c.id] = inpValor.value===''?null:parseFloat(inpValor.value);
+      if(inpDesc) config.fator.venda[c.id+'Desconto'] = inpDesc.value===''?null:parseFloat(inpDesc.value);
+    });
+  }
+  function renderVendaRows(){
+    vendaWrap.innerHTML = config.fator.tiposVenda.map(c=>{
+      const valorAtual = config.fator.venda[c.id];
+      const descontoAtual = config.fator.venda[c.id+'Desconto'];
+      if(c.semValor){
+        return `
+        <div style="border-bottom:1px solid var(--line); padding:10px 0;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <div class="muted" style="font-size:12px; font-weight:700;">${escapeHtml(c.label)} <span class="muted" style="font-weight:400;">— sem valor próprio, cada produto calcula o seu</span></div>
+            <button type="button" class="icon-btn" data-tipodel="${c.id}" title="Remover tipo">✕</button>
+          </div>
+          <div class="grid-3">
+            <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
+          </div>
+        </div>`;
+      }
+      return `
+      <div style="border-bottom:1px solid var(--line); padding:10px 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <div class="muted" style="font-size:12px; font-weight:700;">${escapeHtml(c.label)}</div>
+          <button type="button" class="icon-btn" data-tipodel="${c.id}" title="Remover tipo">✕</button>
+        </div>
+        <div class="grid-3">
+          <div class="field" style="margin-bottom:0;"><label>Valor</label><input type="number" step="0.01" id="vd_${c.id}" placeholder="0.00" value="${valorAtual!=null?valorAtual:''}"></div>
+          <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
+          <div class="field" style="margin-bottom:0;"><label>Valor com desconto</label><input type="text" id="vdc_${c.id}" disabled value="${calcComDesconto(valorAtual, descontoAtual)!=null?calcComDesconto(valorAtual, descontoAtual).toFixed(2):''}"></div>
+        </div>
+      </div>`;
+    }).join('');
+    religarCalculoVenda();
+    vendaWrap.querySelectorAll('[data-tipodel]').forEach(b=> b.addEventListener('click', ()=>{
+      if(!confirm(`Remover o tipo "${config.fator.tiposVenda.find(t=>t.id===b.dataset.tipodel).label}"? Só é removido de verdade ao clicar em Salvar Venda.`)) return;
+      capturarCamposVendaForm();
+      config.fator.tiposVenda = config.fator.tiposVenda.filter(t=>t.id!==b.dataset.tipodel);
+      delete config.fator.venda[b.dataset.tipodel];
+      delete config.fator.venda[b.dataset.tipodel+'Desconto'];
+      renderVendaRows();
+    }));
+  }
   function religarCalculoVenda(){
-    CAMPOS_VENDA_FATOR.forEach(c=>{
+    config.fator.tiposVenda.forEach(c=>{
+      if(c.semValor) return;
       const inpValor = document.getElementById('vd_'+c.id);
       const inpDesc = document.getElementById('vdd_'+c.id);
       const inpCalc = document.getElementById('vdc_'+c.id);
@@ -4895,16 +5021,29 @@ async function renderFatorTab(main){
       inpDesc.addEventListener('input', recalcular);
     });
   }
-  religarCalculoVenda();
+  renderVendaRows();
+  document.getElementById('btnAddTipoVenda').addEventListener('click', ()=>{
+    const nome = document.getElementById('vn_novoTipo').value.trim();
+    if(!nome){ showToast('Informe o nome do novo tipo.'); return; }
+    capturarCamposVendaForm();
+    config.fator.tiposVenda.push({ id: uid('tipoVenda'), label: nome });
+    renderVendaRows();
+    showToast('Tipo adicionado — clique em Salvar Venda pra confirmar.');
+  });
   document.getElementById('btnSalvarVenda').addEventListener('click', async ()=>{
-    CAMPOS_VENDA_FATOR.forEach(c=>{
+    config.fator.tiposVenda.forEach(c=>{
+      if(c.semValor){
+        const d = document.getElementById('vdd_'+c.id).value;
+        config.fator.venda[c.id+'Desconto'] = d===''?null:parseFloat(d);
+        return;
+      }
       const v = document.getElementById('vd_'+c.id).value;
       const d = document.getElementById('vdd_'+c.id).value;
       config.fator.venda[c.id] = v===''?null:Math.round(parseFloat(v)*100)/100;
       config.fator.venda[c.id+'Desconto'] = d===''?null:parseFloat(d);
     });
     const ok = await configSave();
-    if(ok) showToast('Venda salva.');
+    if(ok){ showToast('Venda salva.'); document.getElementById('vn_novoTipo').value=''; }
   });
 }
 
