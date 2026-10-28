@@ -3890,6 +3890,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     observacao: base ? (base.observacao||'') : '',
     vendavel: !base || base.vendavel !== false,
     ncm: base ? (base.ncm||'') : '',
+    _ncmAuto: null, // último NCM preenchido automaticamente — se o usuário editar na mão, não some sozinho
     cfop: base ? (base.cfop||'') : '',
     cstCsosn: base ? (base.cstCsosn||'') : '',
     fornecedor: base ? (base.fornecedor||'') : '',
@@ -4051,6 +4052,28 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     campo.value = preco!=null ? preco.toFixed(2) : '';
     recalcularTipoVenda();
   }
+  /** NCM sugerido automaticamente: fora de Relógio, pela Subcategoria (Ouro/Prata); em
+   * Relógio, pelo Mostrador escolhido. Preenche sozinho, mas respeita edição manual — só
+   * reescreve se o campo ainda estiver vazio ou igual ao último valor que ele mesmo pôs. */
+  function ncmPadrao(){
+    if(ehCategoriaRelogio(d.categoriaId)){
+      const porMostrador = { Ponteiro:'91021110', Digital:'91021220', Smart:'85176277', Misto:'91021900' };
+      return porMostrador[d.relogioMostrador] || '';
+    }
+    const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
+    const nomeSub = (sub?sub.nome:'').trim().toLowerCase();
+    if(nomeSub==='ouro') return '71131900';
+    if(nomeSub==='prata') return '71131100';
+    return '';
+  }
+  function sincronizarNcm(){
+    const novo = ncmPadrao();
+    if(!novo) return;
+    if(!d.ncm || d.ncm===d._ncmAuto) d.ncm = novo;
+    d._ncmAuto = novo;
+    const campo = document.getElementById('pe_ncm');
+    if(campo) campo.value = d.ncm;
+  }
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
       b.classList.toggle('btn-accent', b.dataset.petab===peTabAtiva);
@@ -4097,6 +4120,17 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             </div>
           </div>
         </div>
+        ${relogioAtivo ? `
+        <div class="field"><label>Mostrador</label>
+          <select id="pe_relogioMostrador">
+            <option value="">Selecione</option>
+            <option value="Ponteiro" ${d.relogioMostrador==='Ponteiro'?'selected':''}>Ponteiro</option>
+            <option value="Digital" ${d.relogioMostrador==='Digital'?'selected':''}>Digital</option>
+            <option value="Smart" ${d.relogioMostrador==='Smart'?'selected':''}>Smart</option>
+            <option value="Misto" ${d.relogioMostrador==='Misto'?'selected':''}>Misto</option>
+          </select>
+        </div>
+        ` : ''}
         <div class="field"><label>Fornecedor</label>
           <select id="pe_fornecedor"><option value="">Selecione</option>${config.fornecedores.map(f=>`<option value="${escapeHtml(f.empresa)}" ${d.fornecedor===f.empresa?'selected':''}>${escapeHtml(f.empresa)}</option>`).join('')}</select>
           ${config.fornecedores.length===0?`<p class="muted" style="margin:4px 0 0;font-size:12px;">Nenhum cadastrado ainda — cadastre em Cadastro → Fornecedor.</p>`:''}
@@ -4124,15 +4158,6 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             <label>Observação do kit</label>
             <input type="text" id="pe_relogioKitObs" placeholder="Ex: caixa, manual, certificado..." value="${escapeHtml(d.relogioKitObs||'')}">
           </div>
-        </div>
-        <div class="field"><label>Mostrador</label>
-          <select id="pe_relogioMostrador">
-            <option value="">Selecione</option>
-            <option value="Ponteiro" ${d.relogioMostrador==='Ponteiro'?'selected':''}>Ponteiro</option>
-            <option value="Digital" ${d.relogioMostrador==='Digital'?'selected':''}>Digital</option>
-            <option value="Smart" ${d.relogioMostrador==='Smart'?'selected':''}>Smart</option>
-            <option value="Misto" ${d.relogioMostrador==='Misto'?'selected':''}>Misto</option>
-          </select>
         </div>
         ` : `
         <div class="grid-2">
@@ -4194,7 +4219,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       document.getElementById('pe_subcategoriaId').addEventListener('change', e=>{
         d.subcategoriaId=e.target.value;
         if(!ehCategoriaRelogio(d.categoriaId)) sincronizarReferenciaPeloMetal();
+        sincronizarNcm();
       });
+      sincronizarNcm();
       document.getElementById('pe_fornecedor').addEventListener('change', e=>{
         d.fornecedor = e.target.value;
         const forn = config.fornecedores.find(f=>f.empresa===d.fornecedor);
@@ -4218,7 +4245,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         });
         const campoKitObs = document.getElementById('pe_relogioKitObs');
         if(campoKitObs) campoKitObs.addEventListener('input', e=> d.relogioKitObs = e.target.value);
-        document.getElementById('pe_relogioMostrador').addEventListener('change', e=> d.relogioMostrador = e.target.value);
+        document.getElementById('pe_relogioMostrador').addEventListener('change', e=>{ d.relogioMostrador = e.target.value; sincronizarNcm(); });
       } else {
         // Só auto-define a referência na abertura do formulário se ele ainda não tiver nenhuma salva
         // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
@@ -4474,7 +4501,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       body.innerHTML = `
         <p class="muted" style="margin:-4px 0 12px;">Campos fiscais — confirme os valores exatos com o contador antes de emitir nota de verdade. Preencher aqui não emite nada, só deixa pronto.</p>
         <div class="grid-2">
-          <div class="field"><label>NCM</label><input id="pe_ncm" value="${escapeHtml(d.ncm)}"></div>
+          <div class="field"><label>NCM <span class="muted">preenchido automaticamente pela subcategoria (ou pelo Mostrador, em Relógio) — pode alterar na mão</span></label><input id="pe_ncm" value="${escapeHtml(d.ncm)}"></div>
           <div class="field"><label>CFOP</label><input id="pe_cfop" value="${escapeHtml(d.cfop)}"></div>
         </div>
         <div class="field"><label>CST/CSOSN</label><input id="pe_cstCsosn" value="${escapeHtml(d.cstCsosn)}"></div>
