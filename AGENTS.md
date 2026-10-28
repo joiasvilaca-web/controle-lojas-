@@ -85,11 +85,11 @@ Cada loja tem cor temática. Login da Up Case abre direto em Gravações.
 | `caixa.html` | Caixa (abas: Resumo + Gastos + Conciliação) |
 | `gastos.html` | Gastos (sub-tela do Caixa) |
 | `conciliacao.html` | Conciliação (sub-tela do Caixa) |
-| `dashboard.html` | Dashboard (abas: Painel + IA) |
+| `dashboard.html` | PAINEL › Dashboard (Visão geral com gráficos + relatórios) |
 | `ia.html` | Módulo IA (Diretoria/Gerente) |
 | `marketing.html` | Marketing |
 | `dp.html` | Departamento Pessoal (inclui Funcionários e Perfis de Acesso) |
-| `avisos.html` | Avisos (tela inicial pós-login para todos) |
+| `avisos.html` | PAINEL › Avisos (tela inicial pós-login para todos) |
 | `atendimento.html` | Atendimento WhatsApp/Instagram |
 | `definir-senha.html` | Página pública de setup de senha (link de convite) |
 | `advertencia.html` | Página pública de confirmação de advertência (DP) |
@@ -106,9 +106,8 @@ Grupos de menu com abas em `#shellTopTabs`:
 
 | Grupo | Sub-telas | Permissão base |
 |---|---|---|
-| **Avisos** | — | todos |
 | **CUPOM** | PDV · O.S. · Orçamento · Transferências · Gravações | por sub-tela |
-| **Dashboard** | Painel · IA | `dashboard` / `ia` |
+| **PAINEL** (id `dashboard`) | Avisos · Dashboard · IA | Avisos: todos; `dashboard` / `ia` |
 | **Caixa** | Resumo · Gastos · Conciliação | `caixa` / `gastos` / `conciliacao` |
 | **ADMINISTRAÇÃO** | Cadastro · Departamento Pessoal | `config` / `dp` |
 | **Marketing** | — | `marketing` |
@@ -279,6 +278,8 @@ Cada conversa é **escopada a um único módulo**:
 - 24/set: o mesmo commit de 17/set (`ba04bba`) também quebrou o `orcamentos.html`: colou uma cópia antiga da tela de Novo Orçamento dentro de `abrirSeletorCliente` e apagou os botões Confirmar/Cancelar do modal de cliente. Restaurado a partir do `87dc6fc`. Ao revisar qualquer arquivo, conferir se as funções fecham onde deveriam (função de 90 linhas que vira 300 é sinal de colagem errada).
 - Dashboard: metas gravadas com `mergeConfigKey` na chave `metasMensais` (nunca mais `saveConfig` da config inteira).
 - Marketing: aba Orçamentos carrega sob demanda (`carregarOrcamentosSeNecessario`).
+- 28/out: Avisos e Dashboard viraram um módulo só, **PAINEL** (id interno continua `dashboard`; `avisos` virou sub-tela `dashboard_avisos`, mapeada em `MODULOS_ABSORVIDOS`). PAINEL não tem tela de cartões: abre sempre em Avisos. Dashboard ganhou a seção **Visão geral** (`renderVisaoGeral`, gráficos em SVG puro, só diretoria/gerente).
+- 28/out: RLS ligado em `atendimento_pessoal_usuarios`, `atendimento_lembretes` e `atendimento_setup_log` (só Edge Functions com service_role usam).
 
 ---
 

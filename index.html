@@ -1039,8 +1039,9 @@ function avisarClientesAtualizados(){
 const tabsCache = {};
 
 const SIDEBAR_MODULES = [
-  { id:'avisos', label:'Avisos', icon:'🔔', src:'avisos.html' }, // tela inicial de todo mundo: pendências por módulo/aba
-  { id:'dashboard', label:'Dashboard', icon:'📊', src:null },
+  // PAINEL: Avisos (tela inicial de todo mundo) + Dashboard + IA num módulo só.
+  // O id continua 'dashboard' pra não quebrar sessões salvas e atalhos antigos.
+  { id:'dashboard', label:'PAINEL', icon:'📊', src:null },
   { id:'vendas', label:'CUPOM', icon:'🛒', src:null },
   { id:'atendimento', label:'Atendimento', icon:'💬', src:'atendimento.html' },
   { id:'caixa', label:'Caixa', icon:'💰', src:null },
@@ -1080,10 +1081,11 @@ function subCaixaPermitidos(){
   return out;
 }
 
-// Módulo Dashboard: Painel (relatórios) e Inteligência Artificial, absorvido pra
-// dentro — mesmo padrão do Caixa: sem tela de escolha, entra direto no Painel, com
-// uma aba "IA" no topo pra trocar.
+// Módulo PAINEL (id 'dashboard'): Avisos + Dashboard (relatórios) + Inteligência
+// Artificial. Sem tela de cartões: entra sempre em Avisos (liberado pra todo mundo) e
+// troca pelas abas do topo. Dashboard e IA continuam dependendo da permissão de cada um.
 const DASHBOARD_SUBMODULOS = {
+  avisos: { label:'Avisos', icon:'🔔', src:'avisos.html', permModulo:'avisos' },
   painel: { label:'Dashboard', icon:'📊', src:'dashboard.html', permModulo:'dashboard' },
   ia:     { label:'IA', icon:'🤖', src:'ia.html', permModulo:'ia' },
 };
@@ -1104,7 +1106,7 @@ function subConfigPermitidos(){
   return out;
 }
 function subDashboardPermitidos(){
-  const out = [];
+  const out = ['avisos'];
   if(currentPermissoes['dashboard'] && currentPermissoes['dashboard'].ativo) out.push('painel');
   if(currentPermissoes['ia'] && currentPermissoes['ia'].ativo) out.push('ia');
   return out;
@@ -1127,15 +1129,11 @@ function podeVerModulo(m){
            (currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo) ||
            (currentPermissoes['conciliacao'] && currentPermissoes['conciliacao'].ativo);
   }
-  if(m.id==='dashboard'){
-    return (currentPermissoes['dashboard'] && currentPermissoes['dashboard'].ativo) ||
-           (currentPermissoes['ia'] && currentPermissoes['ia'].ativo);
-  }
+  if(m.id==='dashboard') return true; // PAINEL sempre tem a aba Avisos
   if(m.id==='config'){
     return (currentPermissoes['config'] && currentPermissoes['config'].ativo) ||
            (currentPermissoes['dp'] && currentPermissoes['dp'].ativo);
   }
-  if(m.id==='avisos') return true;
   return currentPermissoes[m.id] && currentPermissoes[m.id].ativo;
 }
 function subVendasPermitidos(){
@@ -1439,7 +1437,7 @@ function preaquecerModulos(){
     const srcs = new Set();
     Object.values(VENDAS_SUBMODULOS).forEach(s=>{ if(s.src && currentPermissoes[s.permModulo] && currentPermissoes[s.permModulo].ativo) srcs.add(s.src); });
     Object.values(CAIXA_SUBMODULOS).forEach(s=>{ if(s.src && currentPermissoes[s.permModulo] && currentPermissoes[s.permModulo].ativo) srcs.add(s.src); });
-    Object.values(DASHBOARD_SUBMODULOS).forEach(s=>{ if(s.src && currentPermissoes[s.permModulo] && currentPermissoes[s.permModulo].ativo) srcs.add(s.src); });
+    subDashboardPermitidos().forEach(id=>{ const s = DASHBOARD_SUBMODULOS[id]; if(s && s.src) srcs.add(s.src); });
     Object.values(CONFIG_SUBMODULOS).forEach(s=>{ if(s.src && currentPermissoes[s.permModulo] && currentPermissoes[s.permModulo].ativo) srcs.add(s.src); });
     SIDEBAR_MODULES.forEach(m=>{ if(m.src && podeVerModulo(m)) srcs.add(m.src); });
     const iniciar = ()=>{ srcs.forEach(src=>{ const l = document.createElement('link'); l.rel = 'prefetch'; l.as = 'document'; l.href = src; document.head.appendChild(l); }); };
@@ -1484,7 +1482,7 @@ function enterShell(moduloInicial){
   if(!alvo){
     // Administração (Cadastro/DP) só como tela inicial se for a única coisa liberada —
     // senão vai pro Dashboard ou pro primeiro módulo de trabalho
-    alvo = permitidos.find(m=>m.id==='avisos') || permitidos.find(m=>m.id==='dashboard') || permitidos.find(m=>m.id!=='config' && m.id!=='loja') || permitidos[0];
+    alvo = permitidos.find(m=>m.id==='dashboard') || permitidos.find(m=>m.id!=='config' && m.id!=='loja') || permitidos[0];
   }
   selecionarModulo(alvo.id);
 }
@@ -1500,8 +1498,8 @@ function fecharMenuMobile(){
 document.getElementById('btnToggleSidebar').addEventListener('click', abrirMenuMobile);
 document.getElementById('sidebarOverlay').addEventListener('click', fecharMenuMobile);
 
-/* Bolinha com a quantidade de pendências no item "Avisos" do menu. */
-function atualizarBadgeAvisos(total){ atualizarBadgeModulo('avisos', total); }
+/* Bolinha com a quantidade de pendências (Avisos) no item "PAINEL" do menu. */
+function atualizarBadgeAvisos(total){ atualizarBadgeModulo('dashboard', total); }
 function atualizarBadgeModulo(moduloId, total){
   const item = document.querySelector('.side-item[data-modulo="'+moduloId+'"]');
   if(!item) return;
@@ -1553,7 +1551,7 @@ function iconeSvg(nome, emojiReserva){
   if(!p) return emojiReserva ? `<span class="ico-emoji">${emojiReserva}</span>` : '';
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 }
-const ICONE_MODULO = { avisos:'bell', dashboard:'chart', vendas:'cart', atendimento:'chat', caixa:'wallet', marketing:'megaphone', reforma:'gem', lancamentos:'calc', site:'globe', config:'sliders', ajuda:'help' };
+const ICONE_MODULO = { dashboard:'chart', vendas:'cart', atendimento:'chat', caixa:'wallet', marketing:'megaphone', reforma:'gem', lancamentos:'calc', site:'globe', config:'sliders', ajuda:'help' };
 
 /* Cartões da tela inicial de cada grupo (um por sub-tela liberada pra pessoa). */
 const GRUPO_CARDS = {
@@ -1569,8 +1567,9 @@ const GRUPO_CARDS = {
     gastos:     { icone:'receipt', titulo:'Gastos',          desc:'Contas a pagar, vencimentos e despesas lançadas' },
     conciliacao:{ icone:'check',   titulo:'Conciliação',     desc:'Confere cartões e PIX recebidos com o que foi vendido' },
   }},
-  dashboard: { titulo:'Dashboard', sub:'Indicadores e análises do negócio.', itens:{
-    painel: { icone:'chart',    titulo:'Painel', desc:'Vendas, metas e desempenho das lojas e vendedoras' },
+  dashboard: { titulo:'PAINEL', sub:'Avisos, indicadores e análises do negócio.', itens:{
+    avisos: { icone:'bell',     titulo:'Avisos', desc:'Pendências de cada módulo que precisam de atenção' },
+    painel: { icone:'chart',    titulo:'Dashboard', desc:'Vendas, metas e desempenho das lojas e vendedoras' },
     ia:     { icone:'sparkles', titulo:'IA',     desc:'Pergunte à inteligência artificial e veja os alertas do dia' },
   }},
   config: { titulo:'Administração', sub:'Cadastros compartilhados e gestão de pessoas.', itens:{
@@ -1622,7 +1621,7 @@ function subModuloDoGrupo(g, s){
 /* Clique no menu lateral: grupos sempre abrem na tela de cartões (ou direto na
  * única sub-tela liberada). */
 function abrirModuloDoMenu(id){
-  if(GRUPOS_COM_CARDS.includes(id)){ definirSubDoGrupo(id, null); if(id==='config') cadastroAberto = false; }
+  if(GRUPOS_COM_CARDS.includes(id)){ definirSubDoGrupo(id, id==='dashboard' ? 'avisos' : null); if(id==='config') cadastroAberto = false; }
   selecionarModulo(id);
 }
 /* Atalhos vindos de módulos (irParaModulo com o id do grupo): abre direto numa
@@ -1687,7 +1686,7 @@ const MODULOS_ABSORVIDOS = {
   pdv:['vendas','pdv'], os:['vendas','os'], orcamentos:['vendas','orc'],
   transferencias:['vendas','transf'], gravacoes:['vendas','grav'],
   gastos:['caixa','gastos'], conciliacao:['caixa','conciliacao'],
-  ia:['dashboard','ia'],
+  ia:['dashboard','ia'], avisos:['dashboard','avisos'],
   dp:['config','dp'],
 };
 /* Cria (uma vez) e mostra o iframe de uma sub-tela de grupo. */
@@ -1746,6 +1745,8 @@ function selecionarModulo(moduloId, subVendas){
     // Só uma sub-tela liberada (ex.: login da Up Case, que só tem Gravações): não
     // faz sentido mostrar uma tela de cartões com um cartão só — abre direto nela.
     if(!atual && perm.length===1){ definirSubDoGrupo(moduloId, perm[0]); atual = perm[0]; }
+    // PAINEL nunca mostra tela de cartões: sem aba escolhida, cai em Avisos.
+    if(!atual && moduloId==='dashboard'){ definirSubDoGrupo(moduloId, 'avisos'); atual = 'avisos'; }
     if(!atual){ mostrarGrupoHome(moduloId); return; }
     const sub = subModuloDoGrupo(moduloId, atual);
     document.getElementById('mobileTopbarTitle').textContent = sub.label;
@@ -1760,14 +1761,15 @@ function selecionarModulo(moduloId, subVendas){
       renderConfigTabs();
       return;
     }
-    mostrarIframeSub(moduloId+'_'+atual, sub);
+    const jaAberto = iframesCriados[moduloId+'_'+atual];
+    const iframeSub = mostrarIframeSub(moduloId+'_'+atual, sub);
+    // Avisos: ao voltar pra ele, recalcula (algo pode ter sido resolvido em outro módulo)
+    if(atual==='avisos' && jaAberto && iframeSub.contentWindow){ try{ iframeSub.contentWindow.postMessage({ type:'recarregarAvisos' }, '*'); }catch(e){} }
     atualizarCabecalho();
     return;
   }
 
   let iframe = iframesCriados[moduloId];
-  // Avisos: ao voltar pra ele, recalcula (algo pode ter sido resolvido em outro módulo)
-  if(moduloId==='avisos' && iframe && iframe.contentWindow){ try{ iframe.contentWindow.postMessage({ type:'recarregarAvisos' }, '*'); }catch(e){} }
   if(!iframe){
     iframe = document.createElement('iframe');
     iframe.src = info.src;
@@ -2064,7 +2066,9 @@ function telaVisivelAtual(){
 }
 /* Para onde o "← Voltar" leva a partir da tela atual (null = tela raiz, sem Voltar). */
 function acaoVoltar(){
-  if(!moduloAtual || moduloAtual==='avisos') return null;
+  if(!moduloAtual) return null;
+  // PAINEL › Avisos é a tela inicial (sem Voltar); Dashboard/IA voltam pra Avisos.
+  if(moduloAtual==='dashboard') return dashboardSubAtual==='avisos' ? null : irParaTelaInicial;
   const g = grupoDoModuloAtual();
   if(g){
     const s = subAtualDoGrupo(g);
@@ -2079,10 +2083,11 @@ function acaoVoltar(){
   }
   return irParaTelaInicial;
 }
-/* Da tela de cartões (ou de um módulo simples), "voltar" leva pra tela inicial (Avisos). */
+/* Da tela de cartões (ou de um módulo simples), "voltar" leva pra tela inicial (PAINEL › Avisos). */
 function irParaTelaInicial(){
   vendasSubAtual = null;
-  selecionarModulo(moduloAtual==='avisos' ? 'dashboard' : 'avisos');
+  dashboardSubAtual = 'avisos';
+  selecionarModulo('dashboard');
 }
 function atualizarCabecalho(){
   // Atendimento trabalha por instância (Vilaça/Reforma), não pela loja: o seletor de loja some lá.
@@ -2212,6 +2217,7 @@ window.addEventListener('message', (ev)=>{
     if(mod==='gastos' && iframesCriados['caixa_gastos']) return iframesCriados['caixa_gastos'];
     if(mod==='conciliacao' && iframesCriados['caixa_conciliacao']) return iframesCriados['caixa_conciliacao'];
     if(mod==='dashboard' && iframesCriados['dashboard_painel']) return iframesCriados['dashboard_painel'];
+    if(mod==='avisos' && iframesCriados['dashboard_avisos']) return iframesCriados['dashboard_avisos'];
     if(mod==='ia' && iframesCriados['dashboard_ia']) return iframesCriados['dashboard_ia'];
     if(mod==='dp' && iframesCriados['config_dp']) return iframesCriados['config_dp'];
     return null;
@@ -5611,7 +5617,7 @@ function renderMensagensTab(main){
  * mesmas permissões, mesmo clique, mesmas bolinhas de pendência e item ativo.
  * Nenhuma lógica de navegação nova: tocar num atalho = tocar no item do menu. */
 (function(){
-  const PREFERIDOS = ['avisos','vendas','atendimento','caixa'];
+  const PREFERIDOS = ['dashboard','vendas','atendimento','caixa'];
   const nav = document.getElementById('bottomNav');
   const menu = document.getElementById('sidebarModules');
   if(!nav || !menu) return;
