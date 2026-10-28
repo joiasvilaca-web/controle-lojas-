@@ -223,6 +223,10 @@ button{cursor:pointer;}
 .conv.interno{background:#EEF4FF;box-shadow:inset 5px 0 0 #2563EB;}
 .conv.interno.active{background:#DCE7FD;}
 .conv.interno .avatar{background:#2563EB;color:#fff;}
+.conv.interno.grupo{background:#ECFDF5;box-shadow:inset 5px 0 0 #059669;border-bottom:2px solid #A7F3D0;}
+.conv.interno.grupo.active{background:#D1FAE5;}
+.conv.interno.grupo .avatar{background:#059669;font-size:20px;}
+.conv.interno.grupo .tag-int{background:#059669;}
 .tagchip.tag-int{background:#2563EB;color:#fff;font-weight:700;}
 .int-wrap.solo{border:none;border-radius:0;height:100%;min-height:0;}
 .int-conv .hd{display:flex;align-items:center;gap:8px;}
@@ -502,6 +506,20 @@ function tocarSom(){
     [880, 1175].forEach((f,i)=>{ const o = audioCtx.createOscillator(), g = audioCtx.createGain(), ini = t + i*0.16; o.type='sine'; o.frequency.value = f; g.gain.setValueAtTime(0.0001, ini); g.gain.exponentialRampToValueAtTime(0.25, ini+0.02); g.gain.exponentialRampToValueAtTime(0.0001, ini+0.15); o.connect(g); g.connect(audioCtx.destination); o.start(ini); o.stop(ini+0.16); });
   }catch(e){}
 }
+/* Toque curto parecido com o do WhatsApp (dois "plins" rápidos), pras mensagens internas. */
+function tocarSomInterno(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state==='suspended') audioCtx.resume();
+    const t = audioCtx.currentTime;
+    [[1318.5,0],[1975.5,0.11]].forEach(([f,d])=>{
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain(), ini = t + d;
+      o.type = 'triangle'; o.frequency.setValueAtTime(f, ini); o.frequency.exponentialRampToValueAtTime(f*0.92, ini+0.12);
+      g.gain.setValueAtTime(0.0001, ini); g.gain.exponentialRampToValueAtTime(0.45, ini+0.008); g.gain.exponentialRampToValueAtTime(0.0001, ini+0.16);
+      o.connect(g); g.connect(audioCtx.destination); o.start(ini); o.stop(ini+0.17);
+    });
+  }catch(e){}
+}
 function tituloAba(total){
   try{ const d = window.top.document; if(tituloOriginal===null) tituloOriginal = d.title.replace(/^\(\d+\)\s*/,''); d.title = total ? `(${total}) ${tituloOriginal}` : tituloOriginal; }catch(e){}
 }
@@ -611,11 +629,30 @@ function internosDaLista(){
   if(!estado.int || !['minhas','todas','finalizadas'].includes(estado.filtro)) return [];
   const q = String(estado.busca||'').trim().toLowerCase();
   const verFinalizadas = estado.filtro==='finalizadas';
-  return (estado.int.threads||[]).filter(t=> !!t.finalizada===verFinalizadas && (!q || String(t.titulo||'').toLowerCase().includes(q)))
+  return (estado.int.threads||[]).filter(t=> t.tipo!=='grupo' && !!t.finalizada===verFinalizadas && (!q || String(t.titulo||'').toLowerCase().includes(q)))
     .slice().sort((a,b)=> String((b.ultima||{}).em||'').localeCompare(String((a.ultima||{}).em||'')));
+}
+/* GRUPO VILAÇA: conversa coletiva de toda a equipe, sempre fixa no topo (Minhas e Todas). */
+function grupoDaLista(){
+  if(!estado.int || !['minhas','todas'].includes(estado.filtro)) return null;
+  const g = (estado.int.threads||[]).find(t=>t.tipo==='grupo') || null;
+  const q = String(estado.busca||'').trim().toLowerCase();
+  return g && (!q || 'grupo vilaça'.includes(q) || 'grupo vilaca'.includes(q)) ? g : null;
 }
 function itemInternoHtml(t){
   const ativo = estado.interno && estado.int.atual && estado.int.atual.chave===t.chave;
+  if(t.tipo==='grupo'){
+    const u = t.ultima || {};
+    return `
+    <div class="conv interno grupo ${ativo?'active':''}" data-int="${escapeHtml(t.chave)}">
+      <div class="avatar">👥</div>
+      <div class="info">
+        <div class="l1"><span class="nome">Grupo Vilaça</span><span class="hora">${fmtHora(u.em)}</span></div>
+        <div class="l2"><span class="prev">${u.texto ? escapeHtml((u.quem?u.quem+': ':'')+u.texto) : 'Mensagens para toda a equipe'}</span>${t.nao_lidas?`<span class="badge">${t.nao_lidas}</span>`:''}</div>
+        <div class="quem"><span class="tagchip tag-int">📌 Fixo</span>Toda a equipe</div>
+      </div>
+    </div>`;
+  }
   const dep = t.tipo==='departamento';
   const nome = String(t.titulo||'').replace(/^🏷\s*/,'');
   const u = t.ultima || {};
@@ -632,7 +669,7 @@ function itemInternoHtml(t){
 function renderLista(){
   const wrap = document.getElementById('conversas');
   const internos = internosDaLista();
-  if(!estado.conversas.length && !internos.length){ wrap._h = null; wrap.innerHTML = `<p class="muted" style="padding:20px;">Nenhuma conversa aqui.</p>`; return; }
+  if(!estado.conversas.length && !internos.length && !grupoDaLista()){ wrap._h = null; wrap.innerHTML = `<p class="muted" style="padding:20px;">Nenhuma conversa aqui.</p>`; return; }
   // Intercala por horário da última mensagem, mantendo a ordem que o servidor mandou pras de cliente.
   const pedacos = []; let j = 0;
   estado.conversas.forEach(c=>{
@@ -640,7 +677,8 @@ function renderLista(){
     pedacos.push(itemConversaHtml(c));
   });
   while(j<internos.length) pedacos.push(itemInternoHtml(internos[j++]));
-  const htmlL = pedacos.join('');
+  const grupo = grupoDaLista();
+  const htmlL = (grupo ? itemInternoHtml(grupo) : '') + pedacos.join('');
   if(wrap._h === htmlL) return; wrap._h = htmlL; const st = wrap.scrollTop; wrap.innerHTML = htmlL; wrap.scrollTop = st;
   wrap.querySelectorAll('.conv[data-id]').forEach(el=> el.addEventListener('click', ()=> abrirConversa(el.dataset.id)));
   wrap.querySelectorAll('.conv[data-int]').forEach(el=> el.addEventListener('click', ()=>{
@@ -1303,7 +1341,7 @@ async function pollChat(){
     const aberta = estado.interno && estado.int.atual && !document.hidden;
     const fora = novas.filter(n=> !(aberta && estado.int.atual.chave===n.chave));
     if(fora.length){
-      if(estado.aviso) tocarSom();
+      if(estado.aviso) tocarSomInterno();
       try{ if(navigator.vibrate) navigator.vibrate([100,50,100]); }catch(e){}
       const n = fora[fora.length-1]; bannerInterno(n);
       try{ if(document.hidden && window.Notification && Notification.permission==='granted'){ const nt = new Notification('Mensagem interna — '+(n.de||''), { body:n.texto, tag:'int_'+n.chave }); nt.onclick = ()=>{ try{ window.top.focus(); }catch(e){} abrirInterno(n.chave); nt.close(); }; } }catch(e){}
@@ -1340,15 +1378,15 @@ async function abrirThreadInterno(t){
   const v = document.getElementById('chatVazio'); v.style.display='block'; v.classList.add('painel');
   document.getElementById('app').classList.add('ver-chat');
   estado.int.atual = { chave:t.chave, tipo:t.tipo, outro_id:t.outro_id, titulo:t.titulo, finalizada:!!t.finalizada }; estado.int.msgs = [];
-  const dep = t.tipo==='departamento';
+  const dep = t.tipo==='departamento', grupo = t.tipo==='grupo';
   v.innerHTML = `<div class="int-wrap solo"><div class="int-conv" id="intConv">
-    <div class="hd"><button class="btn btn-sm voltar-lista" id="intVoltar">←</button><span class="tagchip tag-int">Interno</span><span>${escapeHtml(String(t.titulo||'').replace(/^🏷\s*/,''))}</span><span class="sub">${dep?'Departamento':'Conversa da equipe'}</span>
-      ${t.finalizada ? `<button class="btn btn-sm btn-accent" id="intFinalizar" data-op="reabrir" style="margin-left:auto;">↩ Reabrir</button>` : `<button class="btn btn-sm btn-danger" id="intFinalizar" data-op="finalizar" style="margin-left:auto;">✔ Finalizar</button>`}</div>
+    <div class="hd"><button class="btn btn-sm voltar-lista" id="intVoltar">←</button><span class="tagchip tag-int">Interno</span><span>${grupo ? 'Grupo Vilaça' : escapeHtml(String(t.titulo||'').replace(/^🏷\s*/,''))}</span><span class="sub">${grupo?'Toda a equipe':dep?'Departamento':'Conversa da equipe'}</span>
+      ${grupo ? '' : t.finalizada ? `<button class="btn btn-sm btn-accent" id="intFinalizar" data-op="reabrir" style="margin-left:auto;">↩ Reabrir</button>` : `<button class="btn btn-sm btn-danger" id="intFinalizar" data-op="finalizar" style="margin-left:auto;">✔ Finalizar</button>`}</div>
     <div class="ms" id="intMs"></div>
     <div class="cp"><textarea id="intTxt" placeholder="Escreva a mensagem… (Enter envia)"></textarea><button class="btn btn-accent" id="intEnv">Enviar</button></div>
   </div></div>`;
   document.getElementById('intVoltar').onclick = ()=> document.getElementById('app').classList.remove('ver-chat');
-  document.getElementById('intFinalizar').onclick = ()=> finalizarInterno(t);
+  const bFin = document.getElementById('intFinalizar'); if(bFin) bFin.onclick = ()=> finalizarInterno(t);
   renderLista();
   document.getElementById('intEnv').onclick = enviarInterno;
   document.getElementById('intTxt').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); enviarInterno(); } });
@@ -1377,7 +1415,7 @@ async function finalizarInterno(t){
 async function enviarInterno(){
   const t = estado.int.atual, x = document.getElementById('intTxt'); if(!t || !x) return;
   const texto = x.value.trim(); if(!texto) return; x.value='';
-  const r = await chat({ op:'enviar', destino_tipo:t.tipo==='departamento'?'departamento':'pessoa', destino_id:t.outro_id, texto });
+  const r = await chat({ op:'enviar', destino_tipo:t.tipo==='grupo'?'grupo':t.tipo==='departamento'?'departamento':'pessoa', destino_id:t.outro_id, texto });
   if(!r||!r.ok){ showToast((r&&r.error)||'Não enviou'); x.value = texto; return; }
   await carregarMsgsInterno(); await carregarThreads(true);
 }

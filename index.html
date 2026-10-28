@@ -1453,6 +1453,7 @@ function enterShell(moduloInicial){
   document.getElementById('shellWhoLevel').textContent = levelLabel(currentUser.nivel);
   buildSidebar();
   atualizarAvatar();
+  __chatDesde = null; pollChatInternoShell();
   const decisaoLoja = decidirLojaInicial();
   // Alerta de contas vencendo hoje (módulo Gastos) — aparece sempre ao logar
   verificarAlertaGastos();
@@ -1496,6 +1497,45 @@ function fecharMenuMobile(){
 }
 document.getElementById('btnToggleSidebar').addEventListener('click', abrirMenuMobile);
 document.getElementById('sidebarOverlay').addEventListener('click', fecharMenuMobile);
+
+/* Mensagens internas (chat da equipe / Grupo Vilaça): enquanto o CHAT ainda não foi aberto
+ * nesta sessão, o próprio app consulta a cada 15s e toca o aviso em qualquer módulo. Depois
+ * que o CHAT abre, ele mesmo cuida disso (pollChat em atendimento.html). */
+let __chatDesde = null, __chatTimer = null, __audioShell = null;
+function tocarSomInternoShell(){
+  try{
+    __audioShell = __audioShell || new (window.AudioContext || window.webkitAudioContext)();
+    if(__audioShell.state==='suspended') __audioShell.resume();
+    const t = __audioShell.currentTime;
+    [[1318.5,0],[1975.5,0.11]].forEach(([f,d])=>{
+      const o = __audioShell.createOscillator(), g = __audioShell.createGain(), ini = t + d;
+      o.type = 'triangle'; o.frequency.setValueAtTime(f, ini); o.frequency.exponentialRampToValueAtTime(f*0.92, ini+0.12);
+      g.gain.setValueAtTime(0.0001, ini); g.gain.exponentialRampToValueAtTime(0.45, ini+0.008); g.gain.exponentialRampToValueAtTime(0.0001, ini+0.16);
+      o.connect(g); g.connect(__audioShell.destination); o.start(ini); o.stop(ini+0.17);
+    });
+  }catch(e){}
+}
+async function pollChatInternoShell(){
+  clearTimeout(__chatTimer);
+  __chatTimer = setTimeout(pollChatInternoShell, 15000);
+  if(!currentUser || !__gatewaySenha || iframesCriados['atendimento']) return;
+  if(!(currentPermissoes['atendimento'] && currentPermissoes['atendimento'].ativo)) return;
+  try{
+    const res = await fetch(SUPABASE_URL + '/functions/v1/atendimento-chat', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, op:'poll', desde: __chatDesde || undefined }) });
+    const r = await res.json();
+    if(!r || !r.ok) return;
+    const primeira = !__chatDesde; __chatDesde = r.agora;
+    atualizarBadgeModulo('atendimento', Number(r.total)||0);
+    const novas = primeira ? [] : (r.novas||[]);
+    if(novas.length){
+      let somLigado = true; try{ somLigado = localStorage.getItem('atd_aviso') !== '0'; }catch(e){}
+      if(somLigado) tocarSomInternoShell();
+      const n = novas[novas.length-1];
+      const onde = String(n.titulo||'').startsWith('👥') ? 'Grupo Vilaça' : (n.de||'');
+      showToast('💬 ' + onde + (onde!==n.de && n.de ? ' · '+n.de : '') + ': ' + String(n.texto||'').slice(0,80));
+    }
+  }catch(e){ /* sem rede: tenta de novo no próximo ciclo */ }
+}
 
 /* Bolinha com a quantidade de pendências (Avisos) no item "PAINEL" do menu. */
 function atualizarBadgeAvisos(total){ atualizarBadgeModulo('dashboard', total); }
