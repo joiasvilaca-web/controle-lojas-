@@ -115,8 +115,7 @@ td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
 .item-row-valor input{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px;height:36px;box-sizing:border-box;}
 .item-row-valor input:focus{border-color:var(--accent,#1F6F8B);outline:none;}
 .item-row-estoque{margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
-@media (max-width:640px){ .item-row-produto{min-width:100%;}
-@media (max-width:640px){ .item-row-produto{min-width:100%;} .item-row-topo{flex-wrap:wrap;}
+@media (max-width:640px){ .item-row-produto{min-width:100%;} .item-row-topo{flex-wrap:wrap;} }
 .btn-ajuste{padding:5px 9px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--surface);color:var(--ink-soft);height:34px;white-space:nowrap;transition:background .12s,color .12s,border-color .12s;}
 .btn-ajuste.ativo-desc{background:#FDECEA;color:#B42318;border-color:#B42318;}
 .btn-ajuste.ativo-acr{background:#E7F5EE;color:#1E8E5A;border-color:#1E8E5A;}
@@ -1662,6 +1661,97 @@ function recalcularValorAjustado(it){
 /* ============================================================
    LISTA DE ORÇAMENTOS
    ============================================================ */
+/* ============================================================
+   FOLLOW-UP (veio do antigo Marketing › Orçamentos)
+   Só orçamentos em aberto (status que não encerram, os 3 primeiros). Regra de atraso:
+   2º status aberto parado há 2+ dias, 3º status aberto há 7+ dias.
+   ============================================================ */
+function followupStatusAbertos(){ return statusList().filter(x=>!x.encerra).slice(0,3); }
+function followupDias(o){
+  const ref = o.statusAtualizadoEm || o.criadoEm || o.data;
+  if(!ref) return 0;
+  return Math.max(0, Math.floor((Date.now() - new Date(ref).getTime()) / 86400000));
+}
+function followupLimite(o){
+  const pos = followupStatusAbertos().findIndex(s=>s.id===o.status);
+  return pos===1 ? 2 : pos>=2 ? 7 : null;
+}
+function followupAtrasado(o){ const lim = followupLimite(o); return lim!==null && followupDias(o) >= lim; }
+function followupAbertos(){
+  const ids = new Set(followupStatusAbertos().map(s=>s.id));
+  return (orcamentos||[]).filter(o=> ids.has(o.status));
+}
+function followupAtrasados(){ return followupAbertos().filter(followupAtrasado); }
+function nomeLojaOrc(o){
+  const l = (config.lojas||[]).find(x=>x.id===o.lojaId);
+  return l ? l.nome : (o.loja || '—');
+}
+function renderFollowup(main){
+  const abertos = followupStatusAbertos();
+  const atrasados = followupAtrasados();
+  main.innerHTML = `
+    <div class="page-head">
+      <h1 class="page-title">Follow-up</h1>
+      <p class="page-sub">Orçamentos em aberto e quem precisa de contato. Atrasado: ${escapeHtml((abertos[1]||{}).nome||'2º status')} há 2 dias ou mais, ${escapeHtml((abertos[2]||{}).nome||'3º status')} há 7 dias ou mais.</p>
+    </div>
+    ${atrasados.length>0
+      ? `<div class="alerta-vencimento"><b>${atrasados.length} orçamento(s) com follow-up atrasado.</b> Eles aparecem primeiro na lista, marcados em vermelho.</div>`
+      : `<div class="card" style="padding:12px 16px; border-color:var(--ok); background:var(--ok-soft); color:var(--ok); font-weight:600;">Nenhum orçamento com follow-up atrasado.</div>`}
+    <div class="filters">
+      <input type="text" id="fuBusca" placeholder="Buscar cliente ou vendedora...">
+      <select id="fuLoja"><option value="">Todas as lojas</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.nome)}</option>`).join('')}</select>
+      <select id="fuStatus"><option value="">Todos os status abertos</option>${abertos.map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.nome)}</option>`).join('')}</select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="fuSoAtrasados"> Só atrasados</label>
+    </div>
+    <div class="card" style="padding:0; overflow-x:auto;"><div id="fuTabela"></div></div>
+  `;
+  function atualizar(){
+    const q = (document.getElementById('fuBusca').value||'').toLowerCase();
+    const loja = document.getElementById('fuLoja').value;
+    const st = document.getElementById('fuStatus').value;
+    const so = document.getElementById('fuSoAtrasados').checked;
+    let lista = followupAbertos().filter(o=>{
+      if(q && !((o.cliente||'').toLowerCase().includes(q) || (o.vendedora||'').toLowerCase().includes(q))) return false;
+      if(loja && o.lojaId!==loja) return false;
+      if(st && o.status!==st) return false;
+      if(so && !followupAtrasado(o)) return false;
+      return true;
+    });
+    lista.sort((a,b)=> (followupAtrasado(b)-followupAtrasado(a)) || (followupDias(b)-followupDias(a)));
+    const el = document.getElementById('fuTabela');
+    if(lista.length===0){ el.innerHTML = '<div class="empty" style="padding:22px;">Nenhum orçamento em aberto com esses filtros.</div>'; return; }
+    el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="text-align:left;border-bottom:2px solid var(--line);">
+        <th style="padding:10px 12px;">Cliente</th><th style="padding:10px 8px;">Vendedora</th><th style="padding:10px 8px;">Loja</th>
+        <th style="padding:10px 8px;">Valor</th><th style="padding:10px 8px;">Status</th><th style="padding:10px 8px;">Parado há</th><th style="padding:10px 8px;"></th></tr></thead><tbody>
+      ${lista.map(o=>{
+        const atras = followupAtrasado(o);
+        const d = followupDias(o);
+        return `<tr style="border-bottom:1px solid var(--line);${atras?'background:var(--danger-soft);':''}">
+          <td style="padding:9px 12px;${atras?'border-left:4px solid var(--danger);':''}"><b>${escapeHtml(o.cliente||'—')}</b>${o.codigoVia?`<div class="muted" style="font-size:11px;">${escapeHtml(o.codigoVia)}</div>`:''}</td>
+          <td style="padding:9px 8px;">${escapeHtml(o.vendedora||'—')}</td>
+          <td style="padding:9px 8px;">${escapeHtml(nomeLojaOrc(o))}</td>
+          <td style="padding:9px 8px;white-space:nowrap;">${fmtMoeda(o.valorTotal)}</td>
+          <td style="padding:9px 8px;"><span class="badge" style="background:var(--wait-soft);color:var(--wait);">${escapeHtml(statusInfoDe(o.status).nome)}</span></td>
+          <td style="padding:9px 8px;white-space:nowrap;">${atras?`<span class="badge" style="background:var(--danger);color:#fff;">Atrasado · ${d} dia(s)</span>`:`${d} dia(s)`}</td>
+          <td style="padding:9px 8px;white-space:nowrap;">
+            <button type="button" class="btn btn-ghost btn-sm" data-fuabrir="${escapeHtml(o.id)}">Abrir</button>
+            ${o.telefone?`<button type="button" class="btn btn-ghost btn-sm" data-fuwa="${escapeHtml(o.id)}" title="Chamar no WhatsApp">${waIconSvg()}</button>`:''}
+            ${o.email?`<button type="button" class="btn btn-ghost btn-sm" data-fumail="${escapeHtml(o.id)}" title="Enviar e-mail">E-mail</button>`:''}
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>`;
+    el.querySelectorAll('[data-fuabrir]').forEach(b=> b.addEventListener('click', ()=>{ const o = orcamentos.find(x=>x.id===b.dataset.fuabrir); if(o) abrirDetalheOrcamento(o); }));
+    el.querySelectorAll('[data-fuwa]').forEach(b=> b.addEventListener('click', ()=> enviarWhatsAppOrcId(b.dataset.fuwa)));
+    el.querySelectorAll('[data-fumail]').forEach(b=> b.addEventListener('click', ()=> enviarEmailOrcId(b.dataset.fumail)));
+  }
+  ['fuBusca','fuLoja','fuStatus','fuSoAtrasados'].forEach(id=>{
+    const e = document.getElementById(id);
+    e.addEventListener(e.tagName==='INPUT' && e.type==='text' ? 'input' : 'change', atualizar);
+  });
+  atualizar();
+}
+
 function renderLista(main){
   const avisos = orcamentosParaAvisar();
   const abertos5dias = orcamentosAbertosMaisDe5Dias();
@@ -2238,7 +2328,8 @@ const EMBEDDED = window.self !== window.top;
 function tabsForLevel(){
   const t = [
     { id:'novo', label:'Novo orçamento', icon:'📝' },
-    { id:'lista', label:'Orçamentos', icon:'📋' },
+    { id:'lista', label:'Lançados', icon:'📋' },
+    { id:'followup', label:'Follow-up', icon:'⏰', badge: (config ? followupAtrasados().length : 0) || null },
   ];
   if(window.__permissoesAbasOverride) return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
   return t;
@@ -2252,6 +2343,7 @@ function buildTabs(){
 }
 function renderTabs(){
   document.querySelectorAll('nav.tabs button, .mobile-tabbar button').forEach(b=>{ b.classList.toggle('active', b.dataset.tab===currentTab); });
+  if(EMBEDDED && currentUser) parent.postMessage({ type:'tabs', modulo:'orcamentos', tabs: tabsForLevel(), active: currentTab }, '*');
   if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'orcamentos', tabId: currentTab }, '*');
 }
 function renderView(){
@@ -2259,6 +2351,7 @@ function renderView(){
   if(!main) return;
   main.innerHTML = '';
   if(currentTab==='novo') renderNovo(main);
+  else if(currentTab==='followup') renderFollowup(main);
   else renderLista(main);
 }
 function podeCriarOrcamento(){
