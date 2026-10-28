@@ -557,7 +557,6 @@ function popupInstancia(c){
   const d = document.createElement('div'); d.className='inst-pop';
   d.innerHTML = `<div class="c" style="--ic:${info.cor}"><div style="font-size:13px;color:#666;">Você está atendendo pela instância</div><div class="n">${escapeHtml(info.nome)}</div><div style="font-size:14px;color:#444;">Canal: <b>${canal}</b><br>Responda em nome da <b>${escapeHtml(info.nome)}</b>.</div><button type="button">Entendi</button></div>`;
   d.querySelector('button').onclick = ()=> d.remove();
-  d.addEventListener('click', e=>{ if(e.target===d) d.remove(); });
   document.body.appendChild(d);
 }
 function canalChip(c){ if(c.canal==='instagram') return '<span class="tagchip" title="Instagram">📷 IG</span>'; if(c.canal==='messenger') return '<span class="tagchip" title="Facebook Messenger">💬 FB</span>'; return estado.variosCanais ? '<span class="tagchip" title="WhatsApp">WA</span>' : ''; }
@@ -609,9 +608,10 @@ async function contadores(){
 }
 /* Conversas internas que entram na lista principal (abas Minhas e Todas), filtradas pela busca. */
 function internosDaLista(){
-  if(!estado.int || !['minhas','todas'].includes(estado.filtro)) return [];
+  if(!estado.int || !['minhas','todas','finalizadas'].includes(estado.filtro)) return [];
   const q = String(estado.busca||'').trim().toLowerCase();
-  return (estado.int.threads||[]).filter(t=> !q || String(t.titulo||'').toLowerCase().includes(q))
+  const verFinalizadas = estado.filtro==='finalizadas';
+  return (estado.int.threads||[]).filter(t=> !!t.finalizada===verFinalizadas && (!q || String(t.titulo||'').toLowerCase().includes(q)))
     .slice().sort((a,b)=> String((b.ultima||{}).em||'').localeCompare(String((a.ultima||{}).em||'')));
 }
 function itemInternoHtml(t){
@@ -1339,14 +1339,16 @@ async function abrirThreadInterno(t){
   document.getElementById('chatArea').style.display='none';
   const v = document.getElementById('chatVazio'); v.style.display='block'; v.classList.add('painel');
   document.getElementById('app').classList.add('ver-chat');
-  estado.int.atual = { chave:t.chave, tipo:t.tipo, outro_id:t.outro_id, titulo:t.titulo }; estado.int.msgs = [];
+  estado.int.atual = { chave:t.chave, tipo:t.tipo, outro_id:t.outro_id, titulo:t.titulo, finalizada:!!t.finalizada }; estado.int.msgs = [];
   const dep = t.tipo==='departamento';
   v.innerHTML = `<div class="int-wrap solo"><div class="int-conv" id="intConv">
-    <div class="hd"><button class="btn btn-sm voltar-lista" id="intVoltar">←</button><span class="tagchip tag-int">Interno</span><span>${escapeHtml(String(t.titulo||'').replace(/^🏷\s*/,''))}</span><span class="sub">${dep?'Departamento':'Conversa da equipe'}</span></div>
+    <div class="hd"><button class="btn btn-sm voltar-lista" id="intVoltar">←</button><span class="tagchip tag-int">Interno</span><span>${escapeHtml(String(t.titulo||'').replace(/^🏷\s*/,''))}</span><span class="sub">${dep?'Departamento':'Conversa da equipe'}</span>
+      ${t.finalizada ? `<button class="btn btn-sm btn-accent" id="intFinalizar" data-op="reabrir" style="margin-left:auto;">↩ Reabrir</button>` : `<button class="btn btn-sm btn-danger" id="intFinalizar" data-op="finalizar" style="margin-left:auto;">✔ Finalizar</button>`}</div>
     <div class="ms" id="intMs"></div>
     <div class="cp"><textarea id="intTxt" placeholder="Escreva a mensagem… (Enter envia)"></textarea><button class="btn btn-accent" id="intEnv">Enviar</button></div>
   </div></div>`;
   document.getElementById('intVoltar').onclick = ()=> document.getElementById('app').classList.remove('ver-chat');
+  document.getElementById('intFinalizar').onclick = ()=> finalizarInterno(t);
   renderLista();
   document.getElementById('intEnv').onclick = enviarInterno;
   document.getElementById('intTxt').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); enviarInterno(); } });
@@ -1358,6 +1360,19 @@ function pintarMsgsInterno(){
   const eu = estado.meuId; const fim = ms.scrollHeight - ms.scrollTop - ms.clientHeight < 80;
   ms.innerHTML = estado.int.msgs.map(m=>{ const meu = m.remetente_id===eu; const h = new Date(m.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); return `<div class="int-m ${meu?'eu':''}"><div class="q">${meu?'Você':escapeHtml(m.remetente_nome||'')} · ${h}</div>${escapeHtml(m.texto)}</div>`; }).join('') || '<div class="muted">Sem mensagens ainda. Escreva a primeira.</div>';
   if(fim || estado.int.msgs.length<=1) ms.scrollTop = ms.scrollHeight;
+}
+/* Finalizar tira a conversa interna da lista de quem finalizou (vai para Finalizadas).
+ * Se chegar mensagem nova, ela volta sozinha. */
+async function finalizarInterno(t){
+  const op = document.getElementById('intFinalizar').dataset.op;
+  const r = await chat({ op, chave:t.chave });
+  if(!r || !r.ok){ showToast((r && r.error) || 'Não consegui '+(op==='finalizar'?'finalizar':'reabrir')+'.'); return; }
+  estado.interno = false; estado.int.atual = null;
+  const v = document.getElementById('chatVazio'); v.classList.remove('painel');
+  v.innerHTML = 'Escolha uma conversa à esquerda.<br><span class="muted">Mensagens novas aparecem sozinhas.</span>';
+  document.getElementById('app').classList.remove('ver-chat');
+  await carregarThreads(true);
+  showToast(op==='finalizar' ? 'Conversa interna finalizada' : 'Conversa interna reaberta');
 }
 async function enviarInterno(){
   const t = estado.int.atual, x = document.getElementById('intTxt'); if(!t || !x) return;
@@ -2054,7 +2069,7 @@ function modoInterna(on){
 document.getElementById('btnInterna').addEventListener('click', ()=>{ modoInterna(!estado.modoInterna); document.getElementById('texto').focus(); });
 document.getElementById('arquivo').addEventListener('change', e=>{ enviarArquivo(e.target.files[0]); e.target.value=''; });
 document.getElementById('btnVoltarLista').addEventListener('click', ()=> document.getElementById('app').classList.remove('ver-chat'));
-document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') fecharModal(); });
+/* pop-up só fecha pelos botões dele (não some ao clicar fora) */
 document.getElementById('zoom').addEventListener('click', ()=> document.getElementById('zoom').style.display='none');
 
 window.addEventListener('message', async ev=>{
