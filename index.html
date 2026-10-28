@@ -3894,6 +3894,8 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     cstCsosn: base ? (base.cstCsosn||'') : '',
     fornecedor: base ? (base.fornecedor||'') : '',
     fator: base && base.fator!=null ? base.fator : null,
+    referenciaCompra: base ? (base.referenciaCompra||'') : '',
+    custoCompra: base && base.custoCompra!=null ? base.custoCompra : null,
     gtin: base ? (base.gtin||'') : '',
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
     custo: base && base.custo!==undefined ? base.custo : null,
@@ -3912,6 +3914,33 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     codigoReservadoSeq = seq;
   }
 
+  /** Decide ouro ou prata pelo nome da categoria/subcategoria escolhida (sem campo próprio de metal). */
+  function metalPadraoProduto(){
+    const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===d.categoriaId);
+    const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
+    const texto = ((sub?sub.nome:'')+' '+(cat?cat.nome:'')).toLowerCase();
+    return texto.includes('prata') ? 'prata' : 'ouro';
+  }
+  /** Custo atualizado = Fator × valor aplicado da referência escolhida (Cadastro → Fator → Compra Metal), sempre ao vivo.
+   * Custo compra fixa esse cálculo no momento do lançamento (primeiro salvamento com fator e cotação
+   * disponíveis) e não recalcula mais sozinho depois disso — só o botão ↻ força uma nova fixação.
+   * Enquanto o produto ainda não foi salvo com um valor fixado, o campo mostra o cálculo ao vivo (igual
+   * ao Custo atualizado), pra não travar num valor errado digitado no meio do preenchimento. */
+  function valorCompraAoVivo(){
+    garantirConfigFator();
+    const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
+    const fator = isNaN(fatorNum) ? null : fatorNum;
+    const vAplicado = d.referenciaCompra ? valorCompraMetal(d.referenciaCompra) : null;
+    return (fator!=null && vAplicado!=null) ? Math.round(fator*vAplicado*100)/100 : null;
+  }
+  function recalcularCustoCompra(){
+    const campoFixo = document.getElementById('pe_custoCompra');
+    const campoAtualizado = document.getElementById('pe_custoAtualizado');
+    if(!campoFixo || !campoAtualizado) return;
+    const atualizado = valorCompraAoVivo();
+    campoAtualizado.value = atualizado!=null ? atualizado.toFixed(2) : '—';
+    campoFixo.value = d.custoCompra!=null ? Number(d.custoCompra).toFixed(2) + ' (fixado)' : (atualizado!=null ? atualizado.toFixed(2) + ' (será fixado ao salvar)' : 'aguardando fator/cotação');
+  }
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
       b.classList.toggle('btn-accent', b.dataset.petab===peTabAtiva);
@@ -3962,6 +3991,19 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             <input type="text" id="pe_fator" placeholder="Livre" value="${d.fator!=null?escapeHtml(String(d.fator)):''}">
           </div>
         </div>
+        <div class="field"><label>Referência de compra</label>
+          <select id="pe_referenciaCompra">${CAMPOS_COMPRA_METAL.map(c=>`<option value="${c.id}" ${d.referenciaCompra===c.id?'selected':''}>${escapeHtml(c.label)}</option>`).join('')}</select>
+          <p class="muted" style="margin:4px 0 0; font-size:12px;">Padrão: DTVM do metal da categoria/subcategoria. Pode trocar pra Cooperativa ou Compra Vilaça (ouro) se preferir.</p>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Custo compra (R$) <span class="muted">fixado no cadastro</span></label>
+            <div style="display:flex; gap:6px;">
+              <input type="text" id="pe_custoCompra" disabled style="flex:1;">
+              <button type="button" class="icon-btn" id="btnRecalcularCustoCompra" title="Recalcular com a referência e o fator de agora (normalmente só muda sozinho na primeira vez)">↻</button>
+            </div>
+          </div>
+          <div class="field"><label>Custo atualizado (R$) <span class="muted">segue a cotação do dia</span></label><input type="text" id="pe_custoAtualizado" disabled></div>
+        </div>
         <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:14px 0 0;">
           <input type="checkbox" id="pe_vendavel" ${d.vendavel?'checked':''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
         </label>
@@ -3990,7 +4032,17 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           if(campoFator) campoFator.value = forn.fator;
         }
       });
-      document.getElementById('pe_fator').addEventListener('input', e=> d.fator = e.target.value===''?null:e.target.value);
+      if(!d.referenciaCompra){ d.referenciaCompra = metalPadraoProduto()==='prata' ? 'prataDtvm' : 'ouroDtvm'; document.getElementById('pe_referenciaCompra').value = d.referenciaCompra; }
+      document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); });
+      document.getElementById('pe_referenciaCompra').addEventListener('change', e=>{ d.referenciaCompra = e.target.value; recalcularCustoCompra(); });
+      document.getElementById('btnRecalcularCustoCompra').addEventListener('click', ()=>{
+        const novo = valorCompraAoVivo();
+        if(novo==null){ showToast('Falta fator ou a cotação do dia ainda não carregou.'); return; }
+        d.custoCompra = novo;
+        recalcularCustoCompra();
+        showToast('Custo compra refixado com a referência e o fator de agora — só vale depois de salvar.');
+      });
+      recalcularCustoCompra();
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
       document.getElementById('btnEditarCategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Categorias', config.produtosOtica.categorias, 'cat', ()=> montarShellModalProduto()));
       document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> montarShellModalProduto()));
@@ -4402,6 +4454,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     }
     const composicaoValida = composicao.filter(c=> c.insumoId && c.quantidade && Number(c.quantidade) > 0)
       .map(c=> ({ insumoId: c.insumoId, quantidade: Number(c.quantidade) }));
+    // Custo compra: se ainda não tem valor fixado (produto novo, ou antigo sem essa cotação disponível
+    // na época), fixa agora com o fator e a referência atuais — esse é o "momento do lançamento".
+    // Se já tinha um valor fixado (edição normal, ou refixado pelo ↻), mantém exatamente como está.
+    if(d.custoCompra==null) d.custoCompra = valorCompraAoVivo();
     const dados = {
       id: idAtual,
       nome,
@@ -4423,6 +4479,8 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       cstCsosn: (d.cstCsosn||'').trim(),
       fornecedor: (d.fornecedor||'').trim(),
       fator: d.fator===null || d.fator==='' ? null : String(d.fator).trim(),
+      referenciaCompra: d.referenciaCompra||'',
+      custoCompra: d.custoCompra==null ? null : Number(d.custoCompra),
       gtin: (d.gtin||'').trim(),
       // O estoque em si NÃO é salvo aqui por cima — vai por movimento no Kardex logo
       // abaixo (cada loja que mudou vira um movimento AJUSTE_INVENTARIO/CRIACAO_INICIAL),
@@ -4500,7 +4558,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           nome: d.nome, unidade: d.unidade, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
           comprimento: d.comprimento, altura: d.altura, espessura: d.espessura,
           peso: d.peso, vendavel: d.vendavel, observacao: d.observacao,
-          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, gtin: d.gtin,
+          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, referenciaCompra: d.referenciaCompra, gtin: d.gtin,
           estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
           numerosAro: JSON.parse(JSON.stringify(numerosAro)),
           pedras: JSON.parse(JSON.stringify(pedras)),
