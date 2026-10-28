@@ -3891,6 +3891,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     vendavel: !base || base.vendavel !== false,
     ncm: base ? (base.ncm||'') : '',
     _ncmAuto: null, // último NCM preenchido automaticamente — se o usuário editar na mão, não some sozinho
+    _cfopAuto: null, // idem, pro CFOP de entrada
     cfop: base ? (base.cfop||'') : '',
     cstCsosn: base ? (base.cstCsosn||'') : '',
     fornecedor: base ? (base.fornecedor||'') : '',
@@ -4074,6 +4075,40 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     const campo = document.getElementById('pe_ncm');
     if(campo) campo.value = d.ncm;
   }
+  /** Classifica o Tipo (aba Descrições, vinculado a Cadastro → Fator → Venda) em
+   * revenda (comprado pronto de terceiros: Joias Representante, Relógio) ou própria
+   * (confecção/industrialização Vilaça: Joias Vilaça, Aliança) — base do CFOP de entrada. */
+  function classificarTipoVendaCfop(tipoVendaId){
+    if(!tipoVendaId) return null;
+    if(tipoVendaId==='relogio' || tipoVendaId.startsWith('joiaRepresentante')) return 'revenda';
+    if(tipoVendaId.startsWith('alianca') || tipoVendaId.startsWith('joiaVilaca')) return 'propria';
+    return null;
+  }
+  /** Estado de referência das nossas lojas (todas em MG) — usado pra comparar com o
+   * estado do fornecedor e decidir CFOP interno (1.xxx) ou interestadual (2.xxx). */
+  function nossoEstadoPadrao(){
+    const l = (config.lojas||[]).find(x=>x.estado);
+    return (l?l.estado:'MG').trim().toUpperCase();
+  }
+  /** CFOP de entrada (compra/cadastro do produto): depende do Tipo (revenda × produção
+   * própria) e se o fornecedor é do mesmo estado das nossas lojas ou de outro. */
+  function cfopPadrao(){
+    const grupo = classificarTipoVendaCfop(d.tipoVenda);
+    if(!grupo) return '';
+    const forn = (config.fornecedores||[]).find(f=>f.empresa===d.fornecedor);
+    const ufForn = (forn && forn.estado ? forn.estado : '').trim().toUpperCase();
+    const mesmoEstado = !ufForn || ufForn===nossoEstadoPadrao(); // sem UF do fornecedor, assume mesmo estado
+    if(grupo==='revenda') return mesmoEstado ? '1.102' : '2.102';
+    return mesmoEstado ? '1.101' : '2.101';
+  }
+  function sincronizarCfop(){
+    const novo = cfopPadrao();
+    if(!novo) return;
+    if(!d.cfop || d.cfop===d._cfopAuto) d.cfop = novo;
+    d._cfopAuto = novo;
+    const campo = document.getElementById('pe_cfop');
+    if(campo) campo.value = d.cfop;
+  }
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
       b.classList.toggle('btn-accent', b.dataset.petab===peTabAtiva);
@@ -4230,6 +4265,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           const campoFator = document.getElementById('pe_fator');
           if(campoFator) campoFator.value = forn.fator;
         }
+        sincronizarCfop();
       });
       if(relogioAtivo){
         document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularPrecoVendaRelogio(); });
@@ -4257,8 +4293,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
         document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
       }
-      document.getElementById('pe_tipoVenda').addEventListener('change', e=>{ d.tipoVenda = e.target.value; recalcularTipoVenda(); });
+      document.getElementById('pe_tipoVenda').addEventListener('change', e=>{ d.tipoVenda = e.target.value; recalcularTipoVenda(); sincronizarCfop(); });
       recalcularTipoVenda();
+      sincronizarCfop();
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
       document.getElementById('btnEditarCategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Categorias', config.produtosOtica.categorias, 'cat', ()=> montarShellModalProduto()));
       document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> montarShellModalProduto()));
