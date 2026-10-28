@@ -77,23 +77,23 @@ Cada loja tem cor temática. Login da Up Case abre direto em Gravações.
 | Arquivo | Módulo |
 |---|---|
 | `index.html` | Shell principal (menu, autenticação, roteamento de módulos via iframe) |
-| `vendas.html` | CUPOM → PDV + O.S. + Orçamento + Transferências + Gravações |
+| `vendas.html` | CAIXA › Vendas (PDV) |
 | `painel-ordens.html` | Pedido / O.S. |
 | `orcamentos.html` | Orçamentos |
 | `transferencias-reposicoes.html` | Transferências / Reposições |
 | `gravacoes.html` | Gravações (serviço Up Case) |
-| `caixa.html` | Caixa (abas: Resumo + Gastos + Conciliação) |
+| `caixa.html` | CAIXA › Resumo do caixa |
 | `gastos.html` | Gastos (sub-tela do Caixa) |
 | `conciliacao.html` | Conciliação (sub-tela do Caixa) |
 | `dashboard.html` | PAINEL › Dashboard (Visão geral com gráficos + relatórios) |
 | `ia.html` | Módulo IA (Diretoria/Gerente) |
-| `marketing.html` | Marketing |
+| `marketing.html` | CAIXA › Aniversário (abas Aniversário + Mala direta, com `?secao=aniversario`). O follow-up de orçamentos foi para a aba Follow-up do `orcamentos.html` |
 | `dp.html` | Departamento Pessoal (inclui Funcionários e Perfis de Acesso) |
 | `avisos.html` | PAINEL › Avisos (tela inicial pós-login para todos) |
-| `atendimento.html` | Atendimento WhatsApp/Instagram |
+| `atendimento.html` | CHAT: WhatsApp/Instagram + conversas internas na mesma lista + Agenda (tarefas, calendário, minhas vias, assistente) |
 | `definir-senha.html` | Página pública de setup de senha (link de convite) |
 | `advertencia.html` | Página pública de confirmação de advertência (DP) |
-| `reforma-admin.html` | Reforma — módulo interno (fila de pedidos, orçamento, custódia, Gerar O.S.) |
+| `reforma-admin.html` | CAIXA › Reforma — módulo interno (fila de pedidos, orçamento, custódia, Gerar O.S.) |
 | `reforma.html` | Página pública do cliente da Reforma (envia fotos, aceita orçamento, acompanha pelo link `?t=TOKEN`) |
 
 **`index.html` (shell) só é editado na conversa APP GERAL.**
@@ -106,12 +106,14 @@ Grupos de menu com abas em `#shellTopTabs`:
 
 | Grupo | Sub-telas | Permissão base |
 |---|---|---|
-| **CUPOM** | PDV · O.S. · Orçamento · Transferências · Gravações | por sub-tela |
-| **PAINEL** (id `dashboard`) | Avisos · Dashboard · IA | Avisos: todos; `dashboard` / `ia` |
-| **Caixa** | Resumo · Gastos · Conciliação | `caixa` / `gastos` / `conciliacao` |
-| **ADMINISTRAÇÃO** | Cadastro · Departamento Pessoal | `config` / `dp` |
-| **Marketing** | — | `marketing` |
-| **Atendimento** | — | `atendimento` |
+| **PAINEL** (id `dashboard`) | Avisos · Dashboard · IA (abas) | Avisos: todos; `dashboard` / `ia` |
+| **CAIXA** (id `caixa`, cartões) | Vendas · Pedido · Orçamento · Transferências · Gravações · Resumo do caixa · Gastos · Conciliação · Reforma · Aniversário | por sub-tela: `vendas` / `os` / `orcamentos` / `transferencias` / `gravacoes` / `caixa` / `gastos` / `conciliacao` / `reforma` / `marketing` |
+| **CHAT** (id `atendimento`) | — | `atendimento` |
+| **CONFIGURAÇÕES** (id `config`) | Cadastro · Departamento pessoal (abas) | `config` / `dp` |
+
+- Padrão de texto (28/out): módulos e cartões em CAIXA ALTA; abas só com a 1ª letra maiúscula e sem emoji (`rotuloAba` no shell normaliza o que os módulos mandam). Aba com rótulo repetido não aparece duas vezes.
+- O shell marca o `<html>` de cada módulo com `embedded` (`marcarEmbutido`); `tema.css` esconde o `#lojaFaixa` lá dentro (a loja já aparece no cabeçalho).
+- Iframes do CAIXA: `caixa_pdv`, `caixa_os`, `caixa_orc`, `caixa_transf`, `caixa_grav`, `caixa_resumo`, `caixa_gastos`, `caixa_conciliacao`, `caixa_reforma`, `caixa_aniv` (`marketing.html?secao=aniversario`).
 
 - Loja selecionada: `<select id="shellLojaSelect">` ao lado da logo
 - Módulos absorvidos mapeados em `MODULOS_ABSORVIDOS` (ids antigos → grupo+sub)
@@ -136,6 +138,7 @@ Grupos de menu com abas em `#shellTopTabs`:
 | `upload-foto-drive` | v23 | Upload de fotos para Google Drive |
 | `reforma-api` | v2 | Todas as ops do módulo Reforma (públicas `public*` sem sessão + internas com `senha`) — v2: multi-itens, frete, WhatsApp Evolution |
 | `cotacoes-mercado` | — | Cotações (não usa sessão) |
+| `agenda-tarefas` | v1 | Agenda do CHAT: tarefas (tabela `agenda_tarefas`), lembretes pro calendário e "Minhas vias". Código em `agenda-tarefas.ts`. Usa `npm:@supabase/supabase-js@2` (o deploy com `jsr:` estava dando timeout) |
 
 Deploy: **`files` param precisa do conteúdo completo com `name: index.ts`** e `verify_jwt: true` (boolean).
 
@@ -279,6 +282,8 @@ Cada conversa é **escopada a um único módulo**:
 - Dashboard: metas gravadas com `mergeConfigKey` na chave `metasMensais` (nunca mais `saveConfig` da config inteira).
 - Marketing: aba Orçamentos carrega sob demanda (`carregarOrcamentosSeNecessario`).
 - 28/out: Avisos e Dashboard viraram um módulo só, **PAINEL** (id interno continua `dashboard`; `avisos` virou sub-tela `dashboard_avisos`, mapeada em `MODULOS_ABSORVIDOS`). PAINEL não tem tela de cartões: abre sempre em Avisos. Dashboard ganhou a seção **Visão geral** (`renderVisaoGeral`, gráficos em SVG puro, só diretoria/gerente).
+- 28/out (2): CUPOM + Caixa + Reforma + Aniversário viraram o módulo CAIXA; Administração → CONFIGURAÇÕES; Atendimento → CHAT. Marketing dividido (Aniversário/Mala direta no CAIXA; follow-up de orçamentos na aba Follow-up do Orçamento, com contador de atrasados). Abas padronizadas e sem repetição; `orcamentos.html` tinha um `@media` sem fechar que deixava a barra escura duplicada aparecer.
+- 28/out (2): Chat interno entra na lista principal do CHAT (etiqueta azul "Interno"); o botão Interno só inicia conversa. Agenda virou quadro de tarefas (privada/loja/compartilhada, cores por tipo, classificação), calendário e Minhas vias.
 - 28/out: RLS ligado em `atendimento_pessoal_usuarios`, `atendimento_lembretes` e `atendimento_setup_log` (só Edge Functions com service_role usam).
 
 ---
