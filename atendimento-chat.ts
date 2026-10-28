@@ -4,6 +4,7 @@
 // finalizar, reabrir, anexoUrl. Mensagem pode levar foto/arquivo (bucket privado atendimento-midia, pasta interno/).
 // Finalizar vale só pra quem finalizou (atendimento_interno_leituras.finalizada_em);
 // mensagem nova depois disso traz a conversa de volta pra lista.
+// v6: telas antigas abertas (que mandam o grupo como destino_tipo "pessoa" + destino_id "vilaca") também funcionam.
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -99,7 +100,7 @@ Deno.serve(async (req) => {
       let texto = String(b.texto || "").trim().slice(0, 2000);
       const anexo = b.anexo && b.anexo.base64 ? b.anexo : null;
       if (!texto && !anexo) return json({ error: "texto vazio" }, 400);
-      const tipo = b.destino_tipo === "grupo" ? "grupo" : b.destino_tipo === "departamento" ? "departamento" : "pessoa"; const dest = tipo === "grupo" ? "vilaca" : String(b.destino_id || "");
+      const tipo = (b.destino_tipo === "grupo" || String(b.destino_id || "") === "vilaca") ? "grupo" : b.destino_tipo === "departamento" ? "departamento" : "pessoa"; const dest = tipo === "grupo" ? "vilaca" : String(b.destino_id || "");
       let chave: string;
       if (tipo === "grupo") chave = GRUPO;
       else if (tipo === "pessoa") { if (!dest || dest === meuId || !nomes[dest]) return json({ error: "destinatário inválido" }, 400); chave = "p:" + [meuId, dest].sort().join("|"); }
