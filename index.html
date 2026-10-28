@@ -3896,6 +3896,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     fator: base && base.fator!=null ? base.fator : null,
     referenciaCompra: base ? (base.referenciaCompra||'') : '',
     custoCompra: base && base.custoCompra!=null ? base.custoCompra : null,
+    tipoVenda: base ? (base.tipoVenda||'') : '',
     gtin: base ? (base.gtin||'') : '',
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
     custo: base && base.custo!==undefined ? base.custo : null,
@@ -3961,6 +3962,29 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     campoAtualizado.value = atualizado!=null ? atualizado.toFixed(2) : '—';
     campoFixo.value = d.custoCompra!=null ? Number(d.custoCompra).toFixed(2) : (atualizado!=null ? atualizado.toFixed(2) : '—');
   }
+  /** Tipo (vínculo com Cadastro → Fator → Venda): Valor do produto = Fator × Valor do tipo (sempre ao
+   * vivo, nunca fixa); Desconto atual = desconto configurado pro tipo; Valor de venda = Valor do
+   * produto já líquido do desconto. Tudo arredondado ao centavo. */
+  function recalcularTipoVenda(){
+    const wrap = document.getElementById('pe_tipoVendaCamposWrap');
+    if(!wrap) return;
+    if(!d.tipoVenda){ wrap.innerHTML = ''; return; }
+    wrap.innerHTML = `
+      <div class="grid-3">
+        <div class="field" style="margin-bottom:0;"><label>Valor do produto (R$)</label><input type="text" id="pe_valorProduto" disabled></div>
+        <div class="field" style="margin-bottom:0;"><label>Desconto atual (%)</label><input type="text" id="pe_descontoAtual" disabled></div>
+        <div class="field" style="margin-bottom:0;"><label>Valor de venda (R$)</label><input type="text" id="pe_valorDeVenda" disabled></div>
+      </div>
+    `;
+    const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
+    const fator = isNaN(fatorNum) ? null : fatorNum;
+    const vt = valorVendaFator(d.tipoVenda);
+    const valorProduto = (fator!=null && vt.valor!=null) ? Math.round(fator*vt.valor*100)/100 : null;
+    const valorDeVenda = valorProduto!=null ? Math.round(valorProduto*(1-vt.desconto/100)*100)/100 : null;
+    document.getElementById('pe_valorProduto').value = valorProduto!=null ? valorProduto.toFixed(2) : '—';
+    document.getElementById('pe_descontoAtual').value = String(vt.desconto).replace('.',',') + '%';
+    document.getElementById('pe_valorDeVenda').value = valorDeVenda!=null ? valorDeVenda.toFixed(2) : '—';
+  }
   function renderPeTabs(){
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
       b.classList.toggle('btn-accent', b.dataset.petab===peTabAtiva);
@@ -4022,6 +4046,11 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           <div class="field"><label>Custo atualizado (R$) <span class="muted">segue a cotação do dia</span></label><input type="text" id="pe_custoAtualizado" disabled></div>
         </div>
         <div class="field"><label>Preço de venda (R$)</label><input type="text" inputmode="decimal" id="pe_precoVenda" value="${d.precoVenda!==null?d.precoVenda:''}"></div>
+        <div class="field"><label>Tipo</label>
+          <select id="pe_tipoVenda"><option value="">Nenhum</option>${CAMPOS_VENDA_FATOR.map(c=>`<option value="${c.id}" ${d.tipoVenda===c.id?'selected':''}>${escapeHtml(c.label)}</option>`).join('')}</select>
+          <p class="muted" style="margin:4px 0 0; font-size:12px;">Liga esse produto a um tipo de venda do Cadastro → Fator → Venda.</p>
+        </div>
+        <div id="pe_tipoVendaCamposWrap"></div>
         <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft); margin:14px 0 0;">
           <input type="checkbox" id="pe_vendavel" ${d.vendavel?'checked':''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
         </label>
@@ -4054,11 +4083,13 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
       // o vínculo automático só entra de novo se a categoria/subcategoria for alterada depois.
       if(!d.referenciaCompra) sincronizarReferenciaPeloMetal(); else recalcularCustoCompra();
-      document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); });
+      document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); recalcularTipoVenda(); });
       document.getElementById('pe_referenciaCompra').addEventListener('change', e=>{ d.referenciaCompra = e.target.value; recalcularCustoCompra(); });
       recalcularCustoCompra();
       aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
       document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
+      document.getElementById('pe_tipoVenda').addEventListener('change', e=>{ d.tipoVenda = e.target.value; recalcularTipoVenda(); });
+      recalcularTipoVenda();
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=e.target.checked);
       document.getElementById('btnEditarCategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Categorias', config.produtosOtica.categorias, 'cat', ()=> montarShellModalProduto()));
       document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> montarShellModalProduto()));
@@ -4492,6 +4523,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       fator: d.fator===null || d.fator==='' ? null : String(d.fator).trim(),
       referenciaCompra: d.referenciaCompra||'',
       custoCompra: d.custoCompra==null ? null : Number(d.custoCompra),
+      tipoVenda: d.tipoVenda||'',
       gtin: (d.gtin||'').trim(),
       // O estoque em si NÃO é salvo aqui por cima — vai por movimento no Kardex logo
       // abaixo (cada loja que mudou vira um movimento AJUSTE_INVENTARIO/CRIACAO_INICIAL),
@@ -4569,7 +4601,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           nome: d.nome, unidade: d.unidade, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
           comprimento: d.comprimento, altura: d.altura, espessura: d.espessura,
           peso: d.peso, vendavel: d.vendavel, observacao: d.observacao,
-          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, referenciaCompra: d.referenciaCompra, gtin: d.gtin,
+          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, referenciaCompra: d.referenciaCompra, tipoVenda: d.tipoVenda, gtin: d.gtin,
           estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
           numerosAro: JSON.parse(JSON.stringify(numerosAro)),
           pedras: JSON.parse(JSON.stringify(pedras)),
@@ -4657,6 +4689,16 @@ function valorCompraMetal(id){
   const ref = campo ? refCompraMetal(campo) : null;
   if(des!=null && des!=='' && !isNaN(Number(des)) && ref!=null) return Math.round(ref * (1 - Number(des)/100) * 100) / 100;
   return cm[id]!=null && cm[id]!=='' ? Number(cm[id]) : null;
+}
+/** Valor (R$/g) e desconto (%) configurados pra um tipo de venda (Cadastro → Fator → Venda). */
+function valorVendaFator(id){
+  garantirConfigFator();
+  const v = config.fator.venda[id];
+  const des = config.fator.venda[id+'Desconto'];
+  return {
+    valor: (v!=null && v!=='' && !isNaN(Number(v))) ? Number(v) : null,
+    desconto: (des!=null && des!=='' && !isNaN(Number(des))) ? Number(des) : 0,
+  };
 }
 const CAMPOS_VENDA_FATOR = [
   { id:'joiaRepresentanteOuro', label:'Joia representante ouro' },
