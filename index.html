@@ -3899,6 +3899,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     tipoVenda: base ? (base.tipoVenda||'') : '',
     relogioKit: base ? (base.relogioKit||'sem') : 'sem', // 'com' ou 'sem' kit (só relevante p/ categoria Relógio)
     relogioKitObs: base ? (base.relogioKitObs||'') : '',
+    relogioMostrador: base ? (base.relogioMostrador||'') : '', // Ponteiro/Digital/Smart/Misto (só relevante p/ categoria Relógio)
     gtin: base ? (base.gtin||'') : '',
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
     custo: base && base.custo!==undefined ? base.custo : null,
@@ -3924,6 +3925,18 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
     const nome = (cat?cat.nome:'').toLowerCase();
     return nome.includes('relogio') || nome.includes('relógio');
+  }
+  /** Dados Técnicos é personalizado de acordo com a categoria selecionada: cada tipo de
+   * categoria mostra só as seções que fazem sentido pra ele. Dá pra estender esse perfil
+   * conforme surgirem mais categorias/necessidades. */
+  function perfilDadosTecnicos(categoriaId){
+    const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
+    const nome = (cat?cat.nome:'').toLowerCase();
+    const relogio = ehCategoriaRelogio(categoriaId);
+    return {
+      aro: nome.includes('anel') || nome.includes('alianca') || nome.includes('aliança'),
+      pedra: !relogio, // mostrador/material de relógio é tratado na aba Descrições, não aqui
+    };
   }
   /** Garante que as 5 subcategorias de relógio existem no cadastro geral de subcategorias
    * (criadas uma vez, por nome — se o Felipe já tiver criado na mão, não duplica). */
@@ -4112,6 +4125,15 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             <input type="text" id="pe_relogioKitObs" placeholder="Ex: caixa, manual, certificado..." value="${escapeHtml(d.relogioKitObs||'')}">
           </div>
         </div>
+        <div class="field"><label>Mostrador</label>
+          <select id="pe_relogioMostrador">
+            <option value="">Selecione</option>
+            <option value="Ponteiro" ${d.relogioMostrador==='Ponteiro'?'selected':''}>Ponteiro</option>
+            <option value="Digital" ${d.relogioMostrador==='Digital'?'selected':''}>Digital</option>
+            <option value="Smart" ${d.relogioMostrador==='Smart'?'selected':''}>Smart</option>
+            <option value="Misto" ${d.relogioMostrador==='Misto'?'selected':''}>Misto</option>
+          </select>
+        </div>
         ` : `
         <div class="grid-2">
           <div class="field"><label>Fator</label>
@@ -4146,7 +4168,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         <label style="display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--ink-soft);">
           <input type="checkbox" id="pe_vendavel" ${d.vendavel?'checked':''}> Disponível para venda direta no PDV (desmarque se for só matéria-prima/insumo intermediário)
         </label>
+        <div id="pe_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
       `;
+      mountFotosProduto(document.getElementById('pe_fotosWrap'), fotosHolder, idAtual);
       document.getElementById('pe_nome').addEventListener('input', e=> d.nome=e.target.value);
       document.getElementById('pe_codigoInterno').addEventListener('input', e=>{ d.codigoInterno=e.target.value; if(e.target.value!==codigoReservadoTexto) codigoReservadoTexto=null; });
       document.getElementById('btnGerarCodigoInterno').addEventListener('click', ()=>{
@@ -4194,6 +4218,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         });
         const campoKitObs = document.getElementById('pe_relogioKitObs');
         if(campoKitObs) campoKitObs.addEventListener('input', e=> d.relogioKitObs = e.target.value);
+        document.getElementById('pe_relogioMostrador').addEventListener('change', e=> d.relogioMostrador = e.target.value);
       } else {
         // Só auto-define a referência na abertura do formulário se ele ainda não tiver nenhuma salva
         // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
@@ -4212,6 +4237,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       document.getElementById('btnEditarSubcategoria').addEventListener('click', ()=> abrirGerenciarListaObjetos('Subcategorias', config.produtosOtica.subcategorias, 'sub', ()=> montarShellModalProduto()));
     }
     else if(peTabAtiva==='dadosTecnicos'){
+      const perfil = perfilDadosTecnicos(d.categoriaId);
       body.innerHTML = `
         <div class="grid-3">
           <div class="field"><label>Comprimento (cm)</label><input type="text" inputmode="decimal" id="pe_comprimento" placeholder="0.00" value="${d.comprimento!==null?d.comprimento:''}"></div>
@@ -4220,13 +4246,16 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         </div>
         <div class="field" style="max-width:220px;"><label>Peso (g)</label><input type="text" inputmode="decimal" id="pe_peso" placeholder="0.000" value="${d.peso!==null?d.peso:''}"></div>
 
+        ${perfil.aro ? `
         <div class="section-label" style="margin-top:10px; border:none; padding:0;">Número do aro</div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
           <div class="field" style="flex:0 1 160px; min-width:120px; margin-bottom:0;"><input type="text" inputmode="decimal" id="pe_numeroAroNovo" placeholder="Ex: 18"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="btnAddNumeroAro">+ Adicionar</button>
         </div>
         <div id="pe_numerosAroRows" style="margin-top:8px;"></div>
+        ` : ''}
 
+        ${perfil.pedra ? `
         <div class="section-label" style="margin-top:14px; border:none; padding:0;">Tipo de pedra</div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
           <div class="field" style="flex:1; min-width:110px; margin-bottom:0;">
@@ -4250,13 +4279,14 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         </div>
         <button type="button" class="btn btn-ghost btn-sm" id="btnAddPedra" style="margin-top:6px;">+ Adicionar pedra</button>
         <div id="pe_pedrasRows" style="margin-top:8px;"></div>
+        ` : ''}
 
         <div class="field" style="margin-top:14px;"><label>Observação</label>
           <textarea id="pe_observacao" rows="3" style="width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:8px; font-family:inherit; font-size:14px; resize:vertical;">${escapeHtml(d.observacao||'')}</textarea>
         </div>
 
         <div class="section-label" style="margin-top:18px;">Variações deste produto</div>
-        <p class="muted" style="margin:-4px 0 10px; font-size:12px;">Use quando o mesmo produto tem versões físicas diferentes (peso variando, aro diferente...), cada uma com seu próprio estoque por loja. O estoque da aba "Estoque" passa a ser a soma automática de todas as variações.</p>
+        <p class="muted" style="margin:-4px 0 10px; font-size:12px;">Use quando o mesmo produto tem versões físicas diferentes (peso variando, aro diferente...), cada uma com seu próprio estoque por loja — e suas próprias fotos. O estoque da aba "Estoque" passa a ser a soma automática de todas as variações.</p>
         <div id="pe_variacoesRows"></div>
         <button type="button" class="btn btn-ghost btn-sm" id="btnAddVariacao" style="margin-top:8px;">+ Adicionar variação</button>
       `;
@@ -4264,13 +4294,14 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       aplicarAutoPontoDecimal(document.getElementById('pe_altura'));
       aplicarAutoPontoDecimal(document.getElementById('pe_espessura'));
       aplicarAutoPontoDecimal(document.getElementById('pe_peso'));
-      aplicarAutoPontoDecimal(document.getElementById('pe_numeroAroNovo'));
       document.getElementById('pe_comprimento').addEventListener('input', e=> d.comprimento=e.target.value);
       document.getElementById('pe_altura').addEventListener('input', e=> d.altura=e.target.value);
       document.getElementById('pe_espessura').addEventListener('input', e=> d.espessura=e.target.value);
       document.getElementById('pe_peso').addEventListener('input', e=> d.peso=e.target.value);
       document.getElementById('pe_observacao').addEventListener('input', e=> d.observacao=e.target.value);
 
+      if(perfil.aro){
+      aplicarAutoPontoDecimal(document.getElementById('pe_numeroAroNovo'));
       function renderNumerosAroRows(){
         const wrap = document.getElementById('pe_numerosAroRows');
         if(!wrap) return;
@@ -4288,7 +4319,9 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         campo.value = '';
         renderNumerosAroRows();
       });
+      } // fim perfil.aro
 
+      if(perfil.pedra){
       function renderPedrasRows(){
         const wrap = document.getElementById('pe_pedrasRows');
         if(!wrap) return;
@@ -4310,6 +4343,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         document.getElementById('pe_pedraObs').value = '';
         renderPedrasRows();
       });
+      } // fim perfil.pedra
 
       function estoqueTotalVariacao(v){
         return (config.lojas||[]).reduce((acc,l)=> acc + (Number((v.estoquePorLoja||{})[l.id])||0), 0);
@@ -4322,6 +4356,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           if(v.peso!=null && v.peso!=='') partes.push('Peso: '+v.peso+'g');
           if(v.numerosAro && v.numerosAro.length) partes.push('Aro: '+v.numerosAro.join(', '));
           partes.push('Estoque: '+estoqueTotalVariacao(v));
+          if(v.fotos && v.fotos.length) partes.push('📷 '+v.fotos.length);
           return `
           <div class="code-list-item">
             <div>Variação ${i+1} — ${escapeHtml(partes.join(' · '))}</div>
@@ -4354,8 +4389,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           peso: origem&&origem.peso!=null?origem.peso:'',
           observacao: origem?origem.observacao||'':'',
         };
+        const variacaoId = origem&&origem.id ? origem.id : uid('var');
         const numerosAroV = origem&&Array.isArray(origem.numerosAro) ? [...origem.numerosAro] : [];
         const pedrasV = origem&&Array.isArray(origem.pedras) ? JSON.parse(JSON.stringify(origem.pedras)) : [];
+        const fotosVHolder = { fotos: origem&&Array.isArray(origem.fotos) ? JSON.parse(JSON.stringify(origem.fotos)) : [] };
         const estoqueV = origem&&origem.estoquePorLoja ? {...origem.estoquePorLoja} : {};
         const lojas = config.lojas||[];
         openModal(`
@@ -4384,11 +4421,13 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
               </div>
             `).join('')}
           </div>
+          <div id="vr_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
           <div style="display:flex; gap:10px; margin-top:14px;">
             <button class="btn btn-accent" id="btnSalvarVariacao">Salvar variação</button>
             <button class="btn btn-ghost" id="btnCancelarVariacao">Cancelar</button>
           </div>
         `);
+        mountFotosProduto(document.getElementById('vr_fotosWrap'), fotosVHolder, idAtual+'_'+variacaoId);
         aplicarAutoPontoDecimal(document.getElementById('vr_comprimento'));
         aplicarAutoPontoDecimal(document.getElementById('vr_altura'));
         aplicarAutoPontoDecimal(document.getElementById('vr_espessura'));
@@ -4413,6 +4452,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         document.getElementById('btnCancelarVariacao').addEventListener('click', ()=> montarShellModalProduto());
         document.getElementById('btnSalvarVariacao').addEventListener('click', ()=>{
           const nova = {
+            id: variacaoId,
             comprimento: document.getElementById('vr_comprimento').value===''?null:parseFloat(document.getElementById('vr_comprimento').value),
             altura: document.getElementById('vr_altura').value===''?null:parseFloat(document.getElementById('vr_altura').value),
             espessura: document.getElementById('vr_espessura').value===''?null:parseFloat(document.getElementById('vr_espessura').value),
@@ -4420,6 +4460,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             observacao: document.getElementById('vr_observacao').value.trim(),
             numerosAro: numerosAroV,
             pedras: pedrasV,
+            fotos: fotosVHolder.fotos,
             estoquePorLoja: {},
           };
           document.querySelectorAll('[data-vestloja]').forEach(inp=>{ nova.estoquePorLoja[inp.dataset.vestloja] = parseFloat(inp.value)||0; });
@@ -4496,10 +4537,6 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           </div>
           <div class="muted" id="pe_estoqueTotalHint" style="margin-top:2px;">Total: <b>${totalEstoque} ${unidadeLabel(d.unidade)}</b></div>
         </div>
-        <div class="grid-2">
-          <div class="field"><label>Valor de compra na data (R$) <span class="muted">manual</span></label><input type="text" inputmode="decimal" id="pe_custo" value="${d.custo!==null?d.custo:''}"></div>
-          <div class="field"><label>Valor de compra atualizado (R$) <span class="muted" id="pe_valorAtualizadoRegra"></span></label><input type="text" id="pe_valorCompraAtualizado" disabled></div>
-        </div>
       `;
       if(!temVariacoes){
         body.querySelectorAll('[data-estloja]').forEach(inp=>{
@@ -4511,39 +4548,6 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           });
         });
       }
-      /** Valor de compra atualizado: se a subcategoria escolhida (aba Descrições) tem "ouro" no
-       * nome, usa (peso × Fator) × Valor do Ouro 1000 DTVM (Cadastro → Fator → Compra Metal);
-       * se tem "prata", usa (peso × Fator) × Valor da Prata 1000 DTVM; qualquer outra
-       * subcategoria (ou nenhuma), só repete o Valor de compra na data. */
-      function recalcularValorAtualizado(){
-        garantirConfigFator();
-        const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
-        const nomeSub = (sub?sub.nome:'').toLowerCase();
-        const peso = (d.peso!=null && d.peso!=='') ? parseFloat(d.peso) : null;
-        const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
-        const fator = isNaN(fatorNum) ? null : fatorNum;
-        const custoData = (d.custo!=null && d.custo!=='') ? parseFloat(d.custo) : null;
-        const campoRegra = document.getElementById('pe_valorAtualizadoRegra');
-        const campoValor = document.getElementById('pe_valorCompraAtualizado');
-        let resultado = null, regra = '';
-        if(nomeSub.includes('ouro')){
-          regra = '(peso × Fator) × Valor do Ouro 1000 DTVM';
-          const vOuro = valorCompraMetal('ouroDtvm');
-          if(peso!=null && fator!=null && vOuro!=null) resultado = (peso * fator) * vOuro;
-        } else if(nomeSub.includes('prata')){
-          regra = '(peso × Fator) × Valor da Prata 1000 DTVM';
-          const vPrata = valorCompraMetal('prataDtvm');
-          if(peso!=null && fator!=null && vPrata!=null) resultado = (peso * fator) * vPrata;
-        } else {
-          regra = 'repete o valor de compra na data';
-          resultado = custoData;
-        }
-        if(campoRegra) campoRegra.textContent = '(' + regra + ')';
-        if(campoValor) campoValor.value = resultado!=null ? resultado.toFixed(2) : '—';
-      }
-      recalcularValorAtualizado();
-      aplicarAutoPontoDecimal(document.getElementById('pe_custo'));
-      document.getElementById('pe_custo').addEventListener('input', e=>{ d.custo=e.target.value; recalcularValorAtualizado(); });
     }
     else if(peTabAtiva==='historico'){
       if(!editando){
@@ -4643,6 +4647,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       tipoVenda: d.tipoVenda||'',
       relogioKit: d.relogioKit==='com' ? 'com' : 'sem',
       relogioKitObs: d.relogioKit==='com' ? (d.relogioKitObs||'').trim() : '',
+      relogioMostrador: d.relogioMostrador||'',
       gtin: (d.gtin||'').trim(),
       // O estoque em si NÃO é salvo aqui por cima — vai por movimento no Kardex logo
       // abaixo (cada loja que mudou vira um movimento AJUSTE_INVENTARIO/CRIACAO_INICIAL),
@@ -4701,14 +4706,12 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         ${PE_TABS.map(t=>`<button type="button" class="btn btn-ghost btn-sm" data-petab="${t.id}">${t.label}</button>`).join('')}
       </div>
       <div id="peModalBody"></div>
-      <div id="pe_fotosWrap" style="margin-top:14px; border-top:1px solid var(--line); padding-top:14px;"></div>
       <div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">
         <button class="btn btn-accent" id="btnSalvarProdutoEstoque">Salvar</button>
         ${editando ? `<button class="btn btn-ghost" id="btnClonarProdutoEstoque" title="Cria uma cópia deste produto, com código interno novo, pra você editar e salvar como outro item">⧉ Clonar</button>` : ''}
         <button class="btn btn-ghost" id="btnCancelarProdutoEstoque">Cancelar</button>
       </div>
     `);
-    mountFotosProduto(document.getElementById('pe_fotosWrap'), fotosHolder, idAtual);
     document.querySelectorAll('#peModalTabs [data-petab]').forEach(b=>{
       b.addEventListener('click', ()=>{ peTabAtiva = b.dataset.petab; renderPeTabBody(); renderPeTabs(); });
     });
@@ -4720,7 +4723,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           nome: d.nome, unidade: d.unidade, categoriaId: d.categoriaId, subcategoriaId: d.subcategoriaId,
           comprimento: d.comprimento, altura: d.altura, espessura: d.espessura,
           peso: d.peso, vendavel: d.vendavel, observacao: d.observacao,
-          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, referenciaCompra: d.referenciaCompra, tipoVenda: d.tipoVenda, relogioKit: d.relogioKit, relogioKitObs: d.relogioKitObs, gtin: d.gtin,
+          ncm: d.ncm, cfop: d.cfop, cstCsosn: d.cstCsosn, fornecedor: d.fornecedor, fator: d.fator, referenciaCompra: d.referenciaCompra, tipoVenda: d.tipoVenda, relogioKit: d.relogioKit, relogioKitObs: d.relogioKitObs, relogioMostrador: d.relogioMostrador, gtin: d.gtin,
           estoquePorLoja: {...d.estoquePorLoja}, custo: d.custo, precoVenda: d.precoVenda,
           numerosAro: JSON.parse(JSON.stringify(numerosAro)),
           pedras: JSON.parse(JSON.stringify(pedras)),
