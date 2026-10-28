@@ -160,6 +160,11 @@ button{cursor:pointer;}
 .int-m .q{font-size:10.5px;opacity:.7;margin-bottom:2px}
 .int-conv .cp{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line,#e5e5e5)}
 .int-conv .cp textarea{flex:1;min-height:40px;max-height:110px}
+.int-conv .cp .anx-btn{width:44px;min-height:40px;border-radius:50%;padding:0;font-size:18px;}
+.int-conv.arrastando .ms{outline:3px dashed #2563EB;outline-offset:-6px;}
+.int-m .anx-img{display:block;max-width:240px;max-height:240px;border-radius:8px;margin:4px 0;cursor:zoom-in;background:rgba(0,0,0,.06);min-width:80px;min-height:60px;object-fit:cover;}
+.int-m .anx-arq{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.7);border:1px solid rgba(0,0,0,.08);border-radius:8px;padding:7px 10px;margin:4px 0;cursor:pointer;text-decoration:none;color:inherit;max-width:260px;}
+.int-m .anx-arq b{display:block;font-size:12.5px;word-break:break-all;} .int-m .anx-arq small{color:#666;font-size:11px;}
 #bannerInt{position:fixed;top:12px;right:12px;z-index:9999;max-width:330px;background:#111827;color:#fff;border-left:5px solid #22c55e;border-radius:10px;padding:12px 14px;box-shadow:0 8px 28px rgba(0,0,0,.35);cursor:pointer;display:none;font-size:14px;animation:binS .25s ease-out}
 #bannerInt b{display:block;margin-bottom:3px;font-size:13px;color:#86efac}
 @keyframes binS{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
@@ -1383,21 +1388,82 @@ async function abrirThreadInterno(t){
     <div class="hd"><button class="btn btn-sm voltar-lista" id="intVoltar">←</button><span class="tagchip tag-int">Interno</span><span>${grupo ? 'Grupo Vilaça' : escapeHtml(String(t.titulo||'').replace(/^🏷\s*/,''))}</span><span class="sub">${grupo?'Toda a equipe':dep?'Departamento':'Conversa da equipe'}</span>
       ${grupo ? '' : t.finalizada ? `<button class="btn btn-sm btn-accent" id="intFinalizar" data-op="reabrir" style="margin-left:auto;">↩ Reabrir</button>` : `<button class="btn btn-sm btn-danger" id="intFinalizar" data-op="finalizar" style="margin-left:auto;">✔ Finalizar</button>`}</div>
     <div class="ms" id="intMs"></div>
-    <div class="cp"><textarea id="intTxt" placeholder="Escreva a mensagem… (Enter envia)"></textarea><button class="btn btn-accent" id="intEnv">Enviar</button></div>
+    <div class="cp"><button class="btn anx-btn" id="intAnexo" type="button" title="Anexar foto ou arquivo (até 15 MB). Também dá pra colar uma imagem ou arrastar o arquivo pra conversa.">📎</button><input type="file" id="intArquivo" multiple style="display:none;"><textarea id="intTxt" placeholder="Escreva a mensagem… (Enter envia)"></textarea><button class="btn btn-accent" id="intEnv">Enviar</button></div>
   </div></div>`;
   document.getElementById('intVoltar').onclick = ()=> document.getElementById('app').classList.remove('ver-chat');
   const bFin = document.getElementById('intFinalizar'); if(bFin) bFin.onclick = ()=> finalizarInterno(t);
+  ligarAnexosInterno();
   renderLista();
   document.getElementById('intEnv').onclick = enviarInterno;
   document.getElementById('intTxt').addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); enviarInterno(); } });
   await carregarMsgsInterno(); await carregarThreads(true);
   const x = document.getElementById('intTxt'); if(x) x.focus();
 }
+function tamanhoArquivo(n){ n = Number(n)||0; return n>=1048576 ? (n/1048576).toFixed(1).replace('.',',')+' MB' : Math.max(1,Math.round(n/1024))+' KB'; }
+function anexoInternoHtml(m){
+  if(!m.anexo_path) return '';
+  if(String(m.anexo_tipo||'').startsWith('image/')) return `<img class="anx-img" data-anx="${escapeHtml(m.anexo_path)}" alt="${escapeHtml(m.anexo_nome||'foto')}">`;
+  return `<a class="anx-arq" data-anxarq="${escapeHtml(m.anexo_path)}" data-nome="${escapeHtml(m.anexo_nome||'arquivo')}"><span style="font-size:22px;">📄</span><span><b>${escapeHtml(m.anexo_nome||'arquivo')}</b><small>${tamanhoArquivo(m.anexo_tamanho)} · clique para abrir</small></span></a>`;
+}
+const urlsAnexoInterno = {};
+async function urlAnexoInterno(path, extra){
+  const k = path + (extra ? '|baixar' : '');
+  if(urlsAnexoInterno[k] && urlsAnexoInterno[k].ate > Date.now()) return urlsAnexoInterno[k].url;
+  const r = await chat({ op:'anexoUrl', chave: estado.int.atual && estado.int.atual.chave, path, ...(extra||{}) });
+  if(!r || !r.ok) return null;
+  urlsAnexoInterno[k] = { url:r.url, ate: Date.now() + 50*60000 };
+  return r.url;
+}
 function pintarMsgsInterno(){
   const ms = document.getElementById('intMs'); if(!ms) return;
   const eu = estado.meuId; const fim = ms.scrollHeight - ms.scrollTop - ms.clientHeight < 80;
-  ms.innerHTML = estado.int.msgs.map(m=>{ const meu = m.remetente_id===eu; const h = new Date(m.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); return `<div class="int-m ${meu?'eu':''}"><div class="q">${meu?'Você':escapeHtml(m.remetente_nome||'')} · ${h}</div>${escapeHtml(m.texto)}</div>`; }).join('') || '<div class="muted">Sem mensagens ainda. Escreva a primeira.</div>';
+  ms.innerHTML = estado.int.msgs.map(m=>{
+    const meu = m.remetente_id===eu; const h = new Date(m.created_at).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const soAnexo = m.anexo_path && /^(📷|📎) /.test(m.texto||'') && String(m.texto).slice(2).trim()===String(m.anexo_nome||'');
+    return `<div class="int-m ${meu?'eu':''}"><div class="q">${meu?'Você':escapeHtml(m.remetente_nome||'')} · ${h}</div>${anexoInternoHtml(m)}${soAnexo?'':escapeHtml(m.texto)}</div>`;
+  }).join('') || '<div class="muted">Sem mensagens ainda. Escreva a primeira.</div>';
+  ms.querySelectorAll('img[data-anx]').forEach(async img=>{
+    const url = await urlAnexoInterno(img.dataset.anx); if(!url) { img.alt = 'Não consegui carregar a foto'; return; }
+    img.src = url;
+    img.addEventListener('load', ()=>{ if(fim) ms.scrollTop = ms.scrollHeight; });
+    img.addEventListener('click', ()=>{ document.getElementById('zoomImg').src = url; document.getElementById('zoom').style.display='flex'; });
+  });
+  ms.querySelectorAll('[data-anxarq]').forEach(a=> a.addEventListener('click', async ()=>{
+    const url = await urlAnexoInterno(a.dataset.anxarq, { baixar:true, nome:a.dataset.nome });
+    if(!url){ showToast('Não consegui abrir o arquivo.'); return; }
+    const l = document.createElement('a'); l.href = url; l.target = '_blank'; l.rel = 'noopener'; document.body.appendChild(l); l.click(); l.remove();
+  }));
   if(fim || estado.int.msgs.length<=1) ms.scrollTop = ms.scrollHeight;
+}
+/* Anexos no chat interno: botão 📎, colar imagem (Ctrl+V) ou arrastar arquivo pra conversa. */
+function ligarAnexosInterno(){
+  const inp = document.getElementById('intArquivo'), conv = document.getElementById('intConv');
+  document.getElementById('intAnexo').onclick = ()=> inp.click();
+  inp.onchange = ()=>{ const fs = [...inp.files]; inp.value=''; enviarAnexosInterno(fs); };
+  document.getElementById('intTxt').addEventListener('paste', e=>{
+    const fs = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if(fs.length){ e.preventDefault(); enviarAnexosInterno(fs); }
+  });
+  conv.addEventListener('dragover', e=>{ if([...(e.dataTransfer.types||[])].includes('Files')){ e.preventDefault(); conv.classList.add('arrastando'); } });
+  conv.addEventListener('dragleave', e=>{ if(!conv.contains(e.relatedTarget)) conv.classList.remove('arrastando'); });
+  conv.addEventListener('drop', e=>{ conv.classList.remove('arrastando'); const fs = [...(e.dataTransfer.files||[])]; if(fs.length){ e.preventDefault(); enviarAnexosInterno(fs); } });
+}
+async function enviarAnexosInterno(arquivos){
+  const t = estado.int.atual; if(!t || !arquivos.length) return;
+  const grandes = arquivos.filter(f=> f.size > 15*1024*1024);
+  if(grandes.length) showToast(`${grandes.map(f=>f.name).join(', ')}: maior que 15 MB, não enviado.`);
+  const ok = arquivos.filter(f=> f.size <= 15*1024*1024); if(!ok.length) return;
+  const x = document.getElementById('intTxt'); const legenda = x ? x.value.trim() : '';
+  if(x) x.value = '';
+  for(let i=0;i<ok.length;i++){
+    const f = ok[i];
+    showToast(`Enviando ${ok.length>1?(i+1)+'/'+ok.length+' ':''}${f.name}…`);
+    const base64 = await new Promise((res,rej)=>{ const fr = new FileReader(); fr.onload=()=>res(String(fr.result).split(',')[1]); fr.onerror=rej; fr.readAsDataURL(f); });
+    const r = await chat({ op:'enviar', destino_tipo:t.tipo==='grupo'?'grupo':t.tipo==='departamento'?'departamento':'pessoa', destino_id:t.outro_id, texto: i===0 ? legenda : '', anexo:{ base64, mimetype: f.type || 'application/octet-stream', nome: f.name || 'arquivo' } });
+    if(!r || !r.ok){ showToast((r && r.error) || ('Não enviou '+f.name)); if(i===0 && x && legenda) x.value = legenda; return; }
+  }
+  showToast(ok.length>1 ? `${ok.length} arquivos enviados.` : 'Enviado.');
+  await carregarMsgsInterno(); await carregarThreads(true);
 }
 /* Finalizar tira a conversa interna da lista de quem finalizou (vai para Finalizadas).
  * Se chegar mensagem nova, ela volta sozinha. */

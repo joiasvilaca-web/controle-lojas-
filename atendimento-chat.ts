@@ -1,11 +1,15 @@
-// atendimento-chat v4 — chat interno entre atendentes (pessoa a pessoa, departamento ou o
+// atendimento-chat v5 — chat interno entre atendentes (pessoa a pessoa, departamento ou o
 // GRUPO VILAÇA, conversa coletiva de toda a equipe: chave "g:vilaca", destino_tipo "grupo").
 // Sessão do usuário (sess_…) validada contra gestao_config. Ops: lista, mensagens, enviar, lida, poll,
-// finalizar, reabrir. Finalizar vale só pra quem finalizou (atendimento_interno_leituras.finalizada_em);
+// finalizar, reabrir, anexoUrl. Mensagem pode levar foto/arquivo (bucket privado atendimento-midia, pasta interno/).
+// Finalizar vale só pra quem finalizou (atendimento_interno_leituras.finalizada_em);
 // mensagem nova depois disso traz a conversa de volta pra lista.
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+const MAX_ANEXO = 15 * 1024 * 1024;
+// pasta de anexos de cada conversa (chave sem caracteres especiais)
+const pastaAnexo = (chave: string) => `interno/${chave.replace(/[^\w\-]+/g, "_")}/`;
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
 function sessaoValida(u: any, senha: string): boolean {
@@ -83,14 +87,36 @@ Deno.serve(async (req) => {
       if (error) throw error;
       return json({ ok: true });
     }
+    // Link temporário (1h) pra abrir/baixar um anexo — só quem enxerga a conversa
+    if (b.op === "anexoUrl") {
+      const chave = String(b.chave || ""), path = String(b.path || "");
+      if (!(await podeVer(chave)) || path.includes("..") || !path.startsWith(pastaAnexo(chave))) return json({ error: "sem acesso" }, 403);
+      const { data, error } = await admin.storage.from("atendimento-midia").createSignedUrl(path, 3600, b.baixar ? { download: String(b.nome || true) } : undefined);
+      if (error) throw error;
+      return json({ ok: true, url: data.signedUrl });
+    }
     if (b.op === "enviar") {
-      const texto = String(b.texto || "").trim().slice(0, 2000); if (!texto) return json({ error: "texto vazio" }, 400);
+      let texto = String(b.texto || "").trim().slice(0, 2000);
+      const anexo = b.anexo && b.anexo.base64 ? b.anexo : null;
+      if (!texto && !anexo) return json({ error: "texto vazio" }, 400);
       const tipo = b.destino_tipo === "grupo" ? "grupo" : b.destino_tipo === "departamento" ? "departamento" : "pessoa"; const dest = tipo === "grupo" ? "vilaca" : String(b.destino_id || "");
       let chave: string;
       if (tipo === "grupo") chave = GRUPO;
       else if (tipo === "pessoa") { if (!dest || dest === meuId || !nomes[dest]) return json({ error: "destinatário inválido" }, 400); chave = "p:" + [meuId, dest].sort().join("|"); }
       else { if (!depNome[dest]) return json({ error: "departamento inválido" }, 400); chave = "d:" + dest; }
-      const { error } = await admin.from("atendimento_interno").insert({ chave, destino_tipo: tipo, destino_id: dest, remetente_id: meuId, remetente_nome: meuNome, texto });
+      const linha: Record<string, unknown> = { chave, destino_tipo: tipo, destino_id: dest, remetente_id: meuId, remetente_nome: meuNome, texto };
+      if (anexo) {
+        const bytes = Uint8Array.from(atob(String(anexo.base64)), (c) => c.charCodeAt(0));
+        if (bytes.length > MAX_ANEXO) return json({ error: "Arquivo grande demais (máximo 15 MB)." }, 400);
+        const nome = String(anexo.nome || "arquivo").replace(/[\/\\]/g, "_").slice(0, 120);
+        const tipoMime = String(anexo.mimetype || "application/octet-stream").slice(0, 100);
+        const path = `${pastaAnexo(chave)}${crypto.randomUUID()}-${nome.replace(/[^\w.\-]+/g, "_")}`;
+        const { error: eUp } = await admin.storage.from("atendimento-midia").upload(path, bytes, { contentType: tipoMime, upsert: false });
+        if (eUp) throw eUp;
+        Object.assign(linha, { anexo_path: path, anexo_tipo: tipoMime, anexo_nome: nome, anexo_tamanho: bytes.length });
+        if (!texto) linha.texto = (tipoMime.startsWith("image/") ? "📷 " : "📎 ") + nome;
+      }
+      const { error } = await admin.from("atendimento_interno").insert(linha);
       if (error) throw error;
       // quem escreve de novo numa conversa que tinha finalizado a traz de volta
       await admin.from("atendimento_interno_leituras").upsert({ funcionario_id: meuId, chave, lido_em: new Date().toISOString(), finalizada_em: null });
