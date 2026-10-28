@@ -1,10 +1,11 @@
-// atendimento-chat v5 — chat interno entre atendentes (pessoa a pessoa, departamento ou o
+// atendimento-chat v7 — chat interno entre atendentes (pessoa a pessoa, departamento ou o
 // GRUPO VILAÇA, conversa coletiva de toda a equipe: chave "g:vilaca", destino_tipo "grupo").
 // Sessão do usuário (sess_…) validada contra gestao_config. Ops: lista, mensagens, enviar, lida, poll,
 // finalizar, reabrir, anexoUrl. Mensagem pode levar foto/arquivo (bucket privado atendimento-midia, pasta interno/).
 // Finalizar vale só pra quem finalizou (atendimento_interno_leituras.finalizada_em);
 // mensagem nova depois disso traz a conversa de volta pra lista.
 // v6: telas antigas abertas (que mandam o grupo como destino_tipo "pessoa" + destino_id "vilaca") também funcionam.
+// v7: erros do banco voltam em texto (antes apareciam como "[object Object]").
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -124,5 +125,5 @@ Deno.serve(async (req) => {
       return json({ ok: true, chave });
     }
     return json({ error: "operação desconhecida" }, 400);
-  } catch (e) { console.error(e); return json({ error: String(e) }, 500); }
+  } catch (e: any) { console.error(e); return json({ error: String((e && (e.message || e.error_description)) || JSON.stringify(e)) }, 500); }
 });
