@@ -5082,13 +5082,18 @@ function garantirConfigFornecedor(){
   // Compatibilidade: converte fornecedores no formato antigo (texto simples, ou endereço
   // como campo único) pro formato completo em vez de quebrar a tela.
   config.fornecedores = config.fornecedores.map(f=>{
-    if(typeof f === 'string') return { id: uid('forn'), codigo:'', empresa:f, endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', telefone:'', site:'', email:'', representanteLocal:'', telefoneRepresentante:'', subcategoriaId:'', fator:null, observacao:'' };
+    if(typeof f === 'string') return { id: uid('forn'), codigo:'', empresa:f, endereco:'', numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', telefone:'', site:'', email:'', representanteLocal:'', telefoneRepresentante:'', tipoMercadoria:'', fator:null, observacao:'' };
     return {
-      numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', observacao:'',
+      numero:'', complemento:'', bairro:'', cidade:'', estado:'', cep:'', observacao:'', tipoMercadoria:'',
       ...f,
     };
   });
   if(!config.proximoCodigoRepresentante) config.proximoCodigoRepresentante = 1;
+}
+/** Tipo de mercadoria do fornecedor: lista própria e editável (não é mais atrelada às
+ * subcategorias de produto) — padrão Ouro/Prata/Relógio, mas dá pra adicionar/editar. */
+function garantirTiposMercadoriaFornecedor(){
+  if(!Array.isArray(config.tiposMercadoriaFornecedor)) config.tiposMercadoriaFornecedor = ['Ouro','Prata','Relógio'];
 }
 async function renderFornecedorTab(main){
   garantirConfigFornecedor();
@@ -5104,7 +5109,7 @@ async function renderFornecedorTab(main){
       <div id="fornecedorRows"></div>
     </div>
   `;
-  function subcategoriaNome(id){ const s = (config.produtosOtica.subcategorias||[]).find(x=>x.id===id); return s?s.nome:''; }
+  garantirTiposMercadoriaFornecedor();
   function renderRows(){
     const wrap = document.getElementById('fornecedorRows');
     const lista = config.fornecedores.slice().sort((a,b)=>(a.empresa||'').localeCompare(b.empresa||''));
@@ -5116,7 +5121,7 @@ async function renderFornecedorTab(main){
           ${f.codigo?`<span class="muted" style="font-size:11px;"> · #${escapeHtml(f.codigo)}</span>`:''}
           <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
             ${f.representanteLocal?`<span class="chip">Rep: ${escapeHtml(f.representanteLocal)}${f.telefoneRepresentante?' · '+escapeHtml(f.telefoneRepresentante):''}</span>`:''}
-            ${subcategoriaNome(f.subcategoriaId)?`<span class="chip">${escapeHtml(subcategoriaNome(f.subcategoriaId))}</span>`:''}
+            ${f.tipoMercadoria?`<span class="chip">${escapeHtml(f.tipoMercadoria)}</span>`:''}
             ${f.telefone?`<span class="chip">☎ ${escapeHtml(f.telefone)}</span>`:''}
             ${f.email?`<span class="chip">${escapeHtml(f.email)}</span>`:''}
             ${f.fator!=null?`<span class="chip" style="background:var(--gold-soft);color:var(--gold-ink);">Fator: ${f.fator}</span>`:''}
@@ -5153,10 +5158,11 @@ async function renderFornecedorTab(main){
       email: fornecedor?fornecedor.email||'':'',
       representanteLocal: fornecedor?fornecedor.representanteLocal||'':'',
       telefoneRepresentante: fornecedor?fornecedor.telefoneRepresentante||'':'',
-      subcategoriaId: fornecedor?fornecedor.subcategoriaId||'':'',
+      tipoMercadoria: fornecedor?fornecedor.tipoMercadoria||'':'',
       fator: fornecedor&&fornecedor.fator!=null?fornecedor.fator:null,
       observacao: fornecedor?fornecedor.observacao||'':'',
     };
+    garantirTiposMercadoriaFornecedor();
     openModal(`
       <div class="section-label">${somenteVer?'Ver fornecedor':editando?'Editar fornecedor':'Novo fornecedor'}</div>
       ${editando&&fornecedor.codigo?`<p class="muted" style="margin:-4px 0 12px;">Código do representante: <b>${escapeHtml(fornecedor.codigo)}</b></p>`:`<p class="muted" style="margin:-4px 0 12px;">O código do representante é gerado automaticamente ao salvar.</p>`}
@@ -5185,7 +5191,10 @@ async function renderFornecedorTab(main){
       </div>
       <div class="grid-2">
         <div class="field"><label>Tipo de mercadoria <span class="muted">opcional</span></label>
-          <select id="fn_subcategoriaId"><option value="">Selecione</option>${(config.produtosOtica.subcategorias||[]).map(s=>`<option value="${s.id}" ${d.subcategoriaId===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
+          <div style="display:flex; gap:6px;">
+            <select id="fn_tipoMercadoria" style="flex:1;"><option value="">Selecione</option>${config.tiposMercadoriaFornecedor.map(t=>`<option value="${escapeHtml(t)}" ${d.tipoMercadoria===t?'selected':''}>${escapeHtml(t)}</option>`).join('')}</select>
+            <button type="button" class="icon-btn" id="btnEditarTipoMercadoria" title="Cadastrar/editar tipos de mercadoria">✎</button>
+          </div>
         </div>
         <div class="field"><label>Fator</label><input type="number" step="0.01" id="fn_fator" placeholder="0.00" value="${d.fator!=null?d.fator:''}"></div>
       </div>
@@ -5202,6 +5211,7 @@ async function renderFornecedorTab(main){
       document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=> el.disabled = true);
       return;
     }
+    document.getElementById('btnEditarTipoMercadoria').addEventListener('click', ()=> abrirGerenciarListaStrings('Tipos de mercadoria', config.tiposMercadoriaFornecedor, ()=> abrirFornecedorModal(fornecedor, somenteVer)));
     document.getElementById('fn_cep').addEventListener('blur', async ()=>{
       const cep = document.getElementById('fn_cep').value.replace(/\D/g,'');
       if(cep.length!==8) return;
@@ -5236,7 +5246,7 @@ async function renderFornecedorTab(main){
         email: document.getElementById('fn_email').value.trim(),
         representanteLocal: document.getElementById('fn_representanteLocal').value.trim(),
         telefoneRepresentante: document.getElementById('fn_telefoneRepresentante').value.trim(),
-        subcategoriaId: document.getElementById('fn_subcategoriaId').value,
+        tipoMercadoria: document.getElementById('fn_tipoMercadoria').value,
         fator: document.getElementById('fn_fator').value===''?null:parseFloat(document.getElementById('fn_fator').value),
         observacao: document.getElementById('fn_observacao').value.trim(),
       };
