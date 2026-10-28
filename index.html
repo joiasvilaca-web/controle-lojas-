@@ -4996,13 +4996,15 @@ function imprimirEtiquetaProduto(produto){
   const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===produto.categoriaId);
   const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
 
+  const dobravel = cfg.modelo === 'dobravel';
+  const codigoBarras = String(produto.codigoInterno || produto.gtin || '').trim();
   const linhas = [];
   if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nome)}</div>`);
-  if(campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
+  if(!dobravel && campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
   if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
   if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
   if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${estoqueTotalDe(produto)} ${unidadeLabel(produto.unidade)}</div>`);
-  if(campos.gtin && produto.gtin) linhas.push(`<div>${escapeHtml(produto.gtin)}</div>`);
+  if(!dobravel && campos.gtin && produto.gtin) linhas.push(`<div>${escapeHtml(produto.gtin)}</div>`);
   if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
   if(campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
     linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
@@ -5011,6 +5013,34 @@ function imprimirEtiquetaProduto(produto){
   const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
   const pesoTexto = cfg.negrito!==false ? 700 : 500;
   const reforcoCss = cfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
+  // Etiqueta dobrável (rabo de rato): metade esquerda = código de barras + código; metade direita = demais dados
+  let corpoHtml = linhas.join('');
+  let cssDobravel = '';
+  if(dobravel){
+    let svgBarras = '';
+    if(codigoBarras && window.JsBarcode){
+      try{
+        const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        window.JsBarcode(svgEl, codigoBarras, { format:'CODE128', width:2, height:60, displayValue:false, margin:0 });
+        const w = parseFloat(svgEl.getAttribute('width'))||100, h = parseFloat(svgEl.getAttribute('height'))||60;
+        svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`);
+        svgEl.setAttribute('preserveAspectRatio', 'none');
+        svgEl.removeAttribute('width'); svgEl.removeAttribute('height'); svgEl.removeAttribute('style');
+        svgBarras = svgEl.outerHTML;
+      }catch(e){ svgBarras = ''; }
+    }
+    const meia = cfg.larguraMm / 2;
+    cssDobravel = `
+  body{ flex-direction:row !important; padding:0 !important; justify-content:flex-start !important; }
+  .etq-metade{ width:${meia}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:center; }
+  .etq-barras{ padding:1mm 1.5mm 0.6mm; align-items:stretch; }
+  .etq-barras svg{ display:block; width:100%; flex:1 1 auto; min-height:0; }
+  .etq-cod{ text-align:center; font-weight:700; font-size:${px.base}px; line-height:1.1; margin-top:0.4mm; letter-spacing:.03em; white-space:nowrap; }
+  .etq-dados{ padding:0.8mm 1.5mm; line-height:1.15; }
+  .etq-dados .etq-nome{ font-size:${px.base}px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .etq-dados .etq-preco{ margin-top:0.5mm; }`;
+    corpoHtml = `<div class="etq-metade etq-barras">${svgBarras || '<div style="flex:1"></div>'}<div class="etq-cod">${escapeHtml(codigoBarras || 'SEM CÓDIGO')}</div></div><div class="etq-metade etq-dados">${linhas.join('')}</div>`;
+  }
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -5021,7 +5051,7 @@ function imprimirEtiquetaProduto(produto){
   *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:1.5mm; box-sizing:border-box; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; display:flex; flex-direction:column; justify-content:center; -webkit-font-smoothing:none; ${reforcoCss} }
   .etq-nome{ font-weight:700; font-size:${px.nome}px; }
-  .etq-preco{ font-weight:700; font-size:${px.preco}px; margin-top:2px; }
+  .etq-preco{ font-weight:700; font-size:${px.preco}px; margin-top:2px; }${cssDobravel}
 </style>
   <!-- PWA e ícones Vilaça Joias -->
   <link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAErklEQVR4nM2XyW+VVRjGf+d84x17aSmUFlMsQ9EWJLEIaCBQNUAIGBOJRqMmLhwWuvEPcGPcuXAlGxIxJhKCEA1KQpQYEmhsSEuhBCxDB9qi7b29vdze4bvf5OJ2sBOt0Kae9fed5/c+z3nPIN5f+5LPEg65lOL/CwB1sSYWAoQQAPg++P7MSS8agF3wsG0XfB9VU9ANdUaIRQHwPJ/yVWEqq2NomqS/O0VvVxJNVxk1ZfEAhAB8WLEqQqw0QCCksfvABjraBzjz/bXxWB4bQAgxrZqxrKUquHa5H9fxKBQcrjb38fFne/i77wEXz90hGNbxvGIc/6kLhBBIWVQtWA6ZkQIjDywyaYtMuoCVt8cdMEyVUERnWVmQ+z0p+nuG2fhMBUIK/r0U5uXAmG1W3saxPYJhncrqGBVVEcpWhglHDSIlJrfaB2g6f3d8wY05YpgqhlmUKhYwQTAngJSCfM4GoGZjOZsaKqlaE8MMaDiORz5rU7AcgmGdVDI37d9c1qF6fRnLKyJcbe7DcTwMc6IjZgUQopjpSNpi/dMr2LZ7DVKV9NweorXpHkODWXKZAo7j0XiwltZL94gPjBCKGPij+fp+EWLX3nUULIe2P3pRNTl3BEIIPNfDcTz2v1bHsvIgTec76bqVwHU8NF1B0xUsy+HQW5vxXJ/4wAiRqInregAoiiQ1nOPlV56ivqGKk0db6O9JEQhq4wsQZliEQoA3OskbH27FdX2OH7lM9+0EgaBGOGpgmCqu47FqdQm1myq4+OsdTFPDdT2EAKkIUskczzfWsO9wHT9801r8JjBZfEYHfB8cx+OdT7bT3z3MLyfaiZUG8GGidaQgn3No2FlNZ0ecocEskagBgOt6ZFIWjYdq2bl3Hce+auJ6y32CIX3unVBKwUja4sDr9ZgBlbMnrxMrDUyjdl2PSMygZuNyTn3TimGoCCHIpC2CYZ03P9pKNGby9ecXGBrMEIroeO7MZ8F4BEJAoeBSURVl254nOXf6Bqo6fZuQUpDP2mx+bjWJgQx93SlUTZJO5al7tpL3Pn2BoXiWo19eIp3KFzedWcQnOSCEoGA5bNnxBMl4lq5bCQxTnVa97/tousLmrVX8/nMHVs6mpNRk/+E6SkoD/PRdG50dCcKjkUz9f1aAsZbZUL+Cro4EtuViTDnBhBTkMgXqG6rIZ23amnvZ0VjDlu2ruXa5n5Zv25CKIBIzHlr1jABFeyUd7QP03k2iqJP7FUCMOlW7aSVXm/t49e0tBMM6p49dIZnIEooY4DNv8SkO+OiGwm8/3kRRJEZgcvVSCgqWS2l5iOq1peiGwo0rf9FysQczoBGOGHPaPacDALqhAv6k6oUUuI6HY7s0HqzlQSrP2RPXSSayhKMGvu8/kviMAFN7VQiBXXDRDYV3P9hOKGpw5IsLKIp8aHs9MsBkcXBsl3DU4MVDtQRCOudO3cD3QTOUxxaHed4Hdu1bjxCCuzcH6fwzjhnUFkT84QACXNcnENKpqS0jGNZpvtCNVEaPyQUas0fgT9wFzhxvJxnPkh7Oz3q7XXiA0SFl0XpVnf1qvagAAIapUWzNhX9GzgtgMYTHxpK/DZcc4B+HNBVnYr9itQAAAABJRU5ErkJggg==">
@@ -5035,7 +5065,7 @@ function imprimirEtiquetaProduto(produto){
   <meta name="application-name" content="Vilaça Gestão">
 </head>
 <body>
-  ${linhas.join('')}
+  ${corpoHtml}
 </body>
 </html>`;
   const printWin = window.open('', '_blank', 'width=300,height=300');
@@ -5262,6 +5292,7 @@ const PRESETS_ETIQUETA = [
   { id:'50x30', label:'50 × 30 mm (padrão)', larguraMm:50, alturaMm:30 },
   { id:'60x40', label:'60 × 40 mm (grande)', larguraMm:60, alturaMm:40 },
   { id:'80x40', label:'80 × 40 mm (caixa/estojo)', larguraMm:80, alturaMm:40 },
+  { id:'60x15d', label:'60 × 15 mm dobrável (rabo de rato)', larguraMm:60, alturaMm:15, modelo:'dobravel' },
 ];
 
 function renderImpressaoTab(main){
@@ -5307,9 +5338,16 @@ function renderImpressaoTab(main){
       <div class="field" style="max-width:320px;"><label>Tamanho pronto</label>
         <select id="etqPreset">
           <option value="">Personalizado (definir abaixo)</option>
-          ${PRESETS_ETIQUETA.map(p=>`<option value="${p.id}" ${config.etiquetaJoia.larguraMm===p.larguraMm&&config.etiquetaJoia.alturaMm===p.alturaMm?'selected':''}>${p.label}</option>`).join('')}
+          ${PRESETS_ETIQUETA.map(p=>`<option value="${p.id}" ${config.etiquetaJoia.larguraMm===p.larguraMm&&config.etiquetaJoia.alturaMm===p.alturaMm&&(p.modelo||'simples')===(config.etiquetaJoia.modelo||'simples')?'selected':''}>${p.label}</option>`).join('')}
         </select>
       </div>
+      <div class="field" style="max-width:420px;"><label>Modelo</label>
+        <select id="etqModelo">
+          <option value="simples" ${config.etiquetaJoia.modelo!=='dobravel'?'selected':''}>Simples (um bloco só)</option>
+          <option value="dobravel" ${config.etiquetaJoia.modelo==='dobravel'?'selected':''}>Dobrável ao meio — código de barras de um lado, dados do outro</option>
+        </select>
+      </div>
+      <p class="muted" style="margin:-4px 0 10px; font-size:12px;">No dobrável, a largura é a parte impressa inteira (sem o rabicho). A metade esquerda leva o código de barras do código interno (ou GTIN) com o código embaixo; a direita leva os demais campos marcados.</p>
       <div class="grid-2" style="max-width:360px;">
         <div class="field"><label>Largura (mm)</label><input type="number" min="10" id="etqLargura" value="${config.etiquetaJoia.larguraMm}"></div>
         <div class="field"><label>Altura (mm)</label><input type="number" min="10" id="etqAltura" value="${config.etiquetaJoia.alturaMm}"></div>
@@ -5366,6 +5404,7 @@ function renderImpressaoTab(main){
     if(!preset) return;
     document.getElementById('etqLargura').value = preset.larguraMm;
     document.getElementById('etqAltura').value = preset.alturaMm;
+    document.getElementById('etqModelo').value = preset.modelo || 'simples';
   });
 
   document.getElementById('btnSalvarImpressao').addEventListener('click', async ()=>{
@@ -5386,6 +5425,7 @@ function renderImpressaoTab(main){
     config.etiquetaJoia.escalaTexto = document.getElementById('etqEscala').value;
     config.etiquetaJoia.negrito = document.getElementById('etqNegrito').value === '1';
     config.etiquetaJoia.reforcoTraco = document.getElementById('etqReforco').checked;
+    config.etiquetaJoia.modelo = document.getElementById('etqModelo').value;
     etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{
       config.etiquetaJoia.campos[chk.dataset.etqcampo] = chk.checked;
     });
