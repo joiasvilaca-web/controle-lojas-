@@ -3914,12 +3914,28 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     codigoReservadoSeq = seq;
   }
 
-  /** Decide ouro ou prata pelo nome da categoria/subcategoria escolhida (sem campo próprio de metal). */
+  /** Decide ouro ou prata pelo nome da categoria/subcategoria escolhida (sem campo próprio de metal).
+   * null quando nenhuma das duas aparece no nome (categoria não ligada a metal, ou nada selecionado). */
   function metalPadraoProduto(){
     const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===d.categoriaId);
     const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===d.subcategoriaId);
     const texto = ((sub?sub.nome:'')+' '+(cat?cat.nome:'')).toLowerCase();
-    return texto.includes('prata') ? 'prata' : 'ouro';
+    if(texto.includes('prata')) return 'prata';
+    if(texto.includes('ouro')) return 'ouro';
+    return null;
+  }
+  /** Prata na categoria/subcategoria → Referência de compra vai direto pra Prata 1000 DTVM; ouro →
+   * Ouro 1000 DTVM. Atrelado: toda vez que a categoria/subcategoria muda, a referência acompanha
+   * (mesmo que antes estivesse em Cooperativa/Compra Vilaça). Sem metal identificável, não mexe —
+   * só cai num padrão (ouro) se ainda não tinha nenhuma referência escolhida. */
+  function sincronizarReferenciaPeloMetal(){
+    const metal = metalPadraoProduto();
+    if(metal==='prata') d.referenciaCompra = 'prataDtvm';
+    else if(metal==='ouro') d.referenciaCompra = 'ouroDtvm';
+    else if(!d.referenciaCompra) d.referenciaCompra = 'ouroDtvm';
+    const sel = document.getElementById('pe_referenciaCompra');
+    if(sel) sel.value = d.referenciaCompra;
+    recalcularCustoCompra();
   }
   /** Custo atualizado = Fator × valor aplicado da referência escolhida (Cadastro → Fator → Compra Metal), sempre ao vivo.
    * Custo compra fixa esse cálculo no momento do lançamento (primeiro salvamento com fator e cotação
@@ -4021,8 +4037,8 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       });
       document.getElementById('pe_unidade').addEventListener('change', e=> d.unidade=e.target.value);
       document.getElementById('btnEditarUnidade').addEventListener('click', ()=> abrirGerenciarListaStrings('Unidades', config.unidadesProduto, ()=> montarShellModalProduto()));
-      document.getElementById('pe_categoriaId').addEventListener('change', e=> d.categoriaId=e.target.value);
-      document.getElementById('pe_subcategoriaId').addEventListener('change', e=> d.subcategoriaId=e.target.value);
+      document.getElementById('pe_categoriaId').addEventListener('change', e=>{ d.categoriaId=e.target.value; sincronizarReferenciaPeloMetal(); });
+      document.getElementById('pe_subcategoriaId').addEventListener('change', e=>{ d.subcategoriaId=e.target.value; sincronizarReferenciaPeloMetal(); });
       document.getElementById('pe_fornecedor').addEventListener('change', e=>{
         d.fornecedor = e.target.value;
         const forn = config.fornecedores.find(f=>f.empresa===d.fornecedor);
@@ -4032,7 +4048,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
           if(campoFator) campoFator.value = forn.fator;
         }
       });
-      if(!d.referenciaCompra){ d.referenciaCompra = metalPadraoProduto()==='prata' ? 'prataDtvm' : 'ouroDtvm'; document.getElementById('pe_referenciaCompra').value = d.referenciaCompra; }
+      // Só auto-define a referência na abertura do formulário se ele ainda não tiver nenhuma salva
+      // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
+      // o vínculo automático só entra de novo se a categoria/subcategoria for alterada depois.
+      if(!d.referenciaCompra) sincronizarReferenciaPeloMetal(); else recalcularCustoCompra();
       document.getElementById('pe_fator').addEventListener('input', e=>{ d.fator = e.target.value===''?null:e.target.value; recalcularCustoCompra(); });
       document.getElementById('pe_referenciaCompra').addEventListener('change', e=>{ d.referenciaCompra = e.target.value; recalcularCustoCompra(); });
       document.getElementById('btnRecalcularCustoCompra').addEventListener('click', ()=>{
