@@ -140,6 +140,7 @@
 <div class="modal-overlay" id="modal"><div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3 id="modalTitulo"></h3><button class="btn btn-ghost btn-sm" data-fechar>✕ Fechar</button></div><div id="modalCorpo"></div></div></div>
 <div class="toast" id="toast"></div>
 
+<script src="recorte-foto.js"></script>
 <script>
 const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
@@ -222,7 +223,7 @@ function renderProdutos(){
   if(!estP.lista.length){ $('#listaP').innerHTML = '<div class="empty">Nenhum produto com esses filtros.</div>'; return; }
   $('#listaP').innerHTML = estP.lista.map(p=>{
     const s = p.site||{}; const pub = !!s.publicado;
-    const temTrat = (p.fotos||[]).some(f=>f.tratada);
+    const temTrat = (p.fotos||[]).some(f=>f.tratada && !f.soRecorte), temRecorte = (p.fotos||[]).some(f=>f.recortada);
     return `<div class="prod" data-id="${p.id}">
       <input type="checkbox" aria-label="Selecionar" data-sel="${p.id}" ${selecionados.has(p.id)?'checked':''}>
       ${p.capa ? `<img src="${escapeHtml(p.capa)}" alt="" loading="lazy">` : `<div class="sem">sem foto</div>`}
@@ -231,7 +232,7 @@ function renderProdutos(){
           ${s.lojasAuto ? '<span class="badge b-off">vende: lojas com estoque</span>' : (Array.isArray(s.lojaIds)&&s.lojaIds.length ? s.lojaIds : (s.lojaId?[s.lojaId]:[])).length ? `<span class="badge b-off">vende: ${(Array.isArray(s.lojaIds)&&s.lojaIds.length ? s.lojaIds : [s.lojaId]).map(abrevLoja).map(escapeHtml).join(', ')}</span>`:''}
           ${(s.marketplaces||[]).length ? `<span class="badge b-info">${(s.marketplaces||[]).map(c=>escapeHtml(NOMES_CANAIS[c]||c)).join(', ')}</span>`:''}
           ${s.destaque ? '<span class="badge b-accent">destaque</span>':''}${s.sobEncomenda ? '<span class="badge b-info">sob encomenda</span>':''}
-          ${(p.fotos||[]).length ? (temTrat ? '<span class="badge b-ok">foto tratada</span>' : '<span class="badge b-wait">foto sem tratamento</span>') : ''}</div></div>
+          ${(p.fotos||[]).length ? (temTrat ? '<span class="badge b-ok">foto tratada</span>' : '<span class="badge b-wait">foto sem tratamento</span>') : ''}${temRecorte ? '<span class="badge b-info">recortada</span>' : ''}</div></div>
       <div class="dir"><div class="val">${brl(s.preco ?? p.precoVenda)}</div>
         <div style="display:flex;gap:6px;align-items:center;"><span class="badge ${pub?'b-ok':'b-off'}">${pub?'No site':'Fora do site'}</span>
         <button class="btn btn-ghost btn-sm" data-abrir="${p.id}">Editar</button></div></div>
@@ -294,7 +295,7 @@ function abrirProduto(id){
       <div><label class="f">Descrição para o Google</label><input class="inp" id="eP_seoD" maxlength="160" value="${escapeHtml(s.seoDescricao||'')}"></div>
     </div>
     <div class="section-label">Fotos (vêm do cadastro do produto)</div>
-    ${fotos.length ? `<p class="muted" style="font-size:12.5px;margin:-4px 0 8px;">“Tratar” aplica o padrão do site: fundo branco, peça centralizada e sombra suave. A peça não é alterada. A foto original continua guardada.</p>
+    ${fotos.length ? `<p class="muted" style="font-size:12.5px;margin:-4px 0 8px;">“Recortar” enquadra a foto em quadrado (formato do site). “Tratar” aplica o padrão do site: fundo branco, peça centralizada e sombra suave; se a foto já foi recortada, trata o recorte. A peça não é alterada e a foto original continua guardada.</p>
     <div class="fotos" id="eP_fotos">${fotos.map((f,i)=>fotoCard(p,f,i)).join('')}</div>` : `<div class="alert-box alert-wait">Este produto não tem foto. Anexe em Administração › Cadastro › Produto.</div>`}
     <div class="acoes-row">
       <button class="btn btn-accent" id="eP_salvar">Salvar</button>
@@ -311,7 +312,8 @@ function fotoCard(p, f, i){
     <div class="par"><div><img src="${escapeHtml(f.original)}" alt="" loading="lazy"><div class="lbl">original</div></div>
       <div>${f.tratada ? `<img src="${escapeHtml(f.tratada)}" alt="" loading="lazy">` : `<div style="aspect-ratio:1;border:1px dashed var(--line-strong);border-radius:6px;display:grid;place-items:center;font-size:11px;color:var(--ink-faint);">sem tratamento</div>`}<div class="lbl">no site</div></div></div>
     <div class="acoes">
-      <button class="btn btn-ghost btn-sm" data-ft="${f.id}" data-acao="tratar">✨ ${f.tratada?'Tratar de novo':'Tratar'}</button>
+      <button class="btn btn-ghost btn-sm" data-ft="${f.id}" data-acao="recortar">✂ Recortar${f.recortada?' de novo':''}</button>
+      <button class="btn btn-ghost btn-sm" data-ft="${f.id}" data-acao="tratar">✨ ${f.tratada && !f.soRecorte?'Tratar de novo':'Tratar'}</button>
       ${f.tratada ? `<button class="btn btn-ghost btn-sm" data-ft="${f.id}" data-acao="desfazer">Usar original</button>` : ''}
       <button class="btn btn-ghost btn-sm" data-ft="${f.id}" data-acao="ocultar">${f.ocultarSite?'Mostrar no site':'Esconder do site'}</button>
       ${i>0 ? `<button class="btn btn-ghost btn-sm" data-ft="${f.id}" data-acao="capa">Usar como capa</button>` : '<span class="badge b-accent">capa</span>'}
@@ -320,8 +322,12 @@ function fotoCard(p, f, i){
 async function acaoFoto(p, fotoId, acao){
   const f = p.fotos.find(x=>x.id===fotoId); if(!f) return;
   try{
-    if(acao==='tratar'){ toast('Tratando a foto… leva alguns segundos.'); const r = await api('tratarFoto', { id:p.id, fotoId }); f.tratada = r.url; toast('Foto tratada.'); }
-    else if(acao==='desfazer'){ await api('desfazerTratamento', { id:p.id, fotoId }); f.tratada = null; toast('O site volta a usar a foto original.'); }
+    if(acao==='tratar'){ toast('Tratando a foto… leva alguns segundos.'); const r = await api('tratarFoto', { id:p.id, fotoId }); f.tratada = r.url; f.soRecorte = false; toast('Foto tratada.'); }
+    else if(acao==='recortar'){
+      const rec = await RecorteFoto.abrir({ fonte: f.tratada || f.original, titulo: 'Recortar foto para o site' }); if(!rec) return;
+      toast('Salvando o recorte…'); const r = await api('recortarFoto', { id:p.id, fotoId, dataUrl: rec.dataUrl }); f.tratada = r.url; f.recortada = true; f.soRecorte = true; toast('Recorte salvo: o site já usa esta foto quadrada.');
+    }
+    else if(acao==='desfazer'){ await api('desfazerTratamento', { id:p.id, fotoId }); f.tratada = null; f.recortada = false; f.soRecorte = false; toast('O site volta a usar a foto original.'); }
     else if(acao==='ocultar'){ f.ocultarSite = !f.ocultarSite; await api('salvarProduto', { id:p.id, site:{}, fotosOcultas: p.fotos.filter(x=>x.ocultarSite).map(x=>x.id) }); }
     else if(acao==='capa'){ p.fotos = [f, ...p.fotos.filter(x=>x!==f)]; await api('salvarProduto', { id:p.id, site:{}, ordemFotos: p.fotos.map(x=>x.id) }); p.capa = f.tratada || f.original; }
     $('#eP_fotos').innerHTML = p.fotos.map((x,i)=>fotoCard(p,x,i)).join('');

@@ -93,7 +93,7 @@ Deno.serve(async (req) => {
       const prods = await todosProdutos();
       const pub = prods.filter((r) => r.payload?.site?.publicado);
       const semFoto = pub.filter((r) => !((r.payload.site?.fotos?.length ? r.payload.site.fotos : r.payload.fotos) || []).length);
-      const tratadas = pub.filter((r) => (r.payload.fotos || []).some((f: any) => f.siteUrl));
+      const tratadas = pub.filter((r) => (r.payload.fotos || []).some((f: any) => f.siteUrl && f.siteUrl !== f.recorteUrl));
       const { data: peds } = await sb.from("site_pedidos").select("status,total,loja_id,created_at").gte("created_at", new Date(Date.now() - 30 * 864e5).toISOString());
       const ativos = (peds || []).filter((p: any) => p.status !== "cancelado");
       return json({ ok: true,
@@ -111,7 +111,7 @@ Deno.serve(async (req) => {
       if (body.filtro === "publicados") l = l.filter((r) => r.payload.site?.publicado);
       if (body.filtro === "ocultos") l = l.filter((r) => !r.payload.site?.publicado);
       if (body.filtro === "semfoto") l = l.filter((r) => !((r.payload.site?.fotos?.length ? r.payload.site.fotos : r.payload.fotos) || []).length);
-      if (body.filtro === "fotoNaoTratada") l = l.filter((r) => (r.payload.fotos || []).length && !(r.payload.fotos || []).some((f: any) => f.siteUrl));
+      if (body.filtro === "fotoNaoTratada") l = l.filter((r) => (r.payload.fotos || []).length && !(r.payload.fotos || []).some((f: any) => f.siteUrl && f.siteUrl !== f.recorteUrl));
       if (body.categoria) l = l.filter((r) => r.payload.categoriaId === body.categoria);
       if (body.loja) l = l.filter((r) => (r.payload.site?.lojaId || "") === body.loja || Number((r.payload.estoquePorLoja || {})[body.loja] || 0) > 0);
       l.sort((a, b) => String(a.payload.nome).localeCompare(String(b.payload.nome), "pt-BR"));
@@ -121,7 +121,7 @@ Deno.serve(async (req) => {
         const fotos = (p.fotos || []).filter((f: any) => f.tipo !== "video");
         return { id: r.id, codigo: p.codigoInterno, nomeInterno: p.nome, categoriaId: p.categoriaId, subcategoriaId: p.subcategoriaId, precoVenda: p.precoVenda,
           estoquePorLoja: p.estoquePorLoja || {}, numerosAro: p.numerosAro || [], peso: p.peso, site: s,
-          fotos: fotos.map((f: any) => ({ id: f.id, original: f.driveUrl || f.url, tratada: f.siteUrl || null, ocultarSite: !!f.ocultarSite })),
+          fotos: fotos.map((f: any) => ({ id: f.id, original: f.driveUrl || f.url, tratada: f.siteUrl || null, ocultarSite: !!f.ocultarSite, recortada: !!f.recorteUrl, soRecorte: !!f.recorteUrl && f.siteUrl === f.recorteUrl })),
           capa: fotoUrl(fotos[0]), marketplaces: p.marketplaces || {} };
       }) });
     }
@@ -173,7 +173,7 @@ Deno.serve(async (req) => {
       const alvo = fotos.find((f: any) => f.id === body.fotoId);
       if (!alvo) return json({ error: "foto não encontrada" }, 404);
       const { data: site } = await sb.from("site_config").select("payload").eq("id", "site").single();
-      const bytes = await tratarFoto(alvo.driveUrl || alvo.url, site?.payload?.fotoPadrao || {});
+      const bytes = await tratarFoto(alvo.recorteUrl || alvo.driveUrl || alvo.url, site?.payload?.fotoPadrao || {});   // se já foi recortada, trata o recorte
       const path = `tratadas/${body.id}/${alvo.id}-${Date.now()}.webp`;
       const { error: eUp } = await sb.storage.from("site-produtos").upload(path, bytes, { contentType: "image/webp", upsert: true });
       if (eUp) throw eUp;
@@ -183,11 +183,34 @@ Deno.serve(async (req) => {
       return json({ ok: true, url });
     }
 
+    if (op === "recortarFoto") {
+      // Recorte QUADRADO feito no navegador (JPEG): vira a imagem usada no site (siteUrl) e a origem de um novo "Tratar".
+      const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.dataUrl || ""));
+      if (!m) return json({ error: "imagem inválida" }, 400);
+      const bin = atob(m[2]);
+      if (bin.length > 6_000_000) return json({ error: "imagem muito grande (máx. 6 MB)" }, 400);
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      const { data: row } = await sb.from("produtos_estoque").select("payload").eq("id", body.id).single();
+      if (!row) return json({ error: "produto não encontrado" }, 404);
+      const p = row.payload;
+      const fotos = Array.isArray(p.fotos) ? p.fotos : [];
+      const alvo = fotos.find((f: any) => f.id === body.fotoId);
+      if (!alvo) return json({ error: "foto não encontrada" }, 404);
+      const ext = m[1] === "jpeg" ? "jpg" : m[1];
+      const path = `recortes/${body.id}/${alvo.id}-${Date.now()}.${ext}`;
+      const { error: eUp } = await sb.storage.from("site-produtos").upload(path, bytes, { contentType: `image/${m[1]}`, upsert: true });
+      if (eUp) throw eUp;
+      const url = sb.storage.from("site-produtos").getPublicUrl(path).data.publicUrl;
+      const novas = fotos.map((f: any) => (f.id === alvo.id ? { ...f, recorteUrl: url, siteUrl: url, recorteEm: new Date().toISOString(), recortePor: quem } : f));
+      await sb.from("produtos_estoque").update({ payload: { ...p, fotos: novas }, updated_at: new Date().toISOString() }).eq("id", body.id);
+      return json({ ok: true, url });
+    }
+
     if (op === "desfazerTratamento") {
       const { data: row } = await sb.from("produtos_estoque").select("payload").eq("id", body.id).single();
       if (!row) return json({ error: "produto não encontrado" }, 404);
       const p = row.payload;
-      const fotos = (p.fotos || []).map((f: any) => (f.id === body.fotoId ? (({ siteUrl, tratadoSiteEm, tratadoSitePor, ...resto }) => resto)(f) : f));
+      const fotos = (p.fotos || []).map((f: any) => (f.id === body.fotoId ? (({ siteUrl, tratadoSiteEm, tratadoSitePor, recorteUrl, recorteEm, recortePor, ...resto }) => resto)(f) : f));   // "usar original" também desfaz o recorte
       await sb.from("produtos_estoque").update({ payload: { ...p, fotos }, updated_at: new Date().toISOString() }).eq("id", body.id);
       return json({ ok: true });
     }

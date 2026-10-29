@@ -9,6 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <script src="cliente-lojas.js"></script>
+<script src="recorte-foto.js"></script>
 <!-- Tema compartilhado com os módulos (seletores :where, especificidade zero). Vem ANTES do
      <style> do shell de propósito: as variáveis e regras do shell abaixo sempre vencem. -->
 <link rel="stylesheet" href="tema.css">
@@ -4112,7 +4113,7 @@ function mountFotosProduto(container, holder, produtoId){
   function draw(){
     container.innerHTML = `
       <div class="section-label" style="margin-top:14px;">Fotos e vídeos</div>
-      <p class="muted" style="margin:-4px 0 10px;">As fotos passam por tratamento automático (fundo branco, recorte quadrado, ajuste de tom para ouro/prata). Vídeos são só arquivados por enquanto, sem tratamento.</p>
+      <p class="muted" style="margin:-4px 0 10px;">Ao anexar, você enquadra a foto em <b>quadrado</b> (formato do site) e depois ela passa pelo tratamento automático (fundo branco, ajuste de tom para ouro/prata). Para refazer o enquadramento de uma foto já anexada, use o botão ✂. Vídeos são só arquivados, sem tratamento.</p>
       <div id="pe_fotoGrid" style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px;"></div>
       <input type="file" accept="image/*" multiple id="pe_inputFoto" style="display:none;">
       <input type="file" accept="video/*" id="pe_inputVideo" style="display:none;">
@@ -4128,7 +4129,11 @@ function mountFotosProduto(container, holder, produtoId){
     container.querySelector('#pe_inputFoto').addEventListener('change', async (e)=>{
       const files = Array.from(e.target.files||[]);
       e.target.value = '';
-      for(const file of files){ await processarUpload(file, 'foto', true); }
+      for(let i=0;i<files.length;i++){
+        const rec = await RecorteFoto.abrir({ fonte: files[i], titulo: files.length>1 ? `Recortar foto ${i+1} de ${files.length}` : 'Recortar foto' });
+        if(!rec){ container.querySelector('#pe_uploadStatus').textContent = 'Foto não anexada (recorte cancelado).'; continue; }
+        await processarUpload(files[i], 'foto', true, rec.dataUrl);
+      }
     });
     container.querySelector('#pe_inputVideo').addEventListener('change', async (e)=>{
       const files = Array.from(e.target.files||[]);
@@ -4137,18 +4142,18 @@ function mountFotosProduto(container, holder, produtoId){
     });
   }
 
-  async function processarUpload(file, tipo, tratar){
+  async function processarUpload(file, tipo, tratar, dataUrlPronto){
     const status = container.querySelector('#pe_uploadStatus');
     status.textContent = tipo==='foto' ? 'Enviando e tratando a foto...' : 'Enviando o vídeo...';
     try{
-      const dataUrl = tipo==='foto' ? await compressImage(file, 1400, 0.85) : await readFileAsDataUrl(file);
+      const dataUrl = dataUrlPronto || (tipo==='foto' ? await compressImage(file, 1400, 0.85) : await readFileAsDataUrl(file));
       const itemId = uid('midia');
       const resultado = await uploadFotoParaDrive(dataUrl, produtoId+'_'+itemId+'_'+file.name, 'produtos', tratar);
       holder.fotos.push({
         id: itemId, nome: file.name, tipo,
         driveUrl: resultado.url, driveFileId: resultado.fileId,
         tratamentoAplicado: !!resultado.tratamentoAplicado,
-        criadoEm: Date.now(),
+        criadoEm: Date.now(), ...(dataUrlPronto ? { recortada:true } : {}),
       });
       status.textContent = (tipo==='foto' && !resultado.tratamentoAplicado)
         ? 'Foto anexada, mas sem tratamento automático ainda (verifique se a chave da Photoroom já foi configurada).'
@@ -4160,6 +4165,22 @@ function mountFotosProduto(container, holder, produtoId){
     drawGrid();
   }
 
+  /** Refaz o enquadramento quadrado de uma foto já anexada: sobe o recorte e troca a imagem (a versão do site volta a usar esta). */
+  async function recortarExistente(f){
+    if(!f) return;
+    const status = container.querySelector('#pe_uploadStatus');
+    const rec = await RecorteFoto.abrir({ fonte: f.driveUrl, titulo: 'Recortar foto' });
+    if(!rec) return;
+    status.textContent = 'Enviando o recorte...';
+    try{
+      const r = await uploadFotoParaDrive(rec.dataUrl, produtoId+'_'+f.id+'_recorte.jpg', 'produtos', false);
+      f.driveUrl = r.url; f.driveFileId = r.fileId; f.recortada = true;
+      delete f.siteUrl; delete f.recorteUrl; delete f.tratadoSiteEm; delete f.tratadoSitePor;   // a versão tratada do site era da foto antiga
+      status.textContent = 'Recorte aplicado. Salve o produto para gravar.';
+    }catch(e){ console.error('erro ao enviar recorte', e); status.textContent = 'Não foi possível enviar o recorte. Tente novamente.'; }
+    drawGrid();
+  }
+
   function drawGrid(){
     const grid = container.querySelector('#pe_fotoGrid');
     if(holder.fotos.length===0){ grid.innerHTML = `<span class="muted">Nenhuma foto/vídeo anexado ainda.</span>`; return; }
@@ -4168,10 +4189,14 @@ function mountFotosProduto(container, holder, produtoId){
         ${f.tipo==='video'
           ? `<div style="display:flex; align-items:center; justify-content:center; height:100%; font-size:26px;">🎬</div>`
           : `<img src="${escapeHtml(f.driveUrl||'')}" style="width:100%; height:100%; object-fit:cover;">`}
+        ${f.tipo==='foto' ? `<button type="button" data-recfoto="${f.id}" title="Recortar (quadrado)" style="position:absolute; top:2px; left:2px; background:rgba(20,20,20,0.6); color:#fff; border:none; border-radius:50%; width:20px; height:20px; font-size:11px; cursor:pointer; line-height:20px; padding:0;">✂</button>` : ''}
         <button type="button" data-rmfoto="${f.id}" title="Remover" style="position:absolute; top:2px; right:2px; background:rgba(20,20,20,0.6); color:#fff; border:none; border-radius:50%; width:20px; height:20px; font-size:11px; cursor:pointer; line-height:1;">✕</button>
         ${f.tipo==='foto' && !f.tratamentoAplicado ? `<span style="position:absolute; bottom:0; left:0; right:0; background:rgba(179,38,30,0.85); color:#fff; font-size:9px; text-align:center; padding:1px 0;">sem tratamento</span>` : ''}
       </div>
     `).join('');
+    grid.querySelectorAll('[data-recfoto]').forEach(b=>{
+      b.addEventListener('click', ()=> recortarExistente(holder.fotos.find(f=>f.id===b.dataset.recfoto)));
+    });
     grid.querySelectorAll('[data-rmfoto]').forEach(b=>{
       b.addEventListener('click', ()=>{
         holder.fotos = holder.fotos.filter(f=>f.id!==b.dataset.rmfoto);
