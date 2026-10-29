@@ -4149,6 +4149,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     custo: base && base.custo!==undefined ? base.custo : null,
     precoVenda: base && base.precoVenda!==undefined ? base.precoVenda : null,
   };
+  d._fisAuto = base ? {} : { origem:'0', cfopSaida:'5.102', cstIbsCbs:'000', cClassTrib:'000001', regimeItem:'novo' }; // valores automáticos já presentes
   let peTabAtiva = 'nomenclatura';
   // Controle do código interno gerado automaticamente: só é "reservado" de vez (o contador
   // avança) quando o produto é realmente salvo com esse código. Ver btnSalvarProdutoEstoque.
@@ -4349,6 +4350,22 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     const mesmoEstado = !ufForn || ufForn===nossoEstadoPadrao(); // sem UF do fornecedor, assume mesmo estado
     return mesmoEstado ? '1.101' : '2.101';
   }
+  /** Perfil fiscal do Tipo: preenche NCM, origem, CFOP de saída, CST IBS/CBS, cClassTrib e condição.
+   * Só escreve em campo vazio ou que ainda tem o último valor automático — o que foi digitado
+   * à mão fica como está. */
+  function sincronizarFiscalTipo(){
+    const t = d.tipoVenda ? (config.fator.tiposVenda||[]).find(x=>x.id===d.tipoVenda) : null;
+    if(!t) return;
+    const perfil = fiscalDoTipo(t);
+    CAMPOS_FISCAL_TIPO.forEach(k=>{
+      const novo = perfil[k] || '';
+      if(!novo) return;
+      if(!d[k] || d[k]===d._fisAuto[k]) d[k] = novo;
+      d._fisAuto[k] = novo;
+      const campo = document.getElementById({ ncm:'pe_ncm', origem:'pe_origem', cfopSaida:'pe_cfopSaida', cstIbsCbs:'pe_cstIbsCbs', cClassTrib:'pe_cClassTrib', regimeItem:'pe_regimeItem' }[k]);
+      if(campo) campo.value = d[k];
+    });
+  }
   function sincronizarCfop(){
     const novo = cfopPadrao();
     if(!novo) return;
@@ -4369,7 +4386,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     if(peTabAtiva==='nomenclatura'){
       garantirConfigFator();
       const relogioAtivo = ehCategoriaRelogio(d.categoriaId);
-      if(relogioAtivo && !d.tipoVenda) d.tipoVenda = 'relogio';
+      if(relogioAtivo && !d.tipoVenda) d.tipoVenda = 'relogio'; sincronizarFiscalTipo();
       const subcategoriasOpcoes = subcategoriasParaCategoria();
       body.innerHTML = `
         <div class="section-label">Identificação</div>
@@ -4499,7 +4516,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       document.getElementById('pe_categoriaId').addEventListener('change', e=>{
         d.categoriaId=e.target.value;
         d.subcategoriaId=''; // categoria mudou — a lista de subcategorias é outra, não mantém seleção antiga
-        if(ehCategoriaRelogio(d.categoriaId)){ d.referenciaCompra=''; d.custoCompra=null; if(!d.tipoVenda) d.tipoVenda='relogio'; }
+        if(ehCategoriaRelogio(d.categoriaId)){ d.referenciaCompra=''; d.custoCompra=null; if(!d.tipoVenda){ d.tipoVenda='relogio'; sincronizarFiscalTipo(); } }
         else { sincronizarReferenciaPeloMetal(); }
         renderPeTabBody(); renderPeTabs();
       });
@@ -4545,7 +4562,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         aplicarAutoPontoDecimal(document.getElementById('pe_precoVenda'));
         document.getElementById('pe_precoVenda').addEventListener('input', e=> d.precoVenda=e.target.value);
       }
-      document.getElementById('pe_tipoVenda').addEventListener('change', e=>{ d.tipoVenda = e.target.value; recalcularTipoVenda(); sincronizarCfop(); });
+      document.getElementById('pe_tipoVenda').addEventListener('change', e=>{ d.tipoVenda = e.target.value; recalcularTipoVenda(); sincronizarCfop(); sincronizarFiscalTipo(); });
       recalcularTipoVenda();
       sincronizarCfop();
       document.getElementById('pe_vendavel').addEventListener('change', e=> d.vendavel=(e.target.value==='pdv'));
@@ -5116,6 +5133,38 @@ function garantirConfigFator(){
     config.fator.tiposVenda.push({ id:'relogio', label:'Relógio', semValor:true });
   }
 }
+/* Perfil fiscal de cada Tipo (Fator › Venda): ao escolher o Tipo no produto, os campos fiscais
+   abaixo preenchem sozinhos (e podem ser mudados à mão). Padrões sugeridos por tipo; o que for
+   salvo em tipo.fiscal prevalece. */
+const CAMPOS_FISCAL_TIPO = ['ncm','origem','cfopSaida','cstIbsCbs','cClassTrib','regimeItem'];
+function fiscalPadraoTipo(c){
+  const id = (c && c.id) || '';
+  const base = { origem:'0', cstIbsCbs:'000', cClassTrib:'000001', regimeItem:'novo' };
+  const ncm = /Prata/.test(id) ? '71131100' : '71131900';
+  if(id==='relogio') return { ...base, origem:'', cfopSaida:'5.102' };
+  if(/^joiaRepresentante/.test(id)) return { ...base, cfopSaida:'5.102', ncm };
+  if(/^(alianca|joiaVilaca)/.test(id)) return { ...base, cfopSaida:'5.101', ncm };
+  return { ...base, cfopSaida:'5.102' };
+}
+function fiscalDoTipo(c){ return { ...fiscalPadraoTipo(c), ...((c && c.fiscal) || {}) }; }
+function fiscalTipoHtml(c){
+  const f = fiscalDoTipo(c), id = c.id;
+  const inp = (k, label, ph) => `<div class="field" style="margin-bottom:0;"><label>${label}</label><input id="fs_${id}_${k}" value="${escapeHtml(f[k]||'')}" placeholder="${ph||''}"></div>`;
+  return `<details style="margin-top:8px;"><summary class="muted" style="cursor:pointer;font-size:12px;font-weight:700;">Fiscal deste tipo — preenche o produto automaticamente</summary>
+    <div class="grid-3" style="margin-top:8px;">
+      ${inp('ncm','NCM','8 dígitos')}
+      <div class="field" style="margin-bottom:0;"><label>Origem</label><select id="fs_${id}_origem"><option value="">Definir no produto</option>${['0','1','2','3','4','5','6','7','8'].map(o=>`<option value="${o}" ${f.origem===o?'selected':''}>${o}</option>`).join('')}</select></div>
+      ${inp('cfopSaida','CFOP de saída','5.102')}
+      ${inp('cstIbsCbs','CST IBS/CBS','000')}
+      ${inp('cClassTrib','cClassTrib','000001')}
+      <div class="field" style="margin-bottom:0;"><label>Condição</label><select id="fs_${id}_regimeItem"><option value="novo" ${f.regimeItem!=='usado'?'selected':''}>Novo</option><option value="usado" ${f.regimeItem==='usado'?'selected':''}>Usado</option></select></div>
+    </div></details>`;
+}
+function lerFiscalTipoForm(c){
+  const out = {};
+  CAMPOS_FISCAL_TIPO.forEach(k=>{ const el = document.getElementById('fs_'+c.id+'_'+k); if(el) out[k] = el.value.trim(); });
+  return out;
+}
 function hojeSaoPaulo(){
   // Data de hoje no fuso de São Paulo, formato YYYY-MM-DD (evita cair no dia errado por fuso).
   return new Date().toLocaleDateString('en-CA', { timeZone:'America/Sao_Paulo' });
@@ -5339,6 +5388,7 @@ async function renderFatorTab(main){
       const inpDesc = document.getElementById('vdd_'+c.id);
       if(inpValor) config.fator.venda[c.id] = inpValor.value===''?null:parseFloat(inpValor.value);
       if(inpDesc) config.fator.venda[c.id+'Desconto'] = inpDesc.value===''?null:parseFloat(inpDesc.value);
+      if(document.getElementById('fs_'+c.id+'_ncm')) c.fiscal = lerFiscalTipoForm(c);
     });
   }
   function renderVendaRows(){
@@ -5355,6 +5405,7 @@ async function renderFatorTab(main){
           <div class="grid-3">
             <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
           </div>
+          ${fiscalTipoHtml(c)}
         </div>`;
       }
       return `
@@ -5368,6 +5419,7 @@ async function renderFatorTab(main){
           <div class="field" style="margin-bottom:0;"><label>Desconto (%)</label><input type="number" step="0.01" min="0" max="100" id="vdd_${c.id}" placeholder="0.00" value="${descontoAtual!=null?descontoAtual:''}"></div>
           <div class="field" style="margin-bottom:0;"><label>Valor com desconto</label><input type="text" id="vdc_${c.id}" disabled value="${calcComDesconto(valorAtual, descontoAtual)!=null?calcComDesconto(valorAtual, descontoAtual).toFixed(2):''}"></div>
         </div>
+        ${fiscalTipoHtml(c)}
       </div>`;
     }).join('');
     religarCalculoVenda();
@@ -5407,6 +5459,7 @@ async function renderFatorTab(main){
   });
   document.getElementById('btnSalvarVenda').addEventListener('click', async ()=>{
     config.fator.tiposVenda.forEach(c=>{
+      if(document.getElementById('fs_'+c.id+'_ncm')) c.fiscal = lerFiscalTipoForm(c);
       if(c.semValor){
         const d = document.getElementById('vdd_'+c.id).value;
         config.fator.venda[c.id+'Desconto'] = d===''?null:parseFloat(d);
