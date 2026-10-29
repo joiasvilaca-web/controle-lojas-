@@ -5847,14 +5847,15 @@ function imprimirEtiquetaProduto(produto){
 /* ---------- TIPOS DE ORDEM (usado no agendamento da O.S.) ---------- */
 /* Grupos de tipos de ordem: os tipos de um grupo dividem o MESMO limite por dia e o MESMO prazo na
    agenda (o limite é a soma de todos, não um por tipo). Os valores ficam em config.gruposTipoOrdem
-   e são copiados para cada tipo do grupo (t.grupoId), pra telas que leem só o tipo continuarem certas. */
+   e são copiados para cada tipo do grupo (t.grupoId), pra telas que leem só o tipo continuarem certas.
+   Grupo com prazoIndividual: só as VAGAS são compartilhadas; cada tipo mantém o próprio prazo. */
 function garantirConfigTiposOrdem(){
   if(!Array.isArray(config.tiposServico)) config.tiposServico = [];
   if(!Array.isArray(config.gruposTipoOrdem)) config.gruposTipoOrdem = [];
   config.gruposTipoOrdem.forEach(g=>{
     if(g.prazoMinimoDias==null || isNaN(Number(g.prazoMinimoDias))) g.prazoMinimoDias = 0;
     if(g.maxPorDia==null || isNaN(Number(g.maxPorDia))) g.maxPorDia = 1;
-    config.tiposServico.filter(t=>t.grupoId===g.id).forEach(t=>{ t.prazoMinimoDias = Number(g.prazoMinimoDias); t.maxPorDia = Number(g.maxPorDia); });
+    config.tiposServico.filter(t=>t.grupoId===g.id).forEach(t=>{ if(!g.prazoIndividual) t.prazoMinimoDias = Number(g.prazoMinimoDias); t.maxPorDia = Number(g.maxPorDia); });
   });
   config.tiposServico.forEach(t=>{
     if(t.prazoMinimoDias==null || isNaN(Number(t.prazoMinimoDias))) t.prazoMinimoDias = 1;
@@ -5899,8 +5900,8 @@ function renderTiposOrdemTab(main){
       const n = config.tiposServico.filter(t=>t.grupoId===g.id).length;
       return `<div style="border:1.5px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--surface-2,#f8fafc);">
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-          <div style="flex:2;min-width:220px;"><b>${escapeHtml(g.nome)}</b><div class="muted" style="font-size:12px;">${n} tipo(s) neste grupo dividem as mesmas vagas e o mesmo prazo na agenda.</div></div>
-          <div class="field" style="margin:0;"><label style="font-size:11px;">Prazo p/ entrega (dias)</label><input data-grprazo="${gi}" type="number" min="0" step="1" value="${Number(g.prazoMinimoDias)||0}" style="width:110px;"></div>
+          <div style="flex:2;min-width:220px;"><b>${escapeHtml(g.nome)}</b><div class="muted" style="font-size:12px;">${n} tipo(s) neste grupo ${g.prazoIndividual ? 'dividem as mesmas vagas por dia na agenda (cada tipo tem o seu prazo).' : 'dividem as mesmas vagas e o mesmo prazo na agenda.'}</div></div>
+          ${g.prazoIndividual ? '' : `<div class="field" style="margin:0;"><label style="font-size:11px;">Prazo p/ entrega (dias)</label><input data-grprazo="${gi}" type="number" min="0" step="1" value="${Number(g.prazoMinimoDias)||0}" style="width:110px;"></div>`}
           <div class="field" style="margin:0;"><label style="font-size:11px;">Máx. por dia (soma do grupo)</label><input data-grmax="${gi}" type="number" min="1" step="1" value="${Number(g.maxPorDia)||1}" style="width:130px;"></div>
         </div></div>`;
     }).join('');
@@ -5925,7 +5926,12 @@ function renderTiposOrdemTab(main){
           ${controlesPosicaoHtml(i, config.tiposServico.length)}
           <input data-tordnome="${i}" value="${escapeHtml(t.nome)}" placeholder="Nome"
             style="flex:2; min-width:140px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
-          ${t.grupoId ? `<span class="chip" title="Prazo e vagas vêm do grupo (acima)">Grupo · ${Number(t.prazoMinimoDias)||0}d · máx ${Number(t.maxPorDia)||1}/dia (soma)</span>` : `
+          ${t.grupoId && (config.gruposTipoOrdem||[]).some(g=>g.id===t.grupoId && g.prazoIndividual) ? `
+          <input data-tordprazo="${i}" type="number" min="0" step="1" value="${Number(t.prazoMinimoDias)||0}"
+            title="Prazo para entrega (dias) — próprio deste tipo"
+            style="width:90px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
+          <span class="muted" style="font-size:11px;">dias</span>
+          <span class="chip" title="As vagas vêm do grupo (acima)">máx ${Number(t.maxPorDia)||1}/dia (soma do grupo)</span>` : t.grupoId ? `<span class="chip" title="Prazo e vagas vêm do grupo (acima)">Grupo · ${Number(t.prazoMinimoDias)||0}d · máx ${Number(t.maxPorDia)||1}/dia (soma)</span>` : `
           <input data-tordprazo="${i}" type="number" min="0" step="1" value="${Number(t.prazoMinimoDias)||0}"
             title="Prazo para entrega (dias)"
             style="width:90px; padding:6px 9px; border:1px solid var(--line); border-radius:7px;">
@@ -5986,7 +5992,7 @@ function renderTiposOrdemTab(main){
     if(!nome){ showToast('Informe o nome do tipo de ordem.'); return; }
     const grupoSel = (document.getElementById('tord_grupo')||{}).value || '';
     const grupo = grupoSel ? (config.gruposTipoOrdem||[]).find(g=>g.id===grupoSel) : null;
-    config.tiposServico.push(grupo ? { id: uid('tord'), nome, grupoId: grupo.id, prazoMinimoDias: Number(grupo.prazoMinimoDias)||0, maxPorDia: Number(grupo.maxPorDia)||1 } : { id: uid('tord'), nome, prazoMinimoDias: prazo, maxPorDia: max });
+    config.tiposServico.push(grupo ? { id: uid('tord'), nome, grupoId: grupo.id, prazoMinimoDias: grupo.prazoIndividual ? prazo : (Number(grupo.prazoMinimoDias)||0), maxPorDia: Number(grupo.maxPorDia)||1 } : { id: uid('tord'), nome, prazoMinimoDias: prazo, maxPorDia: max });
     await configSave();
     document.getElementById('tord_nome').value='';
     document.getElementById('tord_prazo').value='';

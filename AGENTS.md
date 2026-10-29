@@ -300,6 +300,7 @@ Cada conversa é **escopada a um único módulo**:
 - 29/out (9): grupo de tipos de ordem `alianca` ("ALIANÇA PERSONALIZADO / FABRICAÇÃO"): `st_lente_simples` (id antigo, renomeado para ALIANÇA OURO ...) e `st_alianca_prata`, prazo 7 / máx. 1 por dia somados. Só dados em `gestao_config`; nenhum arquivo de código mudou.
 - 29/out (10): os grupos de tipos de ordem foram **desativados a pedido** (`gruposTipoOrdem` vazio): cada tipo tem prazo e máx./dia próprios; ALIANÇA e SERVIÇO voltaram como eram. O suporte a grupos continua no código (cartão do grupo, soma de vagas em `checkSlot`) mas só aparece se existir grupo.
 - 29/out (11): **Fator** e **Tipos de ordem** deixaram de ser abas/cartões do Cadastro e viraram botões no topo de Cadastro › Produto (`abrirSubtelaProduto`, com "← Voltar para Produtos"). As permissões continuam as das abas `fator` e `tiposOrdem` (DP › perfis, `podeSubtelaProduto`).
+- 29/out (12): grupo de tipos de ordem `agenda` ("PRODUÇÃO", `prazoIndividual:true`): os 8 tipos atuais (ALIANÇA/SERVIÇO/FABRICACAO × SEM/COM CRAVACAO, RELOGIO ASSISTENCIA AUTORIZADA/JUIZ DE FORA) dividem a MESMA quantidade por dia (máx. 10, soma), cada um com o próprio prazo. Grupo com `prazoIndividual` só propaga `maxPorDia`. Backup: `gestao_config` id `backup_tipos_ordem_pre_agenda_unica_20261029`.
 - 28/out: RLS ligado em `atendimento_pessoal_usuarios`, `atendimento_lembretes` e `atendimento_setup_log` (só Edge Functions com service_role usam).
 
 ---
