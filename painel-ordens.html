@@ -997,6 +997,7 @@ function montarConfigLegadoApartirDoUnificado(u){
     users: u.users || [],
     paymentTypes: u.formasPagamento || [],
     serviceTypes: u.tiposServico || [],
+    gruposTipoOrdem: u.gruposTipoOrdem || [],
     categoriasProdutos: (u.produtosOtica && u.produtosOtica.categorias) || [],
     subcategoriasProdutos: (u.produtosOtica && u.produtosOtica.subcategorias) || [],
     produtos: (u.produtosOtica && u.produtosOtica.produtos) || [],
@@ -1014,6 +1015,7 @@ function montarUnificadoApartirDoConfigLegado(c){
     users: c.users || [],
     formasPagamento: c.paymentTypes || [],
     tiposServico: c.serviceTypes || [],
+    gruposTipoOrdem: c.gruposTipoOrdem || [],
     produtosOtica: {
       categorias: c.categoriasProdutos || [],
       subcategorias: c.subcategoriasProdutos || [],
@@ -2824,6 +2826,12 @@ function renderView(){
 /* ============================================================
    REGRAS DE VAGA / PRAZO
    ============================================================ */
+/* Tipos do mesmo grupo (t.grupoId) dividem vagas e prazo: a contagem do dia soma todos. */
+function idsDoMesmoGrupo(serviceTypeId){
+  const st = (config.serviceTypes||[]).find(s=>s.id===serviceTypeId);
+  if(!st || !st.grupoId) return [serviceTypeId];
+  return config.serviceTypes.filter(s=>s.grupoId===st.grupoId).map(s=>s.id);
+}
 function checkSlot(serviceTypeId, dateStr, excludeOrderId){
   const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
   if(!st || !dateStr) return null;
@@ -2831,7 +2839,8 @@ function checkSlot(serviceTypeId, dateStr, excludeOrderId){
   const target = new Date(dateStr+'T00:00:00');
   const diffDays = Math.round((target - today) / 86400000);
   const prazoOk = diffDays >= st.prazoMinimoDias;
-  const countDay = orders.filter(o=> o.serviceTypeId===serviceTypeId && o.data===dateStr && o.status===STATUS.AGUARDANDO && o.id!==excludeOrderId).length;
+  const idsGrupo = idsDoMesmoGrupo(serviceTypeId);
+  const countDay = orders.filter(o=> idsGrupo.includes(o.serviceTypeId) && o.data===dateStr && o.status===STATUS.AGUARDANDO && o.id!==excludeOrderId).length;
   const quantidadeOk = countDay < st.maxPorDia;
   return {
     st, prazoOk, quantidadeOk, ok: prazoOk && quantidadeOk,
@@ -5123,17 +5132,20 @@ function renderAgenda(main){
       const dayOrders = orders.filter(o=>o.data===iso && o.status!=='entregue');
       const byService = {};
       dayOrders.forEach(o=>{
-        if(!byService[o.serviceTypeId]) byService[o.serviceTypeId] = { aguardando:0, total:0, nome:o.serviceTypeName };
-        byService[o.serviceTypeId].total++;
-        if(o.status===STATUS.AGUARDANDO) byService[o.serviceTypeId].aguardando++;
+        const stO = config.serviceTypes.find(s=>s.id===o.serviceTypeId);
+        const chave = stO && stO.grupoId ? 'g:'+stO.grupoId : o.serviceTypeId; // grupo = um chip só (vagas somadas)
+        if(!byService[chave]) byService[chave] = { aguardando:0, total:0, nome:o.serviceTypeName, grupoId: stO && stO.grupoId, tipoId:o.serviceTypeId };
+        byService[chave].total++;
+        if(o.status===STATUS.AGUARDANDO) byService[chave].aguardando++;
       });
       const chips = Object.keys(byService).slice(0,3).map(sid=>{
-        const st = config.serviceTypes.find(s=>s.id===sid);
-        const max = st ? st.maxPorDia : '?';
         const info = byService[sid];
+        const st = config.serviceTypes.find(s=>s.id===info.tipoId);
+        const max = st ? st.maxPorDia : '?';
         const over = st && info.aguardando > st.maxPorDia;
-        return `<span class="cal-chip ${over?'over':''}" style="background:${serviceColor(sid)}">
-          <span>${escapeHtml((st?st.nome:info.nome).slice(0,10))}</span><span>${info.aguardando}/${max}</span>
+        const rotulo = info.grupoId ? ((config.gruposTipoOrdem||[]).find(g=>g.id===info.grupoId)||{}).nome || 'GRUPO' : (st?st.nome:info.nome);
+        return `<span class="cal-chip ${over?'over':''}" style="background:${serviceColor(info.tipoId)}">
+          <span>${escapeHtml(rotulo.slice(0,10))}</span><span>${info.aguardando}/${max}</span>
         </span>`;
       }).join('');
       const extra = Object.keys(byService).length > 3 ? `<div class="cal-more">+${Object.keys(byService).length-3} serviço(s)</div>` : '';
