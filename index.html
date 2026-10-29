@@ -326,6 +326,20 @@
   .tabs-line button.active::after, .tabs-seg button.active::after{background:var(--primary);}
   .tabs-seg button:focus-visible, .tabs-line button:focus-visible{outline:2px solid var(--primary); outline-offset:-2px;}
   .tab-badge{display:inline-block; min-width:18px; margin-left:6px; padding:1px 6px; border-radius:999px; background:var(--danger, #B42318); color:#fff; font-size:11px; font-weight:800; line-height:16px; text-align:center;}
+  .cli-tag{display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; color:#fff; background:var(--tc,#475569); margin:3px 4px 0 0; white-space:nowrap;}
+  .cli-tags-lista{display:flex; flex-wrap:wrap; margin-top:1px;}
+  .cli-tags-box{display:flex; flex-direction:column; gap:10px;}
+  .cli-tags-chips{display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+  .cli-tag-op{display:inline-flex; align-items:center; border:1.5px solid var(--tc); border-radius:999px; background:#fff; color:var(--tc); overflow:hidden;}
+  .cli-tag-op.on{background:var(--tc); color:#fff;}
+  .cli-tag-op button{border:0; background:transparent; color:inherit; font:inherit; font-size:12.5px; font-weight:700; padding:4px 11px; cursor:pointer;}
+  .cli-tag-op.solo .cli-tag-nome{cursor:default;}
+  .cli-tag-op .cli-tag-ed{padding:4px 8px 4px 0; opacity:.75; font-size:12px;}
+  .cli-tag-op .cli-tag-ed:hover{opacity:1;}
+  .cli-tag-painel{border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:10px; background:var(--surface-2, #F0F3F6);}
+  .cli-tag-cores{display:flex; gap:8px; flex-wrap:wrap;}
+  .cli-tag-cores button{width:26px; height:26px; border-radius:50%; border:3px solid transparent; cursor:pointer; box-shadow:0 0 0 1px rgba(0,0,0,.15);}
+  .cli-tag-cores button.on{border-color:#fff; box-shadow:0 0 0 2px var(--ink, #1B2733);}
   .tabs-div{width:1px; align-self:center; height:22px; background:var(--line); flex-shrink:0;}
 
   .shell-content{flex:1; overflow-y:auto; overflow-x:hidden; padding:28px; position:relative; color:var(--ink);}
@@ -2429,11 +2443,28 @@ function renderClientesTab(body){
       <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" id="cfgBtnMesclarClientes">🔗 Mesclar duplicados</button><button class="btn btn-ghost" id="cfgBtnImportarClientes">📥 Importar clientes</button><button class="btn btn-accent" id="cfgBtnNovoCliente">+ Novo cliente</button></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-      <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone ou CPF..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+      <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone, CPF ou tag..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
+      <select id="cfgCliTag" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);"></select>
+      <button class="btn btn-ghost" id="cfgBtnTagsCli">🏷 Gerenciar tags</button>
     </div>
     <div class="card" style="padding:0;overflow:hidden;"><div id="cfgClientesTable" style="overflow-x:auto;"></div></div>
   `;
   document.getElementById('cfgBtnNovoCliente').addEventListener('click', ()=> openClienteModalCadastro(null));
+  function preencherFiltroTag(){
+    const sel = document.getElementById('cfgCliTag'), atual = sel.value;
+    sel.innerHTML = '<option value="">Todas as tags</option>' + tagsClientesLista().map(t=>`<option value="${escapeHtml(t.id)}">${escapeHtml(t.nome)}</option>`).join('');
+    if([...sel.options].some(o=>o.value===atual)) sel.value = atual;
+  }
+  preencherFiltroTag();
+  document.getElementById('cfgCliTag').addEventListener('change', ()=> renderClientesTable(null));
+  document.getElementById('cfgBtnTagsCli').addEventListener('click', ()=>{
+    openModal(`<h3 style="margin:0 0 6px;">🏷 Tags de clientes</h3>
+      <p style="margin:0 0 12px;color:var(--muted);font-size:13px;">Crie, renomeie, mude a cor ou exclua tags. Pra marcar um cliente, abra o cadastro dele.</p>
+      <div id="tagsGerenciar"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="tagsFechar">Fechar</button></div>`);
+    montarTagsEditor(document.getElementById('tagsGerenciar'), null, { aoMudar: preencherFiltroTag });
+    document.getElementById('tagsFechar').addEventListener('click', ()=>{ closeModal(); preencherFiltroTag(); renderClientesTable(null); });
+  });
   document.getElementById('cfgBtnImportarClientes').addEventListener('click', ()=> openImportarClientesCadastro());
   document.getElementById('cfgBtnMesclarClientes').addEventListener('click', ()=> openMesclarClientesCadastro());
   let _cliBuscaTimer = null;
@@ -2452,21 +2483,127 @@ function renderClientesTab(body){
   });
 }
 function onlyDigitsCli(s){ return String(s||'').replace(/\D/g,''); }
+/* ============================================================
+   TAGS DE CLIENTES — lista única em config.tagsClientes [{id,nome,cor}]; o cliente guarda
+   só os ids (cliente.tags). Renomear/recolorir vale pra todos os clientes na hora.
+   ============================================================ */
+const TAG_CORES = ['#7C3AED','#2563EB','#0F766E','#16A34A','#CA8A04','#EA580C','#DC2626','#DB2777','#475569'];
+function tagsClientesLista(){ return Array.isArray(config && config.tagsClientes) ? config.tagsClientes : []; }
+function tagClienteInfo(id){ return tagsClientesLista().find(t=>t.id===id) || null; }
+function tagChipHtml(t, extra){
+  return `<span class="cli-tag" style="--tc:${escapeHtml(t.cor||'#475569')};" ${extra||''}>${escapeHtml(t.nome)}</span>`;
+}
+function tagsDoClienteHtml(c){
+  return (c.tags||[]).map(tagClienteInfo).filter(Boolean).map(t=>tagChipHtml(t)).join('');
+}
+function podeEditarTagsCli(){ return !!(currentPermissoes && currentPermissoes['config'] && currentPermissoes['config'].ativo); }
+/* Monta o seletor/editor de tags dentro de `box`. sel = ids marcados (só no modal do cliente). */
+function montarTagsEditor(box, sel, opcoes){
+  opcoes = opcoes || {};
+  const podeEditar = podeEditarTagsCli();
+  let editando = null; // id da tag em edição, ou '__nova__'
+  let corEsc = TAG_CORES[0];
+  async function salvarLista(nova, msg){
+    const anterior = config.tagsClientes;
+    config.tagsClientes = nova;
+    if(!(await configSave())){ config.tagsClientes = anterior; desenhar(); return false; }
+    if(msg) showToast(msg);
+    return true;
+  }
+  function desenhar(){
+    const lista = tagsClientesLista();
+    box.innerHTML = `
+      <div class="cli-tags-box">
+        <div class="cli-tags-chips">
+          ${lista.length ? lista.map(t=>{
+            const on = sel && sel.has(t.id);
+            return `<span class="cli-tag-op ${on?'on':''} ${sel?'':'solo'}" style="--tc:${escapeHtml(t.cor||'#475569')};">
+              <button type="button" class="cli-tag-nome" data-tagsel="${escapeHtml(t.id)}" ${sel?'':'tabindex="-1"'}>${escapeHtml(t.nome)}</button>
+              ${podeEditar ? `<button type="button" class="cli-tag-ed" data-tagedit="${escapeHtml(t.id)}" title="Editar tag">✎</button>` : ''}
+            </span>`;
+          }).join('') : `<span style="color:var(--muted);font-size:12.5px;">Nenhuma tag criada ainda.</span>`}
+          ${podeEditar ? `<button type="button" class="btn btn-ghost btn-sm" data-tagnova="1">+ Nova tag</button>` : ''}
+        </div>
+        ${editando ? painelEdicao() : ''}
+      </div>`;
+    box.querySelectorAll('[data-tagsel]').forEach(b=> b.addEventListener('click', ()=>{
+      if(!sel) return; const id = b.dataset.tagsel;
+      if(sel.has(id)) sel.delete(id); else sel.add(id);
+      desenhar();
+    }));
+    box.querySelectorAll('[data-tagedit]').forEach(b=> b.addEventListener('click', ()=>{ editando = b.dataset.tagedit; corEsc = (tagClienteInfo(editando)||{}).cor || TAG_CORES[0]; desenhar(); }));
+    const nova = box.querySelector('[data-tagnova]'); if(nova) nova.addEventListener('click', ()=>{ editando = '__nova__'; corEsc = TAG_CORES[0]; desenhar(); });
+    if(editando) ligarEdicao();
+  }
+  function painelEdicao(){
+    const t = editando==='__nova__' ? { nome:'' } : (tagClienteInfo(editando)||{ nome:'' });
+    const usos = editando==='__nova__' ? 0 : (clientesCacheIdx||[]).filter(c=>(c.tags||[]).includes(editando)).length;
+    return `<div class="cli-tag-painel">
+      <div class="field" style="margin:0;"><label>${editando==='__nova__'?'Nova tag':'Editar tag'}</label>
+        <input id="tagNomeInp" maxlength="30" placeholder="Ex.: VIP, Atacado, Aliança" value="${escapeHtml(t.nome||'')}"></div>
+      <div class="cli-tag-cores">${TAG_CORES.map(c=>`<button type="button" class="${c===corEsc?'on':''}" data-tagcor="${c}" style="background:${c};" aria-label="Cor ${c}"></button>`).join('')}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="btn btn-accent btn-sm" id="tagSalvar">Salvar tag</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="tagCancelar">Cancelar</button>
+        ${editando!=='__nova__' ? `<button type="button" class="btn btn-sm" id="tagExcluir" style="margin-left:auto;background:var(--danger-soft);color:var(--danger);border:none;">Excluir tag</button>` : ''}
+      </div>
+      <p id="tagMsg" style="margin:0;font-size:12px;color:var(--danger);display:none;"></p>
+      ${editando!=='__nova__' && usos ? `<p style="margin:0;font-size:11.5px;color:var(--muted);">Usada em ${usos} cliente(s) carregado(s). Excluir remove a tag de todos.</p>` : ''}
+    </div>`;
+  }
+  function ligarEdicao(){
+    const msg = t=>{ const m = box.querySelector('#tagMsg'); m.textContent = t; m.style.display = 'block'; };
+    box.querySelectorAll('[data-tagcor]').forEach(b=> b.addEventListener('click', ()=>{ corEsc = b.dataset.tagcor; box.querySelectorAll('[data-tagcor]').forEach(x=>x.classList.toggle('on', x===b)); }));
+    box.querySelector('#tagCancelar').addEventListener('click', ()=>{ editando = null; desenhar(); });
+    box.querySelector('#tagSalvar').addEventListener('click', async ()=>{
+      const nome = box.querySelector('#tagNomeInp').value.trim();
+      if(!nome){ msg('Dê um nome para a tag.'); return; }
+      const lista = tagsClientesLista();
+      if(lista.some(t=>t.id!==editando && t.nome.toLowerCase()===nome.toLowerCase())){ msg('Já existe uma tag com esse nome.'); return; }
+      let nova, idNova = editando;
+      if(editando==='__nova__'){ idNova = 'tag_'+Math.random().toString(36).slice(2,8)+Date.now().toString(36).slice(-3); nova = [...lista, { id:idNova, nome, cor:corEsc }]; }
+      else nova = lista.map(t=> t.id===editando ? { ...t, nome, cor:corEsc } : t);
+      if(await salvarLista(nova, editando==='__nova__' ? 'Tag criada' : 'Tag salva')){
+        if(editando==='__nova__' && sel) sel.add(idNova); // a tag nova já vem marcada no cliente
+        editando = null; desenhar(); if(opcoes.aoMudar) opcoes.aoMudar();
+      }
+    });
+    const ex = box.querySelector('#tagExcluir');
+    if(ex) ex.addEventListener('click', async ()=>{
+      if(ex.dataset.c!=='1'){ ex.dataset.c='1'; ex.textContent = 'Confirmar exclusão'; return; }
+      const id = editando;
+      if(!(await salvarLista(tagsClientesLista().filter(t=>t.id!==id), 'Tag excluída'))) return;
+      if(sel) sel.delete(id);
+      // tira a tag dos clientes que a tinham (só os que já estão carregados; o resto some da tela por não achar a tag)
+      const afetados = (clientesCacheIdx||[]).filter(c=>(c.tags||[]).includes(id));
+      for(const c of afetados){ c.tags = c.tags.filter(x=>x!==id); await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:c.id, payload:c } } }); }
+      editando = null; desenhar(); if(opcoes.aoMudar) opcoes.aoMudar(); if(afetados.length) avisarClientesAtualizados();
+    });
+  }
+  desenhar();
+}
 const CLI_TABELA_LIMITE = 200;
 function renderClientesTable(lista){
   if(!lista) lista = clientesCacheIdx || [];
   const q = (document.getElementById('cfgCliBusca')||{}).value||'';
   const el = document.getElementById('cfgClientesTable');
   if(!el) return;
-  if(!q){
+  const filtroTag = (document.getElementById('cfgCliTag')||{}).value||'';
+  if(!q && !filtroTag){
     el.innerHTML = clientesCacheIdx
-      ? `<div style="padding:32px;text-align:center;color:var(--muted);">Digite um nome, telefone ou CPF para buscar entre os ${clientesCacheIdx.length} clientes cadastrados.</div>`
+      ? `<div style="padding:32px;text-align:center;color:var(--muted);">Digite um nome, telefone, CPF ou tag — ou escolha uma tag — para buscar entre os ${clientesCacheIdx.length} clientes cadastrados.</div>`
       : `<div style="padding:32px;text-align:center;color:var(--muted);">Carregando base de clientes…</div>`;
     return;
   }
   let l = [...lista];
   const qd = onlyDigitsCli(q);
-  l = l.filter(c=>(c.nome||'').toLowerCase().includes(q.toLowerCase())||(qd&&onlyDigitsCli(c.telefone).includes(qd))||(qd&&onlyDigitsCli(c.cpf).includes(qd)));
+  const ql = q.toLowerCase();
+  l = l.filter(c=>{
+    if(filtroTag && !(c.tags||[]).includes(filtroTag)) return false;
+    if(!q) return true;
+    const nomesTags = (c.tags||[]).map(tagClienteInfo).filter(Boolean).map(t=>t.nome.toLowerCase());
+    return (c.nome||'').toLowerCase().includes(ql)||(qd&&onlyDigitsCli(c.telefone).includes(qd))||(qd&&onlyDigitsCli(c.cpf).includes(qd))||nomesTags.some(n=>n.includes(ql));
+  });
   l.sort((a,b)=>(a.nome||'').localeCompare(b.nome||''));
   if(l.length===0){ el.innerHTML='<div style="padding:32px;text-align:center;color:var(--muted);">Nenhum cliente encontrado.</div>'; return; }
   const total = l.length;
@@ -2485,7 +2622,7 @@ function renderClientesTable(lista){
     </tr></thead><tbody>
     ${l.map(c=>`
       <tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}</td>
+        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${c.observacoes?` <span title="${escapeHtml(c.observacoes)}" style="cursor:help;">📝</span>`:''}${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}${(c.tags&&c.tags.length)?`<div class="cli-tags-lista">${tagsDoClienteHtml(c)}</div>`:''}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.telefone||'—')}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(c.email||'')}">${escapeHtml(c.email||'—')}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
@@ -2536,7 +2673,9 @@ function clienteModalHtml(c){
       <div class="field"><label>Bairro</label><input id="ccBairro" value="${escapeHtml(c.bairro||'')}"></div>
       <div class="field"><label>Cidade</label><input id="ccCidade" value="${escapeHtml(c.cidade||'')}"></div>
       <div class="field"><label>Estado</label><input id="ccEstado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
-    </div>`;
+    </div>
+    <div class="field"><label>Tags</label><div id="ccTagsBox"></div></div>
+    <div class="field"><label>Observações</label><textarea id="ccObs" rows="3" maxlength="2000" placeholder="Preferências, cuidados, combinados com o cliente…" style="width:100%;resize:vertical;">${escapeHtml(c.observacoes||'')}</textarea></div>`;
 }
 /* ============================================================
    IMPORTAÇÃO DE CLIENTES (planilha) — vive só aqui no Cadastro
@@ -2957,6 +3096,9 @@ function openClienteModalCadastro(cli, somenteVer){
       ${somenteVer?'':'<button class="btn btn-accent" id="ccSalvar">Salvar</button>'}
     </div>
   `);
+  const tagsSel = new Set((cli && cli.tags) || []);
+  montarTagsEditor(document.getElementById('ccTagsBox'), somenteVer ? null : tagsSel, { aoMudar: ()=>{ renderClientesTable(null); } });
+  if(somenteVer){ document.getElementById('ccTagsBox').innerHTML = (cli && (cli.tags||[]).map(tagClienteInfo).filter(Boolean).map(t=>tagChipHtml(t)).join('')) || '<span style="color:var(--muted);font-size:12.5px;">Sem tags.</span>'; }
   (function(){
     const dddInp = document.getElementById('ccTelDDD'), numInp = document.getElementById('ccTelNum');
     dddInp.addEventListener('input', ()=>{ dddInp.value = onlyDigitsCli(dddInp.value).slice(0,2); });
@@ -2969,7 +3111,7 @@ function openClienteModalCadastro(cli, somenteVer){
   }
   document.getElementById('ccCancelar').addEventListener('click', closeModal);
   if(somenteVer){
-    document.querySelectorAll('#modalBox input').forEach(el=> el.disabled = true);
+    document.querySelectorAll('#modalBox input, #modalBox textarea').forEach(el=> el.disabled = true);
     return;
   }
   // CEP auto-fill
@@ -3017,6 +3159,8 @@ function openClienteModalCadastro(cli, somenteVer){
       bairro: maiuscCli(document.getElementById('ccBairro').value),
       cidade: maiuscCli(document.getElementById('ccCidade').value),
       estado: document.getElementById('ccEstado').value.trim().toUpperCase(),
+      observacoes: document.getElementById('ccObs').value.trim(),
+      tags: [...tagsSel].filter(id=>tagClienteInfo(id)),
     };
     const r = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:novo.id, payload:novo } } });
     if(r.error){ showToast('Erro ao salvar.'); return; }
@@ -3093,6 +3237,10 @@ function mesclarGrupo(itens){
       base.fiadoDebitos = [...(base.fiadoDebitos||[]), ...outro.fiadoDebitos];
     if(outro.ultimoAniversarioEnviado && !base.ultimoAniversarioEnviado)
       base.ultimoAniversarioEnviado = outro.ultimoAniversarioEnviado;
+    // observações: junta (sem repetir); tags: união
+    const obsA = String(base.observacoes||'').trim(), obsB = String(outro.observacoes||'').trim();
+    if(obsB && !obsA.includes(obsB)) base.observacoes = obsA ? obsA+'\n'+obsB : obsB;
+    if(Array.isArray(outro.tags) && outro.tags.length) base.tags = [...new Set([...(base.tags||[]), ...outro.tags])];
   }
   return { manter: base, excluir: ordenados.slice(1).map(c=>c.id) };
 }
