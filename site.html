@@ -131,8 +131,7 @@
 <!-- ============ CONFIGURAÇÕES ============ -->
 <div class="tab-content" id="tab-config">
   <div class="page-head">
-    <div><h1 class="page-title">Configurações do site</h1><p class="page-sub">Contato, frete, parcelamento, cupom, lojas que vendem e o padrão das fotos.</p></div>
-    <button class="btn btn-accent" id="btnSalvarCfg">Salvar configurações</button>
+    <div><h1 class="page-title" id="cfgTitulo">Configurações dos sites</h1><p class="page-sub" id="cfgSub">Escolha o site para ver e mudar as configurações dele.</p></div>
   </div>
   <div id="cfgBox"></div>
 </div>
@@ -457,86 +456,121 @@ function abrirVincularMarketplace(ids){
 }
 
 /* ============================================================ CONFIGURAÇÕES ============================================================ */
+// Dois cartões (Vilaça e Reforma); cada um abre as configurações do próprio site.
+const SITES_CFG = {
+  vilaca:  { nome:'Vilaça Joias', sub:'Joias novas em ouro 18k e prata 925', cor:'#662344', url:'https://vilaca-site.vercel.app', dados:()=>INIT.site||{}, guardar:s=>{ INIT.site=s; } },
+  reforma: { nome:'Reforma Joias', sub:'Joias usadas, antigas e reformadas', cor:'#1f3a33', url:'https://controle-lojas-rho.vercel.app', dados:()=>INIT.siteReforma||{}, guardar:s=>{ INIT.siteReforma=s; } },
+};
+let cfgSite = null; // null = mostra os cartões
 function renderConfig(){
-  const s = INIT.site || {};
-  const cp = s.cupomPrimeiraCompra || { codigo:'PRIMEIRACOMPRA', percentual:10, ativo:true };
+  if(!cfgSite) return renderCartoesSites();
+  renderFormSite(cfgSite);
+}
+function renderCartoesSites(){
+  $('#cfgTitulo').textContent = 'Configurações dos sites';
+  $('#cfgSub').textContent = 'Escolha o site para ver e mudar as configurações dele.';
+  $('#cfgBox').innerHTML = `<div class="grid g2">${Object.entries(SITES_CFG).map(([id,c])=>{
+    const s = c.dados();
+    const linhas = [
+      ['Pedidos', s.checkoutModo==='producao' ? 'Produção' : 'Teste (sem cobrança)'],
+      ['WhatsApp', s.whatsapp || '—'],
+      ['Frete grátis', s.freteGratisAcima ? 'acima de '+brl(s.freteGratisAcima) : 'não'],
+      ['Parcelas', (s.parcelasMax||12)+'x sem juros'],
+    ];
+    if(id==='reforma') linhas.push(['CNPJ no rodapé', s.empresa?.cnpj || 'não preenchido']);
+    return `<div class="card site-card" data-site="${id}" role="button" tabindex="0" style="cursor:pointer;border-top:4px solid ${c.cor};margin:0;">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+        <div><div style="font-size:18px;font-weight:800;color:${c.cor};">${escapeHtml(c.nome)}</div><div class="muted" style="font-size:12.5px;margin-top:2px;">${escapeHtml(c.sub)}</div></div>
+        <a class="btn btn-ghost btn-sm" href="${c.url}" target="_blank" rel="noopener" data-abrir>Abrir site</a>
+      </div>
+      <div style="margin-top:10px;font-size:13px;">${linhas.map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-top:1px solid var(--line);"><span class="muted">${k}</span><b style="text-align:right;">${escapeHtml(String(v))}</b></div>`).join('')}</div>
+      <div style="margin-top:12px;"><span class="btn btn-accent btn-sm">Configurar</span></div>
+    </div>`; }).join('')}</div>`;
+  $$('#cfgBox .site-card').forEach(c=>{
+    const abrir = e=>{ if(e.target.closest('[data-abrir]')) return; cfgSite = c.dataset.site; renderConfig(); };
+    c.addEventListener('click', abrir);
+    c.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); abrir(e); } });
+  });
+}
+function renderFormSite(id){
+  const c = SITES_CFG[id], s = c.dados(), ehVilaca = id==='vilaca';
+  const cp = s.cupomPrimeiraCompra || (ehVilaca ? { codigo:'PRIMEIRACOMPRA', percentual:10, ativo:true } : { codigo:'', percentual:0, ativo:false });
   const ft = s.freteTabela || { MG:24.9, SUDESTE:29.9, OUTROS:39.9 };
   const fp = s.fotoPadrao || { fundo:'FFFFFF', margem:0.14, sombra:'ai.soft' };
-  const rf = INIT.siteReforma || {};
   const lojas = (INIT.lojas||[]).filter(l=>l.cnpj);
+  $('#cfgTitulo').textContent = 'Configurações · ' + c.nome;
+  $('#cfgSub').textContent = ehVilaca ? 'Contato, frete, parcelamento, cupom, lojas que vendem e o padrão das fotos.' : 'Contato, empresa, frete, parcelamento, cupom, garantia e vitrine do site de joias usadas e reformadas.';
   $('#cfgBox').innerHTML = `
+    <div class="acoes-row" style="margin:0 0 12px;"><button class="btn btn-ghost" id="cfgVoltar">← Voltar para os sites</button><a class="btn btn-ghost" href="${c.url}" target="_blank" rel="noopener">Abrir site</a><button class="btn btn-accent" id="btnSalvarCfg">Salvar configurações</button></div>
     <div class="card"><div class="section-label" style="margin-top:0;">Atendimento</div>
       <div class="grid g3"><div><label class="f">WhatsApp (com 55 e DDD)</label><input class="inp" id="c_zap" value="${escapeHtml(s.whatsapp||'')}"></div>
         <div><label class="f">E-mail</label><input class="inp" id="c_email" value="${escapeHtml(s.email||'')}"></div>
-        <div><label class="f">Instagram (sem @)</label><input class="inp" id="c_insta" value="${escapeHtml(s.instagram||'vilacajoias')}"></div></div></div>
-    <div class="card"><div class="section-label" style="margin-top:0;">Lojas que vendem no site</div>
+        <div><label class="f">Instagram (sem @)</label><input class="inp" id="c_insta" value="${escapeHtml(s.instagram ?? (ehVilaca ? 'vilacajoias' : ''))}"></div></div></div>
+    ${ehVilaca ? `<div class="card"><div class="section-label" style="margin-top:0;">Lojas que vendem no site</div>
       <p class="muted" style="font-size:12.5px;margin:0 0 6px;">Cada produto é vendido pela loja escolhida nele (ou pela que tem mais estoque). Cada loja recebe pela própria conta Vindi e emite a própria nota.</p>
-      ${lojas.map(l=>`<label class="chkl"><input type="checkbox" class="c_loja" value="${l.id}" ${(s.lojasAtivas||[]).includes(l.id)?'checked':''}> ${escapeHtml(l.nome)} <span class="muted" style="font-weight:400;">· ${escapeHtml(l.cnpj)}</span></label>`).join('')}</div>
+      ${lojas.map(l=>`<label class="chkl"><input type="checkbox" class="c_loja" value="${l.id}" ${(s.lojasAtivas||[]).includes(l.id)?'checked':''}> ${escapeHtml(l.nome)} <span class="muted" style="font-weight:400;">· ${escapeHtml(l.cnpj)}</span></label>`).join('')}</div>`
+    : `<div class="card"><div class="section-label" style="margin-top:0;">Empresa e garantia</div>
+      <p class="muted" style="font-size:12.5px;margin:0 0 6px;">As peças daqui são vendidas pela loja Reforma Joias. Para uma peça aparecer, no produto escolha “Loja que vende” = Reforma Joias e marque “Mostrar este produto no site”. Razão social e CNPJ aparecem no rodapé quando preenchidos (obrigatório para vender pela internet).</p>
+      <div class="grid g3"><div><label class="f">Razão social</label><input class="inp" id="c_rs" value="${escapeHtml(s.empresa?.razaoSocial||'')}"></div>
+        <div><label class="f">CNPJ</label><input class="inp" id="c_cnpj" value="${escapeHtml(s.empresa?.cnpj||'')}"></div>
+        <div><label class="f">Garantia padrão (dias)</label><input class="inp" id="c_gar" inputmode="numeric" value="${s.garantiaDias||90}"></div></div></div>`}
     <div class="card"><div class="section-label" style="margin-top:0;">Frete e prazos</div>
       <div class="grid g4"><div><label class="f">Frete grátis acima de (R$)</label><input class="inp" id="c_fg" inputmode="decimal" value="${numBR(s.freteGratisAcima)}"></div>
         <div><label class="f">Frete MG (R$)</label><input class="inp" id="c_fMG" inputmode="decimal" value="${numBR(ft.MG)}"></div>
         <div><label class="f">Frete SP/RJ/ES (R$)</label><input class="inp" id="c_fSE" inputmode="decimal" value="${numBR(ft.SUDESTE)}"></div>
         <div><label class="f">Frete demais estados (R$)</label><input class="inp" id="c_fOU" inputmode="decimal" value="${numBR(ft.OUTROS)}"></div>
         <div><label class="f">Prazo mostrado</label><input class="inp" id="c_prazo" value="${escapeHtml(s.prazoEnvio||'3 a 8 dias úteis')}"></div></div>
-      <p class="muted" style="font-size:12.5px;">Tabela fixa por região até ligarmos o cálculo dos Correios pelo contrato da Vilaça.</p></div>
+      <p class="muted" style="font-size:12.5px;">Tabela fixa por região até ligarmos o cálculo dos Correios pelo contrato.</p></div>
     <div class="card"><div class="section-label" style="margin-top:0;">Pagamento e cupom</div>
       <div class="grid g4"><div><label class="f">Parcelas sem juros (máx.)</label><input class="inp" id="c_pmax" inputmode="numeric" value="${s.parcelasMax||12}"></div>
         <div><label class="f">Parcela mínima (R$)</label><input class="inp" id="c_pmin" inputmode="decimal" value="${numBR(s.parcelaMinima||50)}"></div>
         <div><label class="f">Desconto no Pix (%)</label><input class="inp" id="c_pix" inputmode="decimal" value="${numBR(s.descontoPix||0)}"></div>
         <div><label class="f">Modo do checkout</label><select class="inp" id="c_modo"><option value="teste" ${s.checkoutModo!=='producao'?'selected':''}>Teste (sem cobrança)</option><option value="producao" ${s.checkoutModo==='producao'?'selected':''} disabled>Produção (precisa das chaves Vindi)</option></select></div></div>
-      <div class="grid g3"><div><label class="f">Cupom de primeira compra</label><input class="inp" id="c_cupom" value="${escapeHtml(cp.codigo)}"></div>
+      <div class="grid g3"><div><label class="f">Cupom de primeira compra</label><input class="inp" id="c_cupom" value="${escapeHtml(cp.codigo||'')}"></div>
         <div><label class="f">Desconto do cupom (%)</label><input class="inp" id="c_cupomPct" inputmode="decimal" value="${numBR(cp.percentual)}"></div>
-        <div><label class="chkl" style="margin-top:28px;"><input type="checkbox" id="c_cupomAtivo" ${cp.ativo!==false?'checked':''}> Cupom ativo</label></div></div></div>
+        <div><label class="chkl" style="margin-top:28px;"><input type="checkbox" id="c_cupomAtivo" ${cp.ativo!==false && cp.codigo?'checked':''}> Cupom ativo</label></div></div></div>
     <div class="card"><div class="section-label" style="margin-top:0;">Vitrine</div>
       <label class="f">Frases da faixa do topo (uma por linha)</label><textarea class="inp" id="c_faixa">${escapeHtml((s.faixa||[]).join('\n'))}</textarea>
-      <div class="grid g2"><div><label class="f">Título da página inicial</label><input class="inp" id="c_heroT" value="${escapeHtml(s.hero?.titulo||'')}" placeholder="Ouro 18k feito e cuidado em Juiz de Fora"></div>
-        <div><label class="f">Texto da página inicial</label><input class="inp" id="c_heroX" value="${escapeHtml(s.hero?.texto||'')}" placeholder="Joias com ourivesaria própria: ajuste de aro, polimento e reparos por quem fez a peça."></div></div></div>
-    <div class="card"><div class="section-label" style="margin-top:0;">Site Reforma Joias (joias usadas e reformadas)</div>
-      <p class="muted" style="font-size:12.5px;margin:0 0 6px;">Para uma peça aparecer lá, no produto escolha “Loja que vende” = Reforma Joias e marque “Mostrar este produto no site”. Razão social e CNPJ aparecem no rodapé quando preenchidos (obrigatório para vender pela internet).</p>
-      <div class="grid g3"><div><label class="f">WhatsApp (com 55 e DDD)</label><input class="inp" id="r_zap" value="${escapeHtml(rf.whatsapp||'')}"></div>
-        <div><label class="f">E-mail</label><input class="inp" id="r_email" value="${escapeHtml(rf.email||'')}"></div>
-        <div><label class="f">Instagram (sem @)</label><input class="inp" id="r_insta" value="${escapeHtml(rf.instagram||'')}"></div>
-        <div><label class="f">Razão social</label><input class="inp" id="r_rs" value="${escapeHtml(rf.empresa?.razaoSocial||'')}"></div>
-        <div><label class="f">CNPJ</label><input class="inp" id="r_cnpj" value="${escapeHtml(rf.empresa?.cnpj||'')}"></div>
-        <div><label class="f">Garantia padrão (dias)</label><input class="inp" id="r_gar" inputmode="numeric" value="${rf.garantiaDias||90}"></div>
-        <div><label class="f">Frete grátis acima de (R$)</label><input class="inp" id="r_fg" inputmode="decimal" value="${numBR(rf.freteGratisAcima)}"></div>
-        <div><label class="f">Pedidos</label><select class="inp" id="r_modo"><option value="teste" ${(rf.checkoutModo||'teste')==='teste'?'selected':''}>Teste (sem cobrança)</option><option value="producao" ${rf.checkoutModo==='producao'?'selected':''}>Produção</option></select></div></div>
-      <label class="f">Faixa de avisos no topo (um por linha)</label><textarea class="inp" id="r_faixa" style="min-height:70px;">${escapeHtml((rf.faixa||[]).join('\n'))}</textarea>
-      <div class="acoes-row"><button class="btn btn-accent" id="btnSalvarRf">Salvar site Reforma</button></div></div>
-    <div class="card"><div class="section-label" style="margin-top:0;">Padrão das fotos do site</div>
+      <div class="grid g2"><div><label class="f">Título da página inicial (vazio = texto padrão do site)</label><input class="inp" id="c_heroT" value="${escapeHtml(s.hero?.titulo||'')}" placeholder="${ehVilaca?'Joias para atravessar gerações':'Toda joia tem uma história. A próxima pode ser a sua.'}"></div>
+        <div><label class="f">Texto da página inicial</label><input class="inp" id="c_heroX" value="${escapeHtml(s.hero?.texto||'')}" placeholder="${ehVilaca?'Joias com ourivesaria própria: ajuste de aro, polimento e reparos por quem fez a peça.':'Peças que já foram usadas, guardadas e herdadas voltam à vitrine depois de passar pela nossa bancada.'}"></div></div></div>
+    ${ehVilaca ? `<div class="card"><div class="section-label" style="margin-top:0;">Padrão das fotos do site</div>
       <div class="grid g3"><div><label class="f">Cor do fundo</label><input class="inp" id="c_fFundo" value="${escapeHtml(fp.fundo||'FFFFFF')}" placeholder="FFFFFF"></div>
         <div><label class="f">Margem em volta da peça (%)</label><input class="inp" id="c_fMargem" inputmode="decimal" value="${numBR(Math.round((fp.margem??0.14)*100))}"></div>
         <div><label class="f">Sombra</label><select class="inp" id="c_fSombra">${[['ai.soft','Suave'],['ai.hard','Marcada'],['ai.floating','Peça flutuando'],['nenhuma','Sem sombra']].map(([v,l])=>`<option value="${v}" ${v===(fp.sombra||'ai.soft')?'selected':''}>${l}</option>`).join('')}</select></div></div>
-      <p class="muted" style="font-size:12.5px;">O tratamento usa a Photoroom: remove o fundo, centraliza e aplica a sombra. A peça não é retocada.</p></div>`;
-  $('#btnSalvarRf').addEventListener('click', async ()=>{
-    const config = { whatsapp: $('#r_zap').value.replace(/\D/g,''), email: $('#r_email').value.trim(), instagram: $('#r_insta').value.replace('@','').trim(),
-      empresa: { razaoSocial: $('#r_rs').value.trim(), cnpj: $('#r_cnpj').value.trim() }, garantiaDias: parseInt($('#r_gar').value)||90,
-      freteGratisAcima: num($('#r_fg').value), checkoutModo: $('#r_modo').value, faixa: $('#r_faixa').value.split('\n').map(x=>x.trim()).filter(Boolean) };
-    try{ const r = await api('salvarConfig', { canal:'reforma', config }); INIT.siteReforma = r.site; toast('Site Reforma salvo. Atualiza em até 1 minuto.'); }
-    catch(e){ toast(e.message); }
-  });
+      <p class="muted" style="font-size:12.5px;">O tratamento usa a Photoroom: remove o fundo, centraliza e aplica a sombra. A peça não é retocada. Vale para as fotos tratadas dos dois sites.</p></div>` : ''}`;
+  $('#cfgVoltar').addEventListener('click', ()=>{ cfgSite = null; renderConfig(); });
+  $('#btnSalvarCfg').addEventListener('click', ()=> salvarConfigSite(id));
 }
-$('#btnSalvarCfg').addEventListener('click', async ()=>{
+async function salvarConfigSite(id){
+  const ehVilaca = id==='vilaca';
   const config = {
     whatsapp: $('#c_zap').value.replace(/\D/g,''), email: $('#c_email').value.trim(), instagram: $('#c_insta').value.replace('@','').trim(),
-    lojasAtivas: $$('.c_loja').filter(c=>c.checked).map(c=>c.value),
     freteGratisAcima: num($('#c_fg').value), freteTabela: { MG:num($('#c_fMG').value)||0, SUDESTE:num($('#c_fSE').value)||0, OUTROS:num($('#c_fOU').value)||0 }, prazoEnvio: $('#c_prazo').value.trim(),
     parcelasMax: Math.max(1, Math.min(12, parseInt($('#c_pmax').value)||12)), parcelaMinima: num($('#c_pmin').value)||50, descontoPix: num($('#c_pix').value)||0, checkoutModo: $('#c_modo').value,
-    cupomPrimeiraCompra: { codigo: $('#c_cupom').value.trim().toUpperCase(), percentual: num($('#c_cupomPct').value)||0, ativo: $('#c_cupomAtivo').checked },
+    cupomPrimeiraCompra: { codigo: $('#c_cupom').value.trim().toUpperCase(), percentual: num($('#c_cupomPct').value)||0, ativo: $('#c_cupomAtivo').checked && !!$('#c_cupom').value.trim() },
     faixa: $('#c_faixa').value.split('\n').map(x=>x.trim()).filter(Boolean),
     hero: { titulo: $('#c_heroT').value.trim(), texto: $('#c_heroX').value.trim() },
-    fotoPadrao: { fundo: $('#c_fFundo').value.replace('#','').trim()||'FFFFFF', margem: (num($('#c_fMargem').value)??14)/100, sombra: $('#c_fSombra').value },
   };
-  if(!config.lojasAtivas.length){ toast('Marque pelo menos uma loja.'); return; }
-  try{ const r = await api('salvarConfig', { config }); INIT.site = r.site; toast('Configurações salvas. O site atualiza em até 1 minuto.'); }
-  catch(e){ toast(e.message); }
-});
+  if(ehVilaca){
+    config.lojasAtivas = $$('.c_loja').filter(c=>c.checked).map(c=>c.value);
+    config.fotoPadrao = { fundo: $('#c_fFundo').value.replace('#','').trim()||'FFFFFF', margem: (num($('#c_fMargem').value)??14)/100, sombra: $('#c_fSombra').value };
+    if(!config.lojasAtivas.length){ toast('Marque pelo menos uma loja.'); return; }
+  } else {
+    config.empresa = { razaoSocial: $('#c_rs').value.trim(), cnpj: $('#c_cnpj').value.trim() };
+    config.garantiaDias = parseInt($('#c_gar').value)||90;
+  }
+  try{
+    const r = await api('salvarConfig', ehVilaca ? { config } : { canal:'reforma', config });
+    SITES_CFG[id].guardar(r.site);
+    toast(`${SITES_CFG[id].nome}: configurações salvas. O site atualiza em até 1 minuto.`);
+  } catch(e){ toast(e.message); }
+}
 
 /* ============================================================ TABS / SHELL ============================================================ */
 function setTab(id){
   currentTab = id; $$('.tab-content').forEach(t=>t.classList.toggle('active', t.id==='tab-'+id));
   parent.postMessage({ type:'activeTab', modulo:'site', tabId:id }, '*');
-  if(id==='config') renderConfig();
+  if(id==='config'){ cfgSite = null; renderConfig(); }
 }
 function atualizarFaixaLoja(){ const f=$('#lojaFaixa'); if(window.__lojaAtual && window.__lojaAtual.nome){ f.style.display='block'; f.style.setProperty('--loja-cor', window.__lojaAtual.cor || '#1F6F8B'); f.textContent=window.__lojaAtual.nome; } else f.style.display='none'; }
 function preencherSelects(){
