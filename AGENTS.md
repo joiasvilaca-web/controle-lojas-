@@ -221,6 +221,7 @@ Quando vendedora sobrescreve data sugerida → aciona fluxo de código de autori
 6. **Se for só backend** (Edge Function): avisar que não precisa subir nada no GitHub
 7. **Validar JS** com `node --check arquivo.html` antes de entregar
 8. **Sempre entregar** arquivo completo + link: `https://github.com/joiasvilaca-web/controle-lojas-/upload/main`
+9. **Resposta ao Felipe (29/out):** não descrever o que foi implementado. Responder só com o que depende da ação dele para finalizar, ou com falhas/limitações encontradas.
 
 ---
 
