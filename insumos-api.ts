@@ -1,6 +1,7 @@
-// insumos-api v2 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// insumos-api v3 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
-// mas só pode mexer em: status (aguardando ⇄ oficina_pronto), local da peça (loja/fabrica) e
+// v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
+// A Oficina só pode mexer em: status (aguardando/pendencia/oficina_pronto), local da peça (loja/fabrica) e
 // observações internas (que a loja vê no Pedido; "avisar a loja" notifica quem é da loja da via).
 // A Oficina não tem CNPJ: cada insumo PERTENCE a uma loja (quem comprou, dona fiscal) e fica
 // em um de dois lugares: na própria loja (local "loja") ou em poder da Oficina (local "oficina").
@@ -29,6 +30,8 @@ function sessaoValida(u: any, senha: string): boolean {
 const texto = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const num = (v: unknown) => { const n = Number(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : NaN; };
 const ABAS = ["vias", "saldos", "movimentos", "cadastro", "baixaVia"];
+/** Via de SERVIÇO (conserto, relógio, gravação) baixa como serviço; o resto (aliança, fabricação, joias) como fabricação. */
+const finalidadeDoTipo = (nome: string) => /SERVI|RELOG|GRAVA|CONSERT/i.test(String(nome || "")) ? "servico" : "fabricacao";
 
 /** Mesmo critério do app: o que foi salvo no acesso vale; sem nada salvo, padrão por nível. */
 function permissoes(user: any) {
@@ -208,6 +211,8 @@ Deno.serve(async (req: Request) => {
       if (!lojaValida(lojaId)) return json({ error: "A via não tem uma loja válida — o material sai do estoque da loja da via." }, 400);
       const codigoVia = (os.payload && (os.payload.codigoVia || os.payload.via)) || "";
       const itens = Array.isArray(p.itens) ? p.itens.slice(0, 30) : [];
+      // serviço × fabricação é fixo pelo tipo da via (não vem da tela)
+      const finalidadeVia = finalidadeDoTipo((os.payload && os.payload.serviceTypeName) || "");
       if (!itens.length) return json({ error: "Informe ao menos um insumo." }, 400);
       const rows: any[] = [];
       const faltas: string[] = [];
@@ -220,7 +225,7 @@ Deno.serve(async (req: Request) => {
         const { saldo, custoMedio } = await saldoDe(ins.id, lojaId, "oficina");
         if (saldo < q) faltas.push(`${ins.payload.nome}: saldo na Oficina ${saldo} ${ins.payload.unidade || ""}`);
         rows.push({ insumo_id: ins.id, loja_id: lojaId, local: "oficina", tipo: "CONSUMO", quantidade: -q, valor_unit: custoMedio,
-          os_id: os.id, codigo_via: codigoVia, finalidade: it.finalidade === "fabricacao" ? "fabricacao" : "servico",
+          os_id: os.id, codigo_via: codigoVia, finalidade: finalidadeVia,
           payload: { por: quem, obs: texto(it.obs, 300), tipoOrdem: (os.payload && os.payload.serviceTypeName) || "" } });
       }
       if (faltas.length && p.forcar !== true) return json({ error: "Saldo insuficiente na Oficina para a loja da via.", faltas }, 409);
@@ -250,20 +255,21 @@ Deno.serve(async (req: Request) => {
     }
 
     /* ---------- VIAS (O.S.) ---------- */
-    const STATUS_VIA = ["rascunho", "aguardando", "oficina_pronto", "pronto", "entregue", "cancelado"];
+    const STATUS_VIA = ["rascunho", "aguardando", "pendencia", "oficina_pronto", "pronto", "entregue", "cancelado"];
+    const STATUS_OFICINA = ["aguardando", "pendencia", "oficina_pronto"];
     const resumoVia = (r: any) => {
       const o = r.payload || {};
       const obs = Array.isArray(o.observacoes) ? o.observacoes : [];
       return { id: r.id, codigoVia: o.codigoVia || o.via || "", cliente: o.cliente || "", lojaId: o.lojaId || "", serviceTypeId: o.serviceTypeId || "",
         serviceTypeName: o.serviceTypeName || "", data: o.data || "", status: o.status || "", descricao: o.descricao || "", localAtual: o.localAtual || "loja",
-        criadoEm: o.criadoEm || null, vendedora: o.vendedora || "", itens: (Array.isArray(o.itens) ? o.itens : []).map((i: any) => ({ descricao: i.descricao || i.produtoNome || i.nome || "", qtd: i.qtd || i.quantidade || 1 })),
+        criadoEm: o.criadoEm || null, vendedora: o.vendedora || "", finalidade: finalidadeDoTipo(o.serviceTypeName || ""), itens: (Array.isArray(o.itens) ? o.itens : []).map((i: any) => ({ descricao: i.descricao || i.produtoNome || i.nome || "", qtd: i.qtd || i.quantidade || 1 })),
         fotos: (Array.isArray(o.fotos) ? o.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8),
         observacoes: obs.map((x: any) => ({ id: x.id, nome: x.nome, descricao: x.descricao, criadoEm: x.criadoEm, ciente: !!x.ciente, cienteNome: x.cienteNome || null, avisaLoja: (x.notificarPara || []).length > 0, origem: x.origem || "" })),
         historicoOficina: Array.isArray(o.historicoOficina) ? o.historicoOficina.slice(-20) : [] };
     };
     if (op === "vias") {
       precisa("vias");
-      const status = (Array.isArray(p.status) ? p.status : ["aguardando", "oficina_pronto"]).filter((x: string) => STATUS_VIA.includes(x));
+      const status = (Array.isArray(p.status) ? p.status : STATUS_OFICINA).filter((x: string) => STATUS_VIA.includes(x));
       let q = admin.from("ordens_servico").select("id,payload").order("updated_at", { ascending: false, nullsFirst: false }).limit(800);
       if (status.length) q = q.in("payload->>status", status);
       if (p.lojaId) q = q.eq("payload->>lojaId", texto(p.lojaId, 60));
@@ -302,9 +308,9 @@ Deno.serve(async (req: Request) => {
       const hist = Array.isArray(o.historicoOficina) ? o.historicoOficina : [];
       const mudou: string[] = [];
       if (p.status !== undefined && p.status !== o.status) {
-        // a Oficina só alterna entre Aguardando e Oficina pronto; pronto/entregue/cancelado são da loja
-        if (!["aguardando", "oficina_pronto"].includes(p.status) || !["aguardando", "oficina_pronto"].includes(o.status))
-          return json({ error: "Pela Oficina, a via só alterna entre Aguardando e Oficina pronto." }, 400);
+        // a Oficina só marca Oficina pronto ou Pendência (em vias ainda abertas); pronto/entregue/cancelado são da loja
+        if (!["pendencia", "oficina_pronto"].includes(p.status) || !STATUS_OFICINA.includes(o.status))
+          return json({ error: "Pela Oficina, a via só pode ir para Oficina pronto ou Pendência." }, 400);
         hist.push({ em: agora, por: quem.nome, de: o.status, para: p.status });
         o.status = p.status; mudou.push("status");
       }
