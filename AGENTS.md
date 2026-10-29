@@ -93,6 +93,7 @@ Cada loja tem cor temática. Login da Up Case abre direto em Gravações.
 | `atendimento.html` | CHAT: WhatsApp/Instagram + conversas internas na mesma lista + Agenda (tarefas, calendário, minhas vias, assistente) |
 | `definir-senha.html` | Página pública de setup de senha (link de convite) |
 | `advertencia.html` | Página pública de confirmação de advertência (DP) |
+| `insumos.html` | CAIXA › Insumos da Oficina (saldos, lançar compra/envio/retorno/perda/ajuste, movimentos, cadastro) — fala só com a Edge Function `insumos-api` |
 | `reforma-admin.html` | CAIXA › Reforma — módulo interno (fila de pedidos, orçamento, custódia, Gerar O.S.) |
 | `reforma.html` | Página pública do cliente da Reforma (envia fotos, aceita orçamento, acompanha pelo link `?t=TOKEN`) |
 
@@ -137,6 +138,7 @@ Grupos de menu com abas em `#shellTopTabs`:
 | `atendimento-api` | v4 | Todas as ops do módulo Atendimento |
 | `upload-foto-drive` | v23 | Upload de fotos para Google Drive |
 | `reforma-api` | v2 | Todas as ops do módulo Reforma (públicas `public*` sem sessão + internas com `senha`) — v2: multi-itens, frete, WhatsApp Evolution |
+| `insumos-api` | v1 | Insumos da Oficina (ouro, prata, cobre, pedras): cadastro, Kardex (`insumos_movimentos`), saldos por loja dona × local (loja/oficina), baixa por via (`consumoVia`), estorno. Código em `insumos-api.ts` |
 | `cotacoes-mercado` | — | Cotações (não usa sessão) |
 | `agenda-tarefas` | v1 | Agenda do CHAT: tarefas (tabela `agenda_tarefas`), lembretes pro calendário e "Minhas vias". Código em `agenda-tarefas.ts`. Usa `npm:@supabase/supabase-js@2` (o deploy com `jsr:` estava dando timeout) |
 
@@ -168,6 +170,8 @@ apikey: ${SERVICE_ROLE_KEY}
 | `painel_ordens_kv` | KV do módulo O.S. |
 | `ia_memoria` | Memória do módulo IA |
 | `reforma_pedidos` | Pedidos de reforma (colunas reais: `numero` bigserial, `token`, `status`, `loja_id`, `telefone_digits` + `payload`) |
+| `insumos` | Cadastro de insumos da Oficina (`id`, `payload` {nome, categoria metal/pedra/outro, unidade g/ct/un, teor, origemPedra, dimensoes, peso, quilates, ncm, custoRef}, `ativo`) |
+| `insumos_movimentos` | Kardex dos insumos: `insumo_id`, `loja_id` (dona fiscal), `local` loja/oficina, `tipo` COMPRA/ENVIO/RETORNO/CONSUMO/PERDA/AJUSTE/ESTORNO, `quantidade` (com sinal), `valor_unit`, `os_id`, `codigo_via`, `finalidade` servico/fabricacao, `ref_id`, `payload` (por, obs, fiscal da compra, par) |
 | `reforma_config` | Config do módulo Reforma (id=`config`: lojas públicas, endereços, serviços, textos, mensagens WhatsApp) |
 
 **Tabelas KV** têm colunas `key`/`value`. Acesso via `kvGet`/`kvSet` no db-gateway (não anon direto).
@@ -303,6 +307,7 @@ Cada conversa é **escopada a um único módulo**:
 - 29/out (12): grupo de tipos de ordem `agenda` ("PRODUÇÃO", `prazoIndividual:true`): os 8 tipos atuais (ALIANÇA/SERVIÇO/FABRICACAO × SEM/COM CRAVACAO, RELOGIO ASSISTENCIA AUTORIZADA/JUIZ DE FORA) dividem a MESMA quantidade por dia (máx. 10, soma), cada um com o próprio prazo. Grupo com `prazoIndividual` só propaga `maxPorDia`. Backup: `gestao_config` id `backup_tipos_ordem_pre_agenda_unica_20261029`.
 - 29/out (13): Tipos de ordem sem dados fiscais (UI e dados removidos). **Cuidado:** uma tela do Cadastro aberta antes de uma alteração feita direto no banco e depois salva sobrescreve a config inteira (já apagou o grupo `agenda` uma vez); depois de mexer em `gestao_config` por SQL, pedir F5 a todos.
 - 29/out (14): as abas **Status de Orçamento** e **Mensagens** do Cadastro viraram uma só, "Status e Mensagens" (`renderStatusMensagensTab`, id `statusOrcamento`), com duas subabas (`.abas-std`). As permissões continuam separadas (`abas.statusOrcamento` e `abas.mensagens` em DP › perfis); a aba aparece se qualquer uma estiver liberada.
+- 29/out (15): **Oficina = unidade interna + Insumos.** `loja_of` tem `interna:true` (checkbox em Cadastro › Lojas, chip "UNIDADE INTERNA"); unidade interna some dos seletores de loja de Vendas, Pedido (loja da O.S.), Orçamento e Caixa, mas continua com usuários, dashboard, agenda e autorizações. A Oficina não tem CNPJ: **os insumos pertencem à loja que comprou** e ficam "em poder da Oficina" (`local:'oficina'`). Módulo CAIXA › **INSUMOS** (`insumos.html`, sub `insumos`, iframe `caixa_insumos`, permissão `insumos` com abas `saldos`/`movimentos`/`cadastro`/`baixaVia` em `MODULOS_APP` e nos 3 blocos de `permissoesPadrao` de index.html e dp.html; padrão: diretoria/gerente tudo, oficina saldos + baixaVia, vendedora desligado). Na via (painel-ordens, modal completo e modal da Oficina) o bloco **"Material da Oficina usado nesta via"** (`mountInsumosVia`) lança a saída (serviço ou fabricação) do saldo da **loja da via** em poder da Oficina, valorada pelo custo médio das compras — base para separar material (venda) e mão de obra (serviço) na nota futura. Saldo insuficiente pede confirmação (fica negativo). Nada é apagado: corrigir = estornar. Tabelas com RLS e sem GRANT; só a Edge Function `insumos-api` acessa (permissões conferidas no servidor).
 - 28/out: RLS ligado em `atendimento_pessoal_usuarios`, `atendimento_lembretes` e `atendimento_setup_log` (só Edge Functions com service_role usam).
 
 ---
