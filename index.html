@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script src="cliente-lojas.js"></script>
 <!-- Tema compartilhado com os módulos (seletores :where, especificidade zero). Vem ANTES do
      <style> do shell de propósito: as variáveis e regras do shell abaixo sempre vencem. -->
 <link rel="stylesheet" href="tema.css">
@@ -1637,6 +1638,7 @@ const CFG_CARDS = {
   impressao:      { icone:'printer', desc:'Modelos de impressão, vias e etiquetas' },
   statusOrcamento:{ icone:'tag',     desc:'Etapas e status dos orçamentos' },
   mensagens:      { icone:'message', desc:'Textos automáticos enviados aos clientes' },
+  tagsClientes:   { icone:'tag',     desc:'Criar, editar e excluir as tags usadas nos clientes' },
 };
 const GRUPOS_COM_CARDS = ['caixa','dashboard','config'];
 let cadastroAberto = false; // Administração › Cadastro: false = cartões dos cadastros; true = um cadastro aberto
@@ -2379,6 +2381,7 @@ const CFG_TABS = [
   { id:'impressao', label:'Impressão & Etiquetas' },
   { id:'statusOrcamento', label:'Status de Orçamento' },
   { id:'mensagens', label:'Mensagens' },
+  { id:'tagsClientes', label:'Tags de clientes' },
 ];
 let currentCfgTab = 'clientes';
 
@@ -2409,6 +2412,7 @@ function renderCfgTab(tab){
   if(tab==='impressao') return renderImpressaoTab(body);
   if(tab==='statusOrcamento') return renderStatusOrcamentoTab(body);
   if(tab==='mensagens') return renderMensagensTab(body);
+  if(tab==='tagsClientes') return renderTagsClientesTab(body);
 }
 
 /* ---------- CLIENTES (Cadastro) ---------- */
@@ -2445,7 +2449,6 @@ function renderClientesTab(body){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone, CPF ou tag..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
       <select id="cfgCliTag" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);"></select>
-      <button class="btn btn-ghost" id="cfgBtnTagsCli">🏷 Gerenciar tags</button>
     </div>
     <div class="card" style="padding:0;overflow:hidden;"><div id="cfgClientesTable" style="overflow-x:auto;"></div></div>
   `;
@@ -2457,14 +2460,6 @@ function renderClientesTab(body){
   }
   preencherFiltroTag();
   document.getElementById('cfgCliTag').addEventListener('change', ()=> renderClientesTable(null));
-  document.getElementById('cfgBtnTagsCli').addEventListener('click', ()=>{
-    openModal(`<h3 style="margin:0 0 6px;">🏷 Tags de clientes</h3>
-      <p style="margin:0 0 12px;color:var(--muted);font-size:13px;">Crie, renomeie, mude a cor ou exclua tags. Pra marcar um cliente, abra o cadastro dele.</p>
-      <div id="tagsGerenciar"></div>
-      <div class="modal-actions"><button class="btn btn-ghost" id="tagsFechar">Fechar</button></div>`);
-    montarTagsEditor(document.getElementById('tagsGerenciar'), null, { aoMudar: preencherFiltroTag });
-    document.getElementById('tagsFechar').addEventListener('click', ()=>{ closeModal(); preencherFiltroTag(); renderClientesTable(null); });
-  });
   document.getElementById('cfgBtnImportarClientes').addEventListener('click', ()=> openImportarClientesCadastro());
   document.getElementById('cfgBtnMesclarClientes').addEventListener('click', ()=> openMesclarClientesCadastro());
   let _cliBuscaTimer = null;
@@ -2477,12 +2472,24 @@ function renderClientesTab(body){
   // funcionarem direito), mas NÃO renderiza os milhares de uma vez — a tabela só mostra
   // algo depois que o usuário digita uma busca (padrão do resto do sistema).
   renderClientesTable([]);
+  if(window.ClienteLojas) ClienteLojas.iniciar(gatewayCall, ()=>config.lojas||[], ()=>renderClientesTable(null));
   carregarClientesParaCadastro().then(lista=>{
     clientesCacheIdx = lista;
     renderClientesTable(null);
   });
 }
 function onlyDigitsCli(s){ return String(s||'').replace(/\D/g,''); }
+function renderTagsClientesTab(body){
+  body.innerHTML = `
+    <div style="margin-bottom:18px;padding-bottom:14px;border-bottom:1.5px solid var(--line);">
+      <h2 style="margin:0 0 4px;font-size:20px;">Tags de clientes</h2>
+      <p style="margin:0;color:var(--muted);font-size:13px;">Crie, renomeie, mude a cor ou exclua as tags. Para marcar um cliente com uma tag, abra o cadastro dele em Clientes.</p>
+    </div>
+    <div class="card" style="padding:16px;"><div id="tagsGerenciar"></div></div>`;
+  if(!podeEditarTagsCli()) body.querySelector('p').textContent += ' Você não tem permissão para alterar as tags.';
+  if(!clientesCacheIdx) carregarClientesParaCadastro().then(l=>{ clientesCacheIdx = l; }); // para contar usos / limpar ao excluir
+  montarTagsEditor(document.getElementById('tagsGerenciar'), null, {});
+}
 /* ============================================================
    TAGS DE CLIENTES — lista única em config.tagsClientes [{id,nome,cor}]; o cliente guarda
    só os ids (cliente.tags). Renomear/recolorir vale pra todos os clientes na hora.
@@ -2500,7 +2507,7 @@ function podeEditarTagsCli(){ return !!(currentPermissoes && currentPermissoes['
 /* Monta o seletor/editor de tags dentro de `box`. sel = ids marcados (só no modal do cliente). */
 function montarTagsEditor(box, sel, opcoes){
   opcoes = opcoes || {};
-  const podeEditar = podeEditarTagsCli();
+  const podeEditar = podeEditarTagsCli() && !sel; // criar/editar/excluir só na aba "Tags de clientes"; no cliente só se marca
   let editando = null; // id da tag em edição, ou '__nova__'
   let corEsc = TAG_CORES[0];
   async function salvarLista(nova, msg){
@@ -2521,7 +2528,7 @@ function montarTagsEditor(box, sel, opcoes){
               <button type="button" class="cli-tag-nome" data-tagsel="${escapeHtml(t.id)}" ${sel?'':'tabindex="-1"'}>${escapeHtml(t.nome)}</button>
               ${podeEditar ? `<button type="button" class="cli-tag-ed" data-tagedit="${escapeHtml(t.id)}" title="Editar tag">✎</button>` : ''}
             </span>`;
-          }).join('') : `<span style="color:var(--muted);font-size:12.5px;">Nenhuma tag criada ainda.</span>`}
+          }).join('') : `<span style="color:var(--muted);font-size:12.5px;">${sel?'Nenhuma tag criada. Crie em Cadastro › Tags de clientes.':'Nenhuma tag criada ainda.'}</span>`}
           ${podeEditar ? `<button type="button" class="btn btn-ghost btn-sm" data-tagnova="1">+ Nova tag</button>` : ''}
         </div>
         ${editando ? painelEdicao() : ''}
@@ -2622,7 +2629,7 @@ function renderClientesTable(lista){
     </tr></thead><tbody>
     ${l.map(c=>`
       <tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${c.observacoes?` <span title="${escapeHtml(c.observacoes)}" style="cursor:help;">📝</span>`:''}${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}${(c.tags&&c.tags.length)?`<div class="cli-tags-lista">${tagsDoClienteHtml(c)}</div>`:''}</td>
+        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${window.ClienteLojas?ClienteLojas.html(c):''}${c.observacoes?` <span title="${escapeHtml(c.observacoes)}" style="cursor:help;">📝</span>`:''}${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}${(c.tags&&c.tags.length)?`<div class="cli-tags-lista">${tagsDoClienteHtml(c)}</div>`:''}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.telefone||'—')}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(c.email||'')}">${escapeHtml(c.email||'—')}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
@@ -3088,7 +3095,7 @@ function openClienteModalCadastro(cli, somenteVer){
       <button class="btn btn-ghost btn-sm" id="ccBtnHistorico">📋 Histórico de compras e O.S.</button>
     </div>` : '';
   openModal(`
-    <h3 style="margin:0 0 16px;">${somenteVer?'Ver cliente':cli?'Editar cliente':'Novo cliente'}</h3>
+    <h3 style="margin:0 0 16px;">${somenteVer?'Ver cliente':cli?'Editar cliente':'Novo cliente'}${cli&&window.ClienteLojas?ClienteLojas.html(cli):''}</h3>
     ${clienteModalHtml(cli)}
     ${resumoExtras}
     <div class="modal-actions">
@@ -6099,6 +6106,7 @@ const MODULOS_APP = {
     { id:'impressao', label:'Impressão & Etiquetas' },
     { id:'statusOrcamento', label:'Status de Orçamento' },
     { id:'mensagens', label:'Mensagens' },
+    { id:'tagsClientes', label:'Tags de clientes' },
   ]},
 };
 
