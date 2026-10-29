@@ -302,6 +302,7 @@ Cada conversa é **escopada a um único módulo**:
 - 29/out (11): **Fator** e **Tipos de ordem** deixaram de ser abas/cartões do Cadastro e viraram botões no topo de Cadastro › Produto (`abrirSubtelaProduto`, com "← Voltar para Produtos"). As permissões continuam as das abas `fator` e `tiposOrdem` (DP › perfis, `podeSubtelaProduto`).
 - 29/out (12): grupo de tipos de ordem `agenda` ("PRODUÇÃO", `prazoIndividual:true`): os 8 tipos atuais (ALIANÇA/SERVIÇO/FABRICACAO × SEM/COM CRAVACAO, RELOGIO ASSISTENCIA AUTORIZADA/JUIZ DE FORA) dividem a MESMA quantidade por dia (máx. 10, soma), cada um com o próprio prazo. Grupo com `prazoIndividual` só propaga `maxPorDia`. Backup: `gestao_config` id `backup_tipos_ordem_pre_agenda_unica_20261029`.
 - 29/out (13): Tipos de ordem sem dados fiscais (UI e dados removidos). **Cuidado:** uma tela do Cadastro aberta antes de uma alteração feita direto no banco e depois salva sobrescreve a config inteira (já apagou o grupo `agenda` uma vez); depois de mexer em `gestao_config` por SQL, pedir F5 a todos.
+- 29/out (14): as abas **Status de Orçamento** e **Mensagens** do Cadastro viraram uma só, "Status e Mensagens" (`renderStatusMensagensTab`, id `statusOrcamento`), com duas subabas (`.abas-std`). As permissões continuam separadas (`abas.statusOrcamento` e `abas.mensagens` em DP › perfis); a aba aparece se qualquer uma estiver liberada.
 - 28/out: RLS ligado em `atendimento_pessoal_usuarios`, `atendimento_lembretes` e `atendimento_setup_log` (só Edge Functions com service_role usam).
 
 ---
