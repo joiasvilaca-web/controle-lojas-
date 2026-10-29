@@ -2447,6 +2447,9 @@ function renderClientesTab(body){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       <input type="text" id="cfgCliBusca" placeholder="Buscar por nome, telefone, CPF ou tag..." style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;">
       <select id="cfgCliTag" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);"></select>
+      <select id="cfgCliLoja" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);"></select>
+      <select id="cfgCliMes" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);"><option value="">Aniversário: todos</option>${['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'].map((m,i)=>`<option value="${i+1}">${m}</option>`).join('')}</select>
+      <select id="cfgCliExtra" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--surface);"><option value="">Qualquer cadastro</option><option value="obs">Com observações</option><option value="semtel">Sem celular</option><option value="semloja">Sem compra/pedido em loja</option></select>
       <button class="btn btn-ghost" id="cfgBtnTagsCli">🏷 Tags</button>
     </div>
     <div class="card" style="padding:0;overflow:hidden;"><div id="cfgClientesTable" style="overflow-x:auto;"></div></div>
@@ -2458,6 +2461,8 @@ function renderClientesTab(body){
     if([...sel.options].some(o=>o.value===atual)) sel.value = atual;
   }
   preencherFiltroTag();
+  document.getElementById('cfgCliLoja').innerHTML = '<option value="">Todas as lojas</option>' + (config.lojas||[]).map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.nome||l.abreviacao||l.id)}</option>`).join('');
+  ['cfgCliLoja','cfgCliMes','cfgCliExtra'].forEach(id=> document.getElementById(id).addEventListener('change', ()=>{ cliPagina = 0; renderClientesTable(null); }));
   document.getElementById('cfgCliTag').addEventListener('change', ()=>{ cliPagina = 0; renderClientesTable(null); });
   document.getElementById('cfgBtnTagsCli').addEventListener('click', ()=>{
     openModal(`<h3 style="margin:0 0 6px;">🏷 Tags de clientes</h3>
@@ -2594,11 +2599,17 @@ function renderClientesTable(lista){
   if(!el) return;
   const filtroTag = (document.getElementById('cfgCliTag')||{}).value||'';
   if(!clientesCacheIdx){ el.innerHTML = `<div style="padding:32px;text-align:center;color:var(--muted);">Carregando base de clientes…</div>`; return; }
+  const fLoja = (document.getElementById('cfgCliLoja')||{}).value||'', fMes = (document.getElementById('cfgCliMes')||{}).value||'', fExtra = (document.getElementById('cfgCliExtra')||{}).value||'';
   let l = [...lista];
   const qd = onlyDigitsCli(q);
   const ql = q.toLowerCase();
   l = l.filter(c=>{
     if(filtroTag && !(c.tags||[]).includes(filtroTag)) return false;
+    if(fLoja && !(window.ClienteLojas && ClienteLojas.lojasDe(c).includes(fLoja))) return false;
+    if(fMes && Number(String(c.dataNascimento||'').split('-')[1]) !== Number(fMes)) return false;
+    if(fExtra==='obs' && !c.observacoes) return false;
+    if(fExtra==='semtel' && onlyDigitsCli(c.telefone)) return false;
+    if(fExtra==='semloja' && window.ClienteLojas && ClienteLojas.pronto() && ClienteLojas.lojasDe(c).length) return false;
     if(!q) return true;
     const nomesTags = (c.tags||[]).map(tagClienteInfo).filter(Boolean).map(t=>t.nome.toLowerCase());
     return (c.nome||'').toLowerCase().includes(ql)||(qd&&onlyDigitsCli(c.telefone).includes(qd))||(qd&&onlyDigitsCli(c.cpf).includes(qd))||nomesTags.some(n=>n.includes(ql));
@@ -2613,10 +2624,11 @@ function renderClientesTable(lista){
   const pager = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;font-size:12.5px;color:var(--muted);background:var(--bg-soft,#f6f6f8);"><span>${total} cliente(s) — mostrando ${cliPagina*CLI_POR_PAGINA+1}–${cliPagina*CLI_POR_PAGINA+l.length}</span><span style="display:flex;gap:6px;align-items:center;"><button class="btn btn-sm btn-ghost" data-cliprev ${cliPagina<=0?'disabled':''}>‹ Anterior</button>Página ${cliPagina+1} de ${paginas}<button class="btn btn-sm btn-ghost" data-clinext ${cliPagina>=paginas-1?'disabled':''}>Próxima ›</button></span></div>`;
   el.innerHTML = `${pager}<table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;">
     <colgroup>
-      <col style="width:26%;"><col style="width:16%;"><col style="width:24%;"><col style="width:14%;"><col style="width:118px;">
+      <col style="width:23%;"><col style="width:110px;"><col style="width:15%;"><col style="width:22%;"><col style="width:12%;"><col style="width:118px;">
     </colgroup>
     <thead><tr>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nome</th>
+      <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Lojas</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Celular</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">E-mail</th>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nascimento</th>
@@ -2624,7 +2636,8 @@ function renderClientesTable(lista){
     </tr></thead><tbody>
     ${l.map(c=>`
       <tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${window.ClienteLojas?ClienteLojas.html(c):''}${c.observacoes?` <span title="${escapeHtml(c.observacoes)}" style="cursor:help;">📝</span>`:''}${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}${(c.tags&&c.tags.length)?`<div class="cli-tags-lista">${tagsDoClienteHtml(c)}</div>`:''}</td>
+        <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><b>${escapeHtml(c.nome)}</b>${c.observacoes?` <span title="${escapeHtml(c.observacoes)}" style="cursor:help;">📝</span>`:''}${c.cpf?`<div style="font-size:11px;color:var(--muted);">${escapeHtml(c.cpf)}</div>`:''}${(c.tags&&c.tags.length)?`<div class="cli-tags-lista">${tagsDoClienteHtml(c)}</div>`:''}</td>
+        <td style="padding:10px 14px;">${(window.ClienteLojas&&ClienteLojas.html(c).replace('cli-lojas','cli-lojas" style="margin-left:0'))||'<span style="color:var(--muted);">—</span>'}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.telefone||'—')}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(c.email||'')}">${escapeHtml(c.email||'—')}</td>
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
