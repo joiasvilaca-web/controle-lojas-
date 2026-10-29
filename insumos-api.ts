@@ -1,6 +1,7 @@
-// insumos-api v3 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// insumos-api v4 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
 // v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
+// v4: status enviado_fabrica (via na Oficina, em processo) — é o que a Oficina enxerga por padrão.
 // A Oficina só pode mexer em: status (aguardando/pendencia/oficina_pronto), local da peça (loja/fabrica) e
 // observações internas (que a loja vê no Pedido; "avisar a loja" notifica quem é da loja da via).
 // A Oficina não tem CNPJ: cada insumo PERTENCE a uma loja (quem comprou, dona fiscal) e fica
@@ -255,8 +256,8 @@ Deno.serve(async (req: Request) => {
     }
 
     /* ---------- VIAS (O.S.) ---------- */
-    const STATUS_VIA = ["rascunho", "aguardando", "pendencia", "oficina_pronto", "pronto", "entregue", "cancelado"];
-    const STATUS_OFICINA = ["aguardando", "pendencia", "oficina_pronto"];
+    const STATUS_VIA = ["rascunho", "aguardando", "enviado_fabrica", "pendencia", "oficina_pronto", "pronto", "entregue", "cancelado"];
+    const STATUS_OFICINA = ["enviado_fabrica", "pendencia", "oficina_pronto"];
     const resumoVia = (r: any) => {
       const o = r.payload || {};
       const obs = Array.isArray(o.observacoes) ? o.observacoes : [];
@@ -309,8 +310,9 @@ Deno.serve(async (req: Request) => {
       const mudou: string[] = [];
       if (p.status !== undefined && p.status !== o.status) {
         // a Oficina só marca Oficina pronto ou Pendência (em vias ainda abertas); pronto/entregue/cancelado são da loja
-        if (!["pendencia", "oficina_pronto"].includes(p.status) || !STATUS_OFICINA.includes(o.status))
-          return json({ error: "Pela Oficina, a via só pode ir para Oficina pronto ou Pendência." }, 400);
+        // aguardando também é aceito: a peça chegou na Oficina sem a loja ter marcado "Enviado p/ fábrica"
+        if (!["pendencia", "oficina_pronto"].includes(p.status) || ![...STATUS_OFICINA, "aguardando"].includes(o.status))
+          return json({ error: "Pela Oficina, a via só pode ir para Fábrica pronto ou Pendência." }, 400);
         hist.push({ em: agora, por: quem.nome, de: o.status, para: p.status });
         o.status = p.status; mudou.push("status");
       }
