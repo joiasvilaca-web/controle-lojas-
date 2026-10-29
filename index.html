@@ -2368,6 +2368,72 @@ window.addEventListener('message', (ev)=>{
   }
 });
 
+/* ===================== COMPARTILHAR CADASTROS (WhatsApp / e-mail) ===================== */
+function linhasCompartilhar(pares){ return pares.filter(([,v])=>v!=null && String(v).trim()!=='').map(([k,v])=>`${k}: ${String(v).trim()}`).join('\n'); }
+function enderecoUmaLinha(o){
+  const rua = [o.endereco, o.numero].filter(Boolean).join(', ');
+  const compl = o.complemento ? ' - '+o.complemento : '';
+  const bairro = o.bairro ? ' - '+o.bairro : '';
+  const cidade = [o.cidade, o.estado].filter(Boolean).join('/');
+  return [rua+compl+bairro, cidade, o.cep ? 'CEP '+o.cep : ''].map(x=>x.trim()).filter(Boolean).join(' · ');
+}
+function textoCompartilharCliente(c){
+  return 'CLIENTE\n' + linhasCompartilhar([['Nome',c.nome],[c.tipoPessoa==='PJ'?'CNPJ':'CPF', c.tipoPessoa==='PJ'?(c.cnpj||c.cpf):c.cpf],['Celular',c.telefone],['E-mail',c.email],['Nascimento',c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):''],['Endereço',enderecoUmaLinha(c)]]);
+}
+function textoCompartilharFornecedor(f){
+  return 'FORNECEDOR\n' + linhasCompartilhar([['Empresa',f.empresa],['Código',f.codigo],['Mercadoria',f.tipoMercadoria],['Telefone',f.telefone],['E-mail',f.email],['Site',f.site],['Representante',f.representanteLocal],['Tel. representante',f.telefoneRepresentante],['Endereço',enderecoUmaLinha(f)]]);
+}
+function textoCompartilharLoja(l, comContas){
+  let t = 'LOJA\n' + linhasCompartilhar([['Nome',l.nome],['Razão social',l.razaoSocial],['CNPJ',l.cnpj],['Inscrição estadual',l.inscricaoEstadual],['Telefone',l.telefone],['E-mail',l.email],['Endereço',enderecoUmaLinha(l)]]);
+  if(comContas && (l.contasBancarias||[]).length) t += '\n\nCONTAS BANCÁRIAS\n' + l.contasBancarias.map(c=>linhasCompartilhar([['Banco',c.banco],['Tipo',c.tipo],['Agência',c.agencia],['Conta',c.conta]]).replace(/\n/g,' · ')).join('\n');
+  return t;
+}
+/* opcoes: { titulo, texto, telefone, email, assunto, extra:{label, gerar:(ligado)=>texto} } */
+function abrirCompartilhar(opcoes){
+  openModal(`
+    <h3 style="margin:0 0 6px;">📤 Compartilhar — ${escapeHtml(opcoes.titulo)}</h3>
+    <p class="muted" style="margin:0 0 10px;font-size:12.5px;">Confira e edite o texto antes de enviar. Envie só para quem precisa ter esses dados.</p>
+    <textarea id="shTexto" rows="9" style="width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13.5px;resize:vertical;">${escapeHtml(opcoes.texto)}</textarea>
+    ${opcoes.extra?`<label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:13px;"><input type="checkbox" id="shExtra"> ${escapeHtml(opcoes.extra.label)}</label>`:''}
+    <div class="grid-2" style="margin-top:12px;">
+      <div class="field"><label>WhatsApp (DDD + número) — vazio = escolher o contato</label><input id="shTel" inputmode="numeric" placeholder="(32) 90000-0000" value="${escapeHtml(opcoes.telefone||'')}"></div>
+      <div class="field"><label>E-mail do destinatário</label><input id="shEmail" type="email" placeholder="nome@email.com" value="${escapeHtml(opcoes.email||'')}"></div>
+    </div>
+    <div class="modal-actions" style="flex-wrap:wrap;gap:8px;">
+      <button class="btn btn-ghost" id="shFechar">Fechar</button>
+      <button class="btn btn-ghost" id="shCopiar">Copiar</button>
+      <button class="btn btn-ghost" id="shEmailBtn">✉️ Enviar por e-mail</button>
+      <button class="btn btn-accent" id="shWa">WhatsApp</button>
+    </div>`);
+  const texto = ()=> document.getElementById('shTexto').value;
+  const extra = document.getElementById('shExtra');
+  if(extra) extra.addEventListener('change', ()=>{ document.getElementById('shTexto').value = opcoes.extra.gerar(extra.checked); });
+  document.getElementById('shFechar').addEventListener('click', closeModal);
+  document.getElementById('shCopiar').addEventListener('click', async ()=>{
+    try{ await navigator.clipboard.writeText(texto()); showToast('Texto copiado.'); }catch(e){ document.getElementById('shTexto').select(); showToast('Selecione e copie o texto (Ctrl+C).'); }
+  });
+  document.getElementById('shWa').addEventListener('click', ()=>{
+    let d = String(document.getElementById('shTel').value||'').replace(/\D/g,'');
+    if(d && (d.length===10 || d.length===11)) d = '55'+d;
+    const url = d ? `https://wa.me/${d}?text=${encodeURIComponent(texto())}` : `https://api.whatsapp.com/send?text=${encodeURIComponent(texto())}`;
+    window.open(url, '_blank', 'noopener');
+  });
+  document.getElementById('shEmailBtn').addEventListener('click', async ()=>{
+    const para = document.getElementById('shEmail').value.trim();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)){ showToast('Informe um e-mail válido.'); return; }
+    const btn = document.getElementById('shEmailBtn'); btn.disabled = true; btn.textContent = 'Enviando...';
+    try{
+      const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ to: para, subject: opcoes.assunto || ('Dados — '+opcoes.titulo), body: texto(), senha: __gatewaySenha })
+      });
+      if(!r.ok) throw new Error('falha');
+      showToast('E-mail enviado!'); closeModal();
+    }catch(e){ showToast('Falha ao enviar o e-mail.'); btn.disabled = false; btn.textContent = '✉️ Enviar por e-mail'; }
+  });
+}
+
 /* ===================== ABAS DE CONFIGURAÇÃO ===================== */
 const CFG_TABS = [
   { id:'clientes', label:'Clientes' },
@@ -2624,7 +2690,7 @@ function renderClientesTable(lista){
   const pager = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;font-size:12.5px;color:var(--muted);background:var(--bg-soft,#f6f6f8);"><span>${total} cliente(s) — mostrando ${cliPagina*CLI_POR_PAGINA+1}–${cliPagina*CLI_POR_PAGINA+l.length}</span><span style="display:flex;gap:6px;align-items:center;"><button class="btn btn-sm btn-ghost" data-cliprev ${cliPagina<=0?'disabled':''}>‹ Anterior</button>Página ${cliPagina+1} de ${paginas}<button class="btn btn-sm btn-ghost" data-clinext ${cliPagina>=paginas-1?'disabled':''}>Próxima ›</button></span></div>`;
   el.innerHTML = `${pager}<table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;">
     <colgroup>
-      <col style="width:32%;"><col style="width:100px;"><col style="width:12%;"><col style="width:12%;"><col style="width:14%;"><col style="width:9%;"><col style="width:118px;">
+      <col style="width:32%;"><col style="width:100px;"><col style="width:12%;"><col style="width:12%;"><col style="width:14%;"><col style="width:9%;"><col style="width:150px;">
     </colgroup>
     <thead><tr>
       <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1.5px solid var(--line);">Nome</th>
@@ -2645,6 +2711,7 @@ function renderClientesTable(lista){
         <td style="padding:10px 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.dataNascimento?c.dataNascimento.split('-').reverse().join('/'):'—'}</td>
         <td style="padding:6px 8px;white-space:nowrap;text-align:right;">
           <button class="btn btn-sm btn-ghost" style="padding:5px 7px;" data-cfgver="${escapeHtml(c.id)}" title="Ver">👁</button>
+          <button class="btn btn-sm btn-ghost" style="padding:5px 7px;" data-cfgshare="${escapeHtml(c.id)}" title="Compartilhar">📤</button>
           <button class="btn btn-sm btn-ghost" style="padding:5px 7px;" data-cfgedi="${escapeHtml(c.id)}" title="Editar">✎</button>
           <button class="btn btn-sm" style="padding:5px 7px;background:var(--danger-soft);color:var(--danger);border:none;" data-cfgdel="${escapeHtml(c.id)}" title="Excluir">🗑</button>
         </td>
@@ -2656,6 +2723,7 @@ function renderClientesTable(lista){
   el.querySelectorAll('[data-cfgver]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgver), true)));
   el.querySelectorAll('[data-cfgedi]').forEach(b=>b.addEventListener('click',()=> openClienteModalCadastro((clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgedi))));
   el.querySelectorAll('[data-cfgdel]').forEach(b=>b.addEventListener('click',()=> deletarClienteCadastro(b.dataset.cfgdel)));
+  el.querySelectorAll('[data-cfgshare]').forEach(b=>b.addEventListener('click',()=>{ const c=(clientesCacheIdx||[]).find(x=>x.id===b.dataset.cfgshare); if(c) abrirCompartilhar({ titulo:c.nome, texto:textoCompartilharCliente(c), assunto:'Dados do cliente — '+c.nome }); }));
 }
 /* Telefone com DDD separado e texto em maiúscula — mesmo padrão de Vendas/O.S./Orçamento. */
 function maiuscCli(s){ return (s==null?'':String(s)).trim().toUpperCase(); }
@@ -3552,12 +3620,18 @@ function renderLojasTab(main){
         <div><span class="code-chip" style="font-size:11.5px; padding:4px 10px;">${escapeHtml(l.abreviacao)}</span> <b style="margin-left:8px;">${escapeHtml(l.nome)}</b>${l.cnpj?`<div class="muted" style="margin-top:2px;">${escapeHtml(l.cnpj)}</div>`:''}</div>
         <div style="display:flex; gap:4px;">
           <button class="icon-btn" data-ver="${i}" title="Ver">👁</button>
+          <button class="icon-btn" data-share="${i}" title="Compartilhar">📤</button>
           <button class="icon-btn" data-edit="${i}" title="Editar">✎</button>
           <button class="icon-btn" data-del="${i}" title="Remover">✕</button>
         </div>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.ver)], true) ));
+    wrap.querySelectorAll('[data-share]').forEach(b=> b.addEventListener('click', ()=>{
+      const l = config.lojas[Number(b.dataset.share)];
+      abrirCompartilhar({ titulo:l.nome, texto:textoCompartilharLoja(l,false), assunto:'Dados da loja — '+l.nome,
+        extra: (l.contasBancarias||[]).length ? { label:'Incluir contas bancárias', gerar:(on)=>textoCompartilharLoja(l,on) } : null });
+    }));
     wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openLojaModal(config.lojas[Number(b.dataset.edit)]) ));
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', async ()=>{
@@ -5530,12 +5604,14 @@ async function renderFornecedorTab(main){
         </div>
         <div style="display:flex;gap:4px;align-items:center;">
           <button class="icon-btn" data-fver="${f.id}" title="Ver">👁</button>
+          <button class="icon-btn" data-fshare="${f.id}" title="Compartilhar">📤</button>
           <button class="icon-btn" data-fedit="${f.id}" title="Editar">✎</button>
           <button class="icon-btn" data-fdel="${f.id}" title="Remover">✕</button>
         </div>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-fver]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fver), true)));
+    wrap.querySelectorAll('[data-fshare]').forEach(b=> b.addEventListener('click', ()=>{ const f = config.fornecedores.find(x=>x.id===b.dataset.fshare); if(f) abrirCompartilhar({ titulo:f.empresa, texto:textoCompartilharFornecedor(f), assunto:'Dados do fornecedor — '+f.empresa }); }));
     wrap.querySelectorAll('[data-fedit]').forEach(b=> b.addEventListener('click', ()=> abrirFornecedorModal(config.fornecedores.find(x=>x.id===b.dataset.fedit))));
     wrap.querySelectorAll('[data-fdel]').forEach(b=> b.addEventListener('click', async ()=>{
       config.fornecedores = config.fornecedores.filter(x=>x.id!==b.dataset.fdel);
