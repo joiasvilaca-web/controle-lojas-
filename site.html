@@ -228,7 +228,8 @@ function renderProdutos(){
       ${p.capa ? `<img src="${escapeHtml(p.capa)}" alt="" loading="lazy">` : `<div class="sem">sem foto</div>`}
       <div><div class="nm" data-abrir="${p.id}">${escapeHtml(s.nome || p.nomeInterno)}</div>
         <div class="sub"><span>${escapeHtml(p.codigo||'')}</span><span>·</span><span>${linhaEstoque(p)}</span>
-          ${s.lojaId ? `<span class="badge b-off">vende: ${escapeHtml(abrevLoja(s.lojaId))}</span>`:''}
+          ${s.lojasAuto ? '<span class="badge b-off">vende: lojas com estoque</span>' : (Array.isArray(s.lojaIds)&&s.lojaIds.length ? s.lojaIds : (s.lojaId?[s.lojaId]:[])).length ? `<span class="badge b-off">vende: ${(Array.isArray(s.lojaIds)&&s.lojaIds.length ? s.lojaIds : [s.lojaId]).map(abrevLoja).map(escapeHtml).join(', ')}</span>`:''}
+          ${(s.marketplaces||[]).length ? `<span class="badge b-info">${(s.marketplaces||[]).map(c=>escapeHtml(NOMES_CANAIS[c]||c)).join(', ')}</span>`:''}
           ${s.destaque ? '<span class="badge b-accent">destaque</span>':''}${s.sobEncomenda ? '<span class="badge b-info">sob encomenda</span>':''}
           ${(p.fotos||[]).length ? (temTrat ? '<span class="badge b-ok">foto tratada</span>' : '<span class="badge b-wait">foto sem tratamento</span>') : ''}</div></div>
       <div class="dir"><div class="val">${brl(s.preco ?? p.precoVenda)}</div>
@@ -264,7 +265,10 @@ function abrirProduto(id){
     <div class="grid g2">
       <div><label class="f">Nome no site</label><input class="inp" id="eP_nome" value="${escapeHtml(s.nome||'')}" placeholder="${escapeHtml(p.nomeInterno)}"></div>
       <div><label class="f">Endereço da página (vilacajoias.com.br/p/…)</label><input class="inp" id="eP_slug" value="${escapeHtml(s.slug||'')}"></div>
-      <div><label class="f">Loja que vende e emite a nota</label><select class="inp" id="eP_loja">${lojasVenda().map(l=>`<option value="${l.id}" ${l.id===s.lojaId?'selected':''}>${escapeHtml(l.nome)} (estoque ${Number((p.estoquePorLoja||{})[l.id]||0)})</option>`).join('')}</select></div>
+      <div style="grid-column:1/-1;"><label class="f">Lojas que vendem e emitem a nota</label>
+        <label class="chkl" style="margin-top:2px;"><input type="checkbox" id="eP_lojasAuto" ${s.lojasAuto?'checked':''}> Automático: as lojas que tiverem estoque</label>
+        <div id="eP_lojas" style="display:flex;flex-wrap:wrap;gap:4px 18px;${s.lojasAuto?'opacity:.5;pointer-events:none;':''}">${lojasVenda().map(l=>{ const marc = (Array.isArray(s.lojaIds)&&s.lojaIds.length ? s.lojaIds : (s.lojaId?[s.lojaId]:[])).includes(l.id); return `<label class="chkl"><input type="checkbox" class="eP_lj" value="${l.id}" ${marc?'checked':''}> ${escapeHtml(l.nome)} <span class="muted" style="font-weight:400;">(estoque ${Number((p.estoquePorLoja||{})[l.id]||0)})</span></label>`; }).join('')}</div>
+        <p class="muted" style="font-size:12px;margin:4px 0 0;">Com mais de uma, a venda sai pela loja que tiver mais estoque. Reforma Joias marcada = aparece no site da Reforma; loja da Vilaça marcada = aparece no site da Vilaça.</p></div>
       <div><label class="f">Metal mostrado no site</label><select class="inp" id="eP_metal"><option value="">—</option>${['Ouro 18k','Ouro branco 18k','Prata 925','Aço'].map(m=>`<option ${m===s.metal?'selected':''}>${m}</option>`).join('')}</select></div>
       <div><label class="f">Preço no site (vazio = preço do cadastro ${brl(p.precoVenda)})</label><input class="inp" id="eP_preco" inputmode="decimal" value="${numBR(s.preco)}"></div>
       <div><label class="f">Preço “de” riscado (opcional, para promoção)</label><input class="inp" id="eP_precoDe" inputmode="decimal" value="${numBR(s.precoDe)}"></div>
@@ -298,6 +302,7 @@ function abrirProduto(id){
       <button class="btn btn-ghost" id="eP_market">Marketplaces…</button>
     </div>`);
   $('#eP_salvar').addEventListener('click', ()=> salvarProduto(p));
+  $('#eP_lojasAuto').addEventListener('change', e=>{ const b=$('#eP_lojas'); b.style.opacity=e.target.checked?'.5':''; b.style.pointerEvents=e.target.checked?'none':''; });
   $('#eP_market').addEventListener('click', ()=> abrirVincularMarketplace([p.id]));
   $$('#eP_fotos [data-ft]').forEach(b=> b.addEventListener('click', ()=> acaoFoto(p, b.dataset.ft, b.dataset.acao)));
 }
@@ -327,9 +332,11 @@ async function acaoFoto(p, fotoId, acao){
 function htmlParaTexto(h){ return String(h).replace(/<br\s*\/?>/gi,'\n').replace(/<\/p>\s*<p>/gi,'\n\n').replace(/<\/?p>/gi,'').replace(/<strong>(.*?)<\/strong>/gi,'**$1**').replace(/<b>(.*?)<\/b>/gi,'**$1**').replace(/<[^>]+>/g,'').trim(); }
 function textoParaHtml(t){ return t.trim().split(/\n{2,}/).map(par=>'<p>'+escapeHtml(par).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>')+'</p>').join('\n'); }
 async function salvarProduto(p){
+  if(!$('#eP_lojasAuto').checked && !$$('.eP_lj').some(c=>c.checked)){ toast('Marque pelo menos uma loja que vende, ou Automático.'); return; }
   const site = {
     publicado: $('#eP_pub').checked, nome: $('#eP_nome').value.trim() || null, slug: $('#eP_slug').value.trim(),
-    lojaId: $('#eP_loja').value, metal: $('#eP_metal').value || null, preco: num($('#eP_preco').value), precoDe: num($('#eP_precoDe').value),
+    lojasAuto: $('#eP_lojasAuto').checked, lojaIds: $$('.eP_lj').filter(c=>c.checked).map(c=>c.value),
+    lojaId: $('#eP_lojasAuto').checked ? (p.site?.lojaId||null) : ($$('.eP_lj').find(c=>c.checked)?.value || null), metal: $('#eP_metal').value || null, preco: num($('#eP_preco').value), precoDe: num($('#eP_precoDe').value),
     numerosAro: $('#eP_aros').value.split(',').map(x=>x.trim()).filter(Boolean), prazoEncomenda: $('#eP_prazo').value.trim(),
     destaque: $('#eP_dest').checked, lancamento: $('#eP_lanc').checked, sobEncomenda: $('#eP_enc').checked, personalizavel: $('#eP_pers').checked,
     condicao: $('#eP_cond').value, estado: $('#eP_estado').value.trim(), historia: $('#eP_hist').value.trim(), garantiaDias: parseInt($('#eP_gar').value)||null,

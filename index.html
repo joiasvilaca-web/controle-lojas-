@@ -4185,6 +4185,7 @@ const PE_TABS = [
   { id:'dadosTecnicos', label:'Dados Técnicos' },
   { id:'fiscal', label:'Fiscal' },
   { id:'composicao', label:'Composição' },
+  { id:'online', label:'Site e marketplaces' },
   { id:'historico', label:'Histórico' },
 ];
 /** Desenha um código de barras pequeno (CODE128) a partir do texto informado, usando
@@ -4249,6 +4250,16 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
     custo: base && base.custo!==undefined ? base.custo : null,
     precoVenda: base && base.precoVenda!==undefined ? base.precoVenda : null,
+  };
+  // Venda online (site e marketplaces). Fica em produto.site, o mesmo objeto que o módulo SITE edita.
+  // Clone não herda (cada produto tem a própria página no site).
+  const siteOrig = produto && produto.site ? JSON.parse(JSON.stringify(produto.site)) : null;
+  const so0 = siteOrig || {};
+  const online = {
+    publicado: !!so0.publicado,
+    lojasAuto: !!so0.lojasAuto,
+    lojaIds: Array.isArray(so0.lojaIds) && so0.lojaIds.length ? [...so0.lojaIds] : (so0.lojaId ? [so0.lojaId] : []),
+    marketplaces: Array.isArray(so0.marketplaces) ? [...so0.marketplaces] : [],
   };
   d._fisAuto = base ? {} : { origem:'0', cfopSaida:'5.102', cstIbsCbs:'000', cClassTrib:'000001', regimeItem:'novo' }; // valores automáticos já presentes
   let peTabAtiva = 'nomenclatura';
@@ -4953,6 +4964,35 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       });
       desenharBarcodeProduto(d.gtin);
     }
+    else if(peTabAtiva==='online'){
+      // Lojas que podem vender pela internet: as que têm CNPJ, mais a Reforma Joias (ainda sem CNPJ). Unidade interna fica de fora.
+      const lojasOnline = (config.lojas||[]).filter(l=>!l.interna && (l.cnpj || l.id==='loja_rj'));
+      const estq = id => Number((d.estoquePorLoja||{})[id])||0;
+      if(!online.lojaIds.length && !online.lojasAuto) online.lojaIds = lojasOnline.filter(l=>estq(l.id)>0).map(l=>l.id);
+      const MKS = [['mercadolivre','Mercado Livre'],['shopee','Shopee'],['tiktok','TikTok Shop'],['amazon','Amazon']];
+      body.innerHTML = `
+        <p class="muted" style="margin:-4px 0 12px;">Tudo aqui é opcional. A peça aparece no site da <b>Reforma Joias</b> quando a loja Reforma Joias estiver entre as que vendem, e no site da <b>Vilaça</b> quando qualquer loja da Vilaça estiver. Fotos, descrição e preço do site continuam no módulo SITE.</p>
+        <label style="display:flex;gap:8px;align-items:center;font-weight:600;margin-bottom:12px;"><input type="checkbox" id="pe_onPub" ${online.publicado?'checked':''} style="width:18px;height:18px;"> Mostrar este produto no site</label>
+        <div class="section-label">Lojas que vendem e emitem a nota</div>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 8px;font-size:13.5px;"><input type="radio" name="pe_onModo" value="auto" ${online.lojasAuto?'checked':''} style="margin-top:3px;"> <span><b>Automático:</b> vende pelas lojas que tiverem estoque deste produto (muda sozinho quando o estoque muda)</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px;font-size:13.5px;"><input type="radio" name="pe_onModo" value="manual" ${!online.lojasAuto?'checked':''} style="margin-top:3px;"> <span><b>Escolher as lojas</b> (pode marcar mais de uma; a venda sai pela que tiver mais estoque)</span></label>
+        <div id="pe_onLojas" style="display:grid;gap:6px;margin:4px 0 14px 26px;${online.lojasAuto?'opacity:.5;pointer-events:none;':''}">
+          ${lojasOnline.map(l=>`<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" class="pe_onLoja" value="${l.id}" ${online.lojaIds.includes(l.id)?'checked':''}> ${escapeHtml(l.nome)} <span class="muted" style="font-size:12px;">· estoque ${estq(l.id)}</span></label>`).join('')}
+        </div>
+        <div class="section-label">Marketplaces</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin:4px 0 6px;">
+          ${MKS.map(([id,nm])=>`<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" class="pe_onMk" value="${id}" ${online.marketplaces.includes(id)?'checked':''}> ${nm}</label>`).join('')}
+        </div>
+        <p class="muted" style="font-size:12px;">Os marketplaces usam as mesmas lojas escolhidas acima. As contas de cada marketplace são ligadas no módulo SITE › Marketplaces; a marcação fica guardada para quando as contas forem ligadas.</p>`;
+      const sync = ()=>{
+        online.publicado = document.getElementById('pe_onPub').checked;
+        online.lojasAuto = (document.querySelector('input[name="pe_onModo"]:checked')||{}).value==='auto';
+        online.lojaIds = Array.from(document.querySelectorAll('.pe_onLoja')).filter(c=>c.checked).map(c=>c.value);
+        online.marketplaces = Array.from(document.querySelectorAll('.pe_onMk')).filter(c=>c.checked).map(c=>c.value);
+        const box = document.getElementById('pe_onLojas'); box.style.opacity = online.lojasAuto?'.5':''; box.style.pointerEvents = online.lojasAuto?'none':'';
+      };
+      body.querySelectorAll('input').forEach(i=>i.addEventListener('change', sync));
+    }
     else if(peTabAtiva==='composicao'){
       body.innerHTML = `
         <p class="muted" style="margin:-4px 0 10px;">Quantidade de cada insumo necessária para produzir 1 ${unidadeLabel(d.unidade)} deste item. Se um insumo aqui também tiver a própria composição, o sistema explode automaticamente na hora da venda quando faltar estoque. Deixe vazio se for matéria-prima pura.</p>
@@ -5074,6 +5114,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     // na época), fixa agora com o fator e a referência atuais — esse é o "momento do lançamento".
     // Se já tinha um valor fixado (edição normal, ou refixado pelo ↻), mantém exatamente como está.
     if(d.custoCompra==null) d.custoCompra = valorCompraAoVivo();
+    if(!online.lojasAuto && (online.publicado || online.marketplaces.length) && !online.lojaIds.length){ showToast('Escolha pelo menos uma loja que vende (aba Site e marketplaces) ou marque Automático.'); peTabAtiva='online'; renderPeTabBody(); renderPeTabs(); return; }
     const dados = {
       id: idAtual,
       nome,
@@ -5119,6 +5160,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
     };
+    if(siteOrig || online.publicado || online.marketplaces.length || online.lojasAuto){
+      dados.site = { ...(siteOrig||{}), publicado: online.publicado, lojasAuto: online.lojasAuto, lojaIds: online.lojaIds,
+        lojaId: online.lojasAuto ? (siteOrig && siteOrig.lojaId) || null : (online.lojaIds[0] || null), marketplaces: online.marketplaces };
+    }
     // Se o código interno salvo é o mesmo que foi gerado automaticamente, agora sim
     // consome o número da sequência (evita "furos" quando alguém gera e desiste).
     if(codigoReservadoTexto && dados.codigoInterno === codigoReservadoTexto && codigoReservadoSeq === (config.produtosOtica.proximoCodigo||1)){

@@ -75,13 +75,22 @@ function nomeBonito(s: string) {
     .replace(/\b18k\b/gi, "18k").replace(/\b925\b/, "925");
 }
 
+// Lojas marcadas para vender o produto: automático (as que têm estoque), várias escolhidas (lojaIds)
+// ou o formato antigo de uma loja só (lojaId).
+function lojasMarcadas(p: any): string[] {
+  const s = p.site || {}, est = p.estoquePorLoja || {};
+  if (s.lojasAuto) return Object.keys(est).filter((l) => Number(est[l] || 0) > 0);
+  if (Array.isArray(s.lojaIds) && s.lojaIds.length) return s.lojaIds;
+  return s.lojaId ? [s.lojaId] : [];
+}
+// Entre as lojas marcadas que vendem neste site, a venda sai pela que tem mais estoque.
 function lojaDoProduto(p: any, ativas: string[]) {
   const est = p.estoquePorLoja || {};
-  const s = p.site || {};
-  if (s.lojaId && ativas.includes(s.lojaId)) return s.lojaId;
+  const marcadas = lojasMarcadas(p).filter((l) => ativas.includes(l));
+  const candidatas = marcadas.length ? marcadas : ativas;
   let melhor = "", qt = -1;
-  for (const l of ativas) { const q = Number(est[l] || 0); if (q > qt) { qt = q; melhor = l; } }
-  return melhor || ativas[0];
+  for (const l of candidatas) { const q = Number(est[l] || 0); if (q > qt) { qt = q; melhor = l; } }
+  return melhor || candidatas[0] || ativas[0];
 }
 
 function publico(row: any, ctx: any, completo = false) {
@@ -126,13 +135,15 @@ function lojaNomePublico(l: any) {
   return m[l.id] || "Vilaça Joias";
 }
 
-// Cada site mostra só as peças marcadas para ele: a Reforma vende as peças da loja_rj;
-// o site da Vilaça nunca mostra peças da Reforma.
+// Cada site mostra só as peças marcadas para ele: o da Reforma, as que têm a loja Reforma entre as
+// lojas que vendem; o da Vilaça, as que têm alguma loja da Vilaça (a mesma peça pode estar nos dois).
 function visivel(row: any, ctx: any) {
   const p = row.payload || {};
   if (!(p.site && p.site.publicado === true && p.vendavel !== false)) return false;
-  const daReforma = p.site.lojaId === LOJA_REFORMA;
-  return ctx.canal === "reforma" ? daReforma : !daReforma;
+  const marcadas = lojasMarcadas(p);
+  if (ctx.canal === "reforma") return marcadas.includes(LOJA_REFORMA);
+  // Vilaça: qualquer loja que não seja a Reforma (sem loja marcada = formato antigo, entra)
+  return !marcadas.length ? !p.site.lojasAuto : marcadas.some((l) => l !== LOJA_REFORMA);
 }
 
 function fmt(n: number) { return Math.round(n * 100) / 100; }

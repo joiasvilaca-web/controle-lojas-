@@ -26,7 +26,7 @@ function podeSite(u: any) {
 
 const CAMPOS_SITE = ["publicado", "nome", "slug", "descricao", "seoTitulo", "seoDescricao", "destaque", "lancamento", "sobEncomenda", "prazoEncomenda",
   "personalizavel", "lojaId", "precoDe", "preco", "metal", "ordem", "numerosAro", "marca", "fotos", "caracteristicas",
-  "condicao", "estado", "historia", "garantiaDias"];
+  "condicao", "estado", "historia", "garantiaDias", "lojaIds", "lojasAuto", "marketplaces"];
 const CAMPOS_CONFIG = ["nome", "whatsapp", "email", "instagram", "freteGratisAcima", "freteTabela", "prazoEnvio", "parcelasMax", "parcelaMinima", "descontoPix",
   "cupomPrimeiraCompra", "cupons", "lojasAtivas", "faixa", "banners", "hero", "checkoutModo", "fotoPadrao", "empresa", "garantiaDias"];
 const CANAIS = ["mercadolivre", "shopee", "tiktok", "amazon"];
