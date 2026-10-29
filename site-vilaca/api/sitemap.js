@@ -2,7 +2,7 @@
 const CFG = {
   canal: "vilaca",
   base: "https://vilaca-site.vercel.app",
-  paginas: ["/novidades", "/garantia", "/trocas", "/envio", "/sobre", "/privacidade"],
+  paginas: ["/novidades", "/reformar", "/garantia", "/trocas", "/envio", "/sobre", "/privacidade"],
 };
 const API = "https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/site-public";
 

@@ -3,7 +3,7 @@
 "use strict";
 const API = "https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/site-public";
 const CANAL = "reforma";
-const URL_SERVICO = "https://vilaca-controle-lojas.vercel.app/reforma.html"; // pedido de reforma (serviço)
+const URL_SERVICO = "https://vilaca-controle-lojas.vercel.app/reforma.html?marca=reforma"; // pedido de reforma (serviço)
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -98,6 +98,7 @@ const rotas = [
   [/^\/finalizar$/, paginaCheckout],
   [/^\/pedido\/([\w-]+)$/, paginaPedido],
   [/^\/historia$/, paginaHistoria],
+  [/^\/reformar$/, paginaReformar],
   [/^\/(garantia|devolucao|pecas-usadas|envio|privacidade)$/, paginaTexto],
 ];
 // endereço oficial de cada página (buscadores); páginas de pedido e busca não têm
@@ -143,7 +144,7 @@ function montarCasca() {
   if (msgs.length > 1 && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
     let i = 0; const faixa = $("#faixa"); setInterval(() => { const s = $$("span", faixa); s[i].classList.remove("ativa"); i = (i + 1) % s.length; s[i].classList.add("ativa"); }, 4800);
   }
-  $("#nav").innerHTML = `<a href="/" data-link>Peças</a><a href="/historia" data-link>Nossa história</a><a href="/garantia" data-link>Garantia</a><a href="/devolucao" data-link>Devolução</a><a href="${URL_SERVICO}" target="_blank" rel="noopener">Reformar minha joia</a>`;
+  $("#nav").innerHTML = `<a href="/" data-link>Peças</a><a href="/historia" data-link>Nossa história</a><a href="/garantia" data-link>Garantia</a><a href="/devolucao" data-link>Devolução</a><a href="/reformar" data-link>Reformar minha joia</a>`;
   const zap = SITE.whatsapp;
   const ends = (SITE.enderecos || []).map((e) => `<li>${esc(e.endereco)}${e.bairro ? ", " + esc(e.bairro) : ""}<br>${esc(e.cidade)}</li>`).join("");
   const emp = SITE.empresa;
@@ -152,7 +153,7 @@ function montarCasca() {
     <div><span class="marca-nome">Reforma <em>Joias</em></span><p style="max-width:34ch;margin-top:12px">Joias usadas, antigas e reformadas, vendidas uma a uma, com o estado de cada peça descrito e fotografado. Juiz de Fora, MG.</p>
       ${SITE.instagram ? `<p><a href="https://instagram.com/${esc(SITE.instagram)}" target="_blank" rel="noopener">Instagram @${esc(SITE.instagram)}</a></p>` : ""}</div>
     <div><h3>Peças</h3><ul>${CATS.map((c) => `<li><a href="/c/${c.slug}" data-link>${esc(plural(c.nome))}</a></li>`).join("")}<li><a href="/recem-chegadas" data-link>Recém-chegadas</a></li></ul></div>
-    <div><h3>Informações</h3><ul><li><a href="/historia" data-link>Nossa história</a></li><li><a href="/pecas-usadas" data-link>Sobre peças usadas</a></li><li><a href="/garantia" data-link>Garantia</a></li><li><a href="/devolucao" data-link>Devolução</a></li><li><a href="/envio" data-link>Envio e prazos</a></li><li><a href="/privacidade" data-link>Privacidade</a></li></ul></div>
+    <div><h3>Informações</h3><ul><li><a href="/historia" data-link>Nossa história</a></li><li><a href="/reformar" data-link>Reformar minha joia</a></li><li><a href="/pecas-usadas" data-link>Sobre peças usadas</a></li><li><a href="/garantia" data-link>Garantia</a></li><li><a href="/devolucao" data-link>Devolução</a></li><li><a href="/envio" data-link>Envio e prazos</a></li><li><a href="/privacidade" data-link>Privacidade</a></li></ul></div>
     <div><h3>Atendimento</h3><ul><li><a href="https://wa.me/${esc(zap)}" target="_blank" rel="noopener">WhatsApp ${fmtTel(zap)}</a></li><li><a href="mailto:${esc(SITE.email)}">${esc(SITE.email)}</a></li><li>Segunda a sábado, 9h30 às 18h</li></ul>
       ${ends ? `<h3 style="margin-top:22px">Loja</h3><ul>${ends}</ul>` : ""}</div>
   </div>
@@ -185,7 +186,7 @@ async function paginaInicio() {
         <p class="lide">${esc(h.texto || "Peças que já foram usadas, guardadas e herdadas voltam à vitrine depois de passar pela nossa bancada. Cada uma é única, fotografada como é e vendida com garantia.")}</p>
         <div class="abertura-acoes">
           <a class="botao" href="${CATS[0] ? "/c/" + CATS[0].slug : "/recem-chegadas"}" data-link>Ver as peças</a>
-          <a class="botao claro" href="/historia" data-link>Nossa história</a>
+          <a class="botao claro" href="/reformar" data-link>Reformar minha joia</a>
         </div>
       </div>
       ${vit.length ? `<div class="pilha">${vit.map((p) => `<a href="/p/${esc(p.slug)}" data-link><img src="${esc(p.foto)}" alt="${esc(p.nome)}"><figcaption>${esc(p.nome)}</figcaption></a>`).join("")}</div>` : `<div class="pilha-vazia">Estamos preparando as próximas peças.<br>Fale com a gente pelo WhatsApp.</div>`}
@@ -210,8 +211,34 @@ async function paginaInicio() {
   </div></section>` : ""}
   <section class="reformar"><div class="caixa reformar-grade">
     <div><h2 class="titulo-secao" style="font-size:clamp(22px,3vw,30px)">Tem uma joia guardada que merece voltar a brilhar?</h2><p class="sub-secao">Também reformamos a sua. Envie fotos, receba o orçamento pelo WhatsApp e acompanhe tudo pelo link.</p></div>
-    <a class="botao cobre" href="${URL_SERVICO}" target="_blank" rel="noopener">Pedir uma reforma</a>
+    <div style="display:flex;gap:10px;flex-wrap:wrap"><a class="botao cobre" href="${URL_SERVICO}" target="_blank" rel="noopener">Reformar minha joia</a><a class="botao claro" href="/reformar" data-link>Como funciona</a></div>
   </div></section>`;
+}
+
+// Explicativo do serviço de reforma (o pedido em si é feito na página reforma.html)
+const PASSOS_REFORMA = [
+  ["Mande as fotos", "Toque em “Reformar minha joia”, informe seu nome e WhatsApp e adicione cada peça: o que precisa ser feito, uma descrição e até 6 fotos. Dá para mandar até 10 peças no mesmo pedido."],
+  ["Diga como a peça chega e volta", "Você pode levar a peça na loja ou enviar pelos Correios, e escolher retirar na loja ou receber em casa."],
+  ["Receba o orçamento", "Analisamos as fotos e mandamos o orçamento de cada peça no seu WhatsApp, junto com o link de acompanhamento."],
+  ["Aprove só o que quiser", "Pelo link, marque as peças que quer reformar. O orçamento vale 10 dias."],
+  ["Entregue a peça", "Quando a peça chega, ela é pesada, fotografada e lacrada, e você recebe o recibo de custódia."],
+  ["Acompanhe até ficar pronta", "Pelo mesmo link você vê cada etapa. Quando ficar pronta, retire na loja ou receba pelos Correios com código de rastreio."],
+];
+const DICAS_FOTO = ["Use luz natural, perto de uma janela.", "Fotografe sobre um fundo liso e claro.", "Mande uma foto da peça inteira e outra do detalhe ou do defeito.", "Se souber, informe o peso e o número do aro."];
+function paginaReformar() {
+  titulo("Reformar minha joia", "Como pedir a reforma da sua joia na Reforma Joias: mande as fotos, receba o orçamento no WhatsApp e acompanhe tudo pelo link.");
+  main.innerHTML = `<div class="caixa"><article class="texto">
+    <h1>Reformar minha joia</h1>
+    <p>Conserto, ajuste de tamanho, solda, troca ou cravação de pedra, polimento e transformação em outra peça. Você pede pelo celular, sem sair de casa, e só paga o que aprovar.</p>
+    <p><a class="botao cobre" href="${URL_SERVICO}" target="_blank" rel="noopener">Começar meu pedido</a></p>
+    <h2>Como funciona</h2>
+    <ol class="passos-lista">${PASSOS_REFORMA.map(([t, d]) => `<li><b>${esc(t)}</b><span>${esc(d)}</span></li>`).join("")}</ol>
+    <h2>Dicas para as fotos</h2>
+    <ul>${DICAS_FOTO.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
+    <h2>Dúvidas</h2>
+    <p>Fale com a gente pelo <a class="link" href="https://wa.me/${esc(SITE.whatsapp)}" target="_blank" rel="noopener">WhatsApp</a>. Se você já fez um pedido, use o link que recebeu para ver o orçamento e acompanhar a reforma.</p>
+    <p style="margin-top:26px"><a class="botao cobre" href="${URL_SERVICO}" target="_blank" rel="noopener">Reformar minha joia</a></p>
+  </article></div>`;
 }
 
 async function paginaHistoria() {

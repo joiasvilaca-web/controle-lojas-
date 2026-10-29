@@ -98,6 +98,7 @@ const rotas = [
   [/^\/finalizar$/, paginaCheckout],
   [/^\/pedido\/([\w-]+)$/, paginaPedido],
   [/^\/(garantia|trocas|envio|sobre|privacidade)$/, paginaTexto],
+  [/^\/reformar$/, paginaReformar],
 ];
 async function navegar(url, empurrar = true) {
   if (empurrar) history.pushState({}, "", url);
@@ -130,14 +131,14 @@ function montarCasca() {
   if (msgs.length > 1 && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
     let i = 0; setInterval(() => { const s = $$("span", faixa); s[i].classList.remove("ativa"); i = (i + 1) % s.length; s[i].classList.add("ativa"); }, 4500);
   }
-  $("#nav").innerHTML = CATS.map((c) => `<a href="/c/${c.slug}" data-link>${esc(plural(c.nome))}</a>`).join("") + `<a href="/novidades" data-link>Novidades</a>`;
+  $("#nav").innerHTML = CATS.map((c) => `<a href="/c/${c.slug}" data-link>${esc(plural(c.nome))}</a>`).join("") + `<a href="/novidades" data-link>Novidades</a><a href="/reformar" data-link>Reformar minha joia</a>`;
   const zap = SITE.whatsapp;
   const ends = (SITE.enderecos || []).map((e) => `<li>${esc(e.nome)}<br><small>${esc(e.endereco)}${e.bairro ? ", " + esc(e.bairro) : ""} · ${esc(e.cidade)}</small></li>`).join("");
   $("#rodape").innerHTML = `<div class="caixa"><div class="rodape-grade">
     <div><span class="marca-nome">VILAÇA</span><p style="max-width:32ch;margin-top:16px">Joalheria e ourivesaria em Juiz de Fora. Peças em ouro 18k e prata 925, ajuste de aro e polimento por nossa própria oficina.</p>
       <p><a href="https://instagram.com/${esc(SITE.instagram)}" target="_blank" rel="noopener">Instagram @${esc(SITE.instagram)}</a></p></div>
     <div><h3>Joias</h3><ul>${CATS.map((c) => `<li><a href="/c/${c.slug}" data-link>${esc(plural(c.nome))}</a></li>`).join("")}</ul></div>
-    <div><h3>Ajuda</h3><ul><li><a href="/garantia" data-link>Garantia</a></li><li><a href="/trocas" data-link>Trocas e devoluções</a></li><li><a href="/envio" data-link>Envio e prazos</a></li><li><a href="/sobre" data-link>Sobre a Vilaça</a></li><li><a href="/privacidade" data-link>Privacidade</a></li></ul></div>
+    <div><h3>Ajuda</h3><ul><li><a href="/garantia" data-link>Garantia</a></li><li><a href="/trocas" data-link>Trocas e devoluções</a></li><li><a href="/envio" data-link>Envio e prazos</a></li><li><a href="/reformar" data-link>Reformar minha joia</a></li><li><a href="/sobre" data-link>Sobre a Vilaça</a></li><li><a href="/privacidade" data-link>Privacidade</a></li></ul></div>
     <div><h3>Atendimento</h3><ul><li><a href="https://wa.me/${esc(zap)}" target="_blank" rel="noopener">WhatsApp ${fmtTel(zap)}</a></li><li><a href="mailto:${esc(SITE.email)}">${esc(SITE.email)}</a></li><li>Segunda a sábado, 9h30 às 18h</li></ul>
       ${ends ? `<h3 style="margin-top:22px">Lojas</h3><ul>${ends}</ul>` : ""}</div>
   </div>
@@ -156,6 +157,33 @@ $("#btnBusca").addEventListener("click", () => { const f = $("#formBusca"); f.hi
 $("#formBusca").addEventListener("submit", (e) => { e.preventDefault(); const q = $("#campoBusca").value.trim(); if (q) { $("#formBusca").hidden = true; navegar("/busca?q=" + encodeURIComponent(q)); } });
 
 // ---------- páginas ----------
+// Reforma de joias: o pedido é feito na página reforma.html, com a cara e as lojas da Vilaça
+const URL_REFORMA = "https://vilaca-controle-lojas.vercel.app/reforma.html?marca=vilaca";
+const PASSOS_REFORMA = [
+  ["Mande as fotos", "Toque em “Reformar minha joia”, informe seu nome e WhatsApp e adicione cada peça: o que precisa ser feito, uma descrição e até 6 fotos. Dá para mandar até 10 peças no mesmo pedido."],
+  ["Diga como a peça chega e volta", "Você pode levar a peça em uma das nossas lojas ou enviar pelos Correios, e escolher retirar na loja ou receber em casa."],
+  ["Receba o orçamento", "Nossa oficina analisa as fotos e mandamos o orçamento de cada peça no seu WhatsApp, junto com o link de acompanhamento."],
+  ["Aprove só o que quiser", "Pelo link, marque as peças que quer reformar. O orçamento vale 10 dias."],
+  ["Entregue a peça", "Quando a peça chega, ela é pesada, fotografada e lacrada, e você recebe o recibo de custódia."],
+  ["Acompanhe até ficar pronta", "Pelo mesmo link você vê cada etapa. Quando ficar pronta, retire na loja ou receba pelos Correios com código de rastreio."],
+];
+const DICAS_FOTO = ["Use luz natural, perto de uma janela.", "Fotografe sobre um fundo liso e claro.", "Mande uma foto da peça inteira e outra do detalhe ou do defeito.", "Se souber, informe o peso e o número do aro."];
+function paginaReformar() {
+  titulo("Reformar minha joia", "Como pedir a reforma da sua joia na Vilaça Joias: mande as fotos, receba o orçamento no WhatsApp e acompanhe tudo pelo link.");
+  main.innerHTML = `<div class="caixa"><article class="texto">
+    <h1>Reformar minha joia</h1>
+    <p>Conserto, ajuste de aro, solda, troca ou cravação de pedra, polimento e transformação em outra peça, feitos pela nossa oficina em Juiz de Fora. Você pede pelo celular e só paga o que aprovar.</p>
+    <p><a class="botao" href="${URL_REFORMA}" target="_blank" rel="noopener">Começar meu pedido</a></p>
+    <h2>Como funciona</h2>
+    <ol class="passos-lista">${PASSOS_REFORMA.map(([t, d]) => `<li><b>${esc(t)}</b><span>${esc(d)}</span></li>`).join("")}</ol>
+    <h2>Dicas para as fotos</h2>
+    <ul>${DICAS_FOTO.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
+    <h2>Dúvidas</h2>
+    <p>Fale com a gente pelo <a class="link" href="https://wa.me/${esc(SITE.whatsapp)}" target="_blank" rel="noopener">WhatsApp</a>. Se você já fez um pedido, use o link que recebeu para ver o orçamento e acompanhar a reforma.</p>
+    <p style="margin-top:26px"><a class="botao" href="${URL_REFORMA}" target="_blank" rel="noopener">Reformar minha joia</a></p>
+  </article></div>`;
+}
+
 async function paginaInicio() {
   titulo("");
   main.innerHTML = `<section class="abertura"><div class="abertura-grade"><div class="abertura-texto"><div class="esqueleto" style="height:180px"></div></div><div class="esqueleto"></div></div></section><section class="secao"><div class="caixa">${esqueletoGrade(8)}</div></section>`;
@@ -208,6 +236,11 @@ async function paginaInicio() {
       <p><a class="link" href="/sobre" data-link>Conheça a Vilaça</a></p>
     </div>
   </section>
+  <section class="secao reformar-faixa"><div class="caixa">
+    <div class="cabeca-centro"><p class="rotulo">Reforma de joias</p><h2 class="titulo-secao">Sua joia merece voltar a brilhar</h2>
+      <p class="sub-secao">Conserto, ajuste de aro, solda, pedras, polimento ou uma peça nova a partir da antiga. Mande as fotos, receba o orçamento no WhatsApp e aprove só o que quiser.</p></div>
+    <div class="abertura-acoes" style="justify-content:center"><a class="botao" href="${URL_REFORMA}" target="_blank" rel="noopener">Reformar minha joia</a><a class="botao claro" href="/reformar" data-link>Como funciona</a></div>
+  </div></section>
   <section class="secao"><div class="caixa">
     <div class="cabeca-centro"><p class="rotulo">Recém-chegadas</p><h2 class="titulo-secao">Novidades</h2></div>
     <div class="grade">${novos.produtos.filter((p) => p.foto).slice(0, 8).map(cardHtml).join("")}</div>

@@ -99,7 +99,7 @@
       <div id="formErro" class="alert alert-danger hide"></div>
       <div style="margin-top:14px;"><button class="btn btn-accent" id="btnEnviar">Enviar para orçamento</button></div>
     </div>
-    <div class="foot">Reforma Joias · <a href="privacidade.html" target="_blank" rel="noopener">Política de privacidade</a></div>
+    <div class="foot"><span class="marcaNome">Reforma Joias</span> · <a href="privacidade.html" target="_blank" rel="noopener">Política de privacidade</a> · <a class="marcaSite" href="https://controle-lojas-rho.vercel.app">Voltar para o site</a></div>
   </div>
 
   <!-- ===== SUCESSO ===== -->
@@ -119,7 +119,7 @@
     <div class="card" id="acItens"></div>
     <div class="card hide" id="acOrcamento"></div>
     <div class="card" id="acDetalhes"></div>
-    <div class="foot">Reforma Joias · <a href="privacidade.html" target="_blank" rel="noopener">Política de privacidade</a></div>
+    <div class="foot"><span class="marcaNome">Reforma Joias</span> · <a href="privacidade.html" target="_blank" rel="noopener">Política de privacidade</a> · <a class="marcaSite" href="https://controle-lojas-rho.vercel.app">Voltar para o site</a></div>
   </div>
   <div id="telaCarregando" class="card muted" style="text-align:center;">Carregando…</div>
 </div>
@@ -130,6 +130,27 @@ const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
 const API_URL = SUPABASE_URL + "/functions/v1/reforma-api";
 let initData = null, itens = [], pedidoAtual = null, tokenAtual = null, selecionados = new Set();
+// Mesma página para os dois sites: ?marca=vilaca mostra a Vilaça (cores, nome e só as lojas da Vilaça);
+// sem marca (ou ?marca=reforma) mostra a Reforma Joias. No acompanhamento, a marca vem da loja do pedido.
+const MARCAS = {
+  vilaca:  { nome:'Vilaça Joias', cor:'#662344', corEsc:'#4d1a33', soft:'#f6ecf1', site:'https://vilaca-site.vercel.app',
+             lojas:{ loja_mc:'Vilaça Joias · Marechal', loja_jb:'Vilaça Joias · Halfeld', loja_jn:'Vilaça Joias · Jardim Norte' } },
+  reforma: { nome:'Reforma Joias', cor:'#1f3a33', corEsc:'#162b25', soft:'#e8efe9', site:'https://controle-lojas-rho.vercel.app',
+             lojas:{ loja_rj:'Reforma Joias' } },
+};
+const marcaUrl = new URLSearchParams(location.search).get('marca');
+let MARCA = marcaUrl==='vilaca' ? 'vilaca' : 'reforma';
+function aplicarMarca(m){
+  MARCA = MARCAS[m] ? m : 'reforma'; const c = MARCAS[MARCA], st = document.documentElement.style;
+  st.setProperty('--accent', c.cor); st.setProperty('--accent-ink', c.corEsc); st.setProperty('--accent-soft', c.soft);
+  document.title = 'Reforma de joias — ' + c.nome;
+  const tc = document.querySelector('meta[name="theme-color"]'); if(tc) tc.setAttribute('content', c.cor);
+  document.querySelectorAll('.marcaNome').forEach(e=>e.textContent = c.nome);
+  document.querySelectorAll('.marcaSite').forEach(e=>e.href = c.site);
+}
+function nomeLoja(l){ if(!l) return ''; for(const k in MARCAS){ if(MARCAS[k].lojas[l.id]) return MARCAS[k].lojas[l.id]; } return l.nome||''; }
+function marcaDaLoja(id){ for(const k in MARCAS){ if(MARCAS[k].lojas[id]) return k; } return null; }
+aplicarMarca(MARCA);
 
 async function api(op, params){
   const res = await fetch(API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op, params: params||{} }) });
@@ -206,7 +227,9 @@ document.getElementById('btnAddItem').addEventListener('click', addItem);
 async function carregarForm(){
   initData = await api('publicInit');
   document.getElementById('topTitulo').textContent = initData.textos.titulo; document.getElementById('topSub').textContent = initData.textos.subtitulo; document.getElementById('termoTexto').textContent = initData.textos.termo;
-  const opts = (initData.lojas||[]).map(l=>`<option value="${esc(l.id)}">${esc(l.nome)}</option>`).join('');
+  const daMarca = (initData.lojas||[]).filter(l=>MARCAS[MARCA].lojas[l.id]);
+  const lojasMostrar = daMarca.length ? daMarca : (initData.lojas||[]);
+  const opts = lojasMostrar.map(l=>`<option value="${esc(l.id)}">${esc(nomeLoja(l))}</option>`).join('');
   document.getElementById('fLojaEntrega').innerHTML = opts; document.getElementById('fLojaDevolucao').innerHTML = opts;
   if(initData.frete && initData.frete.correiosDisponivel===false){ document.querySelectorAll('input[value="correios"]').forEach(r=>r.closest('.radio').classList.add('hide')); }
   addItem(); atualizarEntrega(); show('telaForm');
@@ -230,7 +253,7 @@ document.getElementById('btnEnviar').addEventListener('click', async ()=>{
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Enviando…';
   try{
     const r = await api('publicCriar', params);
-    const link = location.origin + location.pathname + '?t=' + encodeURIComponent(r.token);
+    const link = location.origin + location.pathname + '?t=' + encodeURIComponent(r.token) + (MARCA==='vilaca' ? '&marca=vilaca' : '');
     document.getElementById('okCodigo').textContent = r.codigo; document.getElementById('okLink').textContent = link; document.getElementById('btnAbrir').href = link;
     document.getElementById('btnCopiar').onclick = async ()=>{ try{ await navigator.clipboard.writeText(link); document.getElementById('btnCopiar').textContent='Copiado ✓'; }catch(err){} };
     history.replaceState(null, '', link); show('telaOk'); window.scrollTo(0,0);
@@ -312,10 +335,10 @@ function renderOrcamento(){
 function renderDetalhes(){
   const p = pedidoAtual; const d = document.getElementById('acDetalhes'); const le = p.entrega.loja||{}; const ld = p.devolucao.loja||{};
   d.innerHTML = `
-    <div class="kv"><span>Entrega da peça</span><b>${p.entrega.modo==='correios'?'Envio pelos Correios':esc(le.nome||'')}</b></div>
+    <div class="kv"><span>Entrega da peça</span><b>${p.entrega.modo==='correios'?'Envio pelos Correios':esc(nomeLoja(le))}</b></div>
     ${p.entrega.modo==='loja'&&le.endereco?`<div class="kv"><span>Endereço</span><b style="font-weight:500;">${esc(le.endereco)}${le.horario?' · '+esc(le.horario):''}</b></div>`:''}
     ${p.entrega.modo==='correios'&&p.status==='aprovado'&&le===p.entrega.loja?'' : ''}
-    <div class="kv"><span>Devolução</span><b>${p.devolucao.modo==='correios'?'Correios · CEP '+esc(fmtCep(p.devolucao.cep||'')):'Retirar em '+esc(ld.nome||'')}</b></div>
+    <div class="kv"><span>Devolução</span><b>${p.devolucao.modo==='correios'?'Correios · CEP '+esc(fmtCep(p.devolucao.cep||'')):'Retirar em '+esc(nomeLoja(ld))}</b></div>
     ${p.os?`<div class="kv"><span>O.S.</span><b>${esc(p.os.codigoVia||'')} · previsão ${fmtDataISO(p.os.dataPrevista)}</b></div>`:''}
     ${p.postagem?`<div class="kv"><span>Rastreio</span><b><a href="https://rastreamento.correios.com.br/app/index.php?objeto=${encodeURIComponent(p.postagem.rastreio)}" target="_blank" rel="noopener">${esc(p.postagem.rastreio)}</a> · postado ${fmtDataHora(p.postagem.em)}</b></div>`:''}
     ${p.custodia?`<div class="kv"><span>Peças recebidas em</span><b>${fmtDataHora(p.custodia.em)}</b></div>`:''}
@@ -334,7 +357,11 @@ async function responder(aceite){
 }
 async function carregarAcomp(token){
   tokenAtual = token;
-  try{ const r = await api('publicConsultar', { token }); renderAcomp(r.pedido); }
+  try{
+    const r = await api('publicConsultar', { token });
+    if(!marcaUrl){ const p = r.pedido||{}; const l = (p.entrega&&p.entrega.loja) || (p.devolucao&&p.devolucao.loja); const m = l && marcaDaLoja(l.id); if(m) aplicarMarca(m); }
+    renderAcomp(r.pedido);
+  }
   catch(e){ document.getElementById('telaCarregando').innerHTML = `<div class="alert alert-danger">${esc(e.message)}</div><a class="btn btn-ghost" href="${location.pathname}">Fazer um novo pedido</a>`; }
 }
 (async function init(){

@@ -2,7 +2,7 @@
 const CFG = {
   canal: "reforma",
   base: "https://controle-lojas-rho.vercel.app",
-  paginas: ["/recem-chegadas", "/historia", "/garantia", "/devolucao", "/pecas-usadas", "/envio", "/privacidade"],
+  paginas: ["/recem-chegadas", "/reformar", "/historia", "/garantia", "/devolucao", "/pecas-usadas", "/envio", "/privacidade"],
 };
 const API = "https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/site-public";
 
