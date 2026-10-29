@@ -6,9 +6,9 @@
 //                fatores: tabelas de fator salvas até esse mês (mais recente primeiro) }
 //   op:'salvar'  { mes, tipo:'vendedora'|'loja'|'fator'|'folha', chave, dados, novo? } → upsert + histórico
 //                fator: chave = loja, dados { faixas:[{valor, percentual}] } — vale do mês em diante
-//                folha: chave = 'GERAL', dados { params, feriados, pessoas, gerentes, fixos } — folha de pagamento do mês
+//                folha: chave = 'GERAL', dados { params, feriados, pessoas, gerentes, categ, fixos } — folha de pagamento do mês
 //                       feriados: null = calendário automático; array de dias do mês = lista editada (DSR)
-//                       pessoas[n].diaEx / diasVT ausentes = automático (dia extra do Jardim Norte / dias de seg. a sáb.)
+//                       pessoas[n]: extra, outros, vale?, diasVT?, dep, man{verba: valor digitado} — ausente = automático
 //                novo:true recusa (409) se já existe lançamento dessa chave no mês
 //   op:'excluir' { mes, tipo, chave } → apaga o lançamento do mês + registro no histórico
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -24,10 +24,13 @@ const VENDEDORAS = ["PATRICIA", "GISLAYNE", "CRISTINA", "MARIANA", "PAMELA", "TA
 const FATOR_LOJAS = ["MARECHAL", "JOAO BERALDO", "JARDIM NORTE"];
 const CATEGORIAS = ["ALIANCA", "FABRICACAO", "SERVICO", "REPRES_OURO", "REPRES_PRATA", "RELOGIO"];
 // quem entra na folha de pagamento (VICTORIA fora até definir a loja)
-const FOLHA_NOMES = ["PATRICIA", "GISLAYNE", "CRISTINA", "MARIANA", "PAMELA", "CAMILA", "EDILENE", "FLAVIA", "TANIA", "LARISSA", "AMANDA"];
+const FOLHA_NOMES = ["PATRICIA", "GISLAYNE", "CRISTINA", "MARIANA", "PAMELA", "CAMILA", "EDILENE", "FLAVIA", "TANIA", "LARISSA", "SILVANO", "AMANDA", "SAYMON", "KAUA"];
 const FOLHA_GERENTES = ["CAMILA", "LARISSA"];
-const FOLHA_FIXOS = ["AMANDA"];
-const FOLHA_PARAMS = ["minimo", "salario", "vr", "diaExtraJN", "pctComissao", "pctAssid", "pctHextra", "passagem", "passagensDia", "dental"];
+const FOLHA_FIXOS = ["AMANDA", "SAYMON", "KAUA"];
+const FOLHA_CATEG = ["SILVANO"];
+const CATS_FOLHA = ["ALIANCA", "FABRICACAO", "SERVICO"];
+const FOLHA_MAN = ["salario", "vr", "diaEx", "comissao", "dsr", "assid", "hextra", "premio", "vt", "dental", "inss", "irrf", "descVT"];
+const FOLHA_PARAMS = ["minimo", "salario", "vr", "diaExtraJN", "pctComissao", "pctAssid", "pctHextra", "passagem", "passagensDia", "dental", "valeAdiant", "pctDescVT", "depIR"];
 
 function sessaoValida(u: any, senha: string): boolean {
   if (!u || !senha || typeof senha !== "string" || !senha.startsWith("sess_") || u.bloqueado) return false;
@@ -53,9 +56,12 @@ function limparDados(tipo: string, d: any) {
     const pessoas: any = {};
     for (const n of FOLHA_NOMES) {
       const x = (d.pessoas || {})[n]; if (!x) continue;
-      const p: any = { vale: num(x.vale), extra: num(x.extra) };
-      if (x.diaEx != null) p.diaEx = num(x.diaEx);
+      const p: any = { extra: num(x.extra), outros: num(x.outros), dep: Math.min(20, Math.max(0, Math.floor(Number(x.dep)) || 0)) };
+      if (x.vale != null) p.vale = num(x.vale);
       if (x.diasVT != null) p.diasVT = Math.min(31, Math.max(0, Math.floor(Number(x.diasVT)) || 0));
+      const man: any = {};
+      for (const k of FOLHA_MAN) if (x.man && x.man[k] != null) man[k] = num(x.man[k]);
+      if (Object.keys(man).length) p.man = man;
       pessoas[n] = p;
     }
     const gerentes: any = {};
@@ -64,9 +70,15 @@ function limparDados(tipo: string, d: any) {
       const pct: any = {}; for (const l of LOJAS) pct[l] = Math.min(100, Math.max(0, num((x.pct || {})[l])));
       gerentes[n] = { fixo: num(x.fixo), pct };
     }
+    const categ: any = {};
+    for (const n of FOLHA_CATEG) {
+      const x = (d.categ || {})[n]; if (!x) continue;
+      const pct: any = {}; for (const c of CATS_FOLHA) pct[c] = Math.min(100, Math.max(0, num((x.pct || {})[c])));
+      categ[n] = { fixo: num(x.fixo), pct };
+    }
     const fixos: any = {};
     for (const n of FOLHA_FIXOS) if ((d.fixos || {})[n] != null) fixos[n] = num(d.fixos[n]);
-    return { params, feriados, pessoas, gerentes, fixos };
+    return { params, feriados, pessoas, gerentes, categ, fixos };
   }
   if (tipo === "fator") {
     const faixas = (Array.isArray(d.faixas) ? d.faixas : []).slice(0, 30)

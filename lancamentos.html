@@ -66,6 +66,10 @@ table.folha th:first-child,table.folha td:first-child{position:sticky;left:0;bac
 table.folha tr.tot td:first-child{background:var(--surface-2);}
 table.folha input.din{width:92px;padding:5px 6px;font-size:12.5px;}
 table.folha td.liq{font-weight:800;color:var(--accent);}
+table.folha input.din{width:84px;}
+table.folha input.din.man{background:#FFF4D6;border-color:#C98A00;font-weight:700;}
+table.folha td.totc{font-weight:700;background:var(--accent-soft);}
+table.folha input.int{width:46px;padding:5px 6px;font-size:12.5px;text-align:right;border:1px solid var(--line);border-radius:6px;}
 table.folha tr.baixo td{background:var(--danger-soft);}
 table.ger input.din,table.ger input.pct{width:96px;padding:5px 6px;font-size:12.5px;}
 .gridp{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;}
@@ -203,13 +207,14 @@ table.ger input.din,table.ger input.pct{width:96px;padding:5px 6px;font-size:12.
   <section data-sec="folha" style="display:none">
     <div class="card">
       <h2>Folha de pagamento do mês</h2>
-      <p class="muted" style="margin:0 0 10px">Total = líquido vendido × fator (gerentes: fixo + % das lojas · Amanda: fixo), com o mínimo da empresa (R$ 2.500). O total é preenchido nesta ordem até acabar: salário base → VR → dia extra (Jardim Norte) → comissão (10% do total − VR) → DSR → assiduidade (10% da sobra) → H. extra (10% da sobra) → prêmio (o que sobrar). Vale-transporte (passagem × dias de seg. a sáb.) e plano dental somam por fora. “Extra” soma no total: metade vai pro VR e metade pro prêmio.</p>
+      <p class="muted" style="margin:0 0 10px">Total do mês = vendas × fator (gerentes: fixo + % das lojas · Silvano: fixo + % de aliança/fabricação/serviço · Amanda, Saymon e Kauã: fixo), com o mínimo da empresa (R$ 2.500) para quem não é fixo. Ele é preenchido nesta ordem até acabar: salário base → VR → dia extra (Jardim Norte) → comissão (10% do total − VR) → DSR → assiduidade (10% da sobra) → H. extra (10% da sobra) → prêmio (o que sobrar). Vale-transporte e plano dental <b>somam por fora</b>. Qualquer valor pode ser digitado à mão (fica amarelo): as verbas seguintes se ajustam pela regra e o total do mês é mantido; apague o campo para voltar ao automático. “Extra” soma no total: metade vai pro VR e metade pro prêmio.</p>
       <div class="scroll"><table id="tbFolha" class="folha"></table></div>
       <div id="folhaAvisos"></div>
       <div class="rodape">
         <span class="muted" id="infoFolha"></span>
         <div class="acoes">
           <button class="btn" id="copiarFolha">📋 Copiar tabela</button>
+          <button class="btn" id="exportarFolha">⬇️ Exportar folha</button>
           <button class="btn btn-accent" id="salvarFolha">Salvar folha</button>
         </div>
       </div>
@@ -217,6 +222,7 @@ table.ger input.din,table.ger input.pct{width:96px;padding:5px 6px;font-size:12.
     <div class="card">
       <h2>Gerentes e fixos</h2>
       <div class="scroll"><table id="tbGerentes" class="ger"></table></div>
+      <div class="scroll" style="margin-top:10px"><table id="tbCateg" class="ger"></table></div>
       <p class="muted" id="baseLojas"></p>
     </div>
     <div class="card">
@@ -582,25 +588,32 @@ function renderComissao(){
 
 /* ---------- FOLHA DE PG ---------- */
 /* quem entra na folha: só nomes cadastrados no app (VICTORIA fica de fora até definir a loja) */
-const FOLHA_ORDEM = ["PATRICIA","GISLAYNE","CRISTINA","MARIANA","PAMELA","CAMILA","EDILENE","FLAVIA","TANIA","LARISSA","AMANDA"];
+const FOLHA_ORDEM = ["PATRICIA","GISLAYNE","CRISTINA","MARIANA","PAMELA","CAMILA","EDILENE","FLAVIA","TANIA","LARISSA","SILVANO","AMANDA","SAYMON","KAUA"];
 const FOLHA_GERENTES = ["CAMILA","LARISSA"];
-const FOLHA_FIXOS = ["AMANDA"];
+const FOLHA_FIXOS = ["AMANDA","SAYMON","KAUA"];
+const FOLHA_CATEG = ["SILVANO"];                       /* fixo + % do líquido de categorias (todas as lojas) */
+const CATS_FOLHA = ["ALIANCA","FABRICACAO","SERVICO"];
+const FUNCAO_FOLHA = { SILVANO:"Fixo + % aliança/fabricação/serviço", SAYMON:"Fixo", KAUA:"Fixo" };
+const funcaoFolha = n => FUNCAO_ESPECIAL[n] || FUNCAO_FOLHA[n] || 'Fixo';
 const PARAMS_LABEL = {
   minimo:"Mínimo da empresa (R$)", salario:"Salário base — piso do comércio de JF (R$)", vr:"VR (R$)", diaExtraJN:"Dia extra — Jardim Norte (R$)",
   pctComissao:"Comissão (% do total − VR)", pctAssid:"Assiduidade (% da sobra)", pctHextra:"H. extra (% da sobra)",
-  passagem:"Passagem de ônibus JF (R$)", passagensDia:"Passagens por dia (VT)", dental:"Plano dental (R$)"
+  passagem:"Passagem de ônibus JF (R$)", passagensDia:"Passagens por dia (VT)", dental:"Plano dental (R$)",
+  valeAdiant:"Vale adiantamento (R$)", pctDescVT:"Desconto do VT (% do salário base)", depIR:"Dedução por dependente no IR (R$)"
 };
 /* quem ganha o dia extra por padrão (dá pra mudar na linha de cada uma) */
 const ehJardimNorte = nome => LOJA_DA_VENDEDORA[nome]==='JARDIM NORTE' || nome==='LARISSA';
 function folhaPadrao(){
   return {
-    params:{ minimo:2500, salario:1730, vr:500, diaExtraJN:128, pctComissao:10, pctAssid:10, pctHextra:10, passagem:3.75, passagensDia:2, dental:22.5 }, feriados:null, /* piso CCT comércio JF 2025/26; passagem JF desde 2019; ajustável em “Regras de divisão” */
-    pessoas:{},
+    params:{ minimo:2500, salario:1730, vr:500, diaExtraJN:128, pctComissao:10, pctAssid:10, pctHextra:10, passagem:3.75, passagensDia:2, dental:22.5,
+             valeAdiant:500, pctDescVT:6, depIR:189.59 }, feriados:null, /* piso CCT comércio JF 2025/26; passagem JF desde 2019; ajustável em “Regras de divisão” */
+    pessoas:{},   /* por pessoa: extra, vale, outros, diasVT, dep, man{verba: valor digitado à mão} */
     gerentes:{
       CAMILA:{ fixo:3000, pct:{ "MARECHAL":0.5, "JOAO BERALDO":0.5, "JARDIM NORTE":0, "REFORMA":0 } },
       LARISSA:{ fixo:3000, pct:{ "MARECHAL":0, "JOAO BERALDO":0, "JARDIM NORTE":1, "REFORMA":0 } },
     },
-    fixos:{ AMANDA:2300 },
+    categ:{ SILVANO:{ fixo:3000, pct:{ ALIANCA:0.5, FABRICACAO:0.5, SERVICO:0.5 } } },
+    fixos:{ AMANDA:2300, SAYMON:2300, KAUA:2500 },
   };
 }
 let folhaEstado = folhaPadrao();
@@ -609,15 +622,19 @@ function carregarEstadoFolha(){
   const reg = dadosMes.folha && dadosMes.folha.GERAL;
   const d = (reg && reg.dados) || {};
   const ger = n => ({ fixo: (((d.gerentes||{})[n]||{}).fixo ?? base.gerentes[n].fixo), pct:{ ...base.gerentes[n].pct, ...((((d.gerentes||{})[n]||{}).pct)||{}) } });
+  const cat = n => ({ fixo: (((d.categ||{})[n]||{}).fixo ?? base.categ[n].fixo), pct:{ ...base.categ[n].pct, ...((((d.categ||{})[n]||{}).pct)||{}) } });
   folhaEstado = {
     params:{ ...base.params, ...(d.params||{}) },
     feriados: Array.isArray(d.feriados) ? d.feriados.slice() : null,
     pessoas: JSON.parse(JSON.stringify(d.pessoas||{})),
     gerentes:{ CAMILA: ger("CAMILA"), LARISSA: ger("LARISSA") },
+    categ:{ SILVANO: cat("SILVANO") },
     fixos:{ ...base.fixos, ...(d.fixos||{}) },
   };
   document.getElementById('infoFolha').textContent = reg ? quando(reg) : 'Folha ainda não salva neste mês (valores calculados na tela).';
 }
+/* líquido de uma categoria somado em todas as lojas (fechamento da loja) */
+function somaCategoria(c){ return r2(LOJAS.reduce((a,l)=> a + (Number((((dadosMes.loja[l]||{}).dados||{}).categorias||{})[c])||0), 0)); }
 /* líquido da loja: fechamento da loja se já lançado; senão a soma das vendedoras */
 function baseLoja(l){
   const reg = dadosMes.loja[l];
@@ -666,32 +683,64 @@ function calendarioMes(mes, manual){
   return { diasMes, domingos, feriados, diasUteis, descanso: domingos+feriados, nomes, manual:Array.isArray(manual), auto };
 }
 function regrasOk(p){ return (Number(p.salario)||0) > 0; }
-/* T = total do mês (já com o mínimo). Preenche as verbas na ordem até acabar o T. VT e plano dental somam por fora. */
-function distribuirFolha(T, p, diaEx, extra, vale, diasVT){
-  const R = { salario:0, vr:0, diaEx:0, comissao:0, dsr:0, assid:0, hextra:0, premio:0 };
+/* tabelas 2026: INSS (Portaria MPS/MF 13/2026) · IRRF (Lei 15.191/2025 + redução da Lei 15.270/2025) */
+const INSS_FAIXAS = [[1621.00,7.5],[2902.84,9],[4354.27,12],[8475.55,14]];
+const IRRF_FAIXAS = [[2428.80,0,0],[2826.65,7.5,182.16],[3751.05,15,394.16],[4664.68,22.5,675.49],[Infinity,27.5,908.73]];
+const IRRF_SIMPLIFICADO = 607.20;
+function calcINSS(base){ let ant = 0, t = 0; for(const [lim,al] of INSS_FAIXAS){ if(base <= ant) break; t += (Math.min(base,lim) - ant) * al / 100; ant = lim; } return r2(t); }
+function calcIRRF(trib, inss, dep, valorDep){
+  const b = Math.max(0, trib - Math.max(inss + dep*valorDep, IRRF_SIMPLIFICADO));
+  const f = IRRF_FAIXAS.find(x=> b <= x[0]);
+  const ir = Math.max(0, b * f[1] / 100 - f[2]);
+  const red = trib <= 5000 ? ir : (trib <= 7350 ? Math.max(0, 978.62 - 0.133145 * trib) : 0);
+  return r2(Math.max(0, ir - red));
+}
+/* ordem de preenchimento do total do mês */
+const VERBAS = ['salario','vr','diaEx','comissao','dsr','assid','hextra','premio'];
+const VERBA_LABEL = { salario:'Salário', vr:'VR', diaEx:'Dia extra', comissao:'Comissão', dsr:'DSR', assid:'Assiduidade', hextra:'H. extra', premio:'Prêmio' };
+/* T = total do mês (já com o mínimo). c = { diaExAuto, man, extra, vale, outros, diasVT, dep } */
+function distribuirFolha(T, p, c){
+  const man = c.man || {}, tem = k => man[k] != null, R = {};
+  const meio = r2((Number(c.extra)||0) / 2);   /* metade do extra no VR, metade no prêmio */
   if(regrasOk(p)){
     let resta = r2(T);
-    const pega = v => { v = r2(Math.min(Math.max(0, v), resta)); resta = r2(resta - v); return v; };
-    const VR = Number(p.vr)||0;
-    R.salario = pega(Number(p.salario)||0);
-    R.vr = pega(VR);
-    R.diaEx = pega(diaEx);
-    R.comissao = pega(Math.max(0, T - VR) * (Number(p.pctComissao)||0) / 100);
-    R.dsr = pega((Number(p.diasDsr)>0) ? R.comissao / Number(p.diasDsr) * (Number(p.domingos)||0) : 0);
-    R.assid = pega(resta * (Number(p.pctAssid)||0) / 100);
-    R.hextra = pega(resta * (Number(p.pctHextra)||0) / 100);
-    R.premio = pega(resta);
-  }else R.semRegras = true;
-  R.premio = r2(R.premio + extra/2);   /* metade do extra no prêmio… */
-  R.vr = r2(R.vr + extra/2);           /* …e metade no VR */
-  R.extra = r2(extra);
-  R.bruto = r2(R.salario+R.vr+R.diaEx+R.comissao+R.dsr+R.assid+R.hextra+R.premio);
-  R.semVr = r2(R.bruto - R.vr);
-  R.diasVT = diasVT;
-  R.vt = r2((Number(p.passagem)||0) * (Number(p.passagensDia)||0) * diasVT);
-  R.dental = r2(Number(p.dental)||0);
-  R.vale = r2(vale);
-  R.liquido = r2(R.bruto + R.vt + R.dental - R.vale - R.vr);
+    const regra = {
+      salario: ()=> Number(p.salario)||0,
+      vr: ()=> Number(p.vr)||0,
+      diaEx: ()=> c.diaExAuto,
+      comissao: ()=> Math.max(0, T - R.vr) * (Number(p.pctComissao)||0) / 100,
+      dsr: ()=> Number(p.diasDsr) > 0 ? R.comissao / Number(p.diasDsr) * (Number(p.domingos)||0) : 0,
+      assid: ()=> resta * (Number(p.pctAssid)||0) / 100,
+      hextra: ()=> resta * (Number(p.pctHextra)||0) / 100,
+      premio: ()=> resta,
+    };
+    VERBAS.forEach(k=>{
+      const v = tem(k) ? r2((Number(man[k])||0) - ((k==='vr'||k==='premio') ? meio : 0))
+                       : r2(Math.min(Math.max(0, regra[k]()), Math.max(0, resta)));
+      R[k] = v; resta = r2(resta - v);
+    });
+    /* valor digitado à mão: a diferença vai para as verbas automáticas (de trás pra frente) e o total do mês se mantém */
+    for(const k of VERBAS.slice().reverse()){
+      if(!resta) break; if(tem(k)) continue;
+      const aj = r2(Math.max(-R[k], resta)); R[k] = r2(R[k] + aj); resta = r2(resta - aj);
+    }
+    R.dif = resta;   /* ≠ 0 só quando os valores digitados não fecham com o total */
+  }else{ VERBAS.forEach(k=> R[k] = 0); R.semRegras = true; R.dif = 0; }
+  R.vr = r2(R.vr + meio); R.premio = r2(R.premio + meio);
+  R.extra = r2(c.extra);
+  R.base = r2(VERBAS.reduce((a,k)=> a + R[k], 0));                       /* tudo menos VT e dental */
+  R.diasVT = c.diasVT; R.dep = c.dep;
+  R.vt = tem('vt') ? r2(man.vt) : r2((Number(p.passagem)||0) * (Number(p.passagensDia)||0) * c.diasVT);
+  R.dental = tem('dental') ? r2(man.dental) : r2(Number(p.dental)||0);
+  R.bruto = r2(R.base + R.vt + R.dental);                                 /* tudo */
+  R.vale = r2(c.vale);
+  R.liquido = r2(R.bruto - R.vale);                                       /* tudo − vale adiantamento */
+  /* descontos da carteira: INSS (sem prêmio, VR, VT e dental), IRRF (sem VR, VT e dental), VT até 6% do salário base */
+  R.inss = tem('inss') ? r2(man.inss) : calcINSS(R.salario + R.diaEx + R.comissao + R.dsr + R.assid + R.hextra);
+  R.irrf = tem('irrf') ? r2(man.irrf) : calcIRRF(R.base - R.vr, R.inss, c.dep, Number(p.depIR)||0);
+  R.descVT = tem('descVT') ? r2(man.descVT) : r2(Math.min(R.vt, R.salario * (Number(p.pctDescVT)||0) / 100));
+  R.outros = r2(c.outros);
+  R.liqDesc = r2(R.liquido - R.inss - R.irrf - R.descVT - R.outros);
   return R;
 }
 function modeloFolha(){
@@ -703,94 +752,131 @@ function modeloFolha(){
     if(FOLHA_GERENTES.includes(nome)){
       tipo = 'ger'; const g = folhaEstado.gerentes[nome];
       const variavel = LOJAS.reduce((a,l)=> a + baseLoja(l) * (Number(g.pct[l])||0) / 100, 0);
-      C = r2((Number(g.fixo)||0) + variavel); loja = FUNCAO_ESPECIAL[nome]||'Gerente';
+      C = r2((Number(g.fixo)||0) + variavel); loja = funcaoFolha(nome);
+    }else if(FOLHA_CATEG.includes(nome)){
+      tipo = 'cat'; const g = folhaEstado.categ[nome];
+      vendido = r2(CATS_FOLHA.reduce((a,c)=> a + somaCategoria(c), 0));
+      C = r2((Number(g.fixo)||0) + CATS_FOLHA.reduce((a,c)=> a + somaCategoria(c) * (Number(g.pct[c])||0) / 100, 0)); loja = funcaoFolha(nome);
+      const faltam = LOJAS.filter(l=> !dadosMes.loja[l]);
+      if(faltam.length) aviso = 'fechamento sem lançamento: ' + faltam.map(l=>LOJA_LABEL[l]).join(', ');
     }else if(FOLHA_FIXOS.includes(nome)){
-      tipo = 'fixo'; C = r2(Number(folhaEstado.fixos[nome])||0); loja = FUNCAO_ESPECIAL[nome]||'Fixo';
+      tipo = 'fixo'; C = r2(Number(folhaEstado.fixos[nome])||0); loja = funcaoFolha(nome);
     }else{
       if(!dadosMes.vendedora[nome]){ semLanc.push(nome); return; }
       const b = brutoVendedora(nome); C = b.bruto; vendido = b.total; fator = b.pct; aviso = b.aviso; loja = LOJA_LABEL[b.loja]||'';
     }
     const inp = folhaEstado.pessoas[nome] || {};
-    const T = tipo==='fixo' ? C : r2(Math.max(C, Number(p.minimo)||0));   /* fixo (Amanda) não entra no mínimo */
-    const diaEx = inp.diaEx!=null ? Number(inp.diaEx)||0 : (ehJardimNorte(nome) ? Number(p.diaExtraJN)||0 : 0);
-    const diasVT = inp.diasVT!=null ? Number(inp.diasVT)||0 : cal.diasUteis;
-    linhas.push({ nome, tipo, loja, vendido, fator, aviso, C, T, minimo: T > C, diaEx, inp, calc: distribuirFolha(T, p, diaEx, Number(inp.extra)||0, Number(inp.vale)||0, diasVT) });
+    const T = tipo==='fixo' ? C : r2(Math.max(C, Number(p.minimo)||0));   /* fixo (Amanda, Saymon, Kauã) não entra no mínimo */
+    const calc = distribuirFolha(T, p, {
+      man: inp.man, extra: Number(inp.extra)||0, outros: Number(inp.outros)||0,
+      vale: inp.vale!=null ? Number(inp.vale)||0 : Number(p.valeAdiant)||0,
+      diaExAuto: ehJardimNorte(nome) ? Number(p.diaExtraJN)||0 : 0,
+      diasVT: inp.diasVT!=null ? Number(inp.diasVT)||0 : cal.diasUteis,
+      dep: Number(inp.dep)||0,
+    });
+    linhas.push({ nome, tipo, loja, vendido, fator, aviso, C, T, minimo: T > C, inp, calc });
   });
   return { linhas, semLanc, cal };
 }
-const COLS_CALC = ['salario','vr','diaEx','comissao','dsr','assid','hextra','premio','bruto','vt','dental','liquido'];
+/* colunas da folha (tela, copiar e exportar). ed: 'man' = verba que pode ser digitada (volta ao automático se apagar) */
+const FOLHA_COLS = [
+  { k:'vendido', t:'Líquido vendido' }, { k:'fator', t:'Fator' }, { k:'C', t:'Vendas × fator / fixo' }, { k:'T', t:'Total do mês' },
+  { k:'extra', t:'Extra', ed:'din' },
+  ...VERBAS.map(k=>({ k, t:VERBA_LABEL[k], ed:'man' })),
+  { k:'base', t:'Total base', tot:1 },
+  { k:'diasVT', t:'Dias VT', ed:'int', nosum:1 }, { k:'vt', t:'Vale-transporte', ed:'man' }, { k:'dental', t:'Plano dental', ed:'man' },
+  { k:'bruto', t:'Total bruto', tot:1 },
+  { k:'vale', t:'Vale adiantamento', ed:'din' },
+  { k:'liquido', t:'Total líquido', tot:1 },
+  { k:'inss', t:'INSS', ed:'man' }, { k:'irrf', t:'IRRF', ed:'man' }, { k:'dep', t:'Dependentes IR', ed:'int', nosum:1 }, { k:'descVT', t:'Desconto VT', ed:'man' }, { k:'outros', t:'Outros descontos', ed:'din' },
+  { k:'liqDesc', t:'Total líquido descontos', tot:1 },
+];
+const valFolha = (l,k)=> (k in l.calc) ? l.calc[k] : l[k];
 function renderFolha(){
   const tab = document.getElementById('tbFolha'); if(!tab) return;
   const m = modeloFolha();
   if(!m.linhas.length){
     tab.innerHTML = `<tbody><tr><td class="muted">Nenhuma vendedora lançada neste mês ainda.</td></tr></tbody>`;
   }else{
-    tab.innerHTML = `<thead><tr><th>Nome</th><th>Loja / função</th><th>Líquido vendido</th><th>Fator</th><th>Vendas × fator</th><th>Total do mês</th><th>Extra</th><th>Salário</th><th>VR</th><th>Dia extra</th><th>Comissão</th><th>DSR</th><th>Assiduidade</th><th>H. extra</th><th>Prêmio</th><th>Total bruto</th><th>Dias VT</th><th>Vale-transp.</th><th>Plano dental</th><th>Vale (adiant.)</th><th>Líquido a receber</th></tr></thead><tbody>` +
+    const cel = (l,c)=>{
+      if(c.ed==='man' || c.ed==='din') return `<td><input class="din" data-k="${c.k}" data-ed="${c.ed}" title="${c.ed==='man'?'Digite para mudar à mão · apague para voltar ao automático':''}"></td>`;
+      if(c.ed==='int') return `<td><input class="int" data-k="${c.k}" data-ed="int" inputmode="numeric"></td>`;
+      return `<td class="num${c.tot?' totc':''}${c.k==='liqDesc'?' liq':''}" data-c="${c.k}"></td>`;
+    };
+    tab.innerHTML = `<thead><tr><th>Nome</th><th>Loja / função</th>${FOLHA_COLS.map(c=>`<th>${c.t}</th>`).join('')}</tr></thead><tbody>` +
       m.linhas.map(l=>`<tr data-nome="${l.nome}"><td><b>${l.nome}</b></td>
         <td style="text-align:left">${l.loja}${l.aviso?`<div class="muted" style="color:var(--danger)">⚠ ${l.aviso}</div>`:''}</td>
-        <td class="num" data-c="vendido"></td><td class="num" data-c="fator"></td><td class="num" data-c="C"></td><td class="num" data-c="T"></td>
-        <td><input class="din" data-in="extra" value="${fmt(l.inp.extra)}"></td>
-        <td class="num" data-c="salario"></td><td class="num" data-c="vr"></td>
-        <td><input class="din" data-in="diaEx" value="${fmt(l.diaEx)}"></td>
-        <td class="num" data-c="comissao"></td><td class="num" data-c="dsr"></td><td class="num" data-c="assid"></td><td class="num" data-c="hextra"></td><td class="num" data-c="premio"></td>
-        <td class="num" data-c="bruto"></td>
-        <td><input class="pct" data-dias style="width:56px" value="${l.inp.diasVT!=null ? l.inp.diasVT : ''}" placeholder="${m.cal.diasUteis}" title="Vazio = dias de seg. a sáb. do mês (sem feriados)"></td>
-        <td class="num" data-c="vt"></td><td class="num" data-c="dental"></td>
-        <td><input class="din" data-in="vale" value="${fmt(l.inp.vale)}"></td><td class="num liq" data-c="liquido"></td></tr>`).join('') +
-      `<tr class="tot" id="folhaTot"><td>TOTAL</td><td></td><td></td><td></td><td class="num" data-t="C"></td><td class="num" data-t="T"></td><td class="num" data-t="extra"></td>${COLS_CALC.slice(0,8).map(c=>`<td class="num" data-t="${c}"></td>`).join('')}<td class="num" data-t="bruto"></td><td></td><td class="num" data-t="vt"></td><td class="num" data-t="dental"></td><td class="num" data-t="vale"></td><td class="num" data-t="liquido"></td></tr></tbody>`;
+        ${FOLHA_COLS.map(c=>cel(l,c)).join('')}</tr>`).join('') +
+      `<tr class="tot" id="folhaTot"><td>TOTAL</td><td></td>${FOLHA_COLS.map(c=>`<td class="num" data-t="${c.k}"></td>`).join('')}</tr></tbody>`;
     tab.querySelectorAll('tr[data-nome]').forEach(tr=>{
-      tr.querySelectorAll('input.din').forEach(inp=> ligarFormatoDinheiro(inp, ()=>{
-        const n = tr.dataset.nome; folhaEstado.pessoas[n] = folhaEstado.pessoas[n] || {};
-        folhaEstado.pessoas[n][inp.dataset.in] = parseBR(inp.value); recalcFolha();
-      }));
-      const dias = tr.querySelector('input[data-dias]');
-      dias.addEventListener('input', ()=>{
-        const n = tr.dataset.nome; folhaEstado.pessoas[n] = folhaEstado.pessoas[n] || {};
-        const v = dias.value.replace(/\D/g,'');
-        if(v==='') delete folhaEstado.pessoas[n].diasVT; else folhaEstado.pessoas[n].diasVT = Math.min(31, Number(v));
-        recalcFolha();
+      const n = tr.dataset.nome;
+      tr.querySelectorAll('input[data-k]').forEach(inp=>{
+        const k = inp.dataset.k, ed = inp.dataset.ed;
+        inp.addEventListener('focus', ()=>{ if(ed!=='int'){ const v = parseBR(inp.value); inp.value = v ? String(v).replace('.',',') : ''; } inp.select(); });
+        inp.addEventListener('input', ()=>{
+          const pe = folhaEstado.pessoas[n] = folhaEstado.pessoas[n] || {};
+          const v = inp.value.trim();
+          if(ed==='man'){ pe.man = pe.man || {}; if(v==='') delete pe.man[k]; else pe.man[k] = parseBR(v); }
+          else if(ed==='int'){ const d = v.replace(/\D/g,''); if(d==='') delete pe[k==='diasVT'?'diasVT':'dep']; else pe[k==='diasVT'?'diasVT':'dep'] = Math.min(k==='dep'?20:31, Number(d)); }
+          else { if(v==='') delete pe[k]; else pe[k] = parseBR(v); }
+          recalcFolha();
+        });
+        inp.addEventListener('blur', ()=> recalcFolha());
+        inp.addEventListener('keydown', e=>{ if(e.key==='Enter') inp.blur(); });
       });
     });
   }
   renderGerentes(); renderParams(); recalcFolha();
 }
-/* atualiza só os números (não recria os campos, pra não perder o foco de quem está digitando) */
+/* atualiza só os números (não mexe no campo em que a pessoa está digitando) */
 function recalcFolha(){
   const m = modeloFolha();
-  const tot = { C:0, T:0, extra:0, vale:0 }; COLS_CALC.forEach(c=> tot[c]=0);
+  const tot = {}; FOLHA_COLS.forEach(c=> tot[c.k] = 0);
   m.linhas.forEach(l=>{
     const tr = document.querySelector(`#tbFolha tr[data-nome="${l.nome}"]`); if(!tr) return;
-    const set = (c,v)=>{ const el = tr.querySelector(`[data-c="${c}"]`); if(el) el.textContent = v; };
-    set('vendido', l.vendido==null ? '—' : fmt(l.vendido));
-    set('fator', l.fator==null ? '—' : String(l.fator).replace('.',',')+'%');
-    set('C', fmt(l.C));
-    set('T', fmt(l.T) + (l.minimo ? ' (mín.)' : ''));
-    COLS_CALC.forEach(c=>{ set(c, fmt(l.calc[c])); tot[c] += l.calc[c]; });
-    tot.C += l.C; tot.T += l.T; tot.extra += l.calc.extra; tot.vale += l.calc.vale;
-    const de = tr.querySelector('input[data-in="diaEx"]');   /* dia extra automático acompanha a regra */
-    if(de && document.activeElement!==de && (folhaEstado.pessoas[l.nome]||{}).diaEx==null) de.value = fmt(l.diaEx);
-    const dv = tr.querySelector('input[data-dias]'); if(dv) dv.placeholder = m.cal.diasUteis;
+    const man = (l.inp && l.inp.man) || {};
+    FOLHA_COLS.forEach(c=>{
+      const v = valFolha(l, c.k);
+      if(!c.nosum && c.k!=='fator' && v!=null) tot[c.k] += Number(v)||0;
+      if(c.ed){
+        const inp = tr.querySelector(`input[data-k="${c.k}"]`); if(!inp) return;
+        if(c.ed==='man') inp.classList.toggle('man', man[c.k]!=null);
+        if(document.activeElement===inp) return;
+        if(c.ed==='int'){ inp.value = c.k==='diasVT' ? (l.inp.diasVT!=null ? l.inp.diasVT : '') : (l.inp.dep||''); if(c.k==='diasVT') inp.placeholder = m.cal.diasUteis; }
+        else inp.value = fmt(v);
+        return;
+      }
+      const el = tr.querySelector(`[data-c="${c.k}"]`); if(!el) return;
+      if(c.k==='fator') el.textContent = v==null ? '—' : String(v).replace('.',',')+'%';
+      else if(c.k==='vendido') el.textContent = v==null ? '—' : fmt(v);
+      else el.textContent = fmt(v) + (c.k==='T' && l.minimo ? ' (mín.)' : '');
+    });
   });
   const trT = document.getElementById('folhaTot');
-  if(trT){
-    trT.querySelectorAll('[data-t]').forEach(td=>{ const k = td.dataset.t; td.textContent = (k in tot) ? fmt(tot[k]) : ''; });
-  }
+  if(trT) trT.querySelectorAll('[data-t]').forEach(td=>{ const c = FOLHA_COLS.find(x=>x.k===td.dataset.t); td.textContent = (c.nosum || c.k==='fator') ? '' : fmt(tot[c.k]); });
   const av = [];
   if(!regrasOk(folhaEstado.params)) av.push(`<div class="alerta erro">⚠️ Preencha o salário base nas “Regras de divisão” mais abaixo — enquanto estiver vazio o total não é dividido.</div>`);
   if(m.semLanc.length) av.push(`<div class="alerta" style="background:var(--surface-2);color:var(--ink-soft)">Sem lançamento de vendas neste mês (fora da folha): ${m.semLanc.join(', ')}.</div>`);
   const noMin = m.linhas.filter(l=>l.minimo).map(l=>l.nome);
   if(noMin.length) av.push(`<div class="alerta" style="background:var(--surface-2);color:var(--ink-soft)">No mínimo da empresa (${fmt(Number(folhaEstado.params.minimo)||0)}): ${noMin.join(', ')}.</div>`);
-  const fixBaixo = m.linhas.filter(l=>l.tipo==='fixo' && l.C < (Number(folhaEstado.params.minimo)||0)).map(l=>l.nome);
-  if(fixBaixo.length) av.push(`<div class="alerta erro">⚠️ Valor fixo abaixo do mínimo da empresa: ${fixBaixo.join(', ')} (fixo não é ajustado ao mínimo — corrija em “Gerentes e fixos” se for o caso).</div>`);
+  const difs = m.linhas.filter(l=>l.calc.dif).map(l=>`${l.nome} (${l.calc.dif>0?'faltam':'passam'} ${fmt(Math.abs(l.calc.dif))})`);
+  if(difs.length) av.push(`<div class="alerta erro">⚠️ Os valores digitados à mão não fecham com o total do mês: ${difs.join(', ')}. Apague algum campo amarelo para o sistema completar.</div>`);
   document.getElementById('folhaAvisos').innerHTML = av.join('');
-  /* gerentes: valor variável e total */
+  /* gerentes e Silvano: valor variável e total */
   document.querySelectorAll('#tbGerentes tr[data-g]').forEach(tr=>{
     const n = tr.dataset.g, g = folhaEstado.gerentes[n]; if(!g) return;
     const variavel = r2(LOJAS.reduce((a,l)=> a + baseLoja(l) * (Number(g.pct[l])||0) / 100, 0));
     tr.querySelector('[data-c=variavel]').textContent = fmt(variavel);
     tr.querySelector('[data-c=totalg]').textContent = fmt(r2((Number(g.fixo)||0) + variavel));
   });
-  document.getElementById('baseLojas').textContent = 'Base dos percentuais (líquido de cada loja no mês): ' + LOJAS.map(l=> LOJA_LABEL[l]+' R$ '+fmt(baseLoja(l))).join(' · ');
+  document.querySelectorAll('#tbCateg tr[data-cg]').forEach(tr=>{
+    const g = folhaEstado.categ[tr.dataset.cg]; if(!g) return;
+    const variavel = r2(CATS_FOLHA.reduce((a,c)=> a + somaCategoria(c) * (Number(g.pct[c])||0) / 100, 0));
+    tr.querySelector('[data-c=variavel]').textContent = fmt(variavel);
+    tr.querySelector('[data-c=totalg]').textContent = fmt(r2((Number(g.fixo)||0) + variavel));
+  });
+  document.getElementById('baseLojas').textContent = 'Base dos percentuais (líquido de cada loja no mês): ' + LOJAS.map(l=> LOJA_LABEL[l]+' R$ '+fmt(baseLoja(l))).join(' · ')
+    + ' · Categorias (todas as lojas): ' + CATS_FOLHA.map(c=> (CATEGORIAS.find(x=>x.id===c)||{}).label+' R$ '+fmt(somaCategoria(c))).join(' · ');
 }
 function renderGerentes(){
   const tab = document.getElementById('tbGerentes');
@@ -801,7 +887,7 @@ function renderGerentes(){
       ${LOJAS.map(l=>`<td><input class="pct" data-gp="${l}" value="${g.pct[l] ? String(g.pct[l]).replace('.',',') : ''}" placeholder="0"></td>`).join('')}
       <td class="num" data-c="variavel"></td><td class="num" data-c="totalg"></td></tr>`;
   }).join('');
-  const fl = FOLHA_FIXOS.map(n=>`<tr data-fx="${n}"><td><b>${n}</b> <span class="muted">${FUNCAO_ESPECIAL[n]||''} — valor fixo</span></td>
+  const fl = FOLHA_FIXOS.map(n=>`<tr data-fx="${n}"><td><b>${n}</b> <span class="muted">${funcaoFolha(n)} — valor fixo</span></td>
       <td><input class="din" data-fx value="${fmt(folhaEstado.fixos[n])}"></td><td colspan="${LOJAS.length+2}" class="muted" style="text-align:left">sem percentual de loja</td></tr>`).join('');
   tab.innerHTML = `<thead><tr><th>Nome</th><th>Fixo (R$)</th>${LOJAS.map(l=>`<th>% ${LOJA_LABEL[l]}</th>`).join('')}<th>Variável (R$)</th><th>Total</th></tr></thead><tbody>${gl}${fl}</tbody>`;
   tab.querySelectorAll('tr[data-g]').forEach(tr=>{
@@ -812,6 +898,19 @@ function renderGerentes(){
   tab.querySelectorAll('tr[data-fx]').forEach(tr=>{
     const n = tr.dataset.fx;
     ligarFormatoDinheiro(tr.querySelector('input'), ()=>{ folhaEstado.fixos[n] = parseBR(tr.querySelector('input').value); recalcFolha(); });
+  });
+  const tc = document.getElementById('tbCateg'); if(!tc) return;
+  const catLabel = c => (CATEGORIAS.find(x=>x.id===c)||{}).label || c;
+  tc.innerHTML = `<thead><tr><th>Nome</th><th>Fixo (R$)</th>${CATS_FOLHA.map(c=>`<th>% ${catLabel(c)}</th>`).join('')}<th>Variável (R$)</th><th>Total</th></tr></thead><tbody>` +
+    FOLHA_CATEG.map(n=>{ const g = folhaEstado.categ[n];
+      return `<tr data-cg="${n}"><td><b>${n}</b> <span class="muted">${funcaoFolha(n)} (líquido de todas as lojas)</span></td>
+        <td><input class="din" data-cf="fixo" value="${fmt(g.fixo)}"></td>
+        ${CATS_FOLHA.map(c=>`<td><input class="pct" data-cp="${c}" value="${g.pct[c] ? String(g.pct[c]).replace('.',',') : ''}" placeholder="0"></td>`).join('')}
+        <td class="num" data-c="variavel"></td><td class="num" data-c="totalg"></td></tr>`; }).join('') + `</tbody>`;
+  tc.querySelectorAll('tr[data-cg]').forEach(tr=>{
+    const g = folhaEstado.categ[tr.dataset.cg];
+    ligarFormatoDinheiro(tr.querySelector('[data-cf=fixo]'), ()=>{ g.fixo = parseBR(tr.querySelector('[data-cf=fixo]').value); recalcFolha(); });
+    tr.querySelectorAll('input.pct').forEach(inp=> inp.addEventListener('input', ()=>{ g.pct[inp.dataset.cp] = parseBR(inp.value); recalcFolha(); }));
   });
 }
 function renderParams(){
@@ -824,7 +923,7 @@ function renderParams(){
   cb.innerHTML = `<div><label class="lb">Feriados do mês (dias, separados por vírgula)</label><input id="feriadosIn" value="${diasTxt}" placeholder="ex.: 4, 13"> <button class="btn" id="feriadosAuto" type="button">Voltar ao automático</button></div>
     <div class="muted" id="calResumo"></div>`;
   const resumo = ()=>{ const c = calendarioMes(document.getElementById('mes').value, folhaEstado.feriados);
-    document.getElementById('calResumo').innerHTML = `<b>Vale-transporte</b>: ${c.diasUteis} dias de seg. a sáb. (sem feriados) × passagens por dia × passagem.<br><b>DSR do mês</b> = comissão ÷ <b>${c.diasUteis}</b> dias úteis × <b>${c.descanso}</b> (${c.domingos} domingo${c.domingos===1?'':'s'} + ${c.feriados} feriado${c.feriados===1?'':'s'}). Mês com ${c.diasMes} dias.${c.nomes.length?'<br>Feriados: '+c.nomes.join(' · '):'<br>Sem feriados neste mês.'}${c.manual?'<br><i>(lista editada à mão)</i>':'<br><i>(calendário automático: nacionais + Juiz de Fora; pontos facultativos não entram — digite os dias acima se quiser incluir)</i>'}`; };
+    document.getElementById('calResumo').innerHTML = `<b>Vale-transporte</b>: ${c.diasUteis} dias de seg. a sáb. (sem feriados) × passagens por dia × passagem.<br><b>Descontos</b>: INSS e IRRF pelas tabelas de 2026 (INSS sem prêmio, VR, VT e dental; IRRF sem VR, VT e dental, com a isenção até R$ 5 mil); VT até o % do salário base.<br><b>DSR do mês</b> = comissão ÷ <b>${c.diasUteis}</b> dias úteis × <b>${c.descanso}</b> (${c.domingos} domingo${c.domingos===1?'':'s'} + ${c.feriados} feriado${c.feriados===1?'':'s'}). Mês com ${c.diasMes} dias.${c.nomes.length?'<br>Feriados: '+c.nomes.join(' · '):'<br>Sem feriados neste mês.'}${c.manual?'<br><i>(lista editada à mão)</i>':'<br><i>(calendário automático: nacionais + Juiz de Fora; pontos facultativos não entram — digite os dias acima se quiser incluir)</i>'}`; };
   resumo();
   document.getElementById('feriadosIn').addEventListener('input', e=>{
     const v = e.target.value.trim();
@@ -842,15 +941,58 @@ async function salvarFolha(){
   dadosMes.folha.GERAL = r.data; toast('Folha salva ✔');
   document.getElementById('infoFolha').textContent = quando(r.data);
 }
-/* copia no formato da planilha FOLHA (colar direto no Excel) */
+/* linhas da folha prontas para planilha (números como número) */
+function matrizFolha(){
+  const m = modeloFolha();
+  const cab = ['NOME','LOJA / FUNÇÃO', ...FOLHA_COLS.map(c=>c.t.toUpperCase())];
+  const linhas = m.linhas.map(l=>[l.nome, l.loja, ...FOLHA_COLS.map(c=>{ const v = valFolha(l,c.k); return v==null ? '' : r2(v); })]);
+  const tot = ['TOTAL','', ...FOLHA_COLS.map(c=> (c.nosum || c.k==='fator') ? '' : r2(m.linhas.reduce((a,l)=> a + (Number(valFolha(l,c.k))||0), 0)))];
+  return { m, cab, linhas, tot };
+}
+/* copia no formato de planilha (colar direto no Excel) */
 function copiarFolha(){
-  const m = modeloFolha(); const n = v => String(v.toFixed(2)).replace('.',',');
-  const linhas = [['NOME','LOJA','SALARIO','COMISSAO','DSR','ASSIDUIDADE','PREMIO','DIA EX','H EXTRA','TOTAL BRUTO','VR','SEM VR','VALE TRANSPORTE','PLANO DENTAL','VALE','LIQUIDO']];
-  m.linhas.forEach(l=>{ const c = l.calc; linhas.push([l.nome, l.loja, n(c.salario), n(c.comissao), n(c.dsr), n(c.assid), n(c.premio), n(c.diaEx), n(c.hextra), n(c.bruto), n(c.vr), n(c.semVr), n(c.vt), n(c.dental), n(c.vale), n(c.liquido)]); });
-  const txt = linhas.map(r=>r.join('\t')).join('\n');
+  const { cab, linhas, tot } = matrizFolha();
+  const n = v => typeof v==='number' ? String(v.toFixed(2)).replace('.',',') : v;
+  const txt = [cab, ...linhas, tot].map(r=>r.map(n).join('\t')).join('\n');
   const ok = ()=> toast('Tabela copiada — cole no Excel ✔');
   const fallback = ()=>{ const ta = document.createElement('textarea'); ta.value = txt; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); ok(); }catch(e){ toast('Não consegui copiar.'); } ta.remove(); };
   if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, fallback); else fallback();
+}
+/* planilha .xlsx para a contabilidade: aba Folha + aba Regras */
+function carregarXLSX(){
+  if(window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise((ok, erro)=>{ const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload = ()=> ok(window.XLSX); sc.onerror = erro; document.head.appendChild(sc); });
+}
+async function exportarFolha(){
+  const btn = document.getElementById('exportarFolha'); btn.disabled = true;
+  try{
+    const X = await carregarXLSX();
+    const mes = document.getElementById('mes').value; const [ano, mm] = mes.split('-');
+    const { m, cab, linhas, tot } = matrizFolha();
+    const titulo = [[`GRUPO VILAÇA JOIAS — FOLHA DE PAGAMENTO ${MESES[Number(mm)-1].toUpperCase()}/${ano}`], [`Gerada em ${new Date().toLocaleString('pt-BR')}${currentUser&&currentUser.nome?' por '+currentUser.nome:''}`], []];
+    const ws = X.utils.aoa_to_sheet([...titulo, cab, ...linhas, tot]);
+    const ini = titulo.length + 1, fim = ini + linhas.length;
+    for(let r = ini; r <= fim; r++) for(let c = 2; c < cab.length; c++){
+      const cel = ws[X.utils.encode_cell({ r, c })]; if(cel && cel.t==='n') cel.z = FOLHA_COLS[c-2].nosum ? '0' : (FOLHA_COLS[c-2].k==='fator' ? '0.00"%"' : '#,##0.00');
+    }
+    ws['!cols'] = cab.map((h,i)=>({ wch: i===0 ? 12 : i===1 ? 24 : Math.max(11, h.length+2) }));
+    ws['!freeze'] = { xSplit:1, ySplit:titulo.length+1 };
+    const p = folhaEstado.params;
+    const regras = [['REGRA','VALOR'], ...Object.keys(PARAMS_LABEL).map(k=>[PARAMS_LABEL[k], Number(p[k])||0]),
+      [], ['Dias úteis (seg. a sáb., sem feriados)', m.cal.diasUteis], ['Domingos + feriados (DSR)', m.cal.descanso], ['Feriados', m.cal.nomes.join(' · ') || '—'],
+      [], ['Ordem de preenchimento do total do mês', 'salário → VR → dia extra → comissão → DSR → assiduidade → H. extra → prêmio'],
+      ['Somam por fora (não entram na divisão)', 'vale-transporte e plano dental'],
+      ['Total base', 'todas as verbas, sem VT e dental'], ['Total bruto', 'total base + VT + dental'], ['Total líquido', 'total bruto − vale adiantamento'],
+      ['Total líquido descontos', 'total líquido − INSS − IRRF − desconto VT − outros descontos'],
+      ['Base INSS (estimativa)', 'salário, dia extra, comissão, DSR, assiduidade, H. extra (sem prêmio, VR, VT, dental) — tabela 2026'],
+      ['Base IRRF (estimativa)', 'total base sem VR — tabela 2026 com redução até R$ 5 mil / R$ 7.350'],
+      ['Valores digitados à mão', m.linhas.filter(l=> l.inp.man && Object.keys(l.inp.man).length).map(l=> l.nome+': '+Object.keys(l.inp.man).map(k=> (VERBA_LABEL[k]||k)+' '+fmt(l.inp.man[k])).join(', ')).join(' · ') || '—']];
+    const wr = X.utils.aoa_to_sheet(regras); wr['!cols'] = [{ wch:44 }, { wch:90 }];
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, 'Folha'); X.utils.book_append_sheet(wb, wr, 'Regras');
+    X.writeFile(wb, `folha-vilaca-${mes}.xlsx`);
+  }catch(e){ toast('Não consegui gerar a planilha (sem internet?). Use “Copiar tabela”.'); }
+  btn.disabled = false;
 }
 
 /* ---------- MESES (cards) ---------- */
@@ -924,6 +1066,7 @@ function iniciarUI(){
   document.getElementById('excluirLoja').addEventListener('click', excluirLoja);
   document.getElementById('salvarFolha').addEventListener('click', salvarFolha);
   document.getElementById('copiarFolha').addEventListener('click', copiarFolha);
+  document.getElementById('exportarFolha').addEventListener('click', exportarFolha);
   document.querySelectorAll('#tabs button').forEach(b=> b.addEventListener('click', ()=>{
     document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active', x===b));
     document.querySelectorAll('section[data-sec]').forEach(s=> s.style.display = s.dataset.sec===b.dataset.tab ? '' : 'none');
