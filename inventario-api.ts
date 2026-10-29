@@ -1,4 +1,4 @@
-// inventario-api v1 — Inventário / contagem de estoque (CAIXA › Inventário).
+// inventario-api v3 — Inventário / contagem de estoque (CAIXA › Inventário).
 // POST { senha, op, ... }  (senha = token de sessão sess_…). Permissão: módulo "transferencias" (ou diretoria/gerente).
 //   op:'init'       {} → { lojas, categorias, subcategorias, inventarios, gestao, usuario }
 //   op:'catalogo'   {} → { data:[{id,codigo,nome,categoriaId,subcategoriaId,fornecedor,gtin,custo,preco,unidade,contavel,estoque:{loja:qtd}}] }
@@ -23,6 +23,13 @@ function sessaoValida(u: any, senha: string): boolean {
   const agora = Date.now();
   if (u.senha === senha && (!u.sessaoExpiraEm || Number(u.sessaoExpiraEm) > agora)) return true;
   return (Array.isArray(u.sessoes) ? u.sessoes : []).some((s: any) => s && s.token === senha && (!s.exp || Number(s.exp) > agora));
+}
+// db-gateway v51: a sessão pode ter uma loja extra autorizada pela gerência (users[].sessoes[].lojaExtra)
+function lojasDaSessao(u: any, token: string): string[] {
+  const base: string[] = Array.isArray(u?.lojas) ? u.lojas.map(String) : [];
+  const s = (Array.isArray(u?.sessoes) ? u.sessoes : []).find((x: any) => x && x.token === token);
+  const e = s && s.lojaExtra;
+  return e && e.id && Number(e.ate) > Date.now() && !base.includes(String(e.id)) ? [...base, String(e.id)] : base;
 }
 const ehGestao = (u: any) => u && (u.nivel === "diretoria" || u.nivel === "gerente");
 function moduloAtivo(u: any, mod: string): boolean {
@@ -205,7 +212,7 @@ Deno.serve(async (req: Request) => {
     if (!user) return json({ error: "não autorizado" }, 401);
     if (!moduloAtivo(user, "transferencias")) return json({ error: "sem permissão para o inventário" }, 403);
     const gestao = ehGestao(user);
-    const lojasUser: string[] = Array.isArray(user.lojas) ? user.lojas : [];
+    const lojasUser: string[] = lojasDaSessao(user, b.senha);
     const lojaPermitida = (id: string) => gestao || lojasUser.includes(id);
     const lojasConfig = (config.lojas || []).filter((l: any) => l && !l.interna);
     const por = user.nome || "";

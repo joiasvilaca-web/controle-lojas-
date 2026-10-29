@@ -21,6 +21,13 @@ function sessaoValida(u: any, senha: string): boolean {
   if (u.senha === senha && (!u.sessaoExpiraEm || Number(u.sessaoExpiraEm) > agora)) return true;
   return (Array.isArray(u.sessoes) ? u.sessoes : []).some((s: any) => s && s.token === senha && (!s.exp || Number(s.exp) > agora));
 }
+// db-gateway v51: a sessão pode ter uma loja extra autorizada pela gerência (users[].sessoes[].lojaExtra)
+function lojasDaSessao(u: any, token: string): string[] {
+  const base: string[] = Array.isArray(u?.lojas) ? u.lojas.map(String) : [];
+  const s = (Array.isArray(u?.sessoes) ? u.sessoes : []).find((x: any) => x && x.token === token);
+  const e = s && s.lojaExtra;
+  return e && e.id && Number(e.ate) > Date.now() && !base.includes(String(e.id)) ? [...base, String(e.id)] : base;
+}
 const texto = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const dataOk = (v: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null;
 const horaOk = (v: unknown) => /^\d{2}:\d{2}$/.test(String(v || "")) ? String(v) : null;
@@ -46,7 +53,7 @@ Deno.serve(async (req: Request) => {
     const meuId: string = user.funcionarioId || user.id;
     const meuNome = nomeDe(meuId) || user.nome || "";
     const nivel: string = user.nivel || "vendedora";
-    const minhasLojas: string[] = Array.isArray(user.lojas) ? user.lojas : [];
+    const minhasLojas: string[] = lojasDaSessao(user, b.senha);
     const ehDiretoria = nivel === "diretoria";
     const ehGerente = nivel === "gerente";
     const vejoLoja = (lojaId: string | null) => ehDiretoria || (ehGerente && (!minhasLojas.length || (!!lojaId && minhasLojas.includes(lojaId))));

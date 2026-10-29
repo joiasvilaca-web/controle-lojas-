@@ -152,6 +152,13 @@ const PAPEIS = ["atendente", "administrativo", "gerente", "diretoria"];
 // Vilaça: Marechal, JV (João Beraldo), Jardim Norte, Ecommerce · Reforma: Reforma Joias · Oficina e Up Case: nenhuma.
 const BOT_VILACA = "1ad6780b-07c9-468f-ae72-ec65b5e3b4fd", BOT_REFORMA = "2b59b2d8-afd0-40a3-8827-2cc74b9f55fd";
 const LOJA_BOT: Record<string, string> = { loja_mc: BOT_VILACA, loja_jb: BOT_VILACA, loja_jn: BOT_VILACA, loja_ec: BOT_VILACA, loja_rj: BOT_REFORMA };
+// db-gateway v51: a sessão pode ter uma loja extra autorizada pela gerência (users[].sessoes[].lojaExtra)
+function lojasDaSessao(u: any, token: string): string[] {
+  const base: string[] = Array.isArray(u?.lojas) ? u.lojas.map(String) : [];
+  const s = (Array.isArray(u?.sessoes) ? u.sessoes : []).find((x: any) => x && x.token === token);
+  const e = s && s.lojaExtra;
+  return e && e.id && Number(e.ate) > Date.now() && !base.includes(String(e.id)) ? [...base, String(e.id)] : base;
+}
 function botsDasLojas(user: any): string[] | null {
   const lojas: string[] = Array.isArray(user && user.lojas) ? user.lojas.map(String) : [];
   if (!lojas.length) return null; // cadastro sem lojas: comportamento antigo (todas)
@@ -204,7 +211,7 @@ Deno.serve(async (req) => {
     if (!user) return json({ error: "não autorizado" }, 401);
     const pAt = user.permissoes && user.permissoes.atendimento; if (pAt && pAt.ativo === false) return json({ error: "sem permissão para o Atendimento" }, 403);
     // v3: perfil no Atendimento (DP › Perfis de Acesso: permissoes.atendimento.papel/bots) — mesma regra da atendimento-api
-    const pf = perfilAtd(user);
+    const pf = perfilAtd({ ...user, lojas: lojasDaSessao(user, b.senha) }); // v51: inclui a loja extra da sessão
     const gestao = pf.supervisao; const podeAdmin = pf.admin; const adm = pf.papel === "administrativo";
     const okBot = (botId: string | null) => !pf.bots || (!!botId && pf.bots.includes(botId));
     const filtrarBots = (q: any, col = "bot_id") => pf.bots ? q.in(col, pf.bots.length ? pf.bots : ["00000000-0000-0000-0000-000000000000"]) : q;
@@ -364,7 +371,7 @@ Deno.serve(async (req) => {
     if (op === "camposPadrao") {
       exigeGestao(); const { data: ex } = await admin.from("atendimento_campos").select("nome, entidade"); const tem = new Set((ex || []).map((x: any) => x.entidade + ":" + x.nome));
       const base: [string, string][] = [["BAIRRO", "texto"], ["CEP", "texto"], ["CIDADE", "texto"], ["CPF", "texto"], ["ESTADO", "texto"], ["NOME COMPLETO", "texto"], ["NÚMERO DO DEDO", "numero"], ["REDE SOCIAL", "texto"], ["RUA", "texto"], ["TIPO DE CLIENTE (0 A 10)", "numero"], ["VENDEDORA", "texto"]];
-      const novos = base.filter(([n]) => !tem.has("contato:" + n)).map(([nome, tipo], i) => ({ entidade: "contato", nome, tipo, ordem: i, nome_integracao: nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") }));
+      const novos = base.filter(([n]) => !tem.has("contato:" + n)).map(([nome, tipo], i) => ({ entidade: "contato", nome, tipo, ordem: i, nome_integracao: nome.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") }));
       if (novos.length) await admin.from("atendimento_campos").insert(novos); return json({ ok: true, criados: novos.length });
     }
     if (op === "camposValores") {

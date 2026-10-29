@@ -40,6 +40,13 @@ function sessaoValida(u: any, senha: string): boolean {
   const lista = Array.isArray(u.sessoes) ? u.sessoes : [];
   return lista.some((s: any) => s && s.token === senha && (!s.exp || Number(s.exp) > agora));
 }
+// db-gateway v51: a sessão pode ter uma loja extra autorizada pela gerência (users[].sessoes[].lojaExtra)
+function lojasDaSessao(u: any, token: string): string[] {
+  const base: string[] = Array.isArray(u?.lojas) ? u.lojas.map(String) : [];
+  const s = (Array.isArray(u?.sessoes) ? u.sessoes : []).find((x: any) => x && x.token === token);
+  const e = s && s.lojaExtra;
+  return e && e.id && Number(e.ate) > Date.now() && !base.includes(String(e.id)) ? [...base, String(e.id)] : base;
+}
 function findUserBySenha(config: any, senha: string): any { return (config.users || []).find((u: any) => sessaoValida(u, senha)) || null; }
 function podeAtender(user: any): boolean { const p = user.permissoes && user.permissoes.atendimento; if (p && typeof p.ativo === "boolean") return p.ativo; return true; }
 function ehGestao(user: any): boolean { return user.nivel === "diretoria" || user.nivel === "gerente"; }
@@ -171,8 +178,9 @@ Deno.serve(async (req: Request) => {
   if (!op) return json({ error: "operação obrigatória" }, 400);
   try {
     const config = await getConfig();
-    const user = findUserBySenha(config, senha);
-    if (!user) return json({ error: "não autorizado" }, 401);
+    const userBase = findUserBySenha(config, senha);
+    if (!userBase) return json({ error: "não autorizado" }, 401);
+    const user = { ...userBase, lojas: lojasDaSessao(userBase, senha) }; // v51: lojas próprias + loja extra da sessão (só em memória)
     if (op === "botsLista") { // DP › Perfis de Acesso: lista de instâncias para marcar por usuário
       const pc = user.permissoes && user.permissoes.config;
       if (user.nivel !== "diretoria" && !(pc && pc.ativo === true)) return json({ error: "só diretoria" }, 403);

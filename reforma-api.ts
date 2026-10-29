@@ -108,6 +108,13 @@ function moduloAtivo(user: any): boolean {
   if (user.nivel === "oficina") return false;
   return true;
 }
+// db-gateway v51: a sessão pode ter uma loja extra autorizada pela gerência (users[].sessoes[].lojaExtra)
+function lojasDaSessao(u: any, token: string): string[] {
+  const base: string[] = Array.isArray(u?.lojas) ? u.lojas.map(String) : [];
+  const s = (Array.isArray(u?.sessoes) ? u.sessoes : []).find((x: any) => x && x.token === token);
+  const e = s && s.lojaExtra;
+  return e && e.id && Number(e.ate) > Date.now() && !base.includes(String(e.id)) ? [...base, String(e.id)] : base;
+}
 function usuarioPublico(u: any) { return { id: u.id, nome: u.nome, nivel: u.nivel, lojas: Array.isArray(u.lojas) ? u.lojas : [] }; }
 function gestaoTotal(u: any) { return u.nivel === "diretoria" || u.nivel === "gerente"; }
 
@@ -546,12 +553,12 @@ Deno.serve(async (req: Request) => {
     const user = (Array.isArray(config.users) ? config.users : []).find((u: any) => sessaoValida(u, senha)) || null;
     if (!user) return json({ error: "Sessão inválida ou expirada." }, 401);
     if (!moduloAtivo(user)) return json({ error: "Sem permissão para o módulo Reforma." }, 403);
-    const por = user.nome; const lojasUser: string[] = Array.isArray(user.lojas) ? user.lojas : [];
+    const por = user.nome; const lojasUser: string[] = lojasDaSessao(user, senha);
     const podeVerLoja = (lojaId: string) => gestaoTotal(user) || !lojasUser.length || lojasUser.includes(lojaId);
 
     if (op === "init") {
       const seg = gestaoTotal(user) ? await loadReformaRow("segredos") : {};
-      return json({ ok: true, user: usuarioPublico(user), lojas: (config.lojas || []).map((l: any) => ({ id: l.id, nome: l.nome, abreviacao: l.abreviacao, cor: l.cor, cep: onlyDigits(l.cep || "") })),
+      return json({ ok: true, user: { ...usuarioPublico(user), lojas: lojasUser }, lojas: (config.lojas || []).map((l: any) => ({ id: l.id, nome: l.nome, abreviacao: l.abreviacao, cor: l.cor, cep: onlyDigits(l.cep || "") })),
         serviceTypes: config.serviceTypes || [], servicos: servicosCfg(rcfg), config: rcfg, frete: fc, lojasPublicas: lojasPublicas(config, rcfg), gestao: gestaoTotal(user),
         whatsappInstancia: instanciaPadrao(config, rcfg), instanciasConhecidas: Object.keys(config.atendimentoInstancias || {}).filter((k) => !k.startsWith("ig_")),
         segredosStatus: { correios: !!(seg.correiosUsuario && seg.correiosCodigoAcesso && seg.correiosCartao), correiosUsuario: seg.correiosUsuario || "", correiosCartao: seg.correiosCartao || "" } });
