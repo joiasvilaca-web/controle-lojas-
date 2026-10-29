@@ -2082,10 +2082,14 @@ async function abrirFuncionarioCompletoModal(funcionario){
         <div class="field"><label>Nível de acesso</label>
           <select id="fc_nivelAcesso" ${souDiretoria?'':'disabled'}>${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
         </div>
-        <div class="field"><label>Lojas liberadas</label>
-          <div class="cargo-checks" id="fc_lojasAcesso">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="fc_loja_acesso" ${d.lojasAcesso.includes(l.id)?'checked':''} ${souDiretoria?'':'disabled'}> ${escapeHtml(l.nome)}</label>`).join('')}</div>
+        <div class="field"><label>Loja de trabalho <span class="muted" style="text-transform:none; font-weight:500;">(a pessoa já entra no sistema nesta loja; para trabalhar em outra, usa o cartão OUTRA LOJA com a senha da gerência)</span></label>
+          <select id="fc_lojaTrabalho" ${souDiretoria?'':'disabled'}>
+            <option value="">${d.lojasAcesso.length>1?'Escolha a loja…':'Nenhuma (sem loja definida)'}</option>
+            ${(config.lojas||[]).map(l=>`<option value="${l.id}" ${d.lojasAcesso.length===1 && d.lojasAcesso[0]===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}
+          </select>
+          ${d.lojasAcesso.length>1 ? `<div style="color:var(--danger); font-size:12.5px; margin-top:4px;">Hoje esta pessoa tem ${d.lojasAcesso.length} lojas liberadas (modelo antigo). Escolha a loja de trabalho — ao salvar, ela fica só com essa.</div>` : ''}
         </div>
-        ${souDiretoria ? `<button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e lojas</button>` : `<p class="muted">Só a diretoria pode alterar nível e lojas.</p>`}
+        ${souDiretoria ? `<button type="button" class="btn btn-accent btn-sm" id="btnSalvarAcesso">💾 Salvar nível e loja</button>` : `<p class="muted">Só a diretoria pode alterar nível e loja.</p>`}
         <hr style="margin:16px 0; border-color:var(--surface-2);">
         <p class="muted">Status: <span class="badge ${statusBadge}">${statusLabel}</span>${(!bloqueado && tentativas>0) ? ` <span class="muted">(${tentativas} tentativa${tentativas===1?'':'s'} errada${tentativas===1?'':'s'} desde o último login)</span>` : ''}</p>
         ${bloqueado ? (souDiretoria
@@ -2109,20 +2113,19 @@ async function abrirFuncionarioCompletoModal(funcionario){
         <button type="button" class="btn btn-ghost btn-sm" id="btnExcluirFuncionario" style="color:var(--danger);">🗑️ Excluir cadastro</button>` : ''}
       `;
       document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
-      document.querySelectorAll('.fc_loja_acesso').forEach(chk=>{
-        chk.addEventListener('change', ()=>{
-          d.lojasAcesso = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
-        });
-      });
+      const selLojaTrab = document.getElementById('fc_lojaTrabalho');
+      if(selLojaTrab) selLojaTrab.addEventListener('change', ()=>{ d.lojasAcesso = selLojaTrab.value ? [selLojaTrab.value] : []; });
       const btnSalvarAcesso = document.getElementById('btnSalvarAcesso');
       if(btnSalvarAcesso) btnSalvarAcesso.addEventListener('click', async ()=>{
         // Lê direto do DOM no momento do clique — evita depender só do estado acumulado
         // pelos listeners de 'change', que pode ficar dessincronizado em alguns casos.
         const nivelParaSalvar = document.getElementById('fc_nivelAcesso').value;
-        const lojasParaSalvar = Array.from(document.querySelectorAll('.fc_loja_acesso:checked')).map(c=>c.value);
+        const lojaTrab = document.getElementById('fc_lojaTrabalho').value;
+        const lojasParaSalvar = lojaTrab ? [lojaTrab] : [];
+        if(d.lojasAcesso.length>1 && !lojaTrab){ showToast('Escolha a loja de trabalho desta pessoa.'); return; }
         btnSalvarAcesso.disabled = true; btnSalvarAcesso.textContent = 'Salvando...';
         const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: nivelParaSalvar, lojas: lojasParaSalvar });
-        btnSalvarAcesso.disabled = false; btnSalvarAcesso.textContent = '💾 Salvar nível e lojas';
+        btnSalvarAcesso.disabled = false; btnSalvarAcesso.textContent = '💾 Salvar nível e loja';
         if(r && r.ok){
           d.nivelAcesso = nivelParaSalvar;
           d.lojasAcesso = lojasParaSalvar;

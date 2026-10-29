@@ -302,6 +302,13 @@
   .shell-loja{display:flex; align-items:center; gap:8px; flex-shrink:0; position:relative;}
   .loja-chip{display:inline-flex; align-items:center; gap:6px; padding:4px 10px 4px 8px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.02em; border:1px solid var(--line); background:var(--surface); color:var(--ink); white-space:nowrap;}
   .loja-chip:empty{display:none;}
+  /* loja fixa (sem seletor): só o balão colorido com a sigla */
+  .shell-loja.fixa .loja-chip::after{display:none !important;}
+  .loja-chip.outra{border-color:#B42318; box-shadow:0 0 0 2px rgba(180,35,24,.22); background:#FDECEA; color:#B42318;}
+  /* barra vermelha: operando em OUTRA loja */
+  .barra-outra-loja{display:none; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap; background:#B42318; color:#fff; padding:8px 14px; font-size:13.5px; font-weight:700; text-align:center; flex-shrink:0; position:relative; z-index:30;}
+  .barra-outra-loja.on{display:flex;}
+  .barra-outra-loja button{background:#fff; color:#B42318; border:none; border-radius:6px; padding:5px 12px; font-weight:800; font-size:12.5px; cursor:pointer;}
   .loja-chip .dot{width:10px; height:10px; border-radius:50%; flex-shrink:0; box-shadow:0 0 0 2px rgba(0,0,0,.04);}
   .loja-select-top{
     font-size:13px; font-weight:600; padding:7px 30px 7px 10px; border-radius:10px; border:1px solid var(--line);
@@ -605,12 +612,13 @@
     </div>
   </aside>
   <div class="shell-main">
+    <div class="barra-outra-loja" id="barraOutraLoja" role="alert"><span id="barraOutraLojaTxt"></span><button type="button" id="btnVoltarMinhaLoja">Voltar para minha loja</button></div>
     <header class="shell-header" id="mobileTopbar">
       <button type="button" class="hamburger-btn" id="btnToggleSidebar" aria-label="Abrir menu"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg></button>
       <button type="button" class="shell-voltar" id="shellVoltar" data-voltar-shell="1" style="display:none;" aria-label="Voltar"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg><span class="txt">Voltar</span></button>
       <nav class="shell-breadcrumb" id="shellBreadcrumb" aria-label="Você está em"></nav>
       <span id="mobileTopbarTitle" hidden>Gestão e Controle</span>
-      <div class="shell-loja" title="Loja selecionada">
+      <div class="shell-loja" id="shellLojaBox" title="Loja selecionada">
         <span class="loja-chip" id="shellLojaChip"></span>
         <select id="shellLojaSelect" class="loja-select-top" aria-label="Loja"></select>
       </div>
@@ -952,12 +960,22 @@ let moduloAtual = null;
 let lojaAtual = null; // id da loja selecionada (ex: 'loja_mc') — null = ainda não escolhida
 const iframesCriados = {};
 
-/* A diretoria sempre enxerga TODAS as lojas cadastradas, mesmo as que foram
- * criadas depois do acesso dela já existir — não fica presa à lista antiga
- * salva em currentUser.lojas. Os demais níveis usam só o que foi liberado. */
+/* Cada pessoa entra na(s) loja(s) configurada(s) para ela no DP (currentUser.lojas) — nem a
+ * diretoria transita mais entre todas as lojas. Para trabalhar em OUTRA loja existe o cartão
+ * "OUTRA LOJA" (pede a senha da gerência e mostra a barra vermelha).
+ * Transição: quem ainda NÃO tem loja definida no DP (só vale para a diretoria) continua
+ * escolhendo entre todas, para ninguém ficar travado até o DP ser configurado. */
+let lojaExtra = null; // id da loja de OUTRA unidade liberada nesta sessão (null = trabalhando na própria)
+const INATIVIDADE_OUTRA_LOJA_MS = 10 * 60 * 1000;
+function lojasPropriasDoUsuario(){
+  const ids = Array.isArray(currentUser && currentUser.lojas) ? currentUser.lojas : [];
+  return ids.filter(id=> (config.lojas||[]).some(l=>l.id===id));
+}
 function lojasPermitidasParaUsuario(){
+  const proprias = lojasPropriasDoUsuario();
+  if(proprias.length) return proprias;
   if(currentUser && currentUser.nivel==='diretoria') return (config.lojas||[]).map(l=>l.id);
-  return Array.isArray(currentUser.lojas) ? currentUser.lojas : [];
+  return [];
 }
 
 function lerLojaSalva(){
@@ -990,6 +1008,19 @@ function renderLojaChip(){
   const cor = info.cor || '#7a5230';
   chip.innerHTML = `<span class="dot" style="background:${escapeHtml(cor)}"></span>${escapeHtml(info.abreviacao || info.nome)}`;
   chip.title = 'Loja atual: ' + (info.nome||'');
+  atualizarBarraOutraLoja();
+}
+/* Barra vermelha no topo enquanto a pessoa opera numa loja que não é a dela. */
+function atualizarBarraOutraLoja(){
+  const bar = document.getElementById('barraOutraLoja'); if(!bar) return;
+  const chip = document.getElementById('shellLojaChip');
+  if(lojaExtra && currentUser){
+    const info = lojaInfo(lojaExtra), casa = lojaInfo(lojasPropriasDoUsuario()[0]);
+    document.getElementById('barraOutraLojaTxt').textContent = `⚠ Você está operando na loja ${info?(info.abreviacao||info.nome):lojaExtra}${casa?` (a sua é ${casa.abreviacao||casa.nome})`:''}. Sem movimento por 10 minutos o sistema desloga.`;
+    bar.classList.add('on'); if(chip) chip.classList.add('outra');
+  }else{
+    bar.classList.remove('on'); if(chip) chip.classList.remove('outra');
+  }
 }
 /* Avisa os módulos já abertos qual é a loja ativa agora — usado pela Etapa 3
  * (Vendas, O.S., Orçamentos, Caixa, Estoque) pra filtrar pela loja selecionada. */
@@ -1013,9 +1044,16 @@ function renderLojaSelect(){
   if(lojasPermitidas.length===0){
     sel.innerHTML = '<option value="">Nenhuma loja liberada</option>';
     sel.style.display = 'none';
+    const cx = document.getElementById('shellLojaBox'); if(cx) cx.classList.add('fixa');
     renderLojaChip();
     return;
   }
+  const caixaLoja = document.getElementById('shellLojaBox');
+  if(lojaExtra || lojasPermitidas.length===1){   // loja fixa: só o balão colorido, sem seletor
+    sel.style.display = 'none'; if(caixaLoja) caixaLoja.classList.add('fixa');
+    renderLojaChip(); return;
+  }
+  if(caixaLoja) caixaLoja.classList.remove('fixa');
   sel.style.display = '';
   sel.innerHTML = lojasPermitidas.map(l=>
     `<option value="${l.id}" ${lojaAtual===l.id?'selected':''}>${escapeHtml(l.abreviacao||l.nome)} — ${escapeHtml(l.nome)}</option>`
@@ -1038,6 +1076,7 @@ document.getElementById('shellLojaSelect').addEventListener('change', (e)=>{
  * direto nela sem mostrar tela. Se a loja salva na sessão anterior ainda é
  * válida pro usuário, reaproveita. Senão, força a tela de seleção. */
 function decidirLojaInicial(){
+  if(lojaExtra && lojaInfo(lojaExtra)){ salvarLojaAtual(lojaExtra); return lojaExtra; }   // sessão já estava em outra loja (recarregou a página)
   const permitidas = lojasPermitidasParaUsuario();
   if(permitidas.length===0){ lojaAtual = null; aplicarCorLoja(); return null; }
   if(permitidas.length===1){ salvarLojaAtual(permitidas[0]); return permitidas[0]; }
@@ -1109,6 +1148,7 @@ function subCaixaPermitidos(){
   if(currentPermissoes['insumos'] && currentPermissoes['insumos'].ativo) out.push('insumos');
   if(currentPermissoes['transferencias'] && currentPermissoes['transferencias'].ativo) out.push('inventario');   // Inventário: mesma permissão de Transferências/reposições
   if(anivPermitido()) out.push('aniv');
+  if(out.length && (config.lojas||[]).filter(l=>!l.interna).length>1) out.push('outraloja');   // cartão de ação: não abre tela
   return out;
 }
 /* Aniversário (com a aba Mala direta) herdou a permissão do antigo Marketing. */
@@ -1191,7 +1231,7 @@ async function doLogin(){
     return;
   }
   __gatewaySenha = r.token;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[] };
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
   salvarSessao();
@@ -1206,7 +1246,7 @@ async function tentarRestaurarSessao(){
   const r = await gatewayValidarSessao(s.senha);
   if(!r || !r.ok){ limparSessao(); return false; }
   __gatewaySenha = s.senha;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[] };
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
   salvarSessao(); // renova a validade
@@ -1226,6 +1266,75 @@ if('serviceWorker' in navigator && navigator.serviceWorker && typeof navigator.s
   });
 }
 
+/* ── OUTRA LOJA ──────────────────────────────────────────────────────────────
+   A pessoa trabalha na loja configurada no DP. Para operar noutra, o cartão "OUTRA LOJA" pede a senha
+   da gerência (diretor ou gerente); o servidor libera aquela loja SÓ para esta sessão (db-gateway v51),
+   a barra vermelha avisa e, sem movimento por 10 minutos, o sistema desloga.
+   ──────────────────────────────────────────────────────────────────────────── */
+function abrirOutraLoja(){
+  const proprias = lojasPropriasDoUsuario();
+  const outras = (config.lojas||[]).filter(l=>!l.interna && !proprias.includes(l.id) && l.id!==lojaExtra);
+  if(!outras.length){ showToast('Não há outra loja disponível para você.'); return; }
+  openModal(`
+    <div class="section-label">Trabalhar em outra loja</div>
+    <p class="muted" style="margin:0 0 12px;font-size:13px;">Escolha a loja e peça a <b>senha da gerência</b> (gerente ou diretoria). Enquanto estiver lá, uma barra vermelha fica no topo, o que você lançar vai para a loja escolhida e, se ficar <b>10 minutos sem movimento</b>, o sistema desloga.</p>
+    <div class="field"><label>Loja</label><select id="ol_loja">${outras.map(l=>`<option value="${l.id}">${escapeHtml((l.abreviacao||'')+(l.abreviacao?' — ':'')+l.nome)}</option>`).join('')}</select></div>
+    <div class="field"><label>Senha da gerência</label><input type="password" id="ol_senha" autocomplete="off" placeholder="Senha de um gerente ou da diretoria"></div>
+    <div id="ol_erro" style="color:#B42318;font-weight:600;min-height:20px;font-size:13px;"></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="ol_cancelar" type="button">Cancelar</button><button class="btn btn-accent" id="ol_entrar" type="button">Entrar na loja</button></div>`);
+  const entrar = async ()=>{
+    const erro = document.getElementById('ol_erro'), btn = document.getElementById('ol_entrar');
+    const lojaId = document.getElementById('ol_loja').value, senhaG = document.getElementById('ol_senha').value;
+    if(!senhaG){ erro.textContent = 'Digite a senha da gerência.'; return; }
+    btn.disabled = true; erro.textContent = '';
+    const r = await gatewayCall({ op:'entrarOutraLoja', lojaId, senhaGerencial: senhaG });
+    btn.disabled = false;
+    if(r && r.ok){
+      closeModal();
+      lojaExtra = r.lojaId; currentUser.lojaExtra = r.lojaId;
+      salvarLojaAtual(r.lojaId);
+      registrarAtividade();
+      agendarVerificacaoLojaExtra();
+      showToast('Agora você opera em: ' + ((lojaInfo(r.lojaId)||{}).nome || r.lojaId));
+      return;
+    }
+    if(r && r.bloqueado){ closeModal(); encerrarSessao(r.erro || 'Usuário bloqueado.'); return; }
+    erro.textContent = (r && (r.erro || r.error)) ? (r.erro || r.error) + (r.tentativasRestantes!=null ? ` (restam ${r.tentativasRestantes} tentativas)` : '') : 'Não foi possível confirmar. Tente de novo.';
+    document.getElementById('ol_senha').select();
+  };
+  document.getElementById('ol_entrar').addEventListener('click', entrar);
+  document.getElementById('ol_senha').addEventListener('keydown', e=>{ if(e.key==='Enter') entrar(); });
+  document.getElementById('ol_cancelar').addEventListener('click', closeModal);
+  setTimeout(()=>{ const i = document.getElementById('ol_senha'); if(i) i.focus(); }, 60);
+}
+function aplicarVoltaParaMinhaLoja(aviso){
+  lojaExtra = null; if(currentUser) currentUser.lojaExtra = null;
+  if(__verifLojaExtra){ clearInterval(__verifLojaExtra); __verifLojaExtra = null; }
+  const permitidas = lojasPermitidasParaUsuario();
+  const salva = lerLojaSalva();
+  salvarLojaAtual(permitidas.includes(salva) ? salva : (permitidas[0] || null));
+  atualizarBarraOutraLoja(); registrarAtividade();
+  if(aviso) showToast(aviso);
+}
+async function voltarMinhaLoja(){
+  const r = await gatewayCall({ op:'voltarMinhaLoja' });
+  if(r && r.error){ showToast('Não consegui voltar agora: ' + r.error); return; }
+  aplicarVoltaParaMinhaLoja('Você voltou para a sua loja.');
+}
+document.addEventListener('DOMContentLoaded', ()=>{ const b = document.getElementById('btnVoltarMinhaLoja'); if(b) b.addEventListener('click', voltarMinhaLoja); });
+/* A liberação vale no máximo 4 h no servidor: se vencer (ou a sessão cair) com a tela aberta, volta sozinho. */
+let __verifLojaExtra = null;
+function agendarVerificacaoLojaExtra(){
+  if(__verifLojaExtra){ clearInterval(__verifLojaExtra); __verifLojaExtra = null; }
+  if(!lojaExtra) return;
+  __verifLojaExtra = setInterval(async ()=>{
+    if(!currentUser || !lojaExtra || !__gatewaySenha) return;
+    const r = await gatewayValidarSessao(__gatewaySenha);
+    if(r && r.ok === false){ encerrarSessao('Sessão encerrada. Entre novamente.'); return; }
+    if(r && r.ok && !r.user.lojaExtra && lojaExtra) aplicarVoltaParaMinhaLoja('Sua liberação para a outra loja terminou. Você voltou para a sua loja.');
+  }, 5 * 60 * 1000);
+}
+
 /* ── ENCERRAMENTO DE SESSÃO ──────────────────────────────────────────────────
    Usado pelo botão Sair e pelo encerramento automático por inatividade.
    ──────────────────────────────────────────────────────────────────────────── */
@@ -1234,6 +1343,7 @@ function encerrarSessao(motivo){
   if(__gatewaySenha){ try{ gatewayCall({ op:'logout', senha: __gatewaySenha }); }catch(e){} }
   limparSessao();
   document.getElementById('loginUser').value = '';
+  lojaExtra = null; if(__verifLojaExtra){ clearInterval(__verifLojaExtra); __verifLojaExtra = null; } atualizarBarraOutraLoja();
   currentUser = null; currentPermissoes = null; moduloAtual = null; __gatewaySenha = null; config = null;
   Object.values(iframesCriados).forEach(f=> f.remove());
   for(const k in iframesCriados) delete iframesCriados[k];
@@ -1340,7 +1450,7 @@ async function confirmarTrocaUsuario(){
   for(const k in tabsCache) delete tabsCache[k];
   moduloAtual = null; config = null; __trocaLista = [];
   __gatewaySenha = r.token;
-  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[] };
+  currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
   fecharTrocaUsuario();
   try{ fecharMenuMobile(); }catch(e){}
@@ -1379,15 +1489,16 @@ function registrarAtividade(){
   __avisoVisivel = false;
   if(__idleTimer) clearTimeout(__idleTimer);
   if(__idleAviso) clearTimeout(__idleAviso);
+  const limite = lojaExtra ? INATIVIDADE_OUTRA_LOJA_MS : INATIVIDADE_MS;   // em outra loja: 10 min
   __idleAviso = setTimeout(()=>{
     if(!currentUser) return;
     const bar = document.getElementById('avisoInatividade');
     if(bar){ bar.style.display = 'flex'; __avisoVisivel = true; }
-  }, INATIVIDADE_MS - AVISO_ANTES_MS);
+  }, limite - AVISO_ANTES_MS);
   __idleTimer = setTimeout(()=>{
     if(!currentUser) return;
-    encerrarSessao('Sessão encerrada por inatividade. Entre novamente.');
-  }, INATIVIDADE_MS);
+    encerrarSessao(lojaExtra ? 'Sessão encerrada: 10 minutos sem movimento em outra loja. Entre novamente.' : 'Sessão encerrada por inatividade. Entre novamente.');
+  }, limite);
 }
 document.addEventListener('DOMContentLoaded', ()=>{
   const btn = document.getElementById('btnContinuarSessao');
@@ -1469,7 +1580,9 @@ function enterShell(moduloInicial){
   buildSidebar();
   atualizarAvatar();
   __chatDesde = null; pollChatInternoShell();
+  lojaExtra = (currentUser && currentUser.lojaExtra) || null;
   const decisaoLoja = decidirLojaInicial();
+  agendarVerificacaoLojaExtra();
   // Alerta de contas vencendo hoje (módulo Gastos) — aparece sempre ao logar
   verificarAlertaGastos();
   const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
@@ -1622,6 +1735,7 @@ const GRUPO_CARDS = {
     insumos:    { icone:'package', titulo:'OFICINA',         desc:'Vias de todas as lojas (leitor de código), status Oficina pronto, material usado e insumos' },
     inventario: { icone:'scan',    titulo:'INVENTÁRIO',      desc:'Relatório de estoque por loja e contagem das peças com leitor de código' },
     aniv:       { icone:'megaphone', titulo:'ANIVERSÁRIO',   desc:'Aniversariantes do dia e do mês, e mala direta' },
+    outraloja:  { icone:'store',    titulo:'OUTRA LOJA',      desc:'Trabalhar por um tempo em outra loja (pede a senha da gerência)' },
   }},
   dashboard: { titulo:'PAINEL', sub:'Avisos, indicadores e análises do negócio.', itens:{
     avisos: { icone:'bell',     titulo:'AVISOS', desc:'Pendências de cada módulo que precisam de atenção' },
@@ -1685,6 +1799,7 @@ function abrirGrupoDireto(g){
   selecionarModulo(g);
 }
 function abrirSubDoGrupo(g, s){
+  if(g==='caixa' && s==='outraloja'){ abrirOutraLoja(); return; }
   definirSubDoGrupo(g, s);
   if(g==='config' && s==='cadastro') cadastroAberto = false;
   selecionarModulo(g);
