@@ -17,23 +17,45 @@ const json = (b: unknown, status = 200, cache = 0) =>
 
 const LOJA_REFORMA = "loja_rj";
 
+// Só os campos do produto que os sites usam, e só os produtos publicados (os outros nunca aparecem).
+const CAMPOS_PRODUTO = ["site", "nome", "categoriaId", "subcategoriaId", "estoquePorLoja", "fotos", "precoVenda", "peso", "numerosAro", "codigoInterno", "vendavel"];
+const SELECT_PRODUTO = "id,updated_at," + CAMPOS_PRODUTO.map((c) => `${c}:payload->${c}`).join(",");
+
 let cache: { t: number; config: any; site: any; siteReforma: any; produtos: any[] } | null = null;
-async function carregar(force = false) {
-  if (!force && cache && Date.now() - cache.t < 60_000) return cache;
-  const [{ data: cfg }, { data: sites }] = await Promise.all([
-    sb.from("gestao_config").select("payload").eq("id", "config").single(),
+let recarga: Promise<any> | null = null;
+async function buscarTudo() {
+  const [{ data: cfg, error: e1 }, { data: sites, error: e2 }] = await Promise.all([
+    sb.from("gestao_config").select("lojas:payload->lojas,categorias:payload->produtosOtica->categorias,subcategorias:payload->produtosOtica->subcategorias").eq("id", "config").single(),
     sb.from("site_config").select("id,payload").in("id", ["site", "reforma"]),
   ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
   const todos: any[] = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await sb.from("produtos_estoque").select("id,payload,updated_at").range(from, from + 999);
+    const { data, error } = await sb.from("produtos_estoque").select(SELECT_PRODUTO).eq("payload->site->>publicado", "true").range(from, from + 999);
     if (error) throw error;
-    todos.push(...(data || []));
+    for (const r of data || []) {
+      const payload: any = {};
+      for (const c of CAMPOS_PRODUTO) if (r[c] !== null && r[c] !== undefined) payload[c] = r[c];
+      todos.push({ id: r.id, updated_at: r.updated_at, payload });
+    }
     if (!data || data.length < 1000) break;
   }
   const porId = (id: string) => (sites || []).find((s: any) => s.id === id)?.payload || {};
-  cache = { t: Date.now(), config: cfg?.payload || {}, site: porId("site"), siteReforma: porId("reforma"), produtos: todos };
+  const config = { lojas: cfg?.lojas || [], produtosOtica: { categorias: cfg?.categorias || [], subcategorias: cfg?.subcategorias || [] } };
+  cache = { t: Date.now(), config, site: porId("site"), siteReforma: porId("reforma"), produtos: todos };
   return cache;
+}
+// Cache: até 1 min serve direto; de 1 a 10 min serve o que tem e atualiza em segundo plano;
+// passou disso (ou pedido de compra, force) espera os dados novos.
+async function carregar(force = false) {
+  const idade = cache ? Date.now() - cache.t : Infinity;
+  if (!force && idade < 60_000) return cache!;
+  if (!force && idade < 600_000) {
+    if (!recarga) recarga = buscarTudo().catch((e) => console.error("recarga", e)).finally(() => { recarga = null; });
+    return cache!;
+  }
+  return await buscarTudo();
 }
 // Contexto do canal pedido: "site" aponta para a configuração do site daquele canal.
 async function contexto(body: any, force = false) {

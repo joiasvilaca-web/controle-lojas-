@@ -100,10 +100,19 @@ const rotas = [
   [/^\/historia$/, paginaHistoria],
   [/^\/(garantia|devolucao|pecas-usadas|envio|privacidade)$/, paginaTexto],
 ];
+// endereço oficial de cada página (buscadores); páginas de pedido e busca não têm
+const SITE_URL = "https://controle-lojas-rho.vercel.app";
+function definirCanonico(path) {
+  let c = document.querySelector('link[rel="canonical"]');
+  if (/^\/(finalizar|pedido|busca)/.test(path)) { if (c) c.remove(); return; }
+  if (!c) { c = document.createElement("link"); c.rel = "canonical"; document.head.appendChild(c); }
+  c.href = SITE_URL + (path === "/" ? "/" : path);
+}
 async function navegar(url, empurrar = true) {
   if (empurrar) history.pushState({}, "", url);
   fecharMenus();
   const path = location.pathname.replace(/\/+$/, "") || "/";
+  definirCanonico(path);
   for (const [re, fn] of rotas) {
     const m = path.match(re);
     if (m) {
