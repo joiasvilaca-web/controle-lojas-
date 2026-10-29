@@ -4,8 +4,11 @@
 //   op:'meses'   {} → { data: [{mes, tipo, chave, dados}] de vendedoras e lojas, para os cards de cada mês
 //   op:'listar'  { mes:'YYYY-MM' } → { data: lançamentos atuais, historico: cada salvamento,
 //                fatores: tabelas de fator salvas até esse mês (mais recente primeiro) }
-//   op:'salvar'  { mes, tipo:'vendedora'|'loja'|'fator', chave, dados, novo? } → upsert + histórico
+//   op:'salvar'  { mes, tipo:'vendedora'|'loja'|'fator'|'folha', chave, dados, novo? } → upsert + histórico
 //                fator: chave = loja, dados { faixas:[{valor, percentual}] } — vale do mês em diante
+//                folha: chave = 'GERAL', dados { params, feriados, pessoas, gerentes, fixos } — folha de pagamento do mês
+//                       feriados: null = calendário automático; array de dias do mês = lista editada (DSR)
+//                       pessoas[n].diaEx / diasVT ausentes = automático (dia extra do Jardim Norte / dias de seg. a sáb.)
 //                novo:true recusa (409) se já existe lançamento dessa chave no mês
 //   op:'excluir' { mes, tipo, chave } → apaga o lançamento do mês + registro no histórico
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -16,9 +19,15 @@ const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
 
 const LOJAS = ["MARECHAL", "JOAO BERALDO", "JARDIM NORTE", "REFORMA"];
-const VENDEDORAS = ["PATRICIA", "GISLAINE CRISTINA", "MARIANA", "PAMELA", "GI", "TIRZA", "TANIA", "FLAVIA", "EDILENE", "MEIRIELI", "AMANDA", "CAMILA", "LARYSSA", "PHABRINNE", "FELIPE"];
+// somente nomes cadastrados no app
+const VENDEDORAS = ["PATRICIA", "GISLAYNE", "CRISTINA", "MARIANA", "PAMELA", "TANIA", "FLAVIA", "EDILENE", "AMANDA", "CAMILA", "LARISSA", "VICTORIA"];
 const FATOR_LOJAS = ["MARECHAL", "JOAO BERALDO", "JARDIM NORTE"];
 const CATEGORIAS = ["ALIANCA", "FABRICACAO", "SERVICO", "REPRES_OURO", "REPRES_PRATA", "RELOGIO"];
+// quem entra na folha de pagamento (VICTORIA fora até definir a loja)
+const FOLHA_NOMES = ["PATRICIA", "GISLAYNE", "CRISTINA", "MARIANA", "PAMELA", "CAMILA", "EDILENE", "FLAVIA", "TANIA", "LARISSA", "AMANDA"];
+const FOLHA_GERENTES = ["CAMILA", "LARISSA"];
+const FOLHA_FIXOS = ["AMANDA"];
+const FOLHA_PARAMS = ["minimo", "salario", "vr", "diaExtraJN", "pctComissao", "pctAssid", "pctHextra", "passagem", "passagensDia", "dental"];
 
 function sessaoValida(u: any, senha: string): boolean {
   if (!u || !senha || typeof senha !== "string" || !senha.startsWith("sess_") || u.bloqueado) return false;
@@ -35,6 +44,30 @@ const num = (v: any) => { const n = Number(v); return isFinite(n) ? Math.round(n
 
 function limparDados(tipo: string, d: any) {
   d = d || {};
+  if (tipo === "folha") {
+    const params: any = {};
+    for (const k of FOLHA_PARAMS) params[k] = num((d.params || {})[k]);
+    const feriados = Array.isArray(d.feriados)
+      ? [...new Set(d.feriados.map((x: any) => Math.floor(Number(x))).filter((x: number) => x >= 1 && x <= 31))].sort((a: any, b: any) => a - b).slice(0, 31)
+      : null;
+    const pessoas: any = {};
+    for (const n of FOLHA_NOMES) {
+      const x = (d.pessoas || {})[n]; if (!x) continue;
+      const p: any = { vale: num(x.vale), extra: num(x.extra) };
+      if (x.diaEx != null) p.diaEx = num(x.diaEx);
+      if (x.diasVT != null) p.diasVT = Math.min(31, Math.max(0, Math.floor(Number(x.diasVT)) || 0));
+      pessoas[n] = p;
+    }
+    const gerentes: any = {};
+    for (const n of FOLHA_GERENTES) {
+      const x = (d.gerentes || {})[n]; if (!x) continue;
+      const pct: any = {}; for (const l of LOJAS) pct[l] = Math.min(100, Math.max(0, num((x.pct || {})[l])));
+      gerentes[n] = { fixo: num(x.fixo), pct };
+    }
+    const fixos: any = {};
+    for (const n of FOLHA_FIXOS) if ((d.fixos || {})[n] != null) fixos[n] = num(d.fixos[n]);
+    return { params, feriados, pessoas, gerentes, fixos };
+  }
   if (tipo === "fator") {
     const faixas = (Array.isArray(d.faixas) ? d.faixas : []).slice(0, 30)
       .map((f: any) => ({ valor: num(f && f.valor), percentual: Math.min(100, Math.max(0, num(f && f.percentual))) }))
@@ -52,10 +85,11 @@ function limparDados(tipo: string, d: any) {
   return { bruto: num(d.bruto), devolucao: num(d.devolucao), categorias };
 }
 function chaveInvalida(tipo: string, chave: string): string | null {
-  if (tipo !== "vendedora" && tipo !== "loja" && tipo !== "fator") return "tipo inválido";
+  if (tipo !== "vendedora" && tipo !== "loja" && tipo !== "fator" && tipo !== "folha") return "tipo inválido";
   if (tipo === "fator" && !FATOR_LOJAS.includes(chave)) return "loja sem fator";
   if (tipo === "vendedora" && !VENDEDORAS.includes(chave)) return "vendedora inválida";
   if (tipo === "loja" && !LOJAS.includes(chave)) return "loja inválida";
+  if (tipo === "folha" && chave !== "GERAL") return "chave de folha inválida";
   return null;
 }
 
