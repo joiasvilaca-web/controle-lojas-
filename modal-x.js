@@ -16,7 +16,7 @@
 
   const css = document.createElement('style');
   css.textContent = `
-    .mx-x{position:absolute;z-index:3;width:34px;height:34px;border-radius:50%;border:none;background:var(--t-dark,#1B2733);color:#fff;font-size:22px;line-height:32px;padding:0;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35);display:none;font-family:Arial,sans-serif;}
+    .mx-x{position:absolute;z-index:3;width:34px;height:34px;border-radius:50%;border:none;background:var(--t-dark,#1B2733);color:#fff;outline:1px solid rgba(255,255,255,.28);outline-offset:-1px;font-size:22px;line-height:32px;padding:0;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35);display:none;font-family:Arial,sans-serif;}
     .mx-x:hover{background:#B42318;} .mx-x:focus-visible{outline:3px solid #7CC4DB;outline-offset:2px;}
     .mx-rodape{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}
     .mx-fechar{border:1px solid var(--t-line-strong,#D5DCE3);background:var(--t-surface-2,#F0F3F6);color:var(--t-text,#1B2733);border-radius:8px;padding:9px 16px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;}
