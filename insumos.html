@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Insumos — Gestão e Controle</title>
+<title>Oficina — Gestão e Controle</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="tema.css">
@@ -33,11 +33,43 @@
   .neg{color:var(--danger);font-weight:700;}
   .dot{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 5px;border-radius:999px;color:#fff;font-size:10px;font-weight:800;}
   #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1B2733;color:#fff;padding:10px 18px;border-radius:10px;font-size:13.5px;display:none;z-index:50;}
+  .via-linha{cursor:pointer;} .via-linha:hover{background:var(--surface-2);} .via-linha.sel{background:var(--accent-soft);}
+  .st{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;}
+  .st-aguardando{background:var(--wait-soft);color:var(--wait);} .st-oficina_pronto{background:#E0ECFF;color:#2563EB;} .st-pronto{background:var(--ok-soft);color:var(--ok);} .st-entregue,.st-rascunho{background:var(--surface-2);color:var(--ink-faint);} .st-cancelado{background:var(--danger-soft);color:var(--danger);}
+  .vias-wrap{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:14px;align-items:start;}
+  @media (max-width:900px){ .vias-wrap{grid-template-columns:1fr;} }
+  .leitor{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--accent-soft);border-radius:10px;padding:10px 12px;margin-bottom:12px;}
+  .leitor input{flex:1;min-width:180px;padding:10px 12px;border:2px solid var(--accent);border-radius:8px;font-size:15px;font-weight:700;letter-spacing:.04em;}
+  .obs-o{border-left:3px solid var(--line);padding:4px 8px;margin:6px 0;font-size:12.5px;} .obs-o.of{border-color:#2563EB;}
+  #camBox{display:none;margin-bottom:12px;} #camBox video{width:100%;max-width:420px;border-radius:10px;background:#000;}
   .aviso{background:var(--wait-soft);border:1px solid #f1d39b;border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
 </style>
 </head>
 <body>
 <div id="semAcesso" class="tab-content active"><div class="empty">Carregando…</div></div>
+
+<!-- VIAS -->
+<div class="tab-content" id="tab-vias">
+  <div class="page-head"><div><h1 class="page-title">Vias da Oficina</h1><p class="page-sub">Pedidos de todas as lojas. Leia o código da via (leitor ou câmera) ou clique numa linha para atualizar status, material usado e avisos para a loja.</p></div></div>
+  <div class="leitor">
+    <span style="font-size:20px;">▮▯▮</span>
+    <input id="vLeitor" placeholder="Leia ou digite o código da via (ex.: MC12P) e Enter" autocomplete="off">
+    <button class="btn btn-ghost" id="btnCam" type="button">📷 Câmera</button>
+  </div>
+  <div id="camBox"><video id="camVideo" playsinline muted></video><div class="muted" style="font-size:12px;margin-top:4px;">Aponte para o código de barras da via. <button class="btn btn-ghost btn-sm" id="btnCamFechar" type="button">Fechar câmera</button></div></div>
+  <div class="card"><div class="grid">
+    <div class="field"><label>Status</label><select id="vfStatus"><option value="aguardando,oficina_pronto">Em aberto (aguardando + oficina pronto)</option><option value="aguardando">Aguardando</option><option value="oficina_pronto">Oficina pronto</option><option value="pronto">Pronto (na loja)</option><option value="entregue">Entregue</option><option value="aguardando,oficina_pronto,pronto,entregue,cancelado">Todos</option></select></div>
+    <div class="field"><label>Loja</label><select id="vfLoja"></select></div>
+    <div class="field"><label>Tipo de ordem</label><select id="vfTipo"><option value="">Todos</option></select></div>
+    <div class="field"><label>Agenda de</label><input type="date" id="vfDe"></div>
+    <div class="field"><label>até</label><input type="date" id="vfAte"></div>
+    <div class="field"><label>Buscar</label><input id="vfBusca" placeholder="Via, cliente ou descrição"></div>
+  </div><button class="btn btn-accent" id="btnVias">Filtrar</button></div>
+  <div class="vias-wrap">
+    <div class="card" style="padding:0;overflow-x:auto;" id="viasBox"><div class="empty">Carregando…</div></div>
+    <div class="card" id="viaDet"><div class="empty">Selecione uma via na lista ou leia o código.</div></div>
+  </div>
+</div>
 
 <!-- SALDOS -->
 <div class="tab-content" id="tab-saldos">
@@ -146,6 +178,7 @@ function preencherSelects(){
   const lojaPad = (window.__lojaAtual && window.__lojaAtual.id) || '';
   document.getElementById('lLoja').innerHTML = lojasDonas().map(l=>`<option value="${l.id}" ${l.id===lojaPad?'selected':''}>${escapeHtml(l.nome)}</option>`).join('');
   document.getElementById('mLoja').innerHTML = '<option value="">Todas</option>' + lojasDonas().map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('');
+  document.getElementById('vfLoja').innerHTML = '<option value="">Todas</option>' + lojasDonas().map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('');
 }
 
 /* ---------- Saldos ---------- */
@@ -248,9 +281,132 @@ document.getElementById('btnSalvarIns').addEventListener('click', async ()=>{
   }catch(e){ showToast(e.message, 5000); }
 });
 
+/* ---------- Vias ---------- */
+const NOME_STATUS = { aguardando:'Aguardando', oficina_pronto:'Oficina pronto', pronto:'Pronto', entregue:'Entregue', cancelado:'Cancelado', rascunho:'Rascunho' };
+let viasCache = [], viaSel = null, tiposVias = [];
+const fmtDia = d => d ? d.split('-').reverse().join('/') : '—';
+async function buscarVias(){
+  const box = document.getElementById('viasBox'); box.innerHTML = '<div class="empty">Carregando…</div>';
+  try{
+    const r = await api('vias', { status: document.getElementById('vfStatus').value.split(','), lojaId: document.getElementById('vfLoja').value,
+      serviceTypeId: document.getElementById('vfTipo').value, de: document.getElementById('vfDe').value, ate: document.getElementById('vfAte').value, busca: document.getElementById('vfBusca').value });
+    viasCache = r.vias || [];
+    if(!tiposVias.length && r.tipos){ tiposVias = r.tipos; document.getElementById('vfTipo').innerHTML = '<option value="">Todos</option>' + tiposVias.map(t=>`<option value="${escapeHtml(t.id)}">${escapeHtml(t.nome)}</option>`).join(''); }
+    desenharVias();
+  }catch(e){ box.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; }
+}
+function desenharVias(){
+  const box = document.getElementById('viasBox');
+  if(!viasCache.length){ box.innerHTML = '<div class="empty">Nenhuma via no filtro.</div>'; return; }
+  const hoje = new Date().toISOString().slice(0,10);
+  box.innerHTML = `<div class="muted" style="font-size:12px;padding:8px 10px;">${viasCache.length} via(s)</div><table><thead><tr><th>Via</th><th>Loja</th><th>Tipo</th><th>Agenda</th><th>Status</th></tr></thead><tbody>${viasCache.map(v=>`
+    <tr class="via-linha ${viaSel&&viaSel.id===v.id?'sel':''}" data-via="${escapeHtml(v.id)}">
+      <td><b>${escapeHtml(v.codigoVia||'—')}</b><div class="muted" style="font-size:11.5px;">${escapeHtml(v.cliente||'')}</div></td>
+      <td>${dotLoja(v.lojaId)}</td><td style="font-size:12px;">${escapeHtml(v.serviceTypeName||'')}</td>
+      <td style="white-space:nowrap;${v.data && v.data<hoje && v.status==='aguardando'?'color:var(--danger);font-weight:700;':''}">${fmtDia(v.data)}</td>
+      <td><span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span>${v.localAtual==='fabrica'?'<div class="muted" style="font-size:11px;">🏭 na Oficina</div>':''}</td></tr>`).join('')}</tbody></table>`;
+  box.querySelectorAll('[data-via]').forEach(tr=> tr.addEventListener('click', ()=> abrirVia(viasCache.find(x=>x.id===tr.dataset.via))));
+}
+async function abrirViaPorCodigo(cod){
+  cod = String(cod||'').trim(); if(!cod) return;
+  try{ const r = await api('via', { codigo: cod }); abrirVia(r.via); showToast('Via ' + (r.via.codigoVia||'') + ' aberta.'); }
+  catch(e){ showToast(e.message, 3500); }
+}
+function abrirVia(v){
+  if(!v) return; viaSel = v;
+  const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0) viasCache[i] = v;
+  desenharVias();
+  const det = document.getElementById('viaDet');
+  const podeStatus = ['aguardando','oficina_pronto'].includes(v.status);
+  det.innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+      <div><div style="font-size:18px;font-weight:800;">${escapeHtml(v.codigoVia||'—')} ${dotLoja(v.lojaId)}</div>
+      <div class="muted" style="font-size:12.5px;">${escapeHtml(v.cliente||'')} · ${escapeHtml(v.serviceTypeName||'')} · agenda ${fmtDia(v.data)}${v.vendedora?' · '+escapeHtml(v.vendedora):''}</div></div>
+      <span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span>
+    </div>
+    ${v.descricao?`<div style="margin:10px 0;padding:8px 10px;background:var(--surface-2);border-radius:8px;font-size:13px;white-space:pre-wrap;">${escapeHtml(v.descricao)}</div>`:''}
+    ${v.itens&&v.itens.length?`<div style="font-size:12.5px;margin-bottom:8px;">${v.itens.map(i=>`• ${escapeHtml(i.descricao)} ${i.qtd>1?'×'+i.qtd:''}`).join('<br>')}</div>`:''}
+    ${v.fotos&&v.fotos.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">${v.fotos.map(u=>`<a href="${escapeHtml(u)}" target="_blank" rel="noopener"><img src="${escapeHtml(u)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--line);"></a>`).join('')}</div>`:''}
+    <div class="grid" style="margin-top:6px;">
+      <div class="field"><label>Status</label><select id="dStatus" ${podeStatus?'':'disabled'}><option value="aguardando" ${v.status==='aguardando'?'selected':''}>Aguardando</option><option value="oficina_pronto" ${v.status==='oficina_pronto'?'selected':''}>Oficina pronto</option>${podeStatus?'':`<option selected>${escapeHtml(NOME_STATUS[v.status]||v.status)} (pela loja)</option>`}</select></div>
+      <div class="field"><label>Onde está a peça</label><select id="dLocal"><option value="loja" ${v.localAtual!=='fabrica'?'selected':''}>Na loja</option><option value="fabrica" ${v.localAtual==='fabrica'?'selected':''}>Na Oficina</option></select></div>
+    </div>
+    <div class="field"><label>Observação interna para a loja</label><textarea id="dObs" rows="3" maxlength="1000" placeholder="Ex.: pedra solta, precisa aprovação do cliente; peça pronta, retirar na quinta…"></textarea></div>
+    <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin:-4px 0 10px;"><input type="checkbox" id="dAvisar" checked> Avisar a loja (vendedoras e gerente da loja da via recebem o alerta no Pedido)</label>
+    <button class="btn btn-accent" id="dSalvar">Salvar</button>
+    <div id="dMaterial" style="margin-top:14px;"></div>
+    <div style="margin-top:12px;"><div class="muted" style="font-size:11.5px;font-weight:700;text-transform:uppercase;">Observações da via</div>
+      ${(v.observacoes||[]).length ? v.observacoes.slice().sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0)).map(o=>`<div class="obs-o ${o.origem==='oficina'?'of':''}"><b>${escapeHtml(o.nome||'')}</b> <span class="muted">${o.criadoEm?new Date(o.criadoEm).toLocaleString('pt-BR'):''}</span>${o.avisaLoja?(o.ciente?` <span class="st st-pronto">Ciente: ${escapeHtml(o.cienteNome||'')}</span>`:' <span class="st st-aguardando">Aguardando ciência</span>'):''}<br>${escapeHtml(o.descricao||'')}</div>`).join('') : '<div class="muted" style="font-size:12.5px;">Nenhuma.</div>'}
+    </div>`;
+  document.getElementById('dSalvar').addEventListener('click', async ()=>{
+    const params = { id: v.id, localAtual: document.getElementById('dLocal').value, observacao: document.getElementById('dObs').value, avisarLoja: document.getElementById('dAvisar').checked };
+    if(podeStatus) params.status = document.getElementById('dStatus').value;
+    const b = document.getElementById('dSalvar'); b.disabled = true;
+    try{ const r = await api('viaAtualizar', params); showToast(r.nada ? 'Nada mudou.' : 'Via atualizada: ' + r.mudou.join(', ') + '.'); abrirVia(r.via); }
+    catch(e){ showToast(e.message, 4000); b.disabled = false; }
+  });
+  if(INIT.perm.baixaVia) montarMaterialVia(document.getElementById('dMaterial'), v);
+}
+async function montarMaterialVia(el, v){
+  const ins = (INIT.insumos||[]).filter(i=>i.ativo!==false);
+  const fabricacao = /FABRIC|PERSONALIZ/i.test(v.serviceTypeName||'');
+  el.innerHTML = '<div class="muted" style="font-size:12px;">Carregando material…</div>';
+  let movimentos = [];
+  try{ movimentos = (await api('movimentos', { osId: v.id })).movimentos; }catch(e){ el.innerHTML = `<div class="muted">${escapeHtml(e.message)}</div>`; return; }
+  const ativos = movimentos.filter(m=>m.tipo==='CONSUMO' && !(m.payload&&m.payload.estornado));
+  const total = ativos.reduce((t,m)=> t + (m.valor_unit!=null ? -Number(m.quantidade)*Number(m.valor_unit) : 0), 0);
+  el.innerHTML = `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;">
+    <div class="muted" style="font-size:11.5px;font-weight:700;text-transform:uppercase;">⚖️ Material da Oficina usado nesta via <span style="text-transform:none;font-weight:600;">(sai do saldo de ${escapeHtml(lojaInfo(v.lojaId).nome)} na Oficina)</span></div>
+    ${ativos.length ? ativos.map(m=>{ const i = insInfo(m.insumo_id); return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13px;">
+      <span><b>${escapeHtml(i.nome)}</b> · ${fmtQ(-m.quantidade, i.unidade)} · ${m.finalidade==='fabricacao'?'fabricação':'serviço'}${m.valor_unit!=null?' · '+fmtR(-m.quantidade*m.valor_unit):''} <span class="muted" style="font-size:11.5px;">${escapeHtml((m.payload&&m.payload.por&&m.payload.por.nome)||'')}</span></span>
+      <button class="btn btn-ghost btn-sm" data-insest="${m.id}">Estornar</button></div>`; }).join('') + `<div style="font-size:12.5px;margin-top:6px;">Material total: <b>${fmtR(total)}</b> <span class="muted">— base para separar material e mão de obra na nota.</span></div>`
+      : '<div class="muted" style="font-size:12.5px;margin:4px 0;">Nenhum material lançado.</div>'}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center;">
+      <select id="mvIns" style="flex:2;min-width:150px;padding:7px;border:1px solid var(--line);border-radius:8px;">${ins.map(i=>`<option value="${i.id}">${escapeHtml(i.nome)} (${escapeHtml(i.unidade)})</option>`).join('')}</select>
+      <input id="mvQtd" inputmode="decimal" placeholder="Qtd" style="width:90px;padding:7px;border:1px solid var(--line);border-radius:8px;">
+      <select id="mvFin" style="padding:7px;border:1px solid var(--line);border-radius:8px;"><option value="servico" ${fabricacao?'':'selected'}>Serviço</option><option value="fabricacao" ${fabricacao?'selected':''}>Fabricação</option></select>
+      <button class="btn btn-accent btn-sm" id="mvLancar">Lançar saída</button>
+    </div></div>`;
+  el.querySelectorAll('[data-insest]').forEach(b=> b.addEventListener('click', async ()=>{
+    const motivo = prompt('Motivo do estorno (obrigatório):'); if(!motivo || !motivo.trim()) return;
+    try{ await api('estornar', { id:Number(b.dataset.insest), motivo }); showToast('Material estornado.'); montarMaterialVia(el, v); }catch(e){ showToast(e.message, 4000); }
+  }));
+  document.getElementById('mvLancar').addEventListener('click', async ()=>{
+    const q = numBR(document.getElementById('mvQtd').value);
+    if(!(q>0)){ showToast('Informe a quantidade usada.'); return; }
+    const itens = [{ insumoId: document.getElementById('mvIns').value, quantidade:q, finalidade: document.getElementById('mvFin').value }];
+    try{ await api('consumoVia', { osId: v.id, itens }); }
+    catch(e){
+      if(e.status===409 && e.dados && e.dados.faltas && confirm(e.message + '\n' + e.dados.faltas.join('\n') + '\n\nLançar mesmo assim? O saldo fica negativo até alguém registrar o envio/compra que falta.')){
+        try{ await api('consumoVia', { osId: v.id, itens, forcar:true }); }catch(e2){ showToast(e2.message, 4000); return; }
+      } else { showToast(e.message, 4000); return; }
+    }
+    showToast('Saída de material lançada.'); montarMaterialVia(el, v);
+  });
+}
+document.getElementById('btnVias').addEventListener('click', buscarVias);
+document.getElementById('vLeitor').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); const c = e.target.value; e.target.value=''; abrirViaPorCodigo(c); } });
+// Câmera (BarcodeDetector: Chrome/Android). Leitor USB/Bluetooth funciona como teclado no campo acima.
+let camStream = null, camTimer = null;
+async function fecharCam(){ clearInterval(camTimer); camTimer = null; if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream = null; } document.getElementById('camBox').style.display='none'; }
+document.getElementById('btnCamFechar').addEventListener('click', fecharCam);
+document.getElementById('btnCam').addEventListener('click', async ()=>{
+  if(!('BarcodeDetector' in window)){ showToast('Este navegador não lê código pela câmera. Use o leitor ou digite o código.', 4500); return; }
+  try{
+    const det = new window.BarcodeDetector({ formats:['code_128','code_39','ean_13','qr_code','data_matrix'] });
+    camStream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'environment' } });
+    const video = document.getElementById('camVideo'); video.srcObject = camStream; await video.play();
+    document.getElementById('camBox').style.display = 'block';
+    camTimer = setInterval(async ()=>{
+      try{ const r = await det.detect(video); if(r && r[0] && r[0].rawValue){ const c = r[0].rawValue; await fecharCam(); abrirViaPorCodigo(c); } }catch(e){}
+    }, 400);
+  }catch(e){ showToast('Câmera indisponível: ' + (e.message||'permissão negada'), 4500); fecharCam(); }
+});
+
 /* ---------- Abas / shell ---------- */
 function abasPermitidas(){
   const p = INIT.perm, t = [];
+  if(p.vias) t.push({ id:'vias', label:'Vias' });
   if(p.saldos) t.push({ id:'saldos', label:'Saldos' });
   if(p.movimentos) t.push({ id:'lancar', label:'Lançar' });
   if(p.saldos || p.movimentos) t.push({ id:'movimentos', label:'Movimentos' });
@@ -258,9 +414,11 @@ function abasPermitidas(){
   return t;
 }
 function setTab(id){
+  if(currentTab==='vias' && id!=='vias') fecharCam();
   currentTab = id;
   document.querySelectorAll('.tab-content').forEach(t=> t.classList.toggle('active', t.id==='tab-'+id));
   parent.postMessage({ type:'activeTab', modulo:'insumos', tabId:id }, '*');
+  if(id==='vias') setTimeout(()=>{ try{ document.getElementById('vLeitor').focus(); }catch(e){} }, 100);
 }
 window.addEventListener('message', async ev=>{
   const d = ev.data; if(!d) return;
@@ -269,10 +427,11 @@ window.addEventListener('message', async ev=>{
     try{ INIT = await api('init'); }
     catch(e){ document.getElementById('semAcesso').innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; return; }
     const tabs = abasPermitidas();
-    if(!tabs.length){ document.getElementById('semAcesso').innerHTML = '<div class="empty">Seu acesso não tem nenhuma tela de Insumos liberada. A baixa de material é feita dentro da via (Pedido).</div>'; return; }
+    if(!tabs.length){ document.getElementById('semAcesso').innerHTML = '<div class="empty">Seu acesso não tem nenhuma tela da Oficina liberada.</div>'; return; }
     preencherSelects(); ajustarFormLancar(); renderInsLista();
     parent.postMessage({ type:'tabs', modulo:'insumos', tabs, active:tabs[0].id }, '*');
     setTab(tabs[0].id);
+    if(INIT.perm.vias){ buscarVias(); setTimeout(()=>{ try{ document.getElementById('vLeitor').focus(); }catch(e){} }, 300); }
   }
   if(d.type==='gotoTab' && d.tabId && INIT) setTab(d.tabId);
   if(d.type==='lojaAtual'){ window.__lojaAtual = { id:d.lojaId||null }; if(INIT) preencherSelects(); }

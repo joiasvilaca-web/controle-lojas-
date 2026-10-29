@@ -678,7 +678,8 @@ let currentTab = 'painel';
 let modoNovaOrdem = false;
 let agendaYear, agendaMonth;
 
-const STATUS = { AGUARDANDO:'aguardando', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
+const STATUS = { AGUARDANDO:'aguardando', OFICINA_PRONTO:'oficina_pronto', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
+// oficina_pronto = a Oficina terminou o serviço (card OFICINA); a loja ainda confere e marca Pronto.
 function lojaNomes(){ return (config.lojas||[]).map(l=>l.nome); }
 function lojaAbreviacao(lojaId){
   const l = (config.lojas||[]).find(x=>x.id===lojaId);
@@ -823,7 +824,7 @@ function ajudaPonto(texto){
     '</span></span>';
 }
 function maiusc(s){ return (s==null?'':String(s)).trim().toUpperCase(); }
-function statusLabel(s){ return s==='aguardando'?'Aguardando':s==='pronto'?'Pronto':s==='entregue'?'Entregue':s==='rascunho'?'Rascunho':'Cancelado'; }
+function statusLabel(s){ return s==='aguardando'?'Aguardando':s==='oficina_pronto'?'Oficina pronto':s==='pronto'?'Pronto':s==='entregue'?'Entregue':s==='rascunho'?'Rascunho':'Cancelado'; }
 function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function serviceColor(id){
   const i = config.serviceTypes.findIndex(s=>s.id===id);
@@ -4423,71 +4424,6 @@ function mountLocalizacao(container, order, somenteLeitura){
   draw();
 }
 
-/* ── MATERIAL DA OFICINA (INSUMOS) NA VIA ─────────────────────────────────────
-   Baixa de ouro, prata, cobre e pedras usados nesta via (serviço ou fabricação).
-   Sai do saldo que a loja da via tem em poder da Oficina (Edge Function insumos-api).
-   Só aparece para quem tem "Baixa de material na via" no perfil (DP › perfis › Insumos).
-   ─────────────────────────────────────────────────────────────────────────── */
-let __insumosInit = null;
-async function insumosApi(op, params){
-  const res = await fetch(SUPABASE_URL + '/functions/v1/insumos-api', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op, params: params||{}, senha: __gatewaySenha }) });
-  let j = null; try{ j = await res.json(); }catch(e){}
-  if(!res.ok || !j || j.error){ const err = new Error((j&&j.error) || 'Sem conexão.'); err.status = res.status; err.dados = j; throw err; }
-  return j;
-}
-async function mountInsumosVia(el, order){
-  if(!el || !order) return;
-  try{
-    if(!__insumosInit) __insumosInit = insumosApi('init');
-    const ini = await __insumosInit;
-    if(!ini.perm || !ini.perm.baixaVia) return;
-    const ins = (ini.insumos||[]).filter(i=>i.ativo!==false);
-    const infoIns = id => (ini.insumos||[]).find(i=>i.id===id) || { nome:id, unidade:'' };
-    const fmtQ = n => (Number(n)||0).toLocaleString('pt-BR',{ maximumFractionDigits:4 });
-    const fabricacao = /FABRIC|PERSONALIZ/i.test(order.serviceTypeName||'');
-    async function desenhar(){
-      const { movimentos } = await insumosApi('movimentos', { osId: order.id });
-      const consumos = movimentos.filter(m=>m.tipo==='CONSUMO' || (m.tipo==='ESTORNO' && m.payload && m.payload.tipoOriginal==='CONSUMO'));
-      const ativos = consumos.filter(m=>m.tipo==='CONSUMO' && !(m.payload&&m.payload.estornado));
-      const totalMat = ativos.reduce((t,m)=> t + (m.valor_unit!=null ? -Number(m.quantidade)*Number(m.valor_unit) : 0), 0);
-      const semCusto = ativos.some(m=>m.valor_unit==null);
-      el.innerHTML = `<div class="field" style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;">
-        <label>⚖️ Material da Oficina usado nesta via</label>
-        ${ativos.length ? `<div style="font-size:13px;">${ativos.map(m=>{ const i = infoIns(m.insumo_id); return `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);">
-            <span><b>${escapeHtml(i.nome)}</b> · ${fmtQ(-m.quantidade)} ${escapeHtml(i.unidade)} · ${m.finalidade==='fabricacao'?'fabricação':'serviço'}${m.valor_unit!=null?` · R$ ${(-m.quantidade*m.valor_unit).toFixed(2).replace('.',',')}`:''} <span style="color:var(--muted);font-size:11.5px;">${escapeHtml((m.payload&&m.payload.por&&m.payload.por.nome)||'')}</span></span>
-            <button type="button" class="btn btn-ghost" style="padding:3px 8px;font-size:11.5px;" data-insest="${m.id}">Estornar</button></div>`; }).join('')}
-          <div style="margin-top:6px;font-size:12.5px;">Material total: <b>R$ ${totalMat.toFixed(2).replace('.',',')}</b>${semCusto?' <span style="color:var(--muted);">(há item sem custo de compra lançado)</span>':''} <span style="color:var(--muted);">— base para separar material e mão de obra na nota.</span></div></div>`
-          : '<div style="font-size:12.5px;color:var(--muted);">Nenhum material lançado nesta via.</div>'}
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center;">
-          <select id="insVSel" style="flex:2;min-width:150px;">${ins.map(i=>`<option value="${i.id}">${escapeHtml(i.nome)} (${escapeHtml(i.unidade)})</option>`).join('')}</select>
-          <input id="insVQtd" inputmode="decimal" placeholder="Quantidade" style="width:110px;">
-          <select id="insVFin" style="width:130px;"><option value="servico" ${fabricacao?'':'selected'}>Serviço</option><option value="fabricacao" ${fabricacao?'selected':''}>Fabricação</option></select>
-          <button type="button" class="btn btn-accent" id="insVLancar" style="padding:7px 12px;">Lançar saída</button>
-        </div></div>`;
-      el.querySelectorAll('[data-insest]').forEach(b=> b.addEventListener('click', async ()=>{
-        const motivo = prompt('Motivo do estorno (obrigatório):'); if(!motivo || !motivo.trim()) return;
-        try{ await insumosApi('estornar', { id:Number(b.dataset.insest), motivo }); showToast('Material estornado.'); desenhar(); }catch(e){ showToast(e.message); }
-      }));
-      document.getElementById('insVLancar').addEventListener('click', async ()=>{
-        const q = Number(String(document.getElementById('insVQtd').value||'').replace(',', '.'));
-        if(!(q>0)){ showToast('Informe a quantidade usada.'); return; }
-        const itens = [{ insumoId: document.getElementById('insVSel').value, quantidade:q, finalidade: document.getElementById('insVFin').value }];
-        try{ await insumosApi('consumoVia', { osId: order.id, itens }); }
-        catch(e){
-          if(e.status===409 && e.dados && e.dados.faltas && confirm(e.message + '\n' + e.dados.faltas.join('\n') + '\n\nLançar mesmo assim? O saldo da Oficina fica negativo até alguém registrar o envio/compra que falta.')){
-            try{ await insumosApi('consumoVia', { osId: order.id, itens, forcar:true }); }catch(e2){ showToast(e2.message); return; }
-          } else { showToast(e.message); return; }
-        }
-        showToast('Saída de material lançada.'); desenhar();
-      });
-    }
-    await desenhar();
-  }catch(e){
-    if(e.status===403) return; // acesso sem o módulo Insumos: não mostra nada
-    el.innerHTML = `<div style="font-size:12px;color:var(--muted);">Material da Oficina: ${escapeHtml(e.message)}</div>`;
-  }
-}
-
 function openEditModalOficina(order){
   openModal(`
     <h3>Ordem de ${escapeHtml(order.cliente)}</h3>
@@ -4496,7 +4432,6 @@ function openEditModalOficina(order){
     ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
     <div id="localContainerOficina"></div>
     <div id="fotoContainerEditOficina"></div>
-    <div id="insumosContainer"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="printBtnOficina">🖨️ Imprimir</button>
@@ -4506,7 +4441,6 @@ function openEditModalOficina(order){
   mountLocalizacao(document.getElementById('localContainerOficina'), order, false);
   mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
-  mountInsumosVia(document.getElementById('insumosContainer'), order);
   document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
 }
@@ -4557,6 +4491,7 @@ function openEditModalCompleto(order, opts){
       <select id="e_status">
         <option value="rascunho" ${order.status==='rascunho'?'selected':''}>Rascunho</option>
         <option value="aguardando" ${order.status==='aguardando'?'selected':''}>Aguardando</option>
+        <option value="oficina_pronto" ${order.status==='oficina_pronto'?'selected':''}>Oficina pronto</option>
         <option value="pronto" ${order.status==='pronto'?'selected':''}>Pronto</option>
         <option value="entregue" ${order.status==='entregue'?'selected':''}>Entregue</option>
         <option value="cancelado" ${order.status==='cancelado'?'selected':''}>Cancelado</option>
@@ -4586,7 +4521,6 @@ function openEditModalCompleto(order, opts){
       <textarea id="e_descricao" style="min-height:70px;">${escapeHtml(order.descricao||'')}</textarea>
     </div>
     <div id="fotoContainerEdit"></div>
-    <div id="insumosContainer"></div>
     <div id="obsContainerEdit"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="printBtnCompleto">🖨️ Imprimir</button>
@@ -4595,7 +4529,6 @@ function openEditModalCompleto(order, opts){
     </div>
   `);
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
-  mountInsumosVia(document.getElementById('insumosContainer'), order);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
   const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', _modo:'ok' })) };
@@ -4907,6 +4840,7 @@ function renderPainel(main){
         <option value="">Todos os status (exceto entregues)</option>
         <option value="rascunho">Rascunho</option>
         <option value="aguardando">Aguardando</option>
+        <option value="oficina_pronto">Oficina pronto</option>
         <option value="pronto">Pronto</option>
         <option value="entregue">Entregue</option>
         <option value="cancelado">Cancelado</option>
@@ -5096,6 +5030,7 @@ function renderPainel(main){
               ? `<span class="badge" style="background:${statusBg(o.status)}; color:${statusFg(o.status)};">${statusLabel(o.status)}</span>`
               : `<select class="status-select" data-id="${o.id}">
                   <option value="aguardando" ${o.status==='aguardando'?'selected':''}>Aguardando</option>
+                  <option value="oficina_pronto" ${o.status==='oficina_pronto'?'selected':''}>Oficina pronto</option>
                   <option value="pronto" ${o.status==='pronto'?'selected':''}>Pronto</option>
                   <option value="entregue" ${o.status==='entregue'?'selected':''}>Entregue</option>
                   <option value="cancelado" ${o.status==='cancelado'?'selected':''}>Cancelado</option>
@@ -5137,8 +5072,8 @@ function renderPainel(main){
 function applyStatusClass(sel){
   sel.className = 'status-select status-' + sel.value;
 }
-function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--delivered-soft)' : 'var(--danger-soft)'; }
-function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--delivered)' : 'var(--danger)'; }
+function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : s==='oficina_pronto' ? '#E0ECFF' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--delivered-soft)' : 'var(--danger-soft)'; }
+function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : s==='oficina_pronto' ? '#2563EB' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--delivered)' : 'var(--danger)'; }
 
 /* ============================================================
    AGENDA

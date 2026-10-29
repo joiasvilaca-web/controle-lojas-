@@ -1,4 +1,7 @@
-// insumos-api v1 — insumos da Oficina (ouro, prata, cobre, pedras…).
+// insumos-api v2 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
+// mas só pode mexer em: status (aguardando ⇄ oficina_pronto), local da peça (loja/fabrica) e
+// observações internas (que a loja vê no Pedido; "avisar a loja" notifica quem é da loja da via).
 // A Oficina não tem CNPJ: cada insumo PERTENCE a uma loja (quem comprou, dona fiscal) e fica
 // em um de dois lugares: na própria loja (local "loja") ou em poder da Oficina (local "oficina").
 // Saldo = soma das quantidades por (insumo, loja, local). Tudo é lançamento (Kardex): nada é
@@ -10,7 +13,7 @@
 //   PERDA   −q ; AJUSTE ±q ; ESTORNO = contrário de um lançamento
 // Sessão (sess_…) validada contra gestao_config, igual ao db-gateway.
 // Permissão: módulo "insumos" com abas saldos / movimentos / cadastro / baixaVia.
-// Ops: init, salvarInsumo, saldos, movimentos, lancar, consumoVia, estornar
+// Ops: init, salvarInsumo, saldos, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -25,15 +28,15 @@ function sessaoValida(u: any, senha: string): boolean {
 }
 const texto = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const num = (v: unknown) => { const n = Number(String(v ?? "").replace(",", ".")); return Number.isFinite(n) ? n : NaN; };
-const ABAS = ["saldos", "movimentos", "cadastro", "baixaVia"];
+const ABAS = ["vias", "saldos", "movimentos", "cadastro", "baixaVia"];
 
 /** Mesmo critério do app: o que foi salvo no acesso vale; sem nada salvo, padrão por nível. */
 function permissoes(user: any) {
   const nivel = user.nivel || "vendedora";
   const padrao: Record<string, boolean> =
-    nivel === "diretoria" || nivel === "gerente" ? { saldos: true, movimentos: true, cadastro: true, baixaVia: true }
-    : nivel === "oficina" ? { saldos: true, movimentos: false, cadastro: false, baixaVia: true }
-    : { saldos: false, movimentos: false, cadastro: false, baixaVia: false };
+    nivel === "diretoria" || nivel === "gerente" ? { vias: true, saldos: true, movimentos: true, cadastro: true, baixaVia: true }
+    : nivel === "oficina" ? { vias: true, saldos: true, movimentos: false, cadastro: false, baixaVia: true }
+    : { vias: false, saldos: false, movimentos: false, cadastro: false, baixaVia: false };
   const ativoPadrao = nivel !== "vendedora";
   const m = user.permissoes && user.permissoes.insumos;
   const ativo = m && typeof m.ativo === "boolean" ? m.ativo : ativoPadrao;
@@ -244,6 +247,89 @@ Deno.serve(async (req: Request) => {
       await inserir(rows);
       for (const x of alvo) await admin.from("insumos_movimentos").update({ payload: { ...(x.payload || {}), estornado: true, estornadoPor: quem, estornadoEm: new Date().toISOString() } }).eq("id", x.id);
       return json({ ok: true });
+    }
+
+    /* ---------- VIAS (O.S.) ---------- */
+    const STATUS_VIA = ["rascunho", "aguardando", "oficina_pronto", "pronto", "entregue", "cancelado"];
+    const resumoVia = (r: any) => {
+      const o = r.payload || {};
+      const obs = Array.isArray(o.observacoes) ? o.observacoes : [];
+      return { id: r.id, codigoVia: o.codigoVia || o.via || "", cliente: o.cliente || "", lojaId: o.lojaId || "", serviceTypeId: o.serviceTypeId || "",
+        serviceTypeName: o.serviceTypeName || "", data: o.data || "", status: o.status || "", descricao: o.descricao || "", localAtual: o.localAtual || "loja",
+        criadoEm: o.criadoEm || null, vendedora: o.vendedora || "", itens: (Array.isArray(o.itens) ? o.itens : []).map((i: any) => ({ descricao: i.descricao || i.produtoNome || i.nome || "", qtd: i.qtd || i.quantidade || 1 })),
+        fotos: (Array.isArray(o.fotos) ? o.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8),
+        observacoes: obs.map((x: any) => ({ id: x.id, nome: x.nome, descricao: x.descricao, criadoEm: x.criadoEm, ciente: !!x.ciente, cienteNome: x.cienteNome || null, avisaLoja: (x.notificarPara || []).length > 0, origem: x.origem || "" })),
+        historicoOficina: Array.isArray(o.historicoOficina) ? o.historicoOficina.slice(-20) : [] };
+    };
+    if (op === "vias") {
+      precisa("vias");
+      const status = (Array.isArray(p.status) ? p.status : ["aguardando", "oficina_pronto"]).filter((x: string) => STATUS_VIA.includes(x));
+      let q = admin.from("ordens_servico").select("id,payload").order("updated_at", { ascending: false, nullsFirst: false }).limit(800);
+      if (status.length) q = q.in("payload->>status", status);
+      if (p.lojaId) q = q.eq("payload->>lojaId", texto(p.lojaId, 60));
+      if (p.serviceTypeId) q = q.eq("payload->>serviceTypeId", texto(p.serviceTypeId, 60));
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(p.de || ""))) q = q.gte("payload->>data", p.de);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(p.ate || ""))) q = q.lte("payload->>data", p.ate);
+      const { data, error } = await q;
+      if (error) throw error;
+      let lista = (data || []).map(resumoVia);
+      const busca = texto(p.busca, 60).toUpperCase();
+      if (busca) lista = lista.filter((v: any) => (v.codigoVia + " " + v.cliente + " " + v.descricao).toUpperCase().includes(busca));
+      lista.sort((a: any, b: any) => String(a.data || "9999").localeCompare(String(b.data || "9999")));
+      return json({ ok: true, vias: lista, tipos: (config.tiposServico || []).map((t: any) => ({ id: t.id, nome: t.nome })) });
+    }
+    if (op === "via") {
+      precisa("vias");
+      let row: any = null;
+      if (p.id) { const { data } = await admin.from("ordens_servico").select("id,payload").eq("id", texto(p.id, 80)).maybeSingle(); row = data; }
+      else if (p.codigo) {
+        // leitor: código da via (ex. MC12P) — aceita com ou sem espaços/minúsculas
+        const cod = texto(p.codigo, 40).toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+        if (!cod) return json({ error: "Código vazio." }, 400);
+        const { data } = await admin.from("ordens_servico").select("id,payload").or(`payload->>codigoVia.eq.${cod},payload->>via.eq.${cod},id.eq.${cod}`).limit(1);
+        row = data && data[0];
+      }
+      if (!row) return json({ error: "Via não encontrada." }, 404);
+      return json({ ok: true, via: resumoVia(row) });
+    }
+    if (op === "viaAtualizar") {
+      precisa("vias");
+      const id = texto(p.id, 80);
+      const { data: row } = await admin.from("ordens_servico").select("id,payload").eq("id", id).maybeSingle();
+      if (!row) return json({ error: "Via não encontrada." }, 404);
+      const o = row.payload || {};
+      const agora = Date.now();
+      const hist = Array.isArray(o.historicoOficina) ? o.historicoOficina : [];
+      const mudou: string[] = [];
+      if (p.status !== undefined && p.status !== o.status) {
+        // a Oficina só alterna entre Aguardando e Oficina pronto; pronto/entregue/cancelado são da loja
+        if (!["aguardando", "oficina_pronto"].includes(p.status) || !["aguardando", "oficina_pronto"].includes(o.status))
+          return json({ error: "Pela Oficina, a via só alterna entre Aguardando e Oficina pronto." }, 400);
+        hist.push({ em: agora, por: quem.nome, de: o.status, para: p.status });
+        o.status = p.status; mudou.push("status");
+      }
+      if (p.localAtual !== undefined && ["loja", "fabrica"].includes(p.localAtual) && p.localAtual !== (o.localAtual || "loja")) {
+        o.localAtual = p.localAtual;
+        o.historicoLocal = Array.isArray(o.historicoLocal) ? o.historicoLocal : [];
+        o.historicoLocal.push({ local: p.localAtual, em: agora, por: quem.nome });
+        mudou.push("local");
+      }
+      const txt = texto(p.observacao, 1000).toUpperCase();
+      if (txt) {
+        const lojaVia = o.lojaId;
+        const avisar = p.avisarLoja === true
+          ? (config.users || []).filter((u: any) => !u.bloqueado && (u.nivel === "vendedora" || u.nivel === "gerente") && Array.isArray(u.lojas) && u.lojas.includes(lojaVia)).map((u: any) => u.id)
+          : [];
+        o.observacoes = Array.isArray(o.observacoes) ? o.observacoes : [];
+        o.observacoes.push({ id: "obs_" + crypto.randomUUID().slice(0, 12), nome: quem.nome, descricao: "[OFICINA] " + txt,
+          notificarPara: avisar, criadoEm: agora, ciente: false, cienteNome: null, cienteEm: null, fotos: [], origem: "oficina" });
+        mudou.push(avisar.length ? "observação (loja avisada)" : "observação");
+      }
+      if (!mudou.length) return json({ ok: true, via: resumoVia(row), nada: true });
+      o.historicoOficina = hist.slice(-50);
+      const { error } = await admin.from("ordens_servico").update({ payload: o, updated_at: new Date().toISOString() }).eq("id", id);
+      if (error) throw error;
+      return json({ ok: true, mudou, via: resumoVia({ id, payload: o }) });
     }
 
     return json({ error: "operação desconhecida" }, 400);
