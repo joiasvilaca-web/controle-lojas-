@@ -1,6 +1,8 @@
-// insumos-api v4 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// insumos-api v5 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
 // v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
+// v5: quebra padrão (insumos._config.quebraPadraoPct, padrão 5%) e contagem real da Oficina (insumos_contagens):
+//     saldo bruto × saldo com quebra × real contado → quebra real; "acertar" distribui a diferença entre as lojas (PERDA/AJUSTE proporcional).
 // v4: status enviado_fabrica (via na Oficina, em processo) — é o que a Oficina enxerga por padrão.
 // A Oficina só pode mexer em: status (aguardando/pendencia/oficina_pronto), local da peça (loja/fabrica) e
 // observações internas (que a loja vê no Pedido; "avisar a loja" notifica quem é da loja da via).
@@ -15,7 +17,7 @@
 //   PERDA   −q ; AJUSTE ±q ; ESTORNO = contrário de um lançamento
 // Sessão (sess_…) validada contra gestao_config, igual ao db-gateway.
 // Permissão: módulo "insumos" com abas saldos / movimentos / cadastro / baixaVia.
-// Ops: init, salvarInsumo, saldos, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
+// Ops: init, salvarInsumo, salvarConfig, saldos, contar, contagens, acertarContagem, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -105,6 +107,20 @@ Deno.serve(async (req: Request) => {
       const l = (s[insumoId] && s[insumoId][lojaId]) || { loja: 0, oficina: 0, custoMedio: null };
       return { saldo: Number(l[local] || 0), custoMedio: l.custoMedio };
     };
+    const quebraPadrao = async (): Promise<number> => {
+      const { data } = await admin.from("insumos").select("payload").eq("id", "_config").maybeSingle();
+      const v = Number(data && data.payload && data.payload.quebraPadraoPct);
+      return Number.isFinite(v) && v >= 0 ? v : 5;
+    };
+    /** total em poder da Oficina (todas as lojas) de um insumo */
+    const totalOficina = async (insumoId: string) => {
+      const movs = await todosMovimentos((q) => q.eq("insumo_id", insumoId));
+      const s = montarSaldos(movs)[insumoId] || {};
+      const porLoja: Record<string, number> = {};
+      let total = 0;
+      for (const [lj, v] of Object.entries(s) as any) { porLoja[lj] = Number(v.oficina || 0); total += Number(v.oficina || 0); }
+      return { total: Math.round(total * 10000) / 10000, porLoja };
+    };
     const inserir = async (rows: any[]) => {
       const { data, error } = await admin.from("insumos_movimentos").insert(rows).select("id");
       if (error) throw error;
@@ -112,11 +128,11 @@ Deno.serve(async (req: Request) => {
     };
 
     if (op === "init") {
-      let q = admin.from("insumos").select("id,payload,ativo").order("id");
+      let q = admin.from("insumos").select("id,payload,ativo").neq("id", "_config").order("id");
       if (!perm.cadastro) q = q.eq("ativo", true);
       const { data, error } = await q;
       if (error) throw error;
-      return json({ ok: true, perm, lojas, insumos: (data || []).map((r: any) => ({ id: r.id, ativo: r.ativo, ...r.payload })) });
+      return json({ ok: true, perm, lojas, quebraPadraoPct: await quebraPadrao(), insumos: (data || []).map((r: any) => ({ id: r.id, ativo: r.ativo, ...r.payload })) });
     }
 
     if (op === "salvarInsumo") {
@@ -135,6 +151,71 @@ Deno.serve(async (req: Request) => {
       const { error } = await admin.from("insumos").upsert({ id, payload, ativo: p.ativo !== false, updated_at: new Date().toISOString() });
       if (error) throw error;
       return json({ ok: true, id });
+    }
+
+    if (op === "salvarConfig") {
+      if (!perm.cadastro && !perm.movimentos) throw Object.assign(new Error("Seu acesso não permite alterar a quebra padrão."), { status: 403 });
+      const v = num(p.quebraPadraoPct);
+      if (!(v >= 0 && v <= 100)) return json({ error: "Informe a quebra padrão entre 0 e 100%." }, 400);
+      const { error } = await admin.from("insumos").upsert({ id: "_config", payload: { quebraPadraoPct: v }, ativo: false, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      return json({ ok: true, quebraPadraoPct: v });
+    }
+
+    if (op === "contar") {
+      precisa("saldos");
+      const ins = await insumoExiste(texto(p.insumoId, 60));
+      if (!ins || ins.id === "_config") return json({ error: "Insumo não encontrado." }, 400);
+      if (ins.payload.categoria !== "metal") return json({ error: "A contagem com quebra vale só para metais." }, 400);
+      const real = num(p.quantidade);
+      if (!(real >= 0)) return json({ error: "Informe a quantidade real contada na Oficina." }, 400);
+      const { total } = await totalOficina(ins.id);
+      const pct = await quebraPadrao();
+      const { data, error } = await admin.from("insumos_contagens").insert({ insumo_id: ins.id, quantidade_real: Math.round(real * 10000) / 10000, saldo_sistema: total, quebra_padrao_pct: pct, payload: { por: quem, obs: texto(p.obs, 300) } }).select("id").single();
+      if (error) throw error;
+      return json({ ok: true, id: data.id });
+    }
+
+    if (op === "contagens") {
+      precisa("saldos");
+      let q = admin.from("insumos_contagens").select("*").order("id", { ascending: false }).limit(Math.min(Number(p.limite) || 100, 500));
+      if (p.insumoId) q = q.eq("insumo_id", texto(p.insumoId, 60));
+      const { data, error } = await q;
+      if (error) throw error;
+      return json({ ok: true, contagens: data || [] });
+    }
+
+    if (op === "acertarContagem") {
+      precisa("movimentos");
+      const { data: c } = await admin.from("insumos_contagens").select("*").eq("id", Number(p.id)).maybeSingle();
+      if (!c) return json({ error: "Contagem não encontrada." }, 404);
+      if (c.acertada) return json({ error: "Esta contagem já foi acertada." }, 409);
+      // só vale se for a contagem mais recente do insumo e o saldo do sistema não mudou desde então
+      const { data: mais } = await admin.from("insumos_contagens").select("id").eq("insumo_id", c.insumo_id).gt("id", c.id).limit(1);
+      if (mais && mais.length) return json({ error: "Há uma contagem mais recente deste insumo. Acerte a mais recente." }, 409);
+      const { total, porLoja } = await totalOficina(c.insumo_id);
+      if (Math.abs(total - Number(c.saldo_sistema)) > 0.0001) return json({ error: `O saldo da Oficina mudou desde a contagem (era ${c.saldo_sistema}, agora ${total}). Faça uma nova contagem.` }, 409);
+      const dif = Math.round((Number(c.quantidade_real) - total) * 10000) / 10000; // negativo = quebra
+      if (dif === 0) { await admin.from("insumos_contagens").update({ acertada: true }).eq("id", c.id); return json({ ok: true, nada: true }); }
+      const lojasComSaldo = Object.entries(porLoja).filter(([, v]) => v > 0);
+      let rows: any[] = [];
+      if (dif < 0) {
+        if (total <= 0) return json({ error: "Não há saldo na Oficina para distribuir a quebra." }, 400);
+        let resto = -dif;
+        lojasComSaldo.forEach(([lj, v], i) => {
+          const parte = i === lojasComSaldo.length - 1 ? resto : Math.round((-dif) * (v / total) * 10000) / 10000;
+          resto = Math.round((resto - parte) * 10000) / 10000;
+          if (parte > 0) rows.push({ insumo_id: c.insumo_id, loja_id: lj, local: "oficina", tipo: "PERDA", quantidade: -parte, payload: { por: quem, obs: `Quebra real da contagem #${c.id}`, quebra: true, contagemId: c.id } });
+        });
+      } else {
+        // sobra: soma à loja com mais saldo na Oficina (ou à primeira loja com movimento)
+        const alvo = (lojasComSaldo.sort((a, b) => b[1] - a[1])[0] || Object.entries(porLoja)[0] || [null])[0];
+        if (!alvo) return json({ error: "Sem loja para lançar a sobra." }, 400);
+        rows.push({ insumo_id: c.insumo_id, loja_id: alvo, local: "oficina", tipo: "AJUSTE", quantidade: dif, payload: { por: quem, obs: `Sobra real da contagem #${c.id}`, contagemId: c.id } });
+      }
+      await inserir(rows);
+      await admin.from("insumos_contagens").update({ acertada: true }).eq("id", c.id);
+      return json({ ok: true, lancamentos: rows.length });
     }
 
     if (op === "saldos") {

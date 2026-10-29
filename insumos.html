@@ -73,9 +73,25 @@
 
 <!-- SALDOS -->
 <div class="tab-content" id="tab-saldos">
-  <div class="page-head"><div><h1 class="page-title">Saldos de insumos</h1><p class="page-sub">Cada insumo pertence à loja que comprou (dona fiscal). A coluna Oficina é o que está em poder da Oficina; Total Oficina soma todas as lojas.</p></div>
-    <button class="btn btn-accent" id="btnSaldos">Ver saldos</button></div>
-  <div class="card" style="padding:0;overflow-x:auto;" id="saldosBox"><div class="empty">Clique em "Ver saldos".</div></div>
+  <div class="page-head"><div><h1 class="page-title">Saldos de insumos</h1><p class="page-sub">Cada insumo pertence à loja que comprou. "Oficina geral" soma o que está em poder da Oficina de todas as lojas.</p></div>
+    <button class="btn btn-accent" id="btnSaldos">Atualizar saldos</button></div>
+  <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+    <div class="field" style="margin:0;"><label>Quebra padrão dos metais (%)</label><input id="qbPct" inputmode="decimal" style="width:120px;" placeholder="5"></div>
+    <button class="btn btn-ghost" id="btnQbSalvar" type="button">Salvar quebra</button>
+    <div class="muted" style="font-size:12.5px;max-width:520px;">Perda esperada no processo de fabricação. <b>Saldo com quebra</b> = saldo bruto − quebra padrão. Pode ser alterada quando quiser; cada contagem guarda a quebra vigente na data.</div>
+  </div>
+  <div class="card" style="padding:0;overflow-x:auto;" id="saldosBox"><div class="empty">Carregando…</div></div>
+  <div class="card" id="contagemCard">
+    <div class="section-title" style="font-weight:800;margin-bottom:4px;">Contagem real na Oficina (metais)</div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px;">Pese o que realmente existe na Oficina e lance aqui. O sistema compara com o saldo bruto e com a quebra padrão e mostra a quebra real.</div>
+    <div class="grid">
+      <div class="field"><label>Metal</label><select id="ctIns"></select></div>
+      <div class="field"><label>Quantidade real contada (g)</label><input id="ctQtd" inputmode="decimal" placeholder="0,000"></div>
+      <div class="field"><label>Observação</label><input id="ctObs" maxlength="300"></div>
+    </div>
+    <button class="btn btn-accent" id="btnContar">Registrar contagem</button>
+    <div id="contagemBox" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
 </div>
 
 <!-- LANÇAR -->
@@ -182,21 +198,74 @@ function preencherSelects(){
 }
 
 /* ---------- Saldos ---------- */
-document.getElementById('btnSaldos').addEventListener('click', async ()=>{
+let quebraPct = 5, saldosAtuais = {};
+const metais = () => (INIT.insumos||[]).filter(i=>i.categoria==='metal' && i.ativo!==false);
+function totOficinaDe(id){ const s = saldosAtuais[id] || {}; return Object.values(s).reduce((t,x)=>t+(Number(x.oficina)||0),0); }
+async function carregarSaldos(){
   const box = document.getElementById('saldosBox'); box.innerHTML = '<div class="empty">Carregando…</div>';
   try{
-    const { saldos } = await api('saldos');
+    const { saldos } = await api('saldos'); saldosAtuais = saldos;
     const lojas = lojasDonas();
     const linhas = (INIT.insumos||[]).filter(i=> i.ativo!==false || saldos[i.id]).map(i=>{
       const s = saldos[i.id] || {};
-      let totOf = 0, totLoja = 0;
-      const cels = lojas.map(l=>{ const x = s[l.id] || { loja:0, oficina:0 }; totOf += x.oficina; totLoja += x.loja;
+      const totOf = totOficinaDe(i.id);
+      const ehMetal = i.categoria==='metal';
+      const comQuebra = ehMetal ? totOf * (1 - quebraPct/100) : null;
+      const cels = lojas.map(l=>{ const x = s[l.id] || { loja:0, oficina:0 };
         return `<td class="num ${x.oficina<0?'neg':''}">${x.oficina?fmtQ(x.oficina):'—'}</td><td class="num ${x.loja<0?'neg':''}" style="color:var(--ink-faint)">${x.loja?fmtQ(x.loja):'—'}</td>`; }).join('');
-      return `<tr><td><b>${escapeHtml(i.nome)}</b> <span class="muted">(${escapeHtml(i.unidade)})</span></td><td class="num ${totOf<0?'neg':''}" style="font-weight:800;">${fmtQ(totOf)}</td>${cels}</tr>`;
+      return `<tr><td><b>${escapeHtml(i.nome)}</b> <span class="muted">(${escapeHtml(i.unidade)})</span></td>
+        <td class="num ${totOf<0?'neg':''}" style="font-weight:800;">${fmtQ(totOf)}</td>
+        <td class="num" style="font-weight:800;color:var(--accent);">${ehMetal ? fmtQ(comQuebra) : '—'}</td>${cels}</tr>`;
     }).join('');
-    box.innerHTML = `<table><thead><tr><th>Insumo</th><th class="num">Total Oficina</th>${lojas.map(l=>`<th class="num" colspan="2">${dotLoja(l.id)} Oficina · Loja</th>`).join('')}</tr></thead><tbody>${linhas || '<tr><td colspan="99" class="empty">Nenhum insumo.</td></tr>'}</tbody></table>`;
+    box.innerHTML = `<table><thead><tr><th>Insumo</th><th class="num">Oficina geral<br><span class="muted" style="text-transform:none;font-weight:600;">saldo bruto</span></th><th class="num">Oficina geral<br><span class="muted" style="text-transform:none;font-weight:600;">com quebra de ${fmtQ(quebraPct)}%</span></th>${lojas.map(l=>`<th class="num" colspan="2">${dotLoja(l.id)} Oficina · Loja</th>`).join('')}</tr></thead><tbody>${linhas || '<tr><td colspan="99" class="empty">Nenhum insumo.</td></tr>'}</tbody></table>`;
   }catch(e){ box.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; }
+}
+document.getElementById('btnSaldos').addEventListener('click', ()=>{ carregarSaldos(); carregarContagens(); });
+document.getElementById('btnQbSalvar').addEventListener('click', async ()=>{
+  const v = numBR(document.getElementById('qbPct').value);
+  if(!(v>=0 && v<=100)){ showToast('Informe a quebra entre 0 e 100%.'); return; }
+  try{ const r = await api('salvarConfig', { quebraPadraoPct: v }); quebraPct = r.quebraPadraoPct; INIT.quebraPadraoPct = quebraPct; showToast('Quebra padrão salva: ' + fmtQ(quebraPct) + '%.'); carregarSaldos(); }
+  catch(e){ showToast(e.message, 4500); }
 });
+function prepararSaldos(){
+  quebraPct = Number(INIT.quebraPadraoPct); if(!isFinite(quebraPct)) quebraPct = 5;
+  const q = document.getElementById('qbPct'); q.value = String(quebraPct).replace('.', ',');
+  const pode = INIT.perm.cadastro || INIT.perm.movimentos;
+  q.disabled = !pode; document.getElementById('btnQbSalvar').style.display = pode ? '' : 'none';
+  document.getElementById('ctIns').innerHTML = metais().map(i=>`<option value="${i.id}">${escapeHtml(i.nome)}</option>`).join('');
+}
+/* ---------- Contagem real × quebra ---------- */
+document.getElementById('btnContar').addEventListener('click', async ()=>{
+  const q = numBR(document.getElementById('ctQtd').value);
+  if(!(q>=0)){ showToast('Informe a quantidade real contada.'); return; }
+  const btn = document.getElementById('btnContar'); btn.disabled = true;
+  try{ await api('contar', { insumoId: document.getElementById('ctIns').value, quantidade:q, obs: document.getElementById('ctObs').value }); showToast('Contagem registrada.'); document.getElementById('ctQtd').value=''; document.getElementById('ctObs').value=''; carregarContagens(); }
+  catch(e){ showToast(e.message, 4500); }
+  finally{ btn.disabled = false; }
+});
+async function carregarContagens(){
+  const box = document.getElementById('contagemBox');
+  try{
+    const { contagens } = await api('contagens', { limite: 60 });
+    if(!contagens.length){ box.innerHTML = '<div class="muted" style="font-size:13px;">Nenhuma contagem registrada ainda.</div>'; return; }
+    const ultima = {}; contagens.forEach(c=>{ if(!ultima[c.insumo_id]) ultima[c.insumo_id] = c.id; });
+    box.innerHTML = `<table><thead><tr><th>Data</th><th>Metal</th><th class="num">Saldo bruto</th><th class="num">Esperado c/ quebra padrão</th><th class="num">Real contado</th><th class="num">Quebra real</th><th class="num">Quebra padrão</th><th>Resultado</th><th></th></tr></thead><tbody>${contagens.map(c=>{
+      const i = insInfo(c.insumo_id), bruto = Number(c.saldo_sistema), real = Number(c.quantidade_real), pct = Number(c.quebra_padrao_pct);
+      const esperado = bruto*(1-pct/100), qReal = bruto-real, qRealPct = bruto>0 ? qReal/bruto*100 : 0, qPad = bruto*pct/100, dif = qReal-qPad;
+      const ok = dif <= 0.0001;
+      const res = bruto<=0 ? '<span class="muted">Sem saldo no sistema</span>' : ok ? `<span class="st st-pronto">Dentro do padrão</span><div class="muted" style="font-size:11.5px;">${fmtQ(-dif, 'g')} a menos que o padrão</div>` : `<span class="st st-cancelado">Acima do padrão</span><div class="neg" style="font-size:11.5px;">${fmtQ(dif, 'g')} a mais que o padrão</div>`;
+      return `<tr><td style="white-space:nowrap;">${fmtData(c.created_at)}<div class="muted" style="font-size:11px;">${escapeHtml((c.payload&&c.payload.por&&c.payload.por.nome)||'')}</div></td><td>${escapeHtml(i.nome)}</td>
+        <td class="num">${fmtQ(bruto, i.unidade)}</td><td class="num">${fmtQ(esperado, i.unidade)}</td><td class="num"><b>${fmtQ(real, i.unidade)}</b></td>
+        <td class="num ${qReal>0?'neg':''}"><b>${fmtQ(qReal, i.unidade)}</b><div class="muted" style="font-size:11.5px;">${fmtQ(qRealPct)}%</div></td>
+        <td class="num">${fmtQ(qPad, i.unidade)}<div class="muted" style="font-size:11.5px;">${fmtQ(pct)}%</div></td><td>${res}</td>
+        <td>${c.acertada ? '<span class="muted" style="font-size:11.5px;">Saldo acertado</span>' : (INIT.perm.movimentos && ultima[c.insumo_id]===c.id ? `<button class="btn btn-ghost btn-sm" data-acertar="${c.id}" title="Ajusta o saldo da Oficina para o valor real, distribuindo a diferença entre as lojas">Acertar saldos</button>` : '')}</td></tr>`; }).join('')}</tbody></table>`;
+    box.querySelectorAll('[data-acertar]').forEach(b=> b.addEventListener('click', async ()=>{
+      if(!confirm('Acertar o saldo da Oficina para o valor real contado? A quebra (ou sobra) será lançada como perda/ajuste, dividida entre as lojas na proporção do saldo de cada uma.')) return;
+      try{ const r = await api('acertarContagem', { id:Number(b.dataset.acertar) }); showToast(r.nada ? 'Sem diferença para acertar.' : 'Saldos acertados.'); carregarSaldos(); carregarContagens(); }
+      catch(e){ showToast(e.message, 5000); }
+    }));
+  }catch(e){ box.innerHTML = `<div class="muted">${escapeHtml(e.message)}</div>`; }
+}
 
 /* ---------- Lançar ---------- */
 function ajustarFormLancar(){
@@ -441,9 +510,10 @@ window.addEventListener('message', async ev=>{
     catch(e){ document.getElementById('semAcesso').innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; return; }
     const tabs = abasPermitidas();
     if(!tabs.length){ document.getElementById('semAcesso').innerHTML = '<div class="empty">Seu acesso não tem nenhuma tela da Oficina liberada.</div>'; return; }
-    preencherSelects(); ajustarFormLancar(); renderInsLista();
+    preencherSelects(); prepararSaldos(); ajustarFormLancar(); renderInsLista();
     parent.postMessage({ type:'tabs', modulo:'insumos', tabs, active:tabs[0].id }, '*');
     setTab(tabs[0].id);
+    if(INIT.perm.saldos){ carregarSaldos(); carregarContagens(); }
     if(INIT.perm.vias){ buscarVias(); setTimeout(()=>{ try{ document.getElementById('vLeitor').focus(); }catch(e){} }, 300); }
   }
   if(d.type==='gotoTab' && d.tabId && INIT) setTab(d.tabId);
