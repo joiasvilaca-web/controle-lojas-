@@ -1219,6 +1219,8 @@ function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'
 function nomeLojaPorId(id){ const l=(config.lojas||[]).find(x=>x.id===id); return l?(l.abreviacao||l.nome):id; }
 function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='gerente'?'Gerente':n==='oficina'?'Oficina':n==='vendedora'?'Vendedora':'Personalizado'; }
 /** Diretoria/gerente podem editar QUALQUER funcionário. Vendedora/oficina só podem editar o PRÓPRIO perfil (podem ver todos os outros, só leitura). */
+/** Vendedora/oficina (nível base da função): só o PRÓPRIO DP — Funcionários (só a ficha dela), Pagamentos, Férias, Advertências e Atestados. O servidor também filtra os dados. */
+function soProprioDP(){ return !!(currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='oficina')); }
 function podeEditarDP(){ return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente'); }
 function podeEditarFuncionario(funcionario){
   if(podeEditarDP()) return true;
@@ -1459,7 +1461,7 @@ function enterApp(){
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
   buildTabs();
   currentTab = 'funcionarios';
-  if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'dp', tabs: TABS, active: currentTab }, '*');
+  if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'dp', tabs: abasVisiveisDP(), active: currentTab }, '*');
   renderTabs();
   renderView();
 }
@@ -1474,8 +1476,14 @@ const TABS = [
   { id:'enviarLink', label:'Enviar link de cadastro', icon:'enviar', restrito:true },
   { id:'acessos', label:'Funções', icon:'cadeado', soDiretoria:true },
 ];
+function abasVisiveisDP(){
+  const ABAS_PROPRIAS = ['funcionarios','pagamentos','ferias','avisos','atestados'];
+  return soProprioDP()
+    ? TABS.filter(t=> ABAS_PROPRIAS.includes(t.id))
+    : TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : (!t.restrito || podeEditarDP()));
+}
 function buildTabs(){
-  const abasVisiveis = TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : (!t.restrito || podeEditarDP()));
+  const abasVisiveis = abasVisiveisDP();
   const nav = document.getElementById('tabs');
   nav.innerHTML = '';
   abasVisiveis.forEach(t=>{
@@ -1503,6 +1511,7 @@ function renderTabs(){
 function renderView(){
   const main = document.getElementById('mainContent');
   main.innerHTML = '';
+  if(!abasVisiveisDP().some(t=>t.id===currentTab)) currentTab = 'funcionarios';
   if(currentTab==='funcionarios') renderFuncionarios(main);
   else if(currentTab==='vendas') renderVendasDP(main);
   else if(currentTab==='pagamentos') renderRegistros(main, 'pagamento');
@@ -2084,7 +2093,7 @@ function renderFuncionarios(main){
   function draw(){
     const tbody = document.getElementById('tbodyFunc');
     if(!tbody) return;
-    const lista = funcionarios.slice().reverse().filter(f=>
+    const lista = funcionarios.slice().reverse().filter(f=> !soProprioDP() || f.id===currentUser.funcionarioId || f.funcionarioId===currentUser.funcionarioId).filter(f=>
       abaFuncAtiva==='inativos' ? f.status==='desligado' : f.status!=='desligado'
     );
     if(lista.length===0){
@@ -2882,7 +2891,7 @@ function renderRegistros(main, tipo){
     <div class="card filtro-barra">
       <div class="filters" style="margin-bottom:0;">
         <div class="field" style="min-width:240px;"><label for="fFunc">Funcionário</label>
-          <select id="fFunc"><option value="">Todos os funcionários</option>${funcionarios.map(f=>`<option value="${f.funcionarioId||f.id}">${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select>
+          <select id="fFunc" ${soProprioDP()?'disabled':''}><option value="">Todos os funcionários</option>${funcionarios.map(f=>`<option value="${f.funcionarioId||f.id}">${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('')}</select>
         </div>
       </div>
     </div>
@@ -2915,7 +2924,7 @@ function renderRegistros(main, tipo){
     return { texto:'Pendente', classe:'badge-wait' };
   }
   function draw(){
-    const lista = registros.filter(r=>r.tipo===tipo);
+    const lista = registros.filter(r=>r.tipo===tipo && (!soProprioDP() || r.funcionarioId===currentUser.funcionarioId));
     const filtroFunc = document.getElementById('fFunc').value;
     const filtrada = lista.filter(r=> !filtroFunc || r.funcionarioId===filtroFunc).slice().reverse();
     const tbody = document.getElementById('tbodyReg');
