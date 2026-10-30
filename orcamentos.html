@@ -426,7 +426,7 @@ async function gatewayLogin(senhaTentativa){ return gatewayCall({ op:'login', se
 async function gatewaySelectTudo(table){
   const linhas = [];
   for(let pagina=0; pagina<500; pagina++){
-    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 5000 } });
+    const r = await gatewayCall({ op:'selectPage', table, params:{ from: linhas.length, tamanho: 1000 } });   // o servidor (Supabase) devolve no máximo 1000 linhas por chamada: pedir mais fazia o fim da lista sumir
     if(!r || r.error){ console.error('erro lendo '+table, r && r.error); return { data: linhas, error: r && r.error }; }
     const lote = r.data || [];
     linhas.push(...lote);
@@ -468,6 +468,21 @@ const supabaseClient = {
 };
 
 function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+/** Busca de produto nos autocompletes: ignora acento e maiúscula, aceita palavras em qualquer ordem
+ *  (ex.: "alianca 9 f0,3"), procura também no código interno e mostra primeiro quem começa com o texto digitado. */
+function filtrarProdutosBusca(lista, texto){
+  const norm = s=>String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const q = norm(texto).trim();
+  const toks = q.split(/\s+/).filter(Boolean);
+  if(!toks.length) return [];
+  const achados = (lista||[]).filter(p=>{
+    const alvo = norm([p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor].filter(x=>x!=null&&x!=='').join(' '));
+    return toks.every(t=>alvo.includes(t));
+  });
+  achados.sort((a,b)=>{ const na=norm(a.nome), nb=norm(b.nome);
+    return ((nb===q)-(na===q)) || ((nb.startsWith(q))-(na.startsWith(q))) || na.localeCompare(nb,'pt-BR',{numeric:true}); });
+  return achados.slice(0,40);
+}
 function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function fmtMoeda(v){ return (window.Fmt ? Fmt.brl(v) : 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ',')); }
@@ -749,8 +764,14 @@ let clientes = [];
 let produtosEstoque = [];
 async function produtosEstoqueGet(){
   try{
-    const r = await gatewayCall({ op:'selectPage', table:'produtos_estoque', params:{ from:0, tamanho:2000 } });
-    return (r.data||[]).map(row=>row.payload).filter(Boolean);
+    const linhas = [];
+    for(let pg=0; pg<100; pg++){   // o servidor devolve no máximo 1000 linhas por chamada
+      const r = await gatewayCall({ op:'selectPage', table:'produtos_estoque', params:{ from: linhas.length, tamanho: 1000 } });
+      const lote = (r && r.data) || [];
+      linhas.push(...lote);
+      if(!r || r.error || r.fim || lote.length===0) break;
+    }
+    return linhas.map(row=>row.payload).filter(Boolean);
   }catch(e){ return []; }
 }
 async function loadAll(){
@@ -1609,10 +1630,7 @@ function recalcularValorAjustado(it){
           const porCod=vendaveis.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
           if(porCod){ selecionarProduto(i,porCod); fecharDrop(); return; }
         }
-        renderDrop(vendaveis.filter(p=>{
-          const campos=[p.nome,p.codigo,p.codigoBarras,String(p.fator||''),p.fornecedor];
-          return campos.some(c=>c&&String(c).toLowerCase().includes(t));
-        }).slice(0,15));
+        renderDrop(filtrarProdutosBusca(vendaveis, inp.value));
       },120); });
       inp.addEventListener('keydown',e=>{
         const items=drop.querySelectorAll('.prod-ac-item[data-pk]');
