@@ -739,6 +739,7 @@ function rotuloDia(iso){
 
 /* ================= LISTA ================= */
 async function carregarLista(silencioso){
+  if(estado.soInterno){ estado.conversas=[]; renderLista(); return; }   // Oficina: só chat interno e Grupo Vilaça
   const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca, canal: estado.canal || undefined, botId: estado.botId || undefined, departamentoId: estado.depId || undefined });
   if(!r){ if(!silencioso) showToast('Erro ao carregar'); return; }
   if(r.error){
@@ -756,6 +757,7 @@ async function carregarLista(silencioso){
   contadores();
 }
 async function contadores(){
+  if(estado.soInterno) return;
   // Reaproveita a lista já carregada quando ela é exatamente a de "Minhas" ou a da "Fila" (uma chamada a menos a cada ciclo)
   const limpa = !estado.busca && !estado.canal && !estado.botId && !estado.depId && !temFx();
   const agoraC = Date.now(); const reuso = !limpa && contadores._r && (agoraC - contadores._t) < 30000;
@@ -1682,7 +1684,7 @@ const ETAPA_NOME = { novo:'Novo', em_negociacao:'Em negociação', orcamento_env
 const brl = v => (window.Fmt && Fmt.brl) ? Fmt.brl(Number(v)||0) : (Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtData = d => { if(!d) return ''; const x = new Date(d.length===10 ? d+'T12:00:00' : d); return isNaN(x) ? String(d) : x.toLocaleDateString('pt-BR'); };
 const prazoVencido = t => t.status==='aberta' && t.prazo && new Date(t.prazo) < new Date();
-async function contarTarefas(){ const r = await crm({ op:'minhasTarefas' }); if(r && r.ok){ const n = r.data.filter(prazoVencido).length || ''; document.getElementById('n_tarefas').textContent = n; } }
+async function contarTarefas(){ if(estado.soInterno) return; const r = await crm({ op:'minhasTarefas' }); if(r && r.ok){ const n = r.data.filter(prazoVencido).length || ''; document.getElementById('n_tarefas').textContent = n; } }
 let crmFicha = null, crmAba = 'resumo';
 async function modalCRM(aba){
   crmAba = aba || 'resumo';
@@ -1910,6 +1912,7 @@ function usarSugestao(i){
 
 /* ================= STATUS / RESUMO ================= */
 async function carregarStatus(){
+  if(estado.soInterno) return;
   const r = await api({ op:'status' }); if(!r || r.error) return;
   estado.gestao = !!r.gestao; estado.admin = r.admin===undefined ? !!r.gestao : !!r.admin; estado.papel = r.papel || (r.gestao?'gerente':'atendente'); estado.botsPermitidos = r.botsPermitidos||null; estado.equipeAcesso = r.equipeAcesso||[]; estado.meuId = r.meuId; estado.meuNome = r.meuNome; estado.setores = r.setores||[]; estado.respostas = r.respostasRapidas||[]; estado.instancias = r.instancias||{};
   estado.bots = r.bots||[]; estado.departamentos = r.departamentos||[]; estado.atendentes = r.atendentes||[]; estado.funcionarios = r.funcionarios||[]; estado.meuReg = r.meuReg||null;
@@ -1935,6 +1938,7 @@ async function carregarStatus(){
 /* ================= FOTOS DOS CONTATOS ================= */
 let fotosRodando=false;
 async function sincronizarFotos(){
+  if(estado.soInterno) return;
   if(fotosRodando || !__gatewaySenha) return; fotosRodando=true;
   try{
     for(let i=0;i<6;i++){
@@ -2343,6 +2347,13 @@ document.getElementById('btnVoltarLista').addEventListener('click', ()=> documen
 /* pop-up só fecha pelos botões dele (não some ao clicar fora) */
 document.getElementById('zoom').addEventListener('click', ()=> document.getElementById('zoom').style.display='none');
 
+/* Perfil Oficina: só o chat interno e o Grupo Vilaça. Conversas de cliente, Agenda, CRM, painel e administração ficam de fora. */
+function aplicarModoSoInterno(){
+  ['btnAgenda','btnTarefas','btnFunil','btnModelos','btnComentarios','btnFerr','btnPainel','btnConfig','btnNova','btnOnline','filtroBot','filtroDep','filtroCanal','conexao'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display='none'; });
+  const f=document.querySelector('#filtros [data-f="fila"]'); if(f) f.style.display='none';
+  const m=document.querySelector('#filtros [data-f="minhas"]'); if(m) m.textContent='Conversas';
+  estado.filtro='minhas';
+}
 window.addEventListener('message', async ev=>{
   if(!mensagemConfiavel(ev)) return;
   const d = ev.data || {};
@@ -2350,7 +2361,9 @@ window.addEventListener('message', async ev=>{
     currentUser = d.user; __gatewaySenha = currentUser ? currentUser.senha : null; config = d.configCache || {};
     if(!config.funcionarios){ const r = await gateway({ op:'getConfig' }); if(r && r.data) config = r.data; }
     if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'atendimento', tabs:[], active:null }, '*');
-    await Promise.all([ carregarStatus(), carregarLista() ]); renderLista(); iniciarPolling(); sincronizarFotos(); contarTarefas(); pollChat();
+    estado.soInterno = !!(currentUser && currentUser.nivel==='oficina');
+    if(estado.soInterno) aplicarModoSoInterno();
+    await Promise.all([ carregarStatus(), carregarLista() ]); renderLista(); iniciarPolling(); sincronizarFotos(); if(!estado.soInterno) contarTarefas(); pollChat();
   }
 });
 window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'ready', modulo:'atendimento' }, '*'); });
@@ -2419,6 +2432,7 @@ async function retornosCheck(){
   __retVistos = n;
 }
 function extTimers(){
+  if(estado.soInterno) return;
   if(__extTimer) return;
   __extTimer = setInterval(()=>{ if(!__gatewaySenha || document.hidden) return; ext({ op:'tick' }); retornosCheck(); }, 60000);
   setTimeout(()=>{ retornosCheck(); carregarBl(); }, 2500);
