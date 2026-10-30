@@ -1211,6 +1211,12 @@ async function reverterFiadoECreditoOrdem(order, rotulo){
 }
 /** Código (id no cadastro de funcionários) da vendedora escolhida. Vazio se o nome não bater com exatamente um funcionário.
  *  Gravado junto com o nome para o DP ligar a ordem à vendedora sem depender de grafia/apelido. */
+/** Vendedora e gerente lançam sempre em nome de quem está logado (como na loja). Diretoria/oficina escolhem. Vazio = campo livre. */
+function vendedoraTravadaNoLogin(){
+  if(!currentUser || (currentUser.nivel!=='vendedora' && currentUser.nivel!=='gerente')) return '';
+  const f = (config.funcionarios||[]).find(x=>currentUser.funcionarioId && x.id===currentUser.funcionarioId);
+  return f ? nomeExibicaoFuncionario(f) : (currentUser.nome||'');
+}
 function vendedoraIdPorNome(nome){
   const alvo = String(nome||'').trim().toLowerCase();
   if(!alvo) return '';
@@ -1333,6 +1339,10 @@ function abrirExcluirOrdem(order){
     }
   });
 }
+/* ── Solicitações de permissão (pedido fora do padrão → Oficina libera no cartão CÓDIGO) ──
+   Lista em painel_ordens_kv chave 'autorizacoes': [{id, criadoEm, lojaId, solicitante, status: pendente|liberado|recusado|cancelado, motivo, via:{…}, codigo, liberadoPor}] */
+async function autorizacoesGet(){ const l = await storageGet('autorizacoes', true); return Array.isArray(l) ? l : []; }
+async function autorizacoesMut(fn){ const l = await autorizacoesGet(); fn(l); return storageSet('autorizacoes', l.slice(0,300), true); }
 async function saveCodes(){ await storageSet('codes', codes, true); }
 /** Clientes agora vivem numa tabela compartilhada (clientes_cadastro) — usada também
  * por Vendas e Orçamentos, não só pelo O.S. Cada cliente é salvo/excluído individualmente
@@ -3807,7 +3817,7 @@ function renderNovaOrdem(main){
           <input type="hidden" id="f_loja" value="${window.__lojaAtual ? escapeHtml(window.__lojaAtual.id) : ''}">
         </div>
         <div class="field"><label for="f_via">Número da via</label><input id="f_via" placeholder="Gerado automaticamente" readonly></div>
-        <div class="field"><label for="f_vendedora">Vendedora</label><select id="f_vendedora">${funcionarioOptionsHtml('vendedora', currentUser.nivel==='vendedora'?currentUser.nome:'')}</select></div>
+        <div class="field"><label for="f_vendedora">Vendedora</label>${vendedoraTravadaNoLogin() ? `<input id="f_vendedora" value="${escapeHtml(vendedoraTravadaNoLogin())}" readonly title="Preenchido com o seu login">` : `<select id="f_vendedora">${funcionarioOptionsHtml('vendedora', '')}</select>`}</div>
       </div>
 
       <!-- ITENS VENDIDOS -->
@@ -3864,7 +3874,10 @@ function renderNovaOrdem(main){
         <span class="espaco"></span>
         <button class="btn btn-ghost" id="btnSalvarRascunho">Salvar rascunho</button>
         <button class="btn btn-accent" id="btnSalvarOrdem">${ico('check')} Lançar pedido</button>
+        <button class="btn btn-danger" id="btnSolicitarPerm" type="button" style="display:none;">${ico('cadeado')} Solicitar permissão</button>
+        <button class="btn" id="btnTenhoCodigo" type="button" style="display:none;">Tenho o código</button>
       </div>
+      <div id="solicitacaoBox"></div>
     </div>
   `;
 
@@ -3973,26 +3986,81 @@ function renderNovaOrdem(main){
     viaInp.value = `${abrev}-${proximo}`;
   })();
 
+  // ── Fora do padrão: pedido de permissão à Oficina ─────────────────────────────
+  let foraPadrao = false, tenhoCodigo = false, solicitacaoAtual = null, pollSol = null, motivoForaPadrao = '';
+  const btnLancar = document.getElementById('btnSalvarOrdem'), btnSolic = document.getElementById('btnSolicitarPerm'), btnTenho = document.getElementById('btnTenhoCodigo'), solBox = document.getElementById('solicitacaoBox');
+  function atualizarBotoesPermissao(){
+    const liberado = !!(solicitacaoAtual && solicitacaoAtual.status==='liberado');
+    const mostrarLancar = !foraPadrao || tenhoCodigo || liberado;
+    btnLancar.style.display = mostrarLancar ? '' : 'none';
+    const pendente = !!(solicitacaoAtual && solicitacaoAtual.status==='pendente');
+    btnSolic.style.display = (!mostrarLancar && !pendente) ? '' : 'none';
+    btnTenho.style.display = (foraPadrao && !mostrarLancar) ? '' : 'none';
+    codeArea.style.display = (foraPadrao && (tenhoCodigo || liberado)) ? 'block' : 'none';
+    if(!foraPadrao || !solicitacaoAtual){ solBox.innerHTML = ''; return; }
+    if(pendente) solBox.innerHTML = `<div class="slot-banner slot-bad" style="margin-top:10px;"><span class="dot"></span><div><b>Aguardando a Oficina liberar.</b> Os dados da via já foram enviados (${escapeHtml(solicitacaoAtual.via.numeroVia||'')}). Esta tela libera sozinha quando a Oficina aprovar. <button type="button" class="btn btn-sm" id="btnCancelarSol" style="margin-left:8px;">Cancelar solicitação</button></div></div>`;
+    else if(liberado) solBox.innerHTML = `<div class="slot-banner slot-ok" style="margin-top:10px;"><span class="dot"></span><div><b>Liberado por ${escapeHtml(solicitacaoAtual.liberadoPor||'Oficina')}.</b> O código já foi preenchido — pode lançar o pedido.</div></div>`;
+    const bc = document.getElementById('btnCancelarSol');
+    if(bc) bc.onclick = async ()=>{ await autorizacoesMut(l=>{ const r=l.find(x=>x.id===solicitacaoAtual.id); if(r && r.status==='pendente') r.status='cancelado'; }); solicitacaoAtual=null; if(pollSol){clearInterval(pollSol);pollSol=null;} atualizarBotoesPermissao(); showToast('Solicitação cancelada.'); };
+  }
+  function iniciarPollSolicitacao(){
+    if(pollSol) clearInterval(pollSol);
+    pollSol = setInterval(async ()=>{
+      if(!document.getElementById('btnSolicitarPerm')){ clearInterval(pollSol); pollSol=null; return; }   // saiu da tela
+      if(!solicitacaoAtual) return;
+      const l = await autorizacoesGet(); const r = l.find(x=>x.id===solicitacaoAtual.id);
+      if(!r) return;
+      if(r.status!==solicitacaoAtual.status){
+        solicitacaoAtual = r;
+        if(r.status==='liberado'){
+          codes = await storageGet('codes', true) || codes;
+          document.getElementById('f_codigo').value = r.codigo||''; clearInterval(pollSol); pollSol=null; showToast('A Oficina liberou o pedido.');
+        } else if(r.status==='recusado'){ showToast('A Oficina recusou a solicitação' + (r.motivoRecusa?': '+r.motivoRecusa:'.')); solicitacaoAtual=null; clearInterval(pollSol); pollSol=null; }
+        atualizarBotoesPermissao();
+      }
+    }, 6000);
+  }
+  btnTenho.addEventListener('click', ()=>{ tenhoCodigo = true; atualizarBotoesPermissao(); const f=document.getElementById('f_codigo'); if(f) f.focus(); });
+  btnSolic.addEventListener('click', async ()=>{
+    const cli = collectClienteFields(); const sid = servicoSel.value, dt = dataInp.value;
+    const itens = itensOsParaSalvar(tempItensHolder);
+    const faltam = [];
+    if(!cli.cliente) faltam.push('cliente'); if(!cli.telefone) faltam.push('telefone'); if(!itens.length) faltam.push('itens do pedido'); if(!sid) faltam.push('tipo de serviço'); if(!dt) faltam.push('data');
+    if(faltam.length){ showToast('Preencha os dados da via antes de solicitar: ' + faltam.join(', ') + '.'); return; }
+    const st = config.serviceTypes.find(s=>s.id===sid);
+    const req = { id: uid('aut'), criadoEm: Date.now(), lojaId: lojaSel.value, solicitante: currentUser.nome, solicitanteId: currentUser.id||null, status:'pendente', motivo: motivoForaPadrao,
+      via: { numeroVia: viaInp.value.trim(), cliente: cli.cliente, telefone: cli.telefone, vendedora: (document.getElementById('f_vendedora').value||'').trim(), serviceTypeId: sid, servico: st?st.nome:'', dataPedida: dt,
+             descricao: (document.getElementById('f_descricao').value||'').trim(), itens: itens.map((it,i)=>({ nome: nomeItemOs(it,i), quantidade: it.quantidade||1 })), valorTotal: tempPagHolder.valorTotal||0, observacoes: tempObsHolder.observacoes||'' } };
+    btnSolic.disabled = true;
+    const ok = await autorizacoesMut(l=>{ l.unshift(req); });
+    btnSolic.disabled = false;
+    if(!ok){ showToast('Não consegui enviar a solicitação. Tente de novo.'); return; }
+    solicitacaoAtual = req; atualizarBotoesPermissao(); iniciarPollSolicitacao();
+    showToast('Solicitação enviada para a Oficina.');
+  });
+
   function updateBanner(){
     const sid = servicoSel.value;
     const dt = dataInp.value;
     banner.innerHTML = '';
-    codeArea.style.display = 'none';
-    if(!sid || !dt) return;
+    foraPadrao = false; motivoForaPadrao = '';
+    if(!sid || !dt){ atualizarBotoesPermissao(); return; }
     const res = checkSlot(sid, dt, null);
-    if(!res) return;
+    if(!res){ atualizarBotoesPermissao(); return; }
     if(res.ok){
       banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dt)}, dentro do prazo mínimo.</div></div>`;
     } else {
       const motivos = [];
       if(!res.prazoOk) motivos.push('a data está abaixo do prazo mínimo de confecção (' + res.st.prazoMinimoDias + ' dia(s))');
       if(!res.quantidadeOk) motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
-      banner.innerHTML = `<div class="slot-banner slot-bad"><span class="dot"></span><div><b>Fora do padrão:</b> ${motivos.join(' e ')}. O pedido entra como <b>encaixe</b> e precisa do código de autorização da oficina ou da diretoria (digite abaixo).</div></div>`;
-      codeArea.style.display = 'block';
+      motivoForaPadrao = motivos.join(' e ');
+      foraPadrao = true;
+      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Preencha os dados da via e clique em <b>Solicitar permissão</b> — a Oficina libera por aqui. Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
       // Busca os códigos mais atuais (podem ter sido gerados agora mesmo em outro
       // dispositivo/sessão) pra validar em tempo real o que a vendedora digitar.
       storageGet('codes', true).then(c=>{ if(c) codes = c; });
     }
+    atualizarBotoesPermissao();
   }
   // Ao escolher o tipo de ordem, sugere automaticamente a primeira data com vaga
   // livre (respeitando prazo mínimo e quantidade máxima cadastrados em Tipos de
@@ -5180,6 +5248,10 @@ function renderGerarCodigo(main){
         <p class="page-sub">Libera um pedido fora do prazo ou acima do máximo de vagas do dia (encaixe). Cada código vale para um pedido só.</p>
       </div>
     </div>
+    <div class="card" id="cardSolicitacoes">
+      <div class="section-label">Solicitações de autorização <span class="muted" id="solCont"></span></div>
+      <div id="solLista"><div class="empty" style="padding:20px;">Carregando…</div></div>
+    </div>
     <div class="card">
       <div class="section-label">Novo código</div>
       <div class="grid-2">
@@ -5234,6 +5306,63 @@ function renderGerarCodigo(main){
     codes = await storageGet('codes', true) || codes;
     renderCodeHistory();
   })();
+
+  // ── Solicitações de autorização vindas das lojas ──
+  const nomeLojaSol = id => { const l=(config.lojas||[]).find(x=>x.id===id); return l ? (l.abreviacao||l.nome) : (id||'—'); };
+  async function desenharSolicitacoes(){
+    const box = document.getElementById('solLista'); if(!box) return;
+    const lista = await autorizacoesGet();
+    const pend = lista.filter(r=>r.status==='pendente');
+    const rec = lista.filter(r=>r.status!=='pendente').slice(0,8);
+    const cont = document.getElementById('solCont'); if(cont) cont.textContent = pend.length ? `· ${pend.length} aguardando` : '';
+    const linha = (r, hist) => `<div class="code-list-item" style="align-items:center;">
+      <div><b>${escapeHtml(r.via.numeroVia||'—')}</b> · ${escapeHtml(nomeLojaSol(r.lojaId))} · ${escapeHtml(r.via.servico||'')} para ${fmtDate(r.via.dataPedida)}
+        <div class="muted" style="font-size:12.5px;">${escapeHtml(r.solicitante||'')} · ${Fmt.dataHora(r.criadoEm)} · ${escapeHtml(r.motivo||'')}</div></div>
+      ${hist ? `<span class="selo ${r.status==='liberado'?'st-pronto':'st-entregue'}">${r.status==='liberado'?'Liberado'+(r.liberadoPor?' por '+escapeHtml(r.liberadoPor):''):r.status==='recusado'?'Recusado':'Cancelado'}</span>`
+             : `<button class="btn btn-sm btn-accent" data-ver="${r.id}" type="button">Ver via</button>`}</div>`;
+    box.innerHTML = (pend.length ? pend.map(r=>linha(r,false)).join('') : `<div class="empty" style="padding:20px;"><b>Nenhuma solicitação aguardando</b>Quando uma loja pedir permissão para um pedido fora do padrão, ela aparece aqui.</div>`)
+      + (rec.length ? `<div class="muted" style="margin:14px 0 4px;font-size:12px;">Últimas respondidas</div>` + rec.map(r=>linha(r,true)).join('') : '');
+    box.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=> verSolicitacao(pend.find(r=>r.id===b.dataset.ver))));
+  }
+  function verSolicitacao(r){
+    if(!r) return;
+    const v = r.via||{};
+    openModal(`<div class="modal-titulo"><h3>Solicitação de autorização · ${escapeHtml(v.numeroVia||'')}</h3></div>
+      <div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;margin-top:0;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${escapeHtml(r.motivo||'')}</div></div>
+      <div class="grid-2" style="margin-top:12px;">
+        <div><div class="muted" style="font-size:12px;">Loja</div>${escapeHtml(nomeLojaSol(r.lojaId))}</div>
+        <div><div class="muted" style="font-size:12px;">Solicitante</div>${escapeHtml(r.solicitante||'')}</div>
+        <div><div class="muted" style="font-size:12px;">Vendedora</div>${escapeHtml(v.vendedora||'—')}</div>
+        <div><div class="muted" style="font-size:12px;">Cliente</div>${escapeHtml(v.cliente||'—')} ${v.telefone?'· '+escapeHtml(v.telefone):''}</div>
+        <div><div class="muted" style="font-size:12px;">Tipo de serviço</div>${escapeHtml(v.servico||'—')}</div>
+        <div><div class="muted" style="font-size:12px;">Data pedida</div>${fmtDate(v.dataPedida)}</div>
+      </div>
+      <div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Itens</div>${(v.itens||[]).map(i=>`<div>${escapeHtml(String(i.quantidade||1))}× ${escapeHtml(i.nome||'')}</div>`).join('')||'—'}</div>
+      ${v.descricao?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Descrição</div>${escapeHtml(v.descricao)}</div>`:''}
+      ${v.observacoes?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Observações</div>${escapeHtml(v.observacoes)}</div>`:''}
+      <div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Valor total</div>${fmtMoeda(v.valorTotal||0)}</div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="solFechar" type="button">Fechar</button><button class="btn btn-danger" id="solRecusar" type="button">Recusar</button><button class="btn btn-accent" id="solLiberar" type="button">${ico('check')} Liberar</button></div>`);
+    document.getElementById('solFechar').addEventListener('click', closeModal);
+    document.getElementById('solRecusar').addEventListener('click', async ()=>{
+      const mot = (prompt('Motivo da recusa (a loja vê):')||'').trim(); if(mot===''){ return; }
+      await autorizacoesMut(l=>{ const x=l.find(y=>y.id===r.id); if(x && x.status==='pendente'){ x.status='recusado'; x.motivoRecusa=mot; x.recusadoPor=currentUser.nome; x.respondidoEm=Date.now(); } });
+      closeModal(); showToast('Solicitação recusada.'); desenharSolicitacoes();
+    });
+    document.getElementById('solLiberar').addEventListener('click', async ()=>{
+      const b = document.getElementById('solLiberar'); b.disabled = true;
+      const codigo = Array.from({length:6}, ()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
+      const quem = maiusc(currentUser.nome||'');
+      let liberou = false;
+      await autorizacoesMut(l=>{ const x=l.find(y=>y.id===r.id); if(x && x.status==='pendente'){ x.status='liberado'; x.codigo=codigo; x.liberadoPor=quem; x.respondidoEm=Date.now(); liberou=true; } });
+      if(!liberou){ showToast('Esta solicitação já foi respondida.'); closeModal(); desenharSolicitacoes(); return; }
+      codes = await storageGet('codes', true) || codes;
+      codes.unshift({ codigo, autorizadoPor: quem, nivelGerador: currentUser.nivel, geradoPor: currentUser.nome, criadoEm: Date.now(), usado:false, solicitacaoId: r.id });
+      await saveCodes(); renderCodeHistory();
+      closeModal(); showToast('Liberado. A loja já pode lançar o pedido.'); desenharSolicitacoes();
+    });
+  }
+  desenharSolicitacoes();
+  const __tSol = setInterval(()=>{ if(!document.getElementById('solLista')){ clearInterval(__tSol); return; } desenharSolicitacoes(); }, 10000);
 }
 
 /* ============================================================

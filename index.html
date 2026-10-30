@@ -1801,6 +1801,7 @@ function enterShell(moduloInicial){
   agendarVerificacaoLojaExtra();
   // Alerta de contas vencendo hoje (módulo Gastos) — aparece sempre ao logar
   verificarAlertaGastos();
+  iniciarVigiaAutorizacoes();
   const permitidos = SIDEBAR_MODULES.filter(podeVerModulo);
   if(decisaoLoja==='PRECISA_ESCOLHER'){
     renderLojaSelect();
@@ -1977,6 +1978,29 @@ const CFG_CARDS = {
 };
 const GRUPOS_COM_CARDS = ['caixa','dashboard','config'];
 let cadastroAberto = false; // Administração › Cadastro: false = cartões dos cadastros; true = um cadastro aberto
+let __badgeCodigo = 0;      // solicitações de autorização de pedido fora do padrão aguardando a Oficina
+let __timerAutorizacoes = null;
+/* Oficina: balão vermelho no cartão CÓDIGO com as solicitações pendentes (painel_ordens_kv › autorizacoes). */
+async function verificarAutorizacoes(){
+  if(!currentUser || currentUser.nivel!=='oficina' || !currentPermissoes || !currentPermissoes['os'] || !currentPermissoes['os'].ativo) return;
+  try{
+    const r = await gatewayCall({ op:'kvGet', table:'painel_ordens_kv', params:{ key:'autorizacoes' } });
+    const lista = (r && Array.isArray(r.value)) ? r.value : [];
+    const n = lista.filter(x=>x && x.status==='pendente').length;
+    if(n!==__badgeCodigo){
+      const subiu = n > __badgeCodigo; __badgeCodigo = n;
+      if(subiu){ try{ showToast('Nova solicitação de autorização de pedido.'); }catch(e){} }
+      if(moduloAtual==='caixa' && !caixaSubAtual) mostrarGrupoHome('caixa');
+    }
+  }catch(e){}
+}
+function iniciarVigiaAutorizacoes(){
+  if(__timerAutorizacoes){ clearInterval(__timerAutorizacoes); __timerAutorizacoes = null; }
+  __badgeCodigo = 0;
+  if(!currentUser || currentUser.nivel!=='oficina') return;
+  verificarAutorizacoes();
+  __timerAutorizacoes = setInterval(()=>{ if(!currentUser){ clearInterval(__timerAutorizacoes); __timerAutorizacoes=null; return; } if(!document.hidden) verificarAutorizacoes(); }, 20000);
+}
 let __badgeGastos = 0;      // contas vencidas/vencendo hoje (preenchido por verificarAlertaGastos)
 
 function subsPermitidosDoGrupo(g){
@@ -2191,6 +2215,7 @@ function cartaoGrupoHtml(attrs, icone, titulo, desc, badge){
 }
 function badgeDoCartao(grupo, sub){
   if(grupo==='caixa' && sub==='gastos') return __badgeGastos || 0;
+  if(grupo==='caixa' && sub==='codigo') return __badgeCodigo || 0;
   return 0;
 }
 /* Tela de cartões de um grupo (generaliza a antiga tela de botões do CUPOM). */
