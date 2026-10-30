@@ -1966,6 +1966,32 @@ function notaEmpresasErro(holder){
   return null;
 }
 
+/** Botão "Número da nota" do bloco de pagamento: já marca "Nota fiscal: Sim" e guarda o número (holder.numeroNota). */
+function numeroNotaBtnHtml(holder){
+  const n = (holder && holder.numeroNota) ? String(holder.numeroNota) : '';
+  const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return `<button type="button" class="btn btn-ghost btn-sm" data-numnota style="margin-top:6px;" title="Informar o número da nota fiscal (marca Nota fiscal: Sim)">${n ? 'Nota nº ' + esc(n) : 'Número da nota'}</button>`;
+}
+function abrirNumeroNota(holder, aoSalvar){
+  openModal(`
+    <h3>Número da nota fiscal</h3>
+    <p class="muted">Ao informar o número, a venda/pedido fica como <b>com nota</b>.</p>
+    <div class="field" style="margin-top:12px;"><label for="nn_numero">Número da nota</label><input id="nn_numero" autocomplete="off" placeholder="Ex.: 12345" value="${(holder.numeroNota||'').replace(/"/g,'&quot;')}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="nn_cancel" type="button">Cancelar</button>
+      <button class="btn btn-accent" id="nn_ok" type="button">Confirmar</button>
+    </div>`);
+  document.getElementById('nn_cancel').addEventListener('click', closeModal);
+  const ok = ()=>{
+    const n = document.getElementById('nn_numero').value.trim();
+    if(!n){ showToast('Digite o número da nota fiscal.'); return; }
+    holder.emissaoNota = 'sim'; holder.numeroNota = n;
+    closeModal(); if(aoSalvar) aoSalvar();
+  };
+  document.getElementById('nn_ok').addEventListener('click', ok);
+  document.getElementById('nn_numero').addEventListener('keydown', e=>{ if(e.key==='Enter') ok(); });
+}
+
 function mountPagamentos(container, holder, getLojaVendaId){
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = ''; // sem pré-seleção — obrigatório escolher
@@ -2056,6 +2082,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
               <label for="pagNotaNao">Não</label>
             </div>
           </div>
+          ${numeroNotaBtnHtml(holder)}
         </div>
       </div>
 
@@ -2068,8 +2095,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
       r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
     });
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; });
+      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; if(r.value!=='sim'){ holder.numeroNota = ''; const b2 = container.querySelector('[data-numnota]'); if(b2) b2.textContent = 'Número da nota'; } });
     });
+    const bn = container.querySelector('[data-numnota]'); if(bn) bn.addEventListener('click', ()=> abrirNumeroNota(holder, draw));
     // pagValorTotal agora é hidden — valor vem dos itens + desconto/acréscimo
     const inpTotal = container.querySelector('#pagValorTotal');
     if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
@@ -2212,6 +2240,7 @@ function mountPagamentosEdicao(container, holder){
               <label for="pagNotaNao">Não</label>
             </div>
           </div>
+          ${numeroNotaBtnHtml(holder)}
         </div>
       </div>
       <div id="pagRows"></div>
@@ -2223,8 +2252,9 @@ function mountPagamentosEdicao(container, holder){
       r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
     });
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; });
+      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; if(r.value!=='sim'){ holder.numeroNota = ''; const b2 = container.querySelector('[data-numnota]'); if(b2) b2.textContent = 'Número da nota'; } });
     });
+    const bn = container.querySelector('[data-numnota]'); if(bn) bn.addEventListener('click', ()=> abrirNumeroNota(holder, draw));
     const inpTotal = container.querySelector('#pagValorTotal');
     if(inpTotal) inpTotal.addEventListener('input', (e)=>{
       holder.valorTotal = e.target.value === '' ? null : parseFloat(e.target.value);
@@ -4560,7 +4590,7 @@ function openEditModalCompleto(order, opts){
   const editPagHolder = {
     // pagamento antigo sem data fica com a data de criação da ordem (não vira "hoje" só porque a ordem foi editada)
     valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p, data: p.data || dataLocalDeMs(order.criadoEm)})),
-    momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'',
+    momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'', numeroNota: order.numeroNota||'',
     lojaSaidaId: order.lojaSaidaId||'', lojaPagamentoId: order.lojaPagamentoId||'',
     lojaNotaId: order.lojaNotaId||'', lojaBaixaEstoqueId: order.lojaBaixaEstoqueId||'',
     descTotalTipo: order.descTotalTipo||'nenhum', descTotalModo: order.descTotalModo||'percentual',
@@ -4808,6 +4838,7 @@ function openEditModalCompleto(order, opts){
       pagamentos: carimbarPagamentosOS(editPagHolder ? editPagHolder.pagamentos : order.pagamentos),
       momentoPagamento: editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento,
       emissaoNota: editPagHolder ? editPagHolder.emissaoNota : order.emissaoNota,
+      numeroNota: editPagHolder ? (editPagHolder.emissaoNota==='sim' ? (editPagHolder.numeroNota||'') : '') : order.numeroNota,
       lojaSaidaId: editPagHolder ? editPagHolder.lojaSaidaId : order.lojaSaidaId,
       lojaPagamentoId: editPagHolder ? editPagHolder.lojaPagamentoId : order.lojaPagamentoId,
       lojaNotaId: editPagHolder ? editPagHolder.lojaNotaId : order.lojaNotaId,

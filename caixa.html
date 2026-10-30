@@ -392,6 +392,13 @@ function mensagemConfiavel(ev){
           <button class="btn btn-ghost" id="cx_hoje" title="Mostrar só o dia de hoje">${ic('calendario')} Hoje</button>
           <button class="btn btn-ghost" id="cx_atualizar" title="Buscar de novo no servidor (se alguém lançou algo agora)">${ic('atualizar')} Atualizar dados</button>
           <button class="btn btn-accent" id="cx_pesquisar">${ic('busca')} Pesquisar</button>
+          <button class="btn btn-ghost" id="cx_fechar" title="Pendências de nota fiscal do período e da loja escolhidos">${ic('check')} Fechar caixa</button>
+        </div>
+        <div class="barra-linha" role="group" aria-label="O que mostrar">
+          <span class="rot">Mostrar</span>
+          <label class="chip-check"><input type="radio" name="cx_visao" value="resumo" checked> Resumo</label>
+          <label class="chip-check"><input type="radio" name="cx_visao" value="semnota"> Sem nota</label>
+          <label class="chip-check"><input type="radio" name="cx_visao" value="comnota"> Com nota</label>
         </div>
         <div class="barra-linha" role="group" aria-label="Detalhes a mostrar">
           <span class="rot">Mostrar detalhes</span>
@@ -411,7 +418,14 @@ function mensagemConfiavel(ev){
     const elLoja = wrap.querySelector('#cx_loja');
     const tipos = ()=> [...wrap.querySelectorAll('.cx_tipo')].filter(c=>c.checked).map(c=>c.value);
 
-    function render(){ renderRelatorioCaixa(elDe.value, elAte.value, elLoja.value, tipos()); }
+    const visao = ()=> (wrap.querySelector('input[name="cx_visao"]:checked')||{value:'resumo'}).value;
+    function render(){
+      const v = visao();
+      const det = wrap.querySelector('.barra-linha[aria-label="Detalhes a mostrar"]'); if(det) det.style.display = v==='resumo' ? '' : 'none';
+      if(v==='resumo') renderRelatorioCaixa(elDe.value, elAte.value, elLoja.value, tipos());
+      else renderNotas(v, elDe.value, elAte.value, elLoja.value);
+    }
+    wrap.querySelector('#cx_fechar').addEventListener('click', ()=> abrirFecharCaixa(elDe.value, elAte.value, elLoja.value));
     // Filtros NÃO disparam render automaticamente — lista só carrega via Pesquisar ou Hoje
     wrap.querySelector('#cx_pesquisar').addEventListener('click', render);
     wrap.querySelector('#cx_hoje').addEventListener('click', ()=>{ elDe.value = hoje(); elAte.value = hoje(); render(); });
@@ -431,6 +445,71 @@ function mensagemConfiavel(ev){
       elLoja.title = 'Filtrando pela loja ativa — pra ver outra loja, troque em "Loja" no menu.';
     }
     // NÃO chama render() automaticamente — lista só carrega via Pesquisar
+  }
+
+  /* ================= NOTAS FISCAIS (Sem nota / Com nota) E FECHAR CAIXA ================= */
+  function nomeForma(p){ if(!p || !p.formaId) return ''; if(String(p.formaId).startsWith('__')) return ''; const f=(config.formasPagamento||[]).find(x=>x.id===p.formaId); return (f&&f.nome) || p.tipoNome || p.tipo || ''; }
+  function pagouPixOuCartao(r){ return (r.pagamentos||[]).some(p=> (Number(p.valor)||0)>0 && /pix|cart|d[eé]bito|cr[eé]dito|maquin/i.test(nomeForma(p))); }
+  function registrosFiscais(de, ate, lojaId){
+    const dentro = s=> !!s && s>=de && s<=ate;
+    const v = vendas.filter(x=> x.status!=='cancelada' && dentro(x.data) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Venda', tabela:'vendas_pdv', reg:x }));
+    const o = caixaOrdens.filter(x=> x.status!=='cancelado' && x.status!=='rascunho' && dentro(x.data) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Pedido', tabela:'ordens_servico', reg:x }));
+    return v.concat(o).sort((a,b)=> (b.reg.data||'').localeCompare(a.reg.data||''));
+  }
+  const viaDe = r => r.codigoVia || r.via || '—';
+  function renderNotas(visao, de, ate, lojaId){
+    const com = visao==='comnota';
+    const todos = registrosFiscais(de, ate, lojaId);
+    const lista = todos.filter(x=> com ? x.reg.emissaoNota==='sim' : x.reg.emissaoNota!=='sim');
+    const total = lista.reduce((s,x)=> s + (Number(x.reg.valorTotal)||0), 0);
+    const semNumero = lista.filter(x=> com && !String(x.reg.numeroNota||'').trim()).length;
+    const box = document.getElementById('caixaResumo'); document.getElementById('caixaDetalhes').innerHTML = '';
+    box.innerHTML = `<div class="card">
+      <div class="section-label" style="margin-bottom:8px;">${com?'Com nota fiscal':'Sem nota fiscal'} · ${lista.length} ${lista.length===1?'registro':'registros'} · ${fmtMoeda(total)}${semNumero?` · <span style="color:var(--danger);font-weight:600;">${semNumero} sem número da nota</span>`:''}</div>
+      ${lista.length===0 ? estadoHtml('check', com?'Nenhuma venda ou pedido com nota':'Nenhuma venda ou pedido sem nota', 'Nada neste período e loja.') : `
+      <div style="overflow-x:auto;"><table class="tabela-cartoes"><thead><tr><th>Origem</th><th>Data</th><th>Via</th><th>Loja</th><th>Cliente</th>${com?'<th>Nota nº</th>':''}<th class="r">Valor</th><th></th></tr></thead><tbody>
+      ${lista.map((x,i)=>{ const r=x.reg; return `<tr>
+        ${celula('Origem', escapeHtml(x.origem))}${celula('Data', fmtDate(r.data))}${celula('Via', escapeHtml(viaDe(r)))}${celula('Loja', escapeHtml(nomeLojaCaixa(r.lojaId)||'—'))}${celula('Cliente', escapeHtml(r.cliente||'—'))}
+        ${com ? celula('Nota nº', r.numeroNota ? escapeHtml(r.numeroNota) : '<span style="color:var(--danger);font-weight:600;">falta o número</span>') : ''}
+        ${celula('Valor', fmtMoeda(r.valorTotal), 'r')}
+        <td><button class="btn btn-ghost btn-sm" data-nota="${i}" type="button">${com ? (r.numeroNota?'Editar nº':'Informar nº') : 'Nota emitida'}</button></td></tr>`; }).join('')}
+      </tbody></table></div>`}
+    </div>`;
+    box.querySelectorAll('[data-nota]').forEach(b=> b.addEventListener('click', ()=> abrirNotaEmitida(lista[+b.dataset.nota], ()=> renderNotas(visao, de, ate, lojaId))));
+  }
+  function abrirNotaEmitida(x, aoSalvar){
+    const r = x.reg;
+    openModal(`<h3>Nota fiscal · ${escapeHtml(x.origem)} ${escapeHtml(viaDe(r))}</h3>
+      <p class="muted">${fmtDate(r.data)} · ${fmtMoeda(r.valorTotal)} · ${escapeHtml(r.cliente||'')}</p>
+      <div class="field" style="margin-top:12px;"><label for="nf_numero">Número da nota fiscal</label><input id="nf_numero" autocomplete="off" placeholder="Ex.: 12345" value="${escapeHtml(r.numeroNota||'')}"></div>
+      <div class="field"><label for="nf_loja">Empresa que emitiu</label><select id="nf_loja">${(config.lojas||[]).filter(l=>!l.interna).map(l=>`<option value="${l.id}" ${(r.lojaNotaId||r.lojaId)===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="nf_cancel" type="button">Cancelar</button><button class="btn btn-accent" id="nf_ok" type="button">Registrar nota</button></div>`);
+    document.getElementById('nf_cancel').addEventListener('click', closeModal);
+    document.getElementById('nf_ok').addEventListener('click', async ()=>{
+      const numero = document.getElementById('nf_numero').value.trim();
+      if(!numero){ showToast('Digite o número da nota fiscal.'); return; }
+      const copia = { ...r, emissaoNota:'sim', numeroNota:numero, lojaNotaId: document.getElementById('nf_loja').value, notaRegularizadaEm: new Date().toISOString(), notaRegularizadaPor: currentUser ? currentUser.nome : '' };
+      const res = await gatewayCall({ op:'upsert', table:x.tabela, params:{ row:{ id:r.id, payload:copia, updated_at:new Date().toISOString() } } });
+      if(res && res.error){ showToast('Não foi possível salvar: ' + res.error); return; }
+      Object.assign(r, copia);   // passa para a lista "Com nota" sozinho
+      closeModal(); showToast('Nota registrada.'); if(aoSalvar) aoSalvar();
+    });
+  }
+  function abrirFecharCaixa(de, ate, lojaId){
+    const todos = registrosFiscais(de, ate, lojaId);
+    const emitir = todos.filter(x=> x.reg.emissaoNota!=='sim' && pagouPixOuCartao(x.reg));
+    const faltaNum = todos.filter(x=> x.reg.emissaoNota==='sim' && !String(x.reg.numeroNota||'').trim());
+    const linha = (x,motivo,i,grupo)=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
+      <div><b>${escapeHtml(x.origem)} ${escapeHtml(viaDe(x.reg))}</b> · ${fmtDate(x.reg.data)} · ${escapeHtml(nomeLojaCaixa(x.reg.lojaId)||'')}<div class="muted" style="font-size:12.5px;">${escapeHtml(x.reg.cliente||'')} · ${fmtMoeda(x.reg.valorTotal)}${motivo?' · '+motivo:''}</div></div>
+      <button class="btn btn-ghost btn-sm" data-fc="${grupo}:${i}" type="button">${grupo==='e'?'Nota emitida':'Informar nº'}</button></div>`;
+    const periodo = de===ate ? fmtDate(de) : fmtDate(de)+' a '+fmtDate(ate);
+    openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):''}</h3>
+      ${(!emitir.length && !faltaNum.length) ? `<div style="padding:14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>` : ''}
+      ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão sem nota</div>${emitir.map((x,i)=>linha(x,'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
+      ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
+      <div class="modal-actions"><button class="btn" id="fc_fechar" type="button">Fechar</button></div>`);
+    document.getElementById('fc_fechar').addEventListener('click', closeModal);
+    document.querySelectorAll('[data-fc]').forEach(b=> b.addEventListener('click', ()=>{ const [g,i]=b.dataset.fc.split(':'); const x=(g==='e'?emitir:faltaNum)[+i]; abrirNotaEmitida(x, ()=> abrirFecharCaixa(de, ate, lojaId)); }));
   }
   function renderRelatorioCaixa(de, ate, lojaId, tipos){
     const dentroPeriodo = (s)=> !!s && s>=de && s<=ate;

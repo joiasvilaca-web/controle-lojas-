@@ -1442,6 +1442,32 @@ function metalOptionsHtml(selected){
  * por isso pedimos confirmação de que ela vai ser feita manualmente, na empresa certa.
  * Retorna null se estiver tudo certo, ou uma mensagem de erro pra mostrar.
  */
+/** Botão "Número da nota" do bloco de pagamento: já marca "Nota fiscal: Sim" e guarda o número (holder.numeroNota). */
+function numeroNotaBtnHtml(holder){
+  const n = (holder && holder.numeroNota) ? String(holder.numeroNota) : '';
+  const esc = s => String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return `<button type="button" class="btn btn-ghost btn-sm" data-numnota style="margin-top:6px;" title="Informar o número da nota fiscal (marca Nota fiscal: Sim)">${n ? 'Nota nº ' + esc(n) : 'Número da nota'}</button>`;
+}
+function abrirNumeroNota(holder, aoSalvar){
+  openModal(`
+    <h3>Número da nota fiscal</h3>
+    <p class="muted">Ao informar o número, a venda/pedido fica como <b>com nota</b>.</p>
+    <div class="field" style="margin-top:12px;"><label for="nn_numero">Número da nota</label><input id="nn_numero" autocomplete="off" placeholder="Ex.: 12345" value="${(holder.numeroNota||'').replace(/"/g,'&quot;')}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="nn_cancel" type="button">Cancelar</button>
+      <button class="btn btn-accent" id="nn_ok" type="button">Confirmar</button>
+    </div>`);
+  document.getElementById('nn_cancel').addEventListener('click', closeModal);
+  const ok = ()=>{
+    const n = document.getElementById('nn_numero').value.trim();
+    if(!n){ showToast('Digite o número da nota fiscal.'); return; }
+    holder.emissaoNota = 'sim'; holder.numeroNota = n;
+    closeModal(); if(aoSalvar) aoSalvar();
+  };
+  document.getElementById('nn_ok').addEventListener('click', ok);
+  document.getElementById('nn_numero').addEventListener('keydown', e=>{ if(e.key==='Enter') ok(); });
+}
+
 /**
  * A baixa de estoque acontece sempre na Empresa joia (de onde o produto saiu de
  * verdade) — isso vale COM ou SEM nota fiscal emitida. Quando tem nota e ela é da
@@ -1579,6 +1605,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
               <label for="pagNotaNao">Não</label>
             </div>
           </div>
+          ${numeroNotaBtnHtml(holder)}
         </div>
       </div>
 
@@ -1592,8 +1619,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
       r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
     });
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; });
+      r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; if(r.value!=='sim'){ holder.numeroNota = ''; const b2 = container.querySelector('[data-numnota]'); if(b2) b2.textContent = 'Número da nota'; } });
     });
+    const bn = container.querySelector('[data-numnota]'); if(bn) bn.addEventListener('click', ()=> abrirNumeroNota(holder, draw));
     // pagValorTotal agora é hidden — valor vem dos itens + desconto/acréscimo
     const inpTotal = container.querySelector('#pagValorTotal');
     if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
@@ -2196,6 +2224,7 @@ function tabsForLevel(){
   // Relatório fiscal: só diretoria e gerente
   if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')){
     t.push({ id:'semnota', label:'Sem nota', icon:'⚠️' });
+    t.push({ id:'comnota', label:'Com nota', icon:'🧾' });
     t.push({ id:'interloja', label:'Entre lojas', icon:'🔄' });
   }
   if(window.__permissoesAbasOverride){
@@ -2218,7 +2247,7 @@ function buildTabs(){
   tabs.forEach(t=>{
     const b = document.createElement('button');
     b.dataset.tab = t.id;
-    const icoTab = { vendas:'lista', semnota:'alerta', interloja:'trocar' }[t.id];
+    const icoTab = { vendas:'lista', semnota:'alerta', comnota:'recibo', interloja:'trocar' }[t.id];
     b.innerHTML = `<span class="mt-icon">${icoTab ? ic(icoTab, 20) : ''}</span><span>${t.label}</span>`;
     b.addEventListener('click', ()=>{ currentTab = t.id; modoNovaVenda = false; renderTabs(); renderView(); });
     mobileNav.appendChild(b);
@@ -2238,6 +2267,7 @@ function renderView(){
   if(modoNovaVenda) renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
   else if(currentTab==='semnota') renderSemNota(main);
+  else if(currentTab==='comnota') renderComNota(main);
   else if(currentTab==='interloja') renderInterloja(main);
 }
 
@@ -2337,12 +2367,88 @@ function renderSemNota(main){
   if(btnX) btnX.addEventListener('click', ()=> exportarSemNota(lista));
 }
 
+/** Vendas COM nota fiscal (mesmo molde da aba Sem nota). Quando a nota é registrada na aba Sem nota, a venda passa para cá sozinha. */
+function renderComNota(main){
+  const lojaNome = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l?l.nome:'—'; };
+  const lojaAbrev = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l?(l.abreviacao||l.nome):'—'; };
+  let lista = (vendas||[]).filter(v=> v.emissaoNota === 'sim' && v.status !== 'cancelada');
+  const fLojaSalvo = window.__comNotaFiltroLoja || '';
+  if(fLojaSalvo) lista = lista.filter(v=> v.lojaId === fLojaSalvo);
+  const fDe = window.__comNotaDe || '', fAte = window.__comNotaAte || '';
+  if(fDe) lista = lista.filter(v=> (v.data||'') >= fDe);
+  if(fAte) lista = lista.filter(v=> (v.data||'') <= fAte);
+  lista.sort((a,b)=> (b.data||'').localeCompare(a.data||''));
+  const total = lista.reduce((s,v)=> s + Number(v.valorTotal||0), 0);
+  const semNumero = lista.filter(v=> !String(v.numeroNota||'').trim()).length;
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">Vendas com nota fiscal</h1>
+        <p class="page-sub">Vendas com “Nota fiscal: Sim”. Confira o número da nota de cada uma.</p>
+      </div>
+      <div class="page-acoes"><button class="btn btn-ghost" id="cn_excel">${ic('baixar')} Exportar planilha</button></div>
+    </div>
+    <div class="filters">
+      <select id="cn_loja" aria-label="Loja"><option value="">Todas as lojas</option>${(config.lojas||[]).map(l=>`<option value="${l.id}" ${fLojaSalvo===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select>
+      <input type="date" id="cn_de" value="${escapeHtml(fDe)}" aria-label="De" title="De">
+      <span class="desc-sep">até</span>
+      <input type="date" id="cn_ate" value="${escapeHtml(fAte)}" aria-label="Até" title="Até">
+      <div class="faixa-resumo" style="margin-left:auto;">
+        <span><b>${lista.length}</b> ${lista.length===1?'venda':'vendas'}</span>
+        <span>Total <b>${fmtMoeda(total)}</b></span>
+        ${semNumero>0?`<span class="alerta"><b class="alerta">${semNumero}</b> sem número da nota</span>`:''}
+      </div>
+    </div>
+    <div class="card card-tabela">
+      ${lista.length===0 ? `<div class="estado-vazio">${ic('check',32)}<b>Nenhuma venda com nota</b>Não há vendas com nota neste período e loja.</div>` : `
+      <table class="tabela-cartoes">
+        <thead><tr><th>Data</th><th>Via</th><th>Loja</th><th>Cliente</th><th>Nota nº</th><th>Empresa da nota</th><th class="num">Valor</th><th class="acoes"><span class="so-leitor">Ações</span></th></tr></thead>
+        <tbody>
+          ${lista.map(v=>`<tr>
+              <td class="so-mesa">${fmtDate(v.data)}</td>
+              <td class="so-mesa">${escapeHtml(v.codigoVia||'—')}</td>
+              <td class="so-mesa">${escapeHtml(lojaNome(v.lojaId))}</td>
+              <td class="c-cli"><span class="so-mesa cli-nome">${escapeHtml(v.cliente||'Não identificado')}</span>
+                <div class="so-cel"><div class="cel-topo"><span class="cli-nome">${escapeHtml(v.cliente||'Não identificado')}</span><span class="cel-total">${fmtMoeda(v.valorTotal)}</span></div>
+                <div class="cel-meta">${fmtDate(v.data)} · ${escapeHtml(v.codigoVia||'sem via')} · ${escapeHtml(lojaNome(v.lojaId))} · Nota ${escapeHtml(v.numeroNota||'—')}</div></div></td>
+              <td class="so-mesa">${v.numeroNota ? escapeHtml(v.numeroNota) : '<span class="badge selo-wait">Falta o número</span>'}</td>
+              <td class="so-mesa">${escapeHtml(lojaAbrev(v.lojaNotaId))}</td>
+              <td class="num so-mesa">${fmtMoeda(v.valorTotal)}</td>
+              <td class="acoes"><div class="acoes-linha">
+                ${btnIcone('olho','Ver detalhes da venda',`data-ver="${v.id}"`)}
+                <button type="button" class="btn btn-ghost btn-sm" data-marcar="${v.id}">${ic('check',14)} ${v.numeroNota?'Editar nº':'Informar nº'}</button>
+              </div></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`}
+    </div>
+  `;
+  const aplicar = ()=>{
+    window.__comNotaFiltroLoja = document.getElementById('cn_loja').value;
+    window.__comNotaDe = document.getElementById('cn_de').value;
+    window.__comNotaAte = document.getElementById('cn_ate').value;
+    renderView();
+  };
+  ['cn_loja','cn_de','cn_ate'].forEach(id=> document.getElementById(id).addEventListener('change', aplicar));
+  main.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=>{ const v = vendas.find(x=>x.id===b.dataset.ver); if(v) abrirDetalheVenda(v); }));
+  main.querySelectorAll('[data-marcar]').forEach(b=> b.addEventListener('click', ()=>{ const v = vendas.find(x=>x.id===b.dataset.marcar); if(v) marcarNotaEmitida(v); }));
+  const btnX = document.getElementById('cn_excel');
+  if(btnX) btnX.addEventListener('click', ()=>{
+    const linhas = [['Data','Via','Loja','Cliente','Vendedora','Nota nº','Empresa da nota','Valor']];
+    lista.forEach(v=> linhas.push([ v.data||'', v.codigoVia||'', lojaNome(v.lojaId), v.cliente||'', v.vendedora||'', v.numeroNota||'', lojaNome(v.lojaNotaId), Number(v.valorTotal||0).toFixed(2).replace('.',',') ]));
+    const csv = linhas.map(l=> l.map(c=> '"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+    const url = URL.createObjectURL(new Blob(['﻿'+csv], { type:'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'vendas-com-nota-'+hoje()+'.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(()=> URL.revokeObjectURL(url), 1000);
+  });
+}
+
 /** Registra que a nota desta venda foi emitida (informando o número), tirando-a do relatório. */
 function marcarNotaEmitida(v){
   openModal(`
     <h3>Registrar nota emitida</h3>
     <p class="muted">Venda ${escapeHtml(v.codigoVia||'')} · ${fmtDate(v.data)} · ${fmtMoeda(v.valorTotal)}</p>
-    <div class="field" style="margin-top:14px;"><label>Número da nota fiscal</label><input id="mn_numero" placeholder="Ex.: 12345" autocomplete="off"></div>
+    <div class="field" style="margin-top:14px;"><label>Número da nota fiscal</label><input id="mn_numero" placeholder="Ex.: 12345" autocomplete="off" value="${escapeHtml(v.numeroNota||'')}"></div>
     <div class="field"><label>Empresa que emitiu</label><select id="mn_loja">${(config.lojas||[]).filter(l=>!l.interna).map(l=>`<option value="${l.id}" ${v.lojaId===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="mn_cancel">Cancelar</button>
