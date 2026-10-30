@@ -4033,7 +4033,7 @@ function renderNovaOrdem(main){
              descricao: (document.getElementById('f_descricao').value||'').trim(), itens: itens.map((it,i)=>({ nome: nomeItemOs(it,i), quantidade: it.quantidade||1 })), valorTotal: tempPagHolder.valorTotal||0, observacoes: tempObsHolder.observacoes||'' },
       completa: { cliente: cli, itens: itens, descricao: (document.getElementById('f_descricao').value||'').trim(),
         pagamento: { pagamentos: tempPagHolder.pagamentos||[], valorTotal: tempPagHolder.valorTotal||0, momentoPagamento: tempPagHolder.momentoPagamento||'', emissaoNota: tempPagHolder.emissaoNota||'', numeroNota: tempPagHolder.numeroNota||'', lojaSaidaId: tempPagHolder.lojaSaidaId||'', lojaPagamentoId: tempPagHolder.lojaPagamentoId||'' },
-        fotos: (tempFotoHolder.fotos||[]).filter(f=>f.driveUrl).map(f=>({ nome:f.nome, driveUrl:f.driveUrl })),
+        fotos: (tempFotoHolder.fotos||[]).map(f=>({ id:f.id, nome:f.nome, driveUrl:f.driveUrl||'' })),
         observacoes: tempObsHolder.observacoes||[], infoInterna: (document.getElementById('f_infoInterna')?.value||'').trim() } };
     btnSolic.disabled = true;
     const ok = await autorizacoesMut(l=>{ l.unshift(req); });
@@ -5333,8 +5333,11 @@ function renderGerarCodigo(main){
     const campo = (rot, val) => val ? `<div><div class="muted" style="font-size:12px;">${rot}</div>${escapeHtml(String(val))}</div>` : '';
     const forma = id => { const f=(config.formasPagamento||config.pagamentos||[]).find(x=>x.id===id); return f ? (f.nome||f.label||id) : (id==='__credito'?'Crédito do cliente':id==='__fiado'?'Fiado':id==='__sem_custo'?'Sem custo':id); };
     const endereco = [cl.endereco, cl.numero, cl.complemento, cl.bairro, cl.cidade, cl.estado, cl.cep].filter(Boolean).join(', ');
-    const itens = (c.itens||[]).map((it,i)=>{ const q=Number(it.quantidade)||1, u=Number(it.valorUnitario)||0; return `<tr><td>${escapeHtml(nomeItemOs(it,i))}${it.avulso?' <span class="muted">(avulso)</span>':''}${it.observacao?`<div class="muted" style="font-size:12px;">${escapeHtml(it.observacao)}</div>`:''}</td><td style="text-align:right;">${q}</td><td style="text-align:right;">${fmtMoeda(u)}</td><td style="text-align:right;">${fmtMoeda(q*u)}</td></tr>`; }).join('');
-    const obs = Array.isArray(c.observacoes) ? c.observacoes.map(o=>`<div>${escapeHtml(typeof o==='string'?o:[o.nome,o.descricao].filter(Boolean).join(': '))}</div>`).join('') : escapeHtml(String(c.observacoes||''));
+    const itens = (c.itens||[]).map((it,i)=>{ const q=Number(it.quantidade)||1, u=Number(it.valorUnitario)||0; const aj = it.ajusteTipo && it.ajusteTipo!=='nenhum' ? `${it.ajusteTipo==='desconto'?'Desconto':'Acréscimo'}: ${it.ajusteModo==='percentual'?(it.ajustePerc||0)+'%':fmtMoeda(Number(it.ajusteValR)||0)}` : '';
+      const extra = [it.metal?'Metal: '+it.metal:'', it.precoOriginal!==''&&it.precoOriginal!=null&&Number(it.precoOriginal)!==u?'Preço de tabela: '+fmtMoeda(Number(it.precoOriginal)||0):'', aj].filter(Boolean).join(' · ');
+      return `<tr><td>${escapeHtml(nomeItemOs(it,i))}${it.avulso?' <span class="muted">(avulso)</span>':''}${extra?`<div class="muted" style="font-size:12px;">${escapeHtml(extra)}</div>`:''}${it.observacaoItem?`<div style="font-size:12.5px;margin-top:2px;"><b>Obs. do item:</b> ${escapeHtml(it.observacaoItem)}</div>`:''}</td><td style="text-align:right;">${q}</td><td style="text-align:right;">${fmtMoeda(u)}</td><td style="text-align:right;">${fmtMoeda(q*u)}</td></tr>`; }).join('');
+    const fotoImg = f => `<img data-solfoto="${escapeHtml(f.id||'')}" src="${escapeHtml(f.driveUrl||'')}" alt="${escapeHtml(f.nome||'')}" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;background:var(--surface-2);">`;
+    const obs = Array.isArray(c.observacoes) ? c.observacoes.map(o=>typeof o==='string' ? `<div>${escapeHtml(o)}</div>` : `<div style="margin-bottom:10px;"><b>${escapeHtml(o.nome||'')}</b>${o.descricao?`<div style="white-space:pre-wrap;">${escapeHtml(o.descricao)}</div>`:''}${(o.notificarPara||[]).length?`<div class="muted" style="font-size:12px;">Avisar: ${escapeHtml((o.notificarPara||[]).join(', '))}</div>`:''}${(o.fotos||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">${o.fotos.map(fotoImg).join('')}</div>`:''}</div>`).join('') : escapeHtml(String(c.observacoes||''));
     return `<div class="section-label" style="margin-top:16px;">Cliente</div>
       <div class="grid-2">${campo('Nome',cl.cliente)}${campo('Telefone',cl.telefone)}${campo('E-mail',cl.email)}${campo('CPF',cl.cpf)}${campo('Nascimento',cl.dataNascimento?fmtDate(cl.dataNascimento):'')}${campo('Endereço',endereco)}</div>
       <div class="section-label" style="margin-top:16px;">Itens do pedido</div>
@@ -5343,9 +5346,9 @@ function renderGerarCodigo(main){
       <div class="section-label" style="margin-top:16px;">Pagamento</div>
       <div class="grid-2">${campo('Valor total',fmtMoeda(pg.valorTotal||0))}${campo('Quando paga',pg.momentoPagamento==='na_volta'?'Paga na retirada':pg.momentoPagamento==='agora'?'Pago agora':pg.momentoPagamento)}${campo('Nota fiscal emitida',pg.emissaoNota==='sim'?'Sim':pg.emissaoNota==='nao'?'Não':pg.emissaoNota)}${campo('Nº da nota',pg.numeroNota)}</div>
       ${(pg.pagamentos||[]).length?`<div style="margin-top:8px;">${pg.pagamentos.map(x=>`<div>${escapeHtml(forma(x.formaId))}: ${fmtMoeda(Number(x.valor)||0)}${x.parcelas?` · ${escapeHtml(String(x.parcelas))}x`:''}</div>`).join('')}</div>`:''}
-      ${obs?`<div class="section-label" style="margin-top:16px;">Observações</div>${obs}`:''}
-      ${c.infoInterna?`<div class="section-label" style="margin-top:16px;">Informação interna</div>${escapeHtml(c.infoInterna)}`:''}
-      ${(c.fotos||[]).length?`<div class="section-label" style="margin-top:16px;">Fotos</div><div style="display:flex;gap:8px;flex-wrap:wrap;">${c.fotos.map(f=>`<a href="${escapeHtml(f.driveUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(f.driveUrl)}" alt="${escapeHtml(f.nome||'')}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--line);"></a>`).join('')}</div>`:''}`;
+      ${obs?`<div class="section-label" style="margin-top:16px;">Observações da via (internas)</div>${obs}`:''}
+      ${c.infoInterna?`<div class="section-label" style="margin-top:16px;">Informação interna</div><div style="white-space:pre-wrap;">${escapeHtml(c.infoInterna)}</div>`:''}
+      ${(c.fotos||[]).length?`<div class="section-label" style="margin-top:16px;">Fotos da via</div><div style="display:flex;gap:8px;flex-wrap:wrap;">${c.fotos.map(fotoImg).join('')}</div>`:''}`;
   }
   function verSolicitacao(r){
     if(!r) return;
@@ -5364,6 +5367,10 @@ function renderGerarCodigo(main){
       ${v.descricao?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Descrição</div>${escapeHtml(v.descricao)}</div>`:''}
       <div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Valor total</div>${fmtMoeda(v.valorTotal||0)}</div>`}
       <div class="modal-actions"><button class="btn btn-ghost" id="solFechar" type="button">Fechar</button><button class="btn btn-danger" id="solRecusar" type="button">Recusar</button><button class="btn btn-accent" id="solLiberar" type="button">${ico('check')} Liberar</button></div>`);
+    document.querySelectorAll('[data-solfoto]').forEach(async img=>{
+      if(!img.getAttribute('src') && img.dataset.solfoto){ const d = await getPhotoDataUrl(img.dataset.solfoto); if(d) img.src = d; }
+      img.addEventListener('click', ()=>{ if(!img.src) return; const z=document.createElement('div'); z.style.cssText='position:fixed;inset:0;background:rgba(8,20,30,.85);z-index:200;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:16px;'; z.innerHTML=`<img src="${img.src}" style="max-width:96vw;max-height:92vh;border-radius:8px;">`; z.addEventListener('click',()=>z.remove()); document.body.appendChild(z); });
+    });
     document.getElementById('solFechar').addEventListener('click', closeModal);
     document.getElementById('solRecusar').addEventListener('click', async ()=>{
       const mot = (prompt('Motivo da recusa (a loja vê):')||'').trim(); if(mot===''){ return; }
