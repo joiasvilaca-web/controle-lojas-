@@ -3467,7 +3467,8 @@ function itensSomenteLeituraHtml(order){
   if(!itens.length) return `<div class="section-label">Itens do pedido</div><div class="muted">Nenhum item lançado.</div>`;
   return `<div class="section-label">Itens do pedido</div><div class="itens-leitura">${itens.map(it=>`
     <div class="linha-item"><span><b>${escapeHtml(it.produto||'Item')}</b>${Number(it.quantidade)>1?` <span class="muted">×${escapeHtml(String(it.quantidade))}</span>`:''}${it.avulso?' <span class="badge">avulso</span>':''}${it.observacaoItem?`<span class="obs">${escapeHtml(it.observacaoItem)}</span>`:''}</span>
-    <span class="num" style="font-weight:700;white-space:nowrap;">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):'—'}</span></div>`).join('')}</div>`;
+    <span class="num" style="font-weight:700;white-space:nowrap;">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):'—'}</span></div>
+    ${(it.fotos&&it.fotos.length)?`<div class="foto-grid" data-itfotoleitura="1" style="margin:2px 0 8px;">${it.fotos.map(f=>`<div class="foto-thumb"><img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl||photoCache[f.id]||'')}" alt="${escapeHtml(f.nome||'')}" onclick="if(this.src)openPhotoModal(this.src)"></div>`).join('')}</div>`:''}`).join('')}</div>`;
 }
 function mountItens(container, holder, getLojaId, opts){
   if(!holder.itens) holder.itens = [];
@@ -3544,6 +3545,54 @@ function recalcularValorAjustado(it){
     `;
     drawRows();
   }
+  /* ── Fotos por item lançado (it.fotos = [{id,nome,criadoEm,driveUrl?}]; vão junto com o item ao salvar o pedido) ── */
+  function desenharGridFotosItem(grid, i){
+    const it = holder.itens[i]; if(!it) return;
+    const editavel = grid.dataset.edit==='1';
+    const fotos = it.fotos || [];
+    if(!fotos.length){ grid.innerHTML = editavel ? `<div class="muted" style="font-size:12.5px;">Sem fotos neste item.</div>` : ''; return; }
+    grid.innerHTML = fotos.map(f=>`
+      <div class="foto-thumb" data-fid="${f.id}">
+        <img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl || photoCache[f.id] || '')}" alt="${escapeHtml(f.nome||'')}">
+        ${editavel ? `<button type="button" class="foto-del" data-itfotodel="${f.id}" title="Remover foto" aria-label="Remover foto">${ico('x',13)}</button>` : ''}
+      </div>`).join('');
+    grid.querySelectorAll('img[data-fotoimg]').forEach(img=>{
+      const fid = img.dataset.fotoimg, fObj = fotos.find(x=>x.id===fid);
+      if(!(fObj && fObj.driveUrl) && !photoCache[fid]) getPhotoDataUrl(fid).then(url=>{ if(url) img.src = url; });
+      img.addEventListener('click', ()=>{ if(img.src) openPhotoModal(img.src); });
+    });
+    if(editavel) grid.querySelectorAll('[data-itfotodel]').forEach(b=> b.addEventListener('click', e=>{
+      e.stopPropagation(); it.fotos = (it.fotos||[]).filter(x=>x.id!==b.dataset.itfotodel); desenharGridFotosItem(grid, i);
+    }));
+  }
+  async function anexarFotosItem(i, inputEl, grid){
+    const it = holder.itens[i]; const files = Array.from(inputEl.files||[]); if(!it || !files.length) return;
+    if(!it.fotos) it.fotos = [];
+    for(const file of files){
+      try{
+        const dataUrl = await compressImage(file);
+        const fotoId = uid('foto');
+        let driveResult = null;
+        try{ driveResult = await uploadFotoParaDrive(dataUrl, fotoId + '_' + file.name); }catch(e){ console.error('Falha ao enviar foto do item para o Drive, salvando localmente:', e); }
+        if(driveResult && driveResult.url) it.fotos.push({ id:fotoId, nome:file.name, criadoEm:Date.now(), driveUrl:driveResult.url, driveFileId:driveResult.fileId });
+        else { photoCache[fotoId] = dataUrl; await storageSet('foto:' + fotoId, dataUrl, true); it.fotos.push({ id:fotoId, nome:file.name, criadoEm:Date.now() }); }
+      }catch(e){ showToast('Não foi possível processar uma das fotos.'); }
+    }
+    inputEl.value = '';
+    desenharGridFotosItem(grid, i);
+    showToast('Foto(s) do item anexada(s).');
+  }
+  function ligarFotosItens(wrap){
+    wrap.querySelectorAll('[data-itfotogrid]').forEach(g=> desenharGridFotosItem(g, Number(g.dataset.itfotogrid)));
+    wrap.querySelectorAll('[data-itfotobtn]').forEach(b=> b.addEventListener('click', ()=>{
+      const [i,modo] = b.dataset.itfotobtn.split(':');
+      const inp = wrap.querySelector(modo==='cam' ? `[data-itfotocam="${i}"]` : `[data-itfotoin="${i}"]`); if(inp) inp.click();
+    }));
+    wrap.querySelectorAll('[data-itfotoin],[data-itfotocam]').forEach(inp=>{
+      const i = Number(inp.dataset.itfotoin!=null ? inp.dataset.itfotoin : inp.dataset.itfotocam);
+      inp.addEventListener('change', ()=>{ const grid = wrap.querySelector(`[data-itfotogrid="${i}"][data-edit="1"]`); if(grid) anexarFotosItem(i, inp, grid); });
+    });
+  }
   function drawRows(){
     const wrap = container.querySelector('#itensRows');
     const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
@@ -3567,7 +3616,8 @@ function recalcularValorAjustado(it){
             <button type="button" class="venda-compact-btn perigo" data-itdel="${i}" title="Remover item" aria-label="Remover item">${ico('lixeira')}</button>
           </div>
         </div>
-        <div class="venda-compact-obs" id="vendaObs_${i}">${temObs?escapeHtml(it.observacaoItem):''}</div>`;
+        <div class="venda-compact-obs" id="vendaObs_${i}">${temObs?escapeHtml(it.observacaoItem):''}</div>
+        ${(it.fotos&&it.fotos.length)?`<div class="foto-grid" data-itfotogrid="${i}" style="margin:2px 0 8px;"></div>`:''}`;
       } else {
         const produtoAtual=it.produtoEstoqueId?vendaveis.find(p=>p.id===it.produtoEstoqueId):null;
         const estoqueAqui=produtoAtual?(Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0):null;
@@ -3624,11 +3674,21 @@ function recalcularValorAjustado(it){
             <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)" aria-label="Observação do item"
               value="${escapeHtml(it.observacaoItem||'')}">
           </div>
+          <div class="item-row-fotos" style="margin-top:8px;">
+            <div class="foto-grid" data-itfotogrid="${i}" data-edit="1"></div>
+            <input type="file" accept="image/*" multiple data-itfotoin="${i}" style="display:none;">
+            <input type="file" accept="image/*" capture="environment" data-itfotocam="${i}" style="display:none;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+              <button type="button" class="btn btn-ghost btn-sm" data-itfotobtn="${i}:gal">${ico('imagem',14)} Foto do item</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-itfotobtn="${i}:cam">${ico('camera',14)} Tirar foto</button>
+            </div>
+          </div>
         </div>`;
       }
     });
     wrap.innerHTML=__html;
     if(container.querySelector('[data-estinfo]')) carregarReservadas();
+    ligarFotosItens(wrap);
 
     // ── Autocomplete de produto ──
     wrap.querySelectorAll('[data-pac]').forEach(inp=>{
@@ -5403,7 +5463,7 @@ function renderGerarCodigo(main){
     const endereco = [cl.endereco, cl.numero, cl.complemento, cl.bairro, cl.cidade, cl.estado, cl.cep].filter(Boolean).join(', ');
     const itens = (c.itens||[]).map((it,i)=>{ const q=Number(it.quantidade)||1, u=Number(it.valorUnitario)||0; const aj = it.ajusteTipo && it.ajusteTipo!=='nenhum' ? `${it.ajusteTipo==='desconto'?'Desconto':'Acréscimo'}: ${it.ajusteModo==='percentual'?(it.ajustePerc||0)+'%':fmtMoeda(Number(it.ajusteValR)||0)}` : '';
       const extra = [it.metal?'Metal: '+it.metal:'', aj].filter(Boolean).join(' · ');
-      return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">${escapeHtml(nomeItemOs(it,i))}${it.avulso?' <span class="muted">(avulso)</span>':''}${extra?`<div class="muted" style="font-size:12px;">${escapeHtml(extra)}</div>`:''}${it.observacaoItem?`<div style="font-size:12.5px;margin-top:2px;"><b>Obs. do item:</b> ${escapeHtml(it.observacaoItem)}</div>`:''}</div>`; }).join('');
+      return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">${escapeHtml(nomeItemOs(it,i))}${it.avulso?' <span class="muted">(avulso)</span>':''}${extra?`<div class="muted" style="font-size:12px;">${escapeHtml(extra)}</div>`:''}${it.observacaoItem?`<div style="font-size:12.5px;margin-top:2px;"><b>Obs. do item:</b> ${escapeHtml(it.observacaoItem)}</div>`:''}${(it.fotos||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">${it.fotos.map(f=>`<img data-solfoto="${escapeHtml(f.id||'')}" src="${escapeHtml(f.driveUrl||'')}" alt="${escapeHtml(f.nome||'')}" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;background:var(--surface-2);">`).join('')}</div>`:''}</div>`; }).join('');
     const fotoImg = f => `<img data-solfoto="${escapeHtml(f.id||'')}" src="${escapeHtml(f.driveUrl||'')}" alt="${escapeHtml(f.nome||'')}" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;background:var(--surface-2);">`;
     const obs = Array.isArray(c.observacoes) ? c.observacoes.map(o=>typeof o==='string' ? `<div>${escapeHtml(o)}</div>` : `<div style="margin-bottom:10px;"><b>${escapeHtml(o.nome||'')}</b>${o.descricao?`<div style="white-space:pre-wrap;">${escapeHtml(o.descricao)}</div>`:''}${(o.notificarPara||[]).length?`<div class="muted" style="font-size:12px;">Avisar: ${escapeHtml((o.notificarPara||[]).join(', '))}</div>`:''}${(o.fotos||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">${o.fotos.map(fotoImg).join('')}</div>`:''}</div>`).join('') : escapeHtml(String(c.observacoes||''));
     return `<div class="section-label" style="margin-top:16px;">Itens do pedido</div>
