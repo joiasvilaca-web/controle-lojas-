@@ -11,7 +11,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const admin = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-const BOT_TOKEN = "vjw_bot_4d8e1b7a92c63f05";
+// Tokens internos ficam na tabela atendimento_segredos (nunca no código). Cache de 60 s para a troca valer em ~1 min.
+const __tokInterno: Record<string, { v: string; t: number }> = {};
+async function tokenInterno(chave: "BOT_TOKEN" | "WEBHOOK_TOKEN"): Promise<string> {
+  const c = __tokInterno[chave];
+  if (c && Date.now() - c.t < 60_000) return c.v;
+  const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", chave).maybeSingle();
+  const v = String((data && data.valor) || "");
+  __tokInterno[chave] = { v, t: Date.now() };
+  return v;
+}
+function mesmoToken(a: string | null | undefined, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 const IG_API = "https://graph.instagram.com/v21.0";
 const GRAPH = "https://graph.facebook.com/v21.0";
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-bot-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
@@ -190,15 +204,15 @@ function sistemaAtendente(bot: any, ia: any, extra = ""): string {
 }
 
 /* ---------- envio (mesma lógica do atendimento-bot + Messenger) ---------- */
-let __seg: Record<string, string> | null = null;
+let __seg: Record<string, string> | null = null; let __segT = 0;
 async function segredos() {
-  if (__seg) return __seg;
+  if (__seg && Date.now() - __segT < 60_000) return __seg;
   const out: Record<string, string> = {};
-  for (const k of ["EVOLUTION_URL", "EVOLUTION_API_KEY", "INSTAGRAM_TOKEN", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
+  for (const k of ["EVOLUTION_URL", "INSTAGRAM_TOKEN", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
   const { data } = await admin.from("atendimento_segredos").select("chave, valor");
   for (const r of data || []) if (!out[r.chave]) out[r.chave] = r.valor;
   if (out.EVOLUTION_URL) out.EVOLUTION_URL = out.EVOLUTION_URL.replace(/\/+$/, "");
-  __seg = out; return out;
+  __seg = out; __segT = Date.now(); return out;
 }
 const ehCloud = (conv: any) => conv.canal === "whatsapp" && String(conv.instancia || "").startsWith("wa_");
 async function enviarCanal(conv: any, bot: any, texto: string): Promise<string | null> {
@@ -414,7 +428,7 @@ Deno.serve(async (req) => {
   try {
     // chamadas internas (atendimento-bot)
     if (!b.senha) {
-      if (req.headers.get("x-bot-token") !== BOT_TOKEN) return json({ error: "não autorizado" }, 401);
+      const tk = req.headers.get("x-bot-token"); if (!mesmoToken(tk, await tokenInterno("BOT_TOKEN"))) return json({ error: "não autorizado" }, 401);
       if (op === "responderAuto") return json({ ok: true, ...(await responderAuto(String(b.conversaId || ""), b.ultimoId ? String(b.ultimoId) : null, str(b.contexto, 300))) });
       if (op === "resumirAuto") {
         const conv = await conversaOuErro(String(b.conversaId || "")); const bot = await botDe(conv.bot_id);

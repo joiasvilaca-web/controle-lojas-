@@ -10,14 +10,28 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const VERIFY_TOKEN = "vjw_wa_verify_5c1d9e3a";
-const BOT_TOKEN = "vjw_bot_4d8e1b7a92c63f05";
+// Tokens internos ficam na tabela atendimento_segredos (nunca no código). Cache de 60 s para a troca valer em ~1 min.
+const __tokInterno: Record<string, { v: string; t: number }> = {};
+async function tokenInterno(chave: "BOT_TOKEN" | "WEBHOOK_TOKEN"): Promise<string> {
+  const c = __tokInterno[chave];
+  if (c && Date.now() - c.t < 60_000) return c.v;
+  const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", chave).maybeSingle();
+  const v = String((data && data.valor) || "");
+  __tokInterno[chave] = { v, t: Date.now() };
+  return v;
+}
+function mesmoToken(a: string | null | undefined, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 const GRAPH = "https://graph.facebook.com/v21.0";
 const BUCKET = "atendimento-midia";
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { "Content-Type": "application/json" } });
 
 async function acionarBot(instancia: string, contatoId: string) {
   try {
-    const p = fetch(`${SUPABASE_URL}/functions/v1/atendimento-bot`, { method: "POST", headers: { "Content-Type": "application/json", "x-bot-token": BOT_TOKEN }, body: JSON.stringify({ canal: "whatsapp", instancia, contato_id: contatoId }) }).catch((e) => console.error("bot", e));
+    const p = fetch(`${SUPABASE_URL}/functions/v1/atendimento-bot`, { method: "POST", headers: { "Content-Type": "application/json", "x-bot-token": await tokenInterno("BOT_TOKEN") }, body: JSON.stringify({ canal: "whatsapp", instancia, contato_id: contatoId }) }).catch((e) => console.error("bot", e));
     const er = (globalThis as any).EdgeRuntime;
     if (er && typeof er.waitUntil === "function") er.waitUntil(p); else await p;
   } catch (e) { console.error("acionarBot", e); }

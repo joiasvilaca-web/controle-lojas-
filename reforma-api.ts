@@ -372,7 +372,7 @@ async function calcularFretePedido(config: any, rcfg: any, p: any, servicoIda: s
 // ---------- WhatsApp (Evolution — mesmos segredos do Atendimento) ----------
 async function segredosAtendimento(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  for (const k of ["EVOLUTION_URL", "EVOLUTION_API_KEY"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
+  for (const k of ["EVOLUTION_URL"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
   const { data } = await admin.from("atendimento_segredos").select("chave, valor");
   for (const r of data || []) if (!out[r.chave]) out[r.chave] = r.valor;
   if (out.EVOLUTION_URL) out.EVOLUTION_URL = out.EVOLUTION_URL.replace(/\/+$/, "");

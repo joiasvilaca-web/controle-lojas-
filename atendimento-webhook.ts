@@ -16,29 +16,42 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const WEBHOOK_TOKEN = "vjw_7f3a9c2e51b84d6e";
 const IG_VERIFY_TOKEN = "vjw_ig_verify_7f3a9c2e";
-const BOT_TOKEN = "vjw_bot_4d8e1b7a92c63f05";
 const BUCKET = "atendimento-midia";
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+// Tokens internos ficam na tabela atendimento_segredos (nunca no código). Cache de 60 s para a troca valer em ~1 min.
+const __tokInterno: Record<string, { v: string; t: number }> = {};
+async function tokenInterno(chave: "BOT_TOKEN" | "WEBHOOK_TOKEN"): Promise<string> {
+  const c = __tokInterno[chave];
+  if (c && Date.now() - c.t < 60_000) return c.v;
+  const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", chave).maybeSingle();
+  const v = String((data && data.valor) || "");
+  __tokInterno[chave] = { v, t: Date.now() };
+  return v;
+}
+function mesmoToken(a: string | null | undefined, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 
 async function acionarBot(canal: string, instancia: string, contatoId: string) {
   try {
-    const p = fetch(`${SUPABASE_URL}/functions/v1/atendimento-bot`, { method: "POST", headers: { "Content-Type": "application/json", "x-bot-token": BOT_TOKEN }, body: JSON.stringify({ canal, instancia, contato_id: contatoId }) }).catch((e) => console.error("bot", e));
+    const p = fetch(`${SUPABASE_URL}/functions/v1/atendimento-bot`, { method: "POST", headers: { "Content-Type": "application/json", "x-bot-token": await tokenInterno("BOT_TOKEN") }, body: JSON.stringify({ canal, instancia, contato_id: contatoId }) }).catch((e) => console.error("bot", e));
     const er = (globalThis as any).EdgeRuntime;
     if (er && typeof er.waitUntil === "function") er.waitUntil(p); else await p;
   } catch (e) { console.error("acionarBot", e); }
 }
 
-let __segredos: Record<string, string> | null = null;
+let __segredos: Record<string, string> | null = null; let __segredosT = 0;
 async function segredos(): Promise<Record<string, string>> {
-  if (__segredos) return __segredos;
+  if (__segredos && Date.now() - __segredosT < 60_000) return __segredos;
   const out: Record<string, string> = {};
-  for (const k of ["EVOLUTION_URL", "EVOLUTION_API_KEY", "INSTAGRAM_TOKEN", "INSTAGRAM_IG_ID", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
+  for (const k of ["EVOLUTION_URL", "INSTAGRAM_TOKEN", "INSTAGRAM_IG_ID", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
   const { data } = await admin.from("atendimento_segredos").select("chave, valor");
   for (const r of data || []) if (!out[r.chave]) out[r.chave] = r.valor;
   if (out.EVOLUTION_URL) out.EVOLUTION_URL = out.EVOLUTION_URL.replace(/\/+$/, "");
-  __segredos = out;
+  __segredos = out; __segredosT = Date.now();
   return out;
 }
 
@@ -489,7 +502,7 @@ Deno.serve(async (req: Request) => {
       await processarMessenger(body);
       return new Response("EVENT_RECEIVED", { status: 200 });
     }
-    if (url.searchParams.get("t") !== WEBHOOK_TOKEN) return json({ error: "não autorizado" }, 401);
+    { const tk = url.searchParams.get("t"); if (!mesmoToken(tk, await tokenInterno("WEBHOOK_TOKEN"))) return json({ error: "não autorizado" }, 401); }
     const evento = String(body.event || "").toLowerCase().replace(/_/g, ".");
     const instancia = body.instance || "desconhecida";
     const data = body.data;

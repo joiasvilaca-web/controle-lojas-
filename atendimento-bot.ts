@@ -8,7 +8,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-const BOT_TOKEN = "vjw_bot_4d8e1b7a92c63f05";
+// Tokens internos ficam na tabela atendimento_segredos (nunca no código). Cache de 60 s para a troca valer em ~1 min.
+const __tokInterno: Record<string, { v: string; t: number }> = {};
+async function tokenInterno(chave: "BOT_TOKEN" | "WEBHOOK_TOKEN"): Promise<string> {
+  const c = __tokInterno[chave];
+  if (c && Date.now() - c.t < 60_000) return c.v;
+  const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", chave).maybeSingle();
+  const v = String((data && data.valor) || "");
+  __tokInterno[chave] = { v, t: Date.now() };
+  return v;
+}
+function mesmoToken(a: string | null | undefined, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 const IG_API = "https://graph.instagram.com/v21.0";
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-bot-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
@@ -27,15 +41,15 @@ function fluxoLimpo(x: any) {
   return { ativo: !!x.ativo, empresa: str(x.empresa, 80), voltar_digito: str(x.voltar_digito || "9", 3).trim() || "9", reenviar_apos_horas: Math.min(168, Math.max(1, Number(x.reenviar_apos_horas) || 12)), enviar_encerramento: !!x.enviar_encerramento, enquete: { ativa: !!(x.enquete && x.enquete.ativa), escala: x.enquete && x.enquete.escala === "10" ? "10" : "5", tempo_min: Math.min(1440, Math.max(0, Number(x.enquete && x.enquete.tempo_min) || 0)) }, enviar_nome_atendente: !!x.enviar_nome_atendente, motivo_obrigatorio: !!x.motivo_obrigatorio, motivos: (Array.isArray(x.motivos) ? x.motivos : String(x.motivos || "").split(/[\n,;]+/)).map((m: any) => str(m, 60).trim().toUpperCase()).filter(Boolean).slice(0, 40), contato_pode_finalizar: !!x.contato_pode_finalizar, palavras_finalizar: (Array.isArray(x.palavras_finalizar) ? x.palavras_finalizar : String(x.palavras_finalizar || "sair,encerrar").split(",")).map((m: any) => str(m, 30).trim()).filter(Boolean).slice(0, 10), agrupar_segundos: Math.min(20, Math.max(0, Number(x.agrupar_segundos) || 0)), recado_minutos: Math.min(1440, Math.max(0, Number(x.recado_minutos) || 0)), interativo: !!x.interativo, potenciais: { modo: ["nunca", "novos", "msg_sem_atendimento"].includes(x.potenciais && x.potenciais.modo) ? x.potenciais.modo : "nunca", minutos: Math.min(1440, Math.max(1, Number(x.potenciais && x.potenciais.minutos) || 10)) }, avisar_assumiu: !!x.avisar_assumiu, distribuicao: x.distribuicao === "online" ? "online" : "manual", msgs, menu, palavras };
 }
 
-let __seg: Record<string, string> | null = null;
+let __seg: Record<string, string> | null = null; let __segT = 0;
 async function segredos() {
-  if (__seg) return __seg;
+  if (__seg && Date.now() - __segT < 60_000) return __seg;
   const out: Record<string, string> = {};
-  for (const k of ["EVOLUTION_URL", "EVOLUTION_API_KEY", "INSTAGRAM_TOKEN", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
+  for (const k of ["EVOLUTION_URL", "INSTAGRAM_TOKEN", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
   const { data } = await admin.from("atendimento_segredos").select("chave, valor");
   for (const r of data || []) if (!out[r.chave]) out[r.chave] = r.valor;
   if (out.EVOLUTION_URL) out.EVOLUTION_URL = out.EVOLUTION_URL.replace(/\/+$/, "");
-  __seg = out; return out;
+  __seg = out; __segT = Date.now(); return out;
 }
 
 /* ---------- horário ---------- */
@@ -180,7 +194,7 @@ const iaFora = (bot: any) => !!(iaCfg(bot).ativo && iaCfg(bot).foraHorario);
 const soCumprimento = (t: string) => { const x = norm(t).replace(/[^\p{L}\p{N} ]/gu, " ").replace(/\s+/g, " ").trim(); return !x || /^((oi+|ola|opa|eai|e ai|bom dia|boa tarde|boa noite|tudo bem|tudo bom|ok|okay|obrigad[oa]|valeu|blz|beleza|sim|nao)\s*)+$/.test(x); };
 async function chamarIA(op: string, corpo: any): Promise<any> {
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/atendimento-ia`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + SERVICE_ROLE_KEY, apikey: SERVICE_ROLE_KEY, "x-bot-token": BOT_TOKEN }, body: JSON.stringify({ op, ...corpo }) });
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/atendimento-ia`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + SERVICE_ROLE_KEY, apikey: SERVICE_ROLE_KEY, "x-bot-token": await tokenInterno("BOT_TOKEN") }, body: JSON.stringify({ op, ...corpo }) });
     const r = await res.json().catch(() => ({})); if (!res.ok) console.error("atendimento-ia", op, res.status, r); return r || {};
   } catch (e) { console.error("chamarIA", e); return {}; }
 }
@@ -487,7 +501,7 @@ Deno.serve(async (req) => {
       if (b.op === "modeloExcluir") { const { data: m } = await admin.from("atendimento_modelos").select("*").eq("id", b.id).maybeSingle(); if (!m || !pode(m)) return json({ error: "sem acesso" }, 403); await admin.from("atendimento_modelos").delete().eq("id", b.id); return json({ ok: true }); }
       return json({ error: "operação desconhecida" }, 400);
     }
-    if (req.headers.get("x-bot-token") !== BOT_TOKEN) return json({ error: "não autorizado" }, 401);
+    { const tk = req.headers.get("x-bot-token"); if (!mesmoToken(tk, await tokenInterno("BOT_TOKEN"))) return json({ error: "não autorizado" }, 401); }
     if (b.acao === "finalizou" && b.conversa_id) await aoFinalizar(b.conversa_id);
     else if (b.instancia && b.contato_id) await processar(b.canal || "whatsapp", b.instancia, String(b.contato_id));
     return json({ ok: true });

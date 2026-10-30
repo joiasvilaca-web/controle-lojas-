@@ -16,18 +16,32 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const BUCKET = "atendimento-midia";
 const IG_API = "https://graph.instagram.com/v21.0";
-const WEBHOOK_TOKEN = "vjw_7f3a9c2e51b84d6e";
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+// Tokens internos ficam na tabela atendimento_segredos (nunca no código). Cache de 60 s para a troca valer em ~1 min.
+const __tokInterno: Record<string, { v: string; t: number }> = {};
+async function tokenInterno(chave: "BOT_TOKEN" | "WEBHOOK_TOKEN"): Promise<string> {
+  const c = __tokInterno[chave];
+  if (c && Date.now() - c.t < 60_000) return c.v;
+  const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", chave).maybeSingle();
+  const v = String((data && data.valor) || "");
+  __tokInterno[chave] = { v, t: Date.now() };
+  return v;
+}
+function mesmoToken(a: string | null | undefined, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 
-let __seg: Record<string, string> | null = null;
+let __seg: Record<string, string> | null = null; let __segT = 0;
 async function segredos(): Promise<Record<string, string>> {
-  if (__seg) return __seg;
+  if (__seg && Date.now() - __segT < 60_000) return __seg;
   const out: Record<string, string> = {};
-  for (const k of ["EVOLUTION_URL", "EVOLUTION_API_KEY", "INSTAGRAM_TOKEN", "INSTAGRAM_IG_ID", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
+  for (const k of ["EVOLUTION_URL", "INSTAGRAM_TOKEN", "INSTAGRAM_IG_ID", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
   const { data } = await admin.from("atendimento_segredos").select("chave, valor");
   for (const r of data || []) if (!out[r.chave]) out[r.chave] = r.valor;
   if (out.EVOLUTION_URL) out.EVOLUTION_URL = out.EVOLUTION_URL.replace(/\/+$/, "");
-  __seg = out; return out;
+  __seg = out; __segT = Date.now(); return out;
 }
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 function json(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } }); }
@@ -320,7 +334,7 @@ Deno.serve(async (req: Request) => {
     if (op === "criarInstancia") { // novo número de WhatsApp (Evolution) → devolve QR
       if (!podeAdmin) return json({ error: "só a diretoria configura o Atendimento" }, 403);
       const nome = String(body.nome || "").toLowerCase().replace(/[^a-z0-9]/g, ""); if (nome.length < 3) return json({ error: "nome da instância inválido (use letras/números, mínimo 3)" }, 400);
-      const r = await evolution("/instance/create", { instanceName: nome, integration: "WHATSAPP-BAILEYS", qrcode: true, webhook: { enabled: true, url: `${SUPABASE_URL}/functions/v1/atendimento-webhook?t=${WEBHOOK_TOKEN}`, byEvents: false, base64: false, events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"] } });
+      const r = await evolution("/instance/create", { instanceName: nome, integration: "WHATSAPP-BAILEYS", qrcode: true, webhook: { enabled: true, url: `${SUPABASE_URL}/functions/v1/atendimento-webhook?t=${await tokenInterno("WEBHOOK_TOKEN")}`, byEvents: false, base64: false, events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "SEND_MESSAGE", "CONNECTION_UPDATE"] } });
       return json({ ok: true, instancia: nome, qr: (r && r.qrcode && r.qrcode.base64) || null });
     }
     if (op === "qrInstancia") {

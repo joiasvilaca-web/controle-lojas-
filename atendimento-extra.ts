@@ -11,7 +11,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const admin = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-const BOT_TOKEN = "vjw_bot_4d8e1b7a92c63f05";
+// Tokens internos ficam na tabela atendimento_segredos (nunca no código). Cache de 60 s para a troca valer em ~1 min.
+const __tokInterno: Record<string, { v: string; t: number }> = {};
+async function tokenInterno(chave: "BOT_TOKEN" | "WEBHOOK_TOKEN"): Promise<string> {
+  const c = __tokInterno[chave];
+  if (c && Date.now() - c.t < 60_000) return c.v;
+  const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", chave).maybeSingle();
+  const v = String((data && data.valor) || "");
+  __tokInterno[chave] = { v, t: Date.now() };
+  return v;
+}
+function mesmoToken(a: string | null | undefined, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
 const WA_VERIFY = "vjw_wa_verify_5c1d9e3a";
 const GRAPH = "https://graph.facebook.com/v21.0";
 const IG_API = "https://graph.instagram.com/v21.0";
@@ -30,15 +44,15 @@ function sessaoValida(u: any, senha: string): boolean {
   if (u.senha === senha && (!u.sessaoExpiraEm || Number(u.sessaoExpiraEm) > agora)) return true;
   return (Array.isArray(u.sessoes) ? u.sessoes : []).some((s: any) => s && s.token === senha && (!s.exp || Number(s.exp) > agora));
 }
-let __seg: Record<string, string> | null = null;
+let __seg: Record<string, string> | null = null; let __segT = 0;
 async function segredos() {
-  if (__seg) return __seg;
+  if (__seg && Date.now() - __segT < 60_000) return __seg;
   const out: Record<string, string> = {};
-  for (const k of ["EVOLUTION_URL", "EVOLUTION_API_KEY", "INSTAGRAM_TOKEN", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
+  for (const k of ["EVOLUTION_URL", "INSTAGRAM_TOKEN", "FB_PAGE_TOKEN"]) { const v = Deno.env.get(k); if (v) out[k] = v; }
   const { data } = await admin.from("atendimento_segredos").select("chave, valor");
   for (const r of data || []) if (!out[r.chave]) out[r.chave] = r.valor;
   if (out.EVOLUTION_URL) out.EVOLUTION_URL = out.EVOLUTION_URL.replace(/\/+$/, "");
-  __seg = out; return out;
+  __seg = out; __segT = Date.now(); return out;
 }
 async function evolution(caminho: string, body: any) {
   const s = await segredos(); if (!s.EVOLUTION_URL || !s.EVOLUTION_API_KEY) throw new Erro("Evolution não configurada", 500);
@@ -120,7 +134,7 @@ async function gravarSaida(conv: any, r: { externoId: string | null; texto: stri
   await admin.from("atendimento_conversas").update(upd).eq("id", conv.id);
 }
 async function chamarBot(corpo: any) {
-  try { await fetch(`${SUPABASE_URL}/functions/v1/atendimento-bot`, { method: "POST", headers: { "Content-Type": "application/json", "x-bot-token": BOT_TOKEN }, body: JSON.stringify(corpo) }); } catch (e) { console.error("bot", e); }
+  try { await fetch(`${SUPABASE_URL}/functions/v1/atendimento-bot`, { method: "POST", headers: { "Content-Type": "application/json", "x-bot-token": await tokenInterno("BOT_TOKEN") }, body: JSON.stringify(corpo) }); } catch (e) { console.error("bot", e); }
 }
 async function nomesFuncionarios(config: any): Promise<Record<string, string>> {
   const out: Record<string, string> = {}; for (const f of (config.funcionarios || [])) out[f.id] = ((f.apelido || "").trim()) || f.nome || ""; return out;
@@ -204,7 +218,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   let b: any; try { b = await req.json(); } catch { return json({ error: "json inválido" }, 400); }
   try {
-    if (b.op === "tick" && req.headers.get("x-bot-token") === BOT_TOKEN) return json({ ok: true, ...(await tick()) });
+    if (b.op === "tick" && mesmoToken(req.headers.get("x-bot-token"), await tokenInterno("BOT_TOKEN"))) return json({ ok: true, ...(await tick()) });
     const { data: cfgRow } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
     const config = (cfgRow && cfgRow.payload) || {};
     const user = (config.users || []).find((u: any) => sessaoValida(u, b.senha));
