@@ -4030,7 +4030,11 @@ function renderNovaOrdem(main){
     const st = config.serviceTypes.find(s=>s.id===sid);
     const req = { id: uid('aut'), criadoEm: Date.now(), lojaId: lojaSel.value, solicitante: currentUser.nome, solicitanteId: currentUser.id||null, status:'pendente', motivo: motivoForaPadrao,
       via: { numeroVia: viaInp.value.trim(), cliente: cli.cliente, telefone: cli.telefone, vendedora: (document.getElementById('f_vendedora').value||'').trim(), serviceTypeId: sid, servico: st?st.nome:'', dataPedida: dt,
-             descricao: (document.getElementById('f_descricao').value||'').trim(), itens: itens.map((it,i)=>({ nome: nomeItemOs(it,i), quantidade: it.quantidade||1 })), valorTotal: tempPagHolder.valorTotal||0, observacoes: tempObsHolder.observacoes||'' } };
+             descricao: (document.getElementById('f_descricao').value||'').trim(), itens: itens.map((it,i)=>({ nome: nomeItemOs(it,i), quantidade: it.quantidade||1 })), valorTotal: tempPagHolder.valorTotal||0, observacoes: tempObsHolder.observacoes||'' },
+      completa: { cliente: cli, itens: itens, descricao: (document.getElementById('f_descricao').value||'').trim(),
+        pagamento: { pagamentos: tempPagHolder.pagamentos||[], valorTotal: tempPagHolder.valorTotal||0, momentoPagamento: tempPagHolder.momentoPagamento||'', emissaoNota: tempPagHolder.emissaoNota||'', numeroNota: tempPagHolder.numeroNota||'', lojaSaidaId: tempPagHolder.lojaSaidaId||'', lojaPagamentoId: tempPagHolder.lojaPagamentoId||'' },
+        fotos: (tempFotoHolder.fotos||[]).filter(f=>f.driveUrl).map(f=>({ nome:f.nome, driveUrl:f.driveUrl })),
+        observacoes: tempObsHolder.observacoes||[], infoInterna: (document.getElementById('f_infoInterna')?.value||'').trim() } };
     btnSolic.disabled = true;
     const ok = await autorizacoesMut(l=>{ l.unshift(req); });
     btnSolic.disabled = false;
@@ -5324,6 +5328,25 @@ function renderGerarCodigo(main){
       + (rec.length ? `<div class="muted" style="margin:14px 0 4px;font-size:12px;">Últimas respondidas</div>` + rec.map(r=>linha(r,true)).join('') : '');
     box.querySelectorAll('[data-ver]').forEach(b=> b.addEventListener('click', ()=> verSolicitacao(pend.find(r=>r.id===b.dataset.ver))));
   }
+  function viaCompletaHtml(c, v){
+    const cl = c.cliente||{}, pg = c.pagamento||{};
+    const campo = (rot, val) => val ? `<div><div class="muted" style="font-size:12px;">${rot}</div>${escapeHtml(String(val))}</div>` : '';
+    const forma = id => { const f=(config.formasPagamento||config.pagamentos||[]).find(x=>x.id===id); return f ? (f.nome||f.label||id) : (id==='__credito'?'Crédito do cliente':id==='__fiado'?'Fiado':id==='__sem_custo'?'Sem custo':id); };
+    const endereco = [cl.endereco, cl.numero, cl.complemento, cl.bairro, cl.cidade, cl.estado, cl.cep].filter(Boolean).join(', ');
+    const itens = (c.itens||[]).map((it,i)=>{ const q=Number(it.quantidade)||1, u=Number(it.valorUnitario)||0; return `<tr><td>${escapeHtml(nomeItemOs(it,i))}${it.avulso?' <span class="muted">(avulso)</span>':''}${it.observacao?`<div class="muted" style="font-size:12px;">${escapeHtml(it.observacao)}</div>`:''}</td><td style="text-align:right;">${q}</td><td style="text-align:right;">${fmtMoeda(u)}</td><td style="text-align:right;">${fmtMoeda(q*u)}</td></tr>`; }).join('');
+    const obs = Array.isArray(c.observacoes) ? c.observacoes.map(o=>`<div>${escapeHtml(typeof o==='string'?o:[o.nome,o.descricao].filter(Boolean).join(': '))}</div>`).join('') : escapeHtml(String(c.observacoes||''));
+    return `<div class="section-label" style="margin-top:16px;">Cliente</div>
+      <div class="grid-2">${campo('Nome',cl.cliente)}${campo('Telefone',cl.telefone)}${campo('E-mail',cl.email)}${campo('CPF',cl.cpf)}${campo('Nascimento',cl.dataNascimento?fmtDate(cl.dataNascimento):'')}${campo('Endereço',endereco)}</div>
+      <div class="section-label" style="margin-top:16px;">Itens do pedido</div>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:13px;"><thead><tr><th style="text-align:left;">Item</th><th style="text-align:right;">Qtd</th><th style="text-align:right;">Unit.</th><th style="text-align:right;">Total</th></tr></thead><tbody>${itens||'<tr><td colspan="4">—</td></tr>'}</tbody></table></div>
+      ${c.descricao?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Descrição do serviço</div>${escapeHtml(c.descricao)}</div>`:''}
+      <div class="section-label" style="margin-top:16px;">Pagamento</div>
+      <div class="grid-2">${campo('Valor total',fmtMoeda(pg.valorTotal||0))}${campo('Quando paga',pg.momentoPagamento==='na_volta'?'Paga na retirada':pg.momentoPagamento==='agora'?'Pago agora':pg.momentoPagamento)}${campo('Nota fiscal emitida',pg.emissaoNota==='sim'?'Sim':pg.emissaoNota==='nao'?'Não':pg.emissaoNota)}${campo('Nº da nota',pg.numeroNota)}</div>
+      ${(pg.pagamentos||[]).length?`<div style="margin-top:8px;">${pg.pagamentos.map(x=>`<div>${escapeHtml(forma(x.formaId))}: ${fmtMoeda(Number(x.valor)||0)}${x.parcelas?` · ${escapeHtml(String(x.parcelas))}x`:''}</div>`).join('')}</div>`:''}
+      ${obs?`<div class="section-label" style="margin-top:16px;">Observações</div>${obs}`:''}
+      ${c.infoInterna?`<div class="section-label" style="margin-top:16px;">Informação interna</div>${escapeHtml(c.infoInterna)}`:''}
+      ${(c.fotos||[]).length?`<div class="section-label" style="margin-top:16px;">Fotos</div><div style="display:flex;gap:8px;flex-wrap:wrap;">${c.fotos.map(f=>`<a href="${escapeHtml(f.driveUrl)}" target="_blank" rel="noopener"><img src="${escapeHtml(f.driveUrl)}" alt="${escapeHtml(f.nome||'')}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--line);"></a>`).join('')}</div>`:''}`;
+  }
   function verSolicitacao(r){
     if(!r) return;
     const v = r.via||{};
@@ -5337,10 +5360,9 @@ function renderGerarCodigo(main){
         <div><div class="muted" style="font-size:12px;">Tipo de serviço</div>${escapeHtml(v.servico||'—')}</div>
         <div><div class="muted" style="font-size:12px;">Data pedida</div>${fmtDate(v.dataPedida)}</div>
       </div>
-      <div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Itens</div>${(v.itens||[]).map(i=>`<div>${escapeHtml(String(i.quantidade||1))}× ${escapeHtml(i.nome||'')}</div>`).join('')||'—'}</div>
+      ${r.completa ? viaCompletaHtml(r.completa, v) : `<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Itens</div>${(v.itens||[]).map(i=>`<div>${escapeHtml(String(i.quantidade||1))}× ${escapeHtml(i.nome||'')}</div>`).join('')||'—'}</div>
       ${v.descricao?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Descrição</div>${escapeHtml(v.descricao)}</div>`:''}
-      ${v.observacoes?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Observações</div>${escapeHtml(v.observacoes)}</div>`:''}
-      <div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Valor total</div>${fmtMoeda(v.valorTotal||0)}</div>
+      <div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Valor total</div>${fmtMoeda(v.valorTotal||0)}</div>`}
       <div class="modal-actions"><button class="btn btn-ghost" id="solFechar" type="button">Fechar</button><button class="btn btn-danger" id="solRecusar" type="button">Recusar</button><button class="btn btn-accent" id="solLiberar" type="button">${ico('check')} Liberar</button></div>`);
     document.getElementById('solFechar').addEventListener('click', closeModal);
     document.getElementById('solRecusar').addEventListener('click', async ()=>{
