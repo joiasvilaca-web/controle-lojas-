@@ -4237,6 +4237,7 @@ function renderNovaOrdem(main){
     const res = checkSlot(sid, dt, null);
     let encaixe = false;
     let autorizadoPor = null;
+    let codeObjParaUsar = null;
 
     if(!res.ok){
       const codigoDigitado = document.getElementById('f_codigo').value.trim().toUpperCase();
@@ -4252,11 +4253,11 @@ function renderNovaOrdem(main){
         showToast('Código inválido ou já utilizado.');
         return;
       }
-      codeObj.usado = true;
-      codeObj.usadoEm = Date.now();
+      // O código só é "queimado" quando o pedido for realmente salvo (mais abaixo): se algum aviso
+      // interromper o lançamento (cliente fora do cadastro, crédito insuficiente…), o código continua valendo.
+      codeObjParaUsar = codeObj;
       encaixe = true;
       autorizadoPor = codeObj.autorizadoPor;
-      await saveCodes();
     }
 
     const st = config.serviceTypes.find(s=>s.id===sid);
@@ -4331,6 +4332,13 @@ function renderNovaOrdem(main){
         cliCad.fiadoDebitos.push({ id:novoFiadoDebitoIdOS, origem:'O.S.', numero:via, data:dt, valor:totalFiaOS, valorPago:0, loja:loja||'' });
       }
       await salvarUmCliente(cliCad);
+    }
+    if(codeObjParaUsar){
+      // relê para não sobrescrever códigos gerados enquanto a tela estava aberta
+      const atuais = await storageGet('codes', true) || codes;
+      const alvo = atuais.find(c=>c.codigo===codeObjParaUsar.codigo);
+      if(alvo){ alvo.usado = true; alvo.usadoEm = Date.now(); alvo.usadoPor = currentUser.nome; }
+      codes = atuais; await saveCodes();
     }
     orders.unshift(novaOrdem);
     await saveOrders();
