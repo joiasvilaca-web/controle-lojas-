@@ -2007,6 +2007,20 @@ function abrirNumeroNota(holder, aoSalvar){
   document.getElementById('nn_numero').addEventListener('keydown', e=>{ if(e.key==='Enter') ok(); });
 }
 
+/** Pix: o campo PF/PJ ao lado da forma de pagamento. PF não entra nos casos que exigem número de nota fiscal. */
+function formaEhPix(formaId){
+  if(!formaId || String(formaId).startsWith('__')) return false;
+  const f = (config.paymentTypes||config.formasPagamento||[]).find(x=>x.id===formaId);
+  return !!(f && /pix/i.test(f.nome||''));
+}
+function pessoaPixHtml(p, i){
+  if(!formaEhPix(p.formaId)) return '';
+  return `<select data-pagpessoa="${i}" aria-label="Pix de pessoa física ou jurídica" title="Pix recebido de pessoa física (PF) ou jurídica (PJ)" style="max-width:110px;"><option value="">PF ou PJ?</option><option value="PF" ${p.pessoa==='PF'?'selected':''}>PF</option><option value="PJ" ${p.pessoa==='PJ'?'selected':''}>PJ</option></select>`;
+}
+function pixSemPessoa(pagamentos){
+  return (pagamentos||[]).some(p=> formaEhPix(p.formaId) && (Number(p.valor)||0)>0 && !p.pessoa);
+}
+
 function mountPagamentos(container, holder, getLojaVendaId){
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = ''; // sem pré-seleção — obrigatório escolher
@@ -2172,13 +2186,17 @@ function mountPagamentos(container, holder, getLojaVendaId){
       <div class="pag-linha">
         <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId)}</select>
         <div style="display:flex; gap:6px; align-items:center;">
+          ${pessoaPixHtml(p,i)}
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor (R$)" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
           <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
         </div>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagform)].formaId = sel.value; });
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
+    });
+    wrap.querySelectorAll('[data-pagpessoa]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagpessoa)].pessoa = sel.value; });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
       inp.addEventListener('input', ()=>{
@@ -2288,13 +2306,17 @@ function mountPagamentosEdicao(container, holder){
       <div class="pag-linha">
         <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId)}</select>
         <div style="display:flex; gap:6px; align-items:center;">
+          ${pessoaPixHtml(p,i)}
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor (R$)" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
           <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
         </div>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagform)].formaId = sel.value; });
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
+    });
+    wrap.querySelectorAll('[data-pagpessoa]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagpessoa)].pessoa = sel.value; });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
       inp.addEventListener('input', ()=>{
@@ -4334,6 +4356,7 @@ function renderNovaOrdem(main){
     }
     if(!tempPagHolder.momentoPagamento){ showToast('Em Pagamento, escolha quando o cliente paga: "Pago agora" ou "Paga na retirada".'); return; }
     if(!tempPagHolder.emissaoNota){ showToast('Em Pagamento, responda se a nota fiscal já foi emitida (Sim ou Não).'); return; }
+    if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha PF ou PJ.'); return; }
     const erroNota = notaEmpresasErro(tempPagHolder);
     if(erroNota){
       showToast(erroNota);
