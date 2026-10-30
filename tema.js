@@ -34,7 +34,16 @@
  * No computador (mouse/teclado, leitor USB) nada muda. */
 (function(){
   var mm = window.matchMedia;
-  if(!mm || !mm('(any-pointer: coarse)').matches || mm('(any-pointer: fine)').matches) return;
+  // Celular/tablet pequeno: toque como entrada principal, ou tela pequena com toque (alguns aparelhos dizem ter "mouse" por causa de caneta/Samsung DeX).
+  // Notebook com tela de toque (ponteiro principal = mouse e tela grande) fica de fora: lá o leitor de código continua valendo.
+  function modoToque(){
+    var toque = (navigator.maxTouchPoints || 0) > 0 || ('ontouchstart' in window);
+    if(!toque) return false;
+    if(mm && mm('(pointer: coarse)').matches) return true;
+    var menor = Math.min(screen.width || 9999, screen.height || 9999);
+    return menor <= 600;
+  }
+  if(!modoToque()) return;
   var TIPOS = /^(text|search|email|tel|url|password|number|)$/i;
   var ultToque = { el:null, t:0 }, ultDigitou = 0;
   function digitavel(el){
@@ -62,6 +71,18 @@
     if(digitavel(this) && !permitido(this)) return;
     return original.apply(this, arguments);
   };
+  ['select','setSelectionRange'].forEach(function(nome){
+    [HTMLInputElement, HTMLTextAreaElement].forEach(function(C){
+      var o = C.prototype[nome]; if(!o) return;
+      C.prototype[nome] = function(){
+        if(document.activeElement !== this && !permitido(this)){
+          // sem foco e sem toque: não deixa o navegador focar por trás
+          return;
+        }
+        return o.apply(this, arguments);
+      };
+    });
+  });
   // autofocus do HTML e qualquer outro caminho: se o campo ganhou foco sem toque, solta.
   document.addEventListener('focusin', function(e){
     var el = e.target;
