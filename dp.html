@@ -191,6 +191,16 @@ tr.linha-atencao > td{background:var(--wait-soft);}
 .mod-lista{border:1px solid var(--line); border-radius:10px; padding:4px 14px; max-height:46vh; overflow:auto;}
 .mod-item{padding:10px 0; border-bottom:1px solid var(--line);}
 .mod-item:last-child{border-bottom:0;}
+.mod-lista-alta{max-height:52vh;}
+.grp-mod{padding:4px 0;}
+.grp-mod > header{display:flex; align-items:center; justify-content:space-between; gap:8px; position:sticky; top:0; z-index:1; background:var(--surface); padding:8px 0 6px; border-bottom:1px solid var(--line);}
+.grp-mod > header h4{margin:0; font-size:12px; letter-spacing:.04em; color:var(--ink-faint); font-weight:700;}
+.grp-acoes{display:flex; gap:6px;}
+.mod-item.ajustado{background:var(--wait-soft); border-radius:8px; padding-left:8px; padding-right:8px;}
+.cargo-checks > label.ajustado{border-color:var(--wait); background:var(--wait-soft);}
+.tag-ajuste{display:inline-block; padding:1px 8px; border-radius:999px; background:var(--wait-soft); color:var(--wait); font-size:11.5px; font-weight:700;}
+.barra-pers{display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 8px; flex-wrap:wrap;}
+.pers-linha{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px;}
 .mod-item > label{display:flex; align-items:center; gap:8px; font-weight:600; font-size:13.5px; color:var(--ink); cursor:pointer;}
 .mod-abas{margin:8px 0 2px 26px;}
 .atd-perfil{margin:8px 0 2px 26px; display:flex; flex-direction:column; gap:8px;}
@@ -524,19 +534,20 @@ function abasChecklistHtml(moduloId, permissoesModulo){
     </div>
   `;
 }
-function modulosChecklistHtml(permissoes){
-  return Object.keys(MODULOS_APP).map(moduloId=>{
-    const mod = MODULOS_APP[moduloId];
-    const ativo = permissoes[moduloId] && permissoes[moduloId].ativo;
-    return `
-      <div class="mod-item">
+function moduloItemHtml(moduloId, permissoes){
+  const mod = MODULOS_APP[moduloId];
+  const ativo = permissoes[moduloId] && permissoes[moduloId].ativo;
+  return `
+      <div class="mod-item" data-moditem="${moduloId}">
         <label>
           <input type="checkbox" class="chk-modulo" data-modulo="${moduloId}" ${ativo?'checked':''}> ${escapeHtml(mod.nome)}
         </label>
         <div data-abasslot="${moduloId}" style="display:${ativo?'':'none'};">${abasChecklistHtml(moduloId, permissoes[moduloId])}${moduloId==='atendimento'?atendimentoPerfilHtml(permissoes[moduloId]):''}</div>
       </div>
     `;
-  }).join('');
+}
+function modulosChecklistHtml(permissoes){
+  return Object.keys(MODULOS_APP).map(moduloId=>moduloItemHtml(moduloId, permissoes)).join('');
 }
 /* ---- Atendimento: perfil (papel) e instâncias (bots) que a pessoa pode trabalhar ----
    Gravado em users[].permissoes.atendimento.{papel,bots}. papel vazio = automático pelo nível
@@ -626,6 +637,282 @@ function lerPermissoesDoFormulario(container){
     if(moduloId==='atendimento') permissoes[moduloId] = lerAtendimentoPerfil(container, permissoes[moduloId]);
   });
   return permissoes;
+}
+/* ============================================================
+   FUNÇÕES DE ACESSO (30/out/2026)
+   Uma função = um tipo de acesso (Diretoria, Gerente, Vendedora, Oficina e as que a diretoria criar) com o padrão de módulos/abas
+   liberados. Cada funcionário recebe uma função (Funcionários › Acesso) e a diretoria pode PERSONALIZAR por pessoa (tirar/incluir
+   acessos). Guardado em config.funcoesAcesso; em cada users[]: funcaoId + ajustes (só a diferença para a função).
+   O que vale de verdade continua em users[].permissoes (o servidor e o shell leem só isso): é recalculado a partir de
+   função + ajustes sempre que algo muda. Usuário que sempre seguiu o padrão do nível mantém permissoes = null (como era).
+   ============================================================ */
+const NIVEIS_BASE = [['diretoria','Diretoria'],['gerente','Gerente'],['vendedora','Vendedora'],['oficina','Oficina']];
+const GRUPOS_MODULOS = [
+  { nome:'PAINEL', mods:['dashboard','ia'] },
+  { nome:'CAIXA', mods:['vendas','os','orcamentos','transferencias','gravacoes','caixa','gastos','conciliacao','reforma','insumos','marketing'] },
+  { nome:'CHAT', mods:['atendimento'] },
+  { nome:'CONFIGURAÇÕES', mods:['config','dp'] },
+  { nome:'OUTROS', mods:['lancamentos','site'] },
+];
+/** Grupos de módulos para a tela de permissões; módulo novo em MODULOS_APP que não esteja listado cai em OUTROS. */
+function gruposDeModulos(){
+  const vistos = new Set();
+  const out = GRUPOS_MODULOS.map(g=>({ nome:g.nome, mods:g.mods.filter(m=>MODULOS_APP[m]) }));
+  out.forEach(g=>g.mods.forEach(m=>vistos.add(m)));
+  const sobra = Object.keys(MODULOS_APP).filter(m=>!vistos.has(m));
+  if(sobra.length){ out.find(g=>g.nome==='OUTROS').mods.push(...sobra); }
+  return out.filter(g=>g.mods.length);
+}
+function copiarJson(o){ return o==null ? null : JSON.parse(JSON.stringify(o)); }
+function funcaoSistema(nivel, nome){ return { id:'fn_'+nivel, nome, nivelBase:nivel, sistema:true, descricao:'', permissoes:permissoesPadrao(nivel) }; }
+/** Funções cadastradas; antes de a diretoria abrir a tela pela primeira vez, mostra as 4 padrões (sem gravar). */
+function funcoesAcesso(){
+  return (Array.isArray(config && config.funcoesAcesso) && config.funcoesAcesso.length) ? config.funcoesAcesso : NIVEIS_BASE.map(([n,l])=>funcaoSistema(n,l));
+}
+function funcaoPorId(id){ return id ? (funcoesAcesso().find(f=>f.id===id) || null) : null; }
+function funcaoDoUsuario(u){ return u ? (funcaoPorId(u.funcaoId) || (u.funcaoId ? null : funcaoPorId('fn_'+u.nivel))) : null; }
+function nomeFuncaoUsuario(u){ const f = funcaoDoUsuario(u); return f ? f.nome : levelLabel(u && u.nivel); }
+function usuariosDaFuncao(id){ return (config.users||[]).filter(u=>u && u.funcaoId===id); }
+/** Quantos itens (módulos/abas/extras) a pessoa tem diferentes da função. */
+function qtdAjustes(aj){
+  let n = 0;
+  Object.keys(aj||{}).forEach(m=>{ const d = aj[m]; if(!d) return; if('ativo' in d) n++; n += Object.keys(d.abas||{}).length; Object.keys(d).forEach(k=>{ if(k!=='ativo' && k!=='abas') n++; }); });
+  return n;
+}
+/** Permissões finais = função + ajustes da pessoa. */
+function permissoesEfetivas(funcao, ajustes){
+  const base = copiarJson((funcao && funcao.permissoes) || permissoesPadrao('vendedora'));
+  const aj = ajustes || {};
+  Object.keys(MODULOS_APP).forEach(m=>{
+    if(!base[m]) base[m] = MODULOS_APP[m].abas.length ? { ativo:false, abas:{} } : { ativo:false };
+    const a = aj[m]; if(!a) return;
+    const b = base[m];
+    Object.keys(a).forEach(k=>{
+      if(k==='abas'){ b.abas = { ...(b.abas||{}), ...a.abas }; return; }
+      if(a[k]===null) delete b[k]; else b[k] = copiarJson(a[k]);
+    });
+  });
+  return base;
+}
+/** Diferença entre as permissões finais e as da função (é o que fica em users[].ajustes). */
+function calcularAjustes(efetivas, funcao){
+  const base = (funcao && funcao.permissoes) || {};
+  const out = {};
+  Object.keys(MODULOS_APP).forEach(m=>{
+    const e = efetivas[m] || {}; const b = base[m] || {}; const d = {};
+    if(!!e.ativo !== !!b.ativo) d.ativo = !!e.ativo;
+    const abasE = e.abas || {}, abasB = b.abas || {}; const da = {};
+    MODULOS_APP[m].abas.forEach(a=>{ if(!!abasE[a.id] !== !!abasB[a.id]) da[a.id] = !!abasE[a.id]; });
+    if(Object.keys(da).length) d.abas = da;
+    Object.keys(e).forEach(k=>{ if(k==='ativo'||k==='abas') return; if(JSON.stringify(e[k]) !== JSON.stringify(b[k])) d[k] = copiarJson(e[k]); });
+    Object.keys(b).forEach(k=>{ if(k==='ativo'||k==='abas') return; if(!(k in e)) d[k] = null; });
+    if(Object.keys(d).length) out[m] = d;
+  });
+  return out;
+}
+/** Dá a função à pessoa e recalcula users[].permissoes (e o nível, que é o nível base da função). */
+function aplicarFuncaoAoUsuario(u, fn){
+  u.funcaoId = fn.id; u.nivel = fn.nivelBase;
+  if(u.ajustes && !Object.keys(u.ajustes).length) delete u.ajustes;
+  const efetivas = permissoesEfetivas(fn, u.ajustes);
+  const igualAoPadrao = Object.keys(calcularAjustes(efetivas, { permissoes: permissoesPadrao(fn.nivelBase) })).length === 0;
+  if(u.permissoes == null && igualAoPadrao) return;   // sempre seguiu o padrão do nível: continua null
+  u.permissoes = efetivas;
+}
+function reaplicarFuncao(fn){ usuariosDaFuncao(fn.id).forEach(u=>aplicarFuncaoAoUsuario(u, fn)); }
+/** Primeira abertura: cria as 4 funções padrão e liga cada usuário à função do nível dele SEM mudar o que ele acessa hoje
+ *  (o que já era diferente do padrão vira "ajustes"). Devolve true se mudou algo (precisa salvar). */
+function garantirFuncoes(){
+  let mudou = false;
+  if(!Array.isArray(config.funcoesAcesso) || !config.funcoesAcesso.length){
+    config.funcoesAcesso = NIVEIS_BASE.map(([n,l])=>funcaoSistema(n,l)); mudou = true;
+  }
+  (config.users||[]).forEach(u=>{
+    if(!u || u.funcaoId) return;
+    const fn = config.funcoesAcesso.find(f=>f.id==='fn_'+u.nivel);
+    if(!fn) return;   // nível antigo "personalizado": continua sem função até a diretoria escolher uma
+    const aj = calcularAjustes(permissoesDoUsuario(u), fn);
+    u.funcaoId = fn.id;
+    if(Object.keys(aj).length) u.ajustes = aj; else delete u.ajustes;
+    mudou = true;
+  });
+  return mudou;
+}
+/** Relê a configuração do servidor antes de alterar (evita gravar por cima de mudança feita em outra tela). */
+async function recarregarConfig(){
+  const f = await configGetUnificada();
+  if(!f) return false;
+  config = f; return true;
+}
+/** Lê a config fresca, aplica `mutar()` e grava. `mutar` pode devolver false para cancelar. */
+async function alterarFuncoesEGravar(mutar){
+  if(!(await recarregarConfig())){ showToast('Não consegui atualizar a configuração. Tente de novo.'); return false; }
+  garantirFuncoes();
+  if(mutar() === false) return false;
+  return await configSave();
+}
+/** Dá uma função a um funcionário (cria o acesso se ainda não existir) e grava as permissões resultantes. */
+async function atribuirFuncaoAoFuncionario(funcionarioId, funcaoId, lojas){
+  const fn = funcaoPorId(funcaoId); if(!fn) return false;
+  const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId, nivel: fn.nivelBase, lojas: lojas||[] });
+  if(!r || !r.ok){ showToast((r && r.error) || 'Não foi possível salvar o acesso.'); return false; }
+  return await alterarFuncoesEGravar(()=>{
+    const u = (config.users||[]).find(x=>x.funcionarioId===funcionarioId); if(!u) return false;
+    const mudou = u.funcaoId !== fn.id;
+    if(mudou) delete u.ajustes;
+    const f = funcaoPorId(fn.id) || fn; aplicarFuncaoAoUsuario(u, f);
+  });
+}
+function nomeCurtoModulo(m){ return String(MODULOS_APP[m].nome).replace(/^.*›\s*/,''); }
+function resumoFuncaoHtml(fn){
+  const mods = Object.keys(MODULOS_APP).filter(m=>fn.permissoes && fn.permissoes[m] && fn.permissoes[m].ativo);
+  if(!mods.length) return `<span class="chip chip-erro">Nenhum acesso</span>`;
+  const vis = mods.slice(0,8).map(m=>`<span class="chip">${escapeHtml(nomeCurtoModulo(m))}</span>`).join(' ');
+  return vis + (mods.length>8 ? ` <span class="chip">+${mods.length-8}</span>` : '');
+}
+
+/* ---- editor de permissões agrupado (usado em Funções e em Personalizar) ---- */
+function modulosGrupadosHtml(permissoes){
+  return gruposDeModulos().map(g=>`
+    <section class="grp-mod">
+      <header><h4>${escapeHtml(g.nome)}</h4><span class="grp-acoes"><button type="button" class="btn btn-ghost btn-sm" data-grp-todos>Marcar tudo</button><button type="button" class="btn btn-ghost btn-sm" data-grp-nenhum>Limpar</button></span></header>
+      ${g.mods.map(m=>moduloItemHtml(m, permissoes)).join('')}
+    </section>`).join('');
+}
+function ligarBotoesGrupo(wrap, aoMudar){
+  wrap.querySelectorAll('[data-grp-todos],[data-grp-nenhum]').forEach(b=> b.addEventListener('click', ()=>{
+    const marcar = b.hasAttribute('data-grp-todos'); const sec = b.closest('.grp-mod');
+    sec.querySelectorAll('.chk-modulo').forEach(c=>{ c.checked = marcar; const slot = wrap.querySelector(`[data-abasslot="${c.dataset.modulo}"]`); if(slot) slot.style.display = marcar ? '' : 'none'; });
+    sec.querySelectorAll('.chk-aba').forEach(c=> c.checked = marcar);
+    if(aoMudar) aoMudar();
+  }));
+}
+function desenharEditorPermissoes(wrap, permissoes, aoMudar){
+  wrap.innerHTML = modulosGrupadosHtml(permissoes);
+  wirePermissoesChecklist(wrap);
+  ligarBotoesGrupo(wrap, aoMudar);
+}
+
+/* ---- tela Funções ---- */
+function abrirFuncaoModal(fn, base){
+  const origem = fn || base || null;
+  const emUso = fn ? usuariosDaFuncao(fn.id).length : 0;
+  const travarNivel = !!(fn && (fn.sistema || emUso));
+  const nivelIni = origem ? origem.nivelBase : 'vendedora';
+  const permIni = origem ? copiarJson(origem.permissoes) : permissoesPadrao('vendedora');
+  const outras = funcoesAcesso().filter(f=>!fn || f.id!==fn.id);
+  openModal(`
+    <div class="modal-head"><h2>${fn ? 'Editar função' : (base ? 'Duplicar função' : 'Nova função')}</h2><p>Defina o que esta função acessa por padrão. Depois, em Funcionários › Acesso, é só escolher a função de cada pessoa.${emUso ? ` <b>${emUso} funcionário${emUso===1?'':'s'} usa${emUso===1?'':'m'} esta função</b>: ao salvar, o acesso deles acompanha as mudanças (os ajustes individuais são mantidos).` : ''}</p></div>
+    <div class="grid-3">
+      <div class="field"><label for="fn_nome">Nome da função</label><input id="fn_nome" value="${escapeHtml(fn ? fn.nome : (base ? base.nome+' (cópia)' : ''))}" placeholder="Ex.: Gerente de loja, Caixa, Estoquista" ${fn&&fn.sistema?'disabled':''}></div>
+      <div class="field"><label for="fn_nivel">Nível base</label>
+        <select id="fn_nivel" ${travarNivel?'disabled':''}>${NIVEIS_BASE.map(([v,l])=>`<option value="${v}" ${nivelIni===v?'selected':''}>${l}</option>`).join('')}</select>
+        <p class="dica">${travarNivel ? 'Não muda enquanto houver funcionários na função.' : 'Escolha o mais parecido com o cargo: define as regras de segurança do servidor (só Diretoria e Gerente têm poderes de gestão).'}</p>
+      </div>
+      <div class="field"><label for="fn_desc">Descrição <span class="opc">(opcional)</span></label><input id="fn_desc" value="${escapeHtml(origem && origem.descricao || '')}" placeholder="Para quem é esta função"></div>
+    </div>
+    ${!fn ? `<div class="field" style="max-width:360px;"><label for="fn_copiar">Começar a partir de</label>
+      <select id="fn_copiar"><option value="">${base ? escapeHtml(base.nome) : 'Padrão de Vendedora'}</option>${outras.filter(f=>!base||f.id!==base.id).map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select>
+      <p class="dica">Troca as marcações abaixo pelas dessa função.</p></div>` : ''}
+    <div class="section-label" style="margin-top:6px;">Módulos e abas liberados</div>
+    <div id="fnPermWrap" class="mod-lista mod-lista-alta"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="fnCancelar">Cancelar</button>
+      <button class="btn btn-accent" id="fnSalvar">${fn ? 'Salvar função' : 'Criar função'}</button>
+    </div>
+  `);
+  const wrap = document.getElementById('fnPermWrap');
+  desenharEditorPermissoes(wrap, permIni);
+  const sel = document.getElementById('fn_copiar');
+  if(sel) sel.addEventListener('change', ()=>{
+    const f = sel.value ? funcaoPorId(sel.value) : (base || null);
+    desenharEditorPermissoes(wrap, f ? copiarJson(f.permissoes) : permissoesPadrao('vendedora'));
+    if(f && !travarNivel){ document.getElementById('fn_nivel').value = f.nivelBase; }
+  });
+  document.getElementById('fnCancelar').addEventListener('click', closeModal);
+  document.getElementById('fnSalvar').addEventListener('click', async ()=>{
+    const nome = maiusc((document.getElementById('fn_nome').value||'').trim());
+    const nivel = document.getElementById('fn_nivel').value;
+    const descricao = (document.getElementById('fn_desc').value||'').trim();
+    if(!nome){ showToast('Dê um nome para a função.'); return; }
+    if(funcoesAcesso().some(f=> (!fn || f.id!==fn.id) && String(f.nome).toUpperCase()===nome.toUpperCase())){ showToast('Já existe uma função com esse nome.'); return; }
+    if(!travarNivel && nivel==='diretoria' && !confirm('O nível Diretoria dá poderes totais de gestão no servidor (inclusive alterar acessos). Criar mesmo assim?')) return;
+    if(emUso && !confirm(`Isto muda o acesso de ${emUso} funcionário${emUso===1?'':'s'} que usa${emUso===1?'':'m'} esta função. Continuar?`)) return;
+    const permissoes = lerPermissoesDoFormulario(wrap);
+    const btn = document.getElementById('fnSalvar'); btn.disabled = true;
+    const ok = await alterarFuncoesEGravar(()=>{
+      if(fn){
+        const alvo = config.funcoesAcesso.find(f=>f.id===fn.id); if(!alvo){ showToast('Esta função não existe mais. Recarregue a página.'); return false; }
+        if(!alvo.sistema) alvo.nome = nome;
+        alvo.descricao = descricao;
+        if(!travarNivel) alvo.nivelBase = nivel;
+        alvo.permissoes = permissoes;
+        reaplicarFuncao(alvo);
+      } else {
+        config.funcoesAcesso.push({ id: uid('fn'), nome, nivelBase: nivel, sistema:false, descricao, permissoes });
+      }
+    });
+    btn.disabled = false;
+    if(!ok) return;
+    closeModal();
+    if(window.__redrawAcessos) window.__redrawAcessos();
+    showToast(fn ? 'Função salva.' : 'Função criada.');
+  });
+}
+async function excluirFuncao(fn){
+  if(fn.sistema){ showToast('As funções padrão do sistema não podem ser excluídas.'); return; }
+  const n = usuariosDaFuncao(fn.id).length;
+  if(n){ showToast(`Esta função está em uso por ${n} funcionário${n===1?'':'s'}. Mude a função deles antes de excluir.`); return; }
+  if(!confirm(`Excluir a função “${fn.nome}”? Essa ação não pode ser desfeita.`)) return;
+  const ok = await alterarFuncoesEGravar(()=>{
+    if(usuariosDaFuncao(fn.id).length){ showToast('Esta função passou a ter funcionários. Nada foi excluído.'); return false; }
+    const i = config.funcoesAcesso.findIndex(f=>f.id===fn.id); if(i<0) return false;
+    config.funcoesAcesso.splice(i,1);
+  });
+  if(ok){ if(window.__redrawAcessos) window.__redrawAcessos(); showToast('Função excluída.'); }
+}
+/** Personalizar o acesso de UMA pessoa (só diretoria): tira ou inclui módulos/abas por cima da função dela. */
+function abrirPersonalizarModal(userId, aoVoltar){
+  const u = (config.users||[]).find(x=>x.id===userId);
+  const fn = u && funcaoDoUsuario(u);
+  if(!u || !fn){ showToast('Salve a função desta pessoa antes de personalizar.'); return; }
+  openModal(`
+    <div class="modal-head"><h2>Personalizar acesso</h2><p><b>${escapeHtml(u.nome)}</b> · função <b>${escapeHtml(fn.nome)}</b>. Marque ou desmarque para dar ou tirar acessos só desta pessoa; o que você não mexer continua seguindo a função. O que fica diferente da função aparece marcado como <span class="tag-ajuste">ajustado</span>.</p></div>
+    <div class="barra-pers"><span id="persContador" class="muted"></span><button type="button" class="btn btn-ghost btn-sm" id="persRestaurar">Restaurar padrão da função</button></div>
+    <div id="persWrap" class="mod-lista mod-lista-alta"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="persCancelar">Cancelar</button>
+      <button class="btn btn-accent" id="persSalvar">Salvar personalização</button>
+    </div>
+  `);
+  const wrap = document.getElementById('persWrap');
+  function marcar(){
+    const aj = calcularAjustes(lerPermissoesDoFormulario(wrap), fn);
+    wrap.querySelectorAll('.mod-item').forEach(it=>{ const m = it.dataset.moditem; const d = aj[m]; it.classList.toggle('ajustado', !!d); });
+    wrap.querySelectorAll('.chk-aba').forEach(c=>{ const d = aj[c.dataset.modulo]; c.closest('label').classList.toggle('ajustado', !!(d && d.abas && (c.dataset.aba in d.abas))); });
+    const n = qtdAjustes(aj);
+    document.getElementById('persContador').textContent = n ? `${n} ajuste${n===1?'':'s'} em relação à função` : 'Igual à função (nenhum ajuste)';
+  }
+  desenharEditorPermissoes(wrap, permissoesEfetivas(fn, u.ajustes), marcar);
+  wrap.addEventListener('change', marcar);
+  marcar();
+  document.getElementById('persRestaurar').addEventListener('click', ()=>{ desenharEditorPermissoes(wrap, copiarJson(fn.permissoes), marcar); marcar(); });
+  const voltar = ()=>{ if(aoVoltar) aoVoltar(); else closeModal(); };
+  document.getElementById('persCancelar').addEventListener('click', voltar);
+  document.getElementById('persSalvar').addEventListener('click', async ()=>{
+    const aj = calcularAjustes(lerPermissoesDoFormulario(wrap), fn);
+    const btn = document.getElementById('persSalvar'); btn.disabled = true;
+    const ok = await alterarFuncoesEGravar(()=>{
+      const alvo = (config.users||[]).find(x=>x.id===userId); const f = alvo && funcaoDoUsuario(alvo);
+      if(!alvo || !f){ showToast('Não encontrei o acesso desta pessoa. Recarregue a página.'); return false; }
+      if(Object.keys(aj).length) alvo.ajustes = aj; else delete alvo.ajustes;
+      aplicarFuncaoAoUsuario(alvo, f);
+    });
+    btn.disabled = false;
+    if(!ok) return;
+    showToast(Object.keys(aj).length ? 'Acesso personalizado salvo.' : 'Acesso igual ao da função.');
+    voltar();
+  });
 }
 function openAcessoModal(usuario){
   const permissoesIniciais = usuario ? permissoesDoUsuario(usuario) : permissoesPadrao('vendedora');
@@ -722,7 +1009,7 @@ function renderEnviarLinkDP(main){
         <div class="field"><label for="el_nome">Nome completo</label><input id="el_nome" placeholder="Nome do funcionário"></div>
         <div class="field"><label for="el_apelido">Apelido <span class="opc">(opcional)</span></label><input id="el_apelido" placeholder="Como aparece nas listas"></div>
       </div>
-      <div class="field"><label class="rot">Função</label>
+      <div class="field"><label class="rot">Cargo</label>
         <div class="cargo-checks">
           <label><input type="checkbox" value="vendedora" class="el_cargo"> Vendedora</label>
           <label><input type="checkbox" value="oficina" class="el_cargo"> Oficina</label>
@@ -730,6 +1017,9 @@ function renderEnviarLinkDP(main){
           ${currentUser.nivel==='diretoria' ? `<label><input type="checkbox" value="diretor" class="el_cargo"> Diretor(a)</label>` : ''}
         </div>
       </div>
+      ${currentUser.nivel==='diretoria' ? `<div class="field" style="max-width:360px;"><label for="el_funcao">Função de acesso</label>
+        <select id="el_funcao">${funcoesAcesso().map(f=>`<option value="${f.id}" ${f.id==='fn_vendedora'?'selected':''}>${escapeHtml(f.nome)}</option>`).join('')}</select>
+        <p class="dica">O que a pessoa acessa no sistema. Dá para personalizar depois, na ficha dela.</p></div>` : ''}
       <div class="field"><label class="rot">Lojas de acesso</label>
         <div class="cargo-checks">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="el_loja"> ${escapeHtml(l.nome)}</label>`).join('')}</div>
       </div>
@@ -775,6 +1065,8 @@ function renderEnviarLinkDP(main){
     if(!rCriar || !rCriar.ok){ btn.disabled = false; btn.textContent = 'Criar e enviar'; status.textContent = (rCriar && rCriar.error) || 'Não foi possível salvar o cadastro. Tente de novo.'; return; }
     const novoId = rCriar.funcionarioId;
     await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, lojas: lojasEscolhidas });
+    const selFuncaoEl = document.getElementById('el_funcao');
+    if(selFuncaoEl && selFuncaoEl.value){ const okF = await atribuirFuncaoAoFuncionario(novoId, selFuncaoEl.value, lojasEscolhidas); if(!okF) showToast('Atenção: não foi possível aplicar a função de acesso; defina na ficha dela, em Acesso.'); }
 
     if(canal==='email'){
       const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email: contato, canal:'email' });
@@ -806,50 +1098,73 @@ function renderEnviarLinkDP(main){
 }
 function renderAcessosDP(main){
   if(currentUser.nivel!=='diretoria'){
-    main.innerHTML = `<div class="card">${estadoHtml('cadeado', 'Sem permissão', 'Só a diretoria pode ver os perfis de acesso.')}</div>`;
+    main.innerHTML = `<div class="card">${estadoHtml('cadeado', 'Sem permissão', 'Só a diretoria pode ver e criar as funções de acesso.')}</div>`;
     return;
   }
   main.innerHTML = `
     <div class="page-head">
       <div>
-        <h1 class="page-title">Perfis de acesso</h1>
-        <p class="page-sub">Cada senha define quais módulos a pessoa vê e, dentro de cada módulo, quais abas pode usar.</p>
+        <h1 class="page-title">Funções</h1>
+        <p class="page-sub">Cada função é um tipo de acesso (Gerente, Vendedora, Oficina…) com os módulos e abas liberados por padrão. Em Funcionários › Acesso você escolhe a função de cada pessoa e, se precisar, personaliza.</p>
       </div>
-      <div class="page-actions"><button class="btn btn-accent" id="btnNovoAcesso">${ic('mais')} Novo acesso</button></div>
+      <div class="page-actions"><button class="btn btn-accent" id="btnNovaFuncao">${ic('mais')} Nova função</button></div>
     </div>
-    <div class="card">
-      <div id="userRows"></div>
-    </div>
+    <div class="card"><div id="funcoesRows">${estadoHtml('atualizar', 'Carregando as funções…')}</div></div>
+    <div class="card" id="semFuncaoCard" style="display:none;"></div>
   `;
-  function renderRows(){
-    const wrap = document.getElementById('userRows');
-    const users = config.users||[];
-    if(users.length===0){ wrap.innerHTML = estadoHtml('cadeado', 'Nenhum acesso cadastrado', 'Clique em “Novo acesso” para criar o primeiro.'); return; }
-    wrap.innerHTML = users.map((u,i)=>`
+  function desenhar(){
+    const rows = document.getElementById('funcoesRows'); if(!rows) return;
+    const funcs = funcoesAcesso();
+    rows.innerHTML = funcs.map(fn=>{
+      const us = usuariosDaFuncao(fn.id);
+      const nomes = us.slice(0,4).map(u=>escapeHtml(u.nome)).join(', ') + (us.length>4 ? ` e mais ${us.length-4}` : '');
+      return `
       <div class="code-list-item">
         <div style="flex:1; min-width:0;">
-          <div class="perfil-topo"><span class="nome-func">${escapeHtml(u.nome)}</span> <span class="muted">senha: ${escapeHtml(u.senha)}</span> <span class="level-pill">${levelLabel(u.nivel)}</span>${Array.isArray(u.lojas)&&u.lojas.length?` <span class="level-pill loja">${escapeHtml(nomeLojaPorId(u.lojas[0]))}</span>`:''}</div>
-          <div class="perfil-chips">${resumoPermissoesHtml(u)}</div>
+          <div class="perfil-topo"><span class="nome-func">${escapeHtml(fn.nome)}</span> <span class="level-pill">${escapeHtml(levelLabel(fn.nivelBase))}</span>${fn.sistema?' <span class="chip">Padrão do sistema</span>':''} <span class="muted">${us.length} funcionário${us.length===1?'':'s'}</span></div>
+          ${fn.descricao ? `<div class="muted" style="margin:2px 0 6px;">${escapeHtml(fn.descricao)}</div>` : ''}
+          <div class="perfil-chips">${resumoFuncaoHtml(fn)}</div>
+          ${us.length ? `<div class="muted" style="margin-top:6px; font-size:12.5px;">${nomes}</div>` : ''}
         </div>
         <div class="acoes-linha" style="align-items:flex-start;">
-          ${btnIcone('lapis', 'Editar acesso', `data-edit="${i}"`)}
-          ${btnIcone('lixeira', 'Remover acesso', `data-del="${i}"`, true)}
+          ${btnIcone('lapis', 'Editar função', `data-fn-edit="${fn.id}"`)}
+          ${btnIcone('copiar', 'Duplicar função', `data-fn-dup="${fn.id}"`)}
+          ${fn.sistema ? '' : btnIcone('lixeira', 'Excluir função', `data-fn-del="${fn.id}"`, true)}
         </div>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openAcessoModal(config.users[Number(b.dataset.edit)]) ));
-    wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
-      if(config.users.length<=1){ showToast('É necessário manter ao menos um acesso.'); return; }
-      if(!confirm('Remover este acesso? A pessoa não vai mais conseguir entrar com ele.')) return;
-      config.users.splice(Number(b.dataset.del),1);
-      const ok = await configSave();
-      if(!ok) return;
-      renderRows(); showToast('Acesso removido.');
+      </div>`;
+    }).join('');
+    rows.querySelectorAll('[data-fn-edit]').forEach(b=> b.addEventListener('click', ()=> abrirFuncaoModal(funcaoPorId(b.dataset.fnEdit), null)));
+    rows.querySelectorAll('[data-fn-dup]').forEach(b=> b.addEventListener('click', ()=> abrirFuncaoModal(null, funcaoPorId(b.dataset.fnDup))));
+    rows.querySelectorAll('[data-fn-del]').forEach(b=> b.addEventListener('click', ()=> excluirFuncao(funcaoPorId(b.dataset.fnDel))));
+    // acessos antigos (nível "personalizado") que ainda não têm função
+    const card = document.getElementById('semFuncaoCard');
+    const semFuncao = (config.users||[]).filter(u=>u && !u.funcaoId);
+    if(!semFuncao.length){ card.style.display = 'none'; return; }
+    card.style.display = '';
+    card.innerHTML = `<div class="section-label">Acessos sem função</div>
+      <p class="muted" style="margin:0 0 10px;">Acessos antigos, de antes das funções. Escolha uma função para cada um: o que a pessoa acessa hoje é mantido como ajuste (dá para ver em Personalizar).</p>
+      ${semFuncao.map(u=>`<div class="code-list-item"><div style="flex:1;min-width:0;"><div class="perfil-topo"><span class="nome-func">${escapeHtml(u.nome)}</span> <span class="level-pill">${escapeHtml(levelLabel(u.nivel))}</span></div></div>
+        <div class="acoes-linha"><select data-sf-sel="${escapeHtml(u.id)}" aria-label="Função de ${escapeHtml(u.nome)}">${funcs.map(f=>`<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join('')}</select><button type="button" class="btn btn-ghost btn-sm" data-sf-aplicar="${escapeHtml(u.id)}">Aplicar</button></div></div>`).join('')}`;
+    card.querySelectorAll('[data-sf-aplicar]').forEach(b=> b.addEventListener('click', async ()=>{
+      const uid_ = b.dataset.sfAplicar; const fid = card.querySelector(`[data-sf-sel="${uid_}"]`).value;
+      b.disabled = true;
+      const ok = await alterarFuncoesEGravar(()=>{
+        const alvo = (config.users||[]).find(x=>x.id===uid_); const f = funcaoPorId(fid); if(!alvo || !f) return false;
+        const aj = calcularAjustes(permissoesDoUsuario(alvo), f);   // mantém o que a pessoa acessa hoje
+        if(Object.keys(aj).length) alvo.ajustes = aj; else delete alvo.ajustes;
+        aplicarFuncaoAoUsuario(alvo, f);
+      });
+      b.disabled = false;
+      if(ok){ desenhar(); showToast('Função aplicada.'); }
     }));
   }
-  renderRows();
-  window.__redrawAcessos = renderRows;
-  document.getElementById('btnNovoAcesso').addEventListener('click', ()=> openAcessoModal(null) );
+  window.__redrawAcessos = desenhar;
+  document.getElementById('btnNovaFuncao').addEventListener('click', ()=> abrirFuncaoModal(null, null));
+  (async()=>{
+    await recarregarConfig();
+    if(garantirFuncoes()){ const ok = await configSave(); if(!ok) showToast('Não consegui gravar as funções padrão. Recarregue a página e tente de novo.'); }
+    desenhar();
+  })();
 }
 async function gatewayLogin(senhaTentativa){ return gatewayCall({ op:'login', senha: senhaTentativa }); }
 const supabaseClient = {
@@ -1157,7 +1472,7 @@ const TABS = [
   { id:'avisos', label:'Advertências', icon:'alerta' },
   { id:'atestados', label:'Atestados', icon:'documento' },
   { id:'enviarLink', label:'Enviar link de cadastro', icon:'enviar', restrito:true },
-  { id:'acessos', label:'Perfis de acesso', icon:'cadeado', soDiretoria:true },
+  { id:'acessos', label:'Funções', icon:'cadeado', soDiretoria:true },
 ];
 function buildTabs(){
   const abasVisiveis = TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : (!t.restrito || podeEditarDP()));
@@ -1625,7 +1940,7 @@ function comRenderCadastro(corpo){
     ${lista.length ? `<table class="tabela-cartoes"><thead><tr><th>Funcionário</th><th>Acesso (lojas)</th><th>Loja-base para comissão</th></tr></thead><tbody>
     ${lista.map(f=>{ const id = comIdFunc(f); const u = (config.users||[]).find(u=>u.funcionarioId===id); const atual = (cad.vendedoras[id]||{}).lojaBase || '';
       const auto = !atual && u && Array.isArray(u.lojas) && u.lojas.length===1 ? u.lojas[0] : '';
-      return `<tr><td class="cel-titulo"><span class="nome-func">${escapeHtml(nomeExibicaoFuncionario(f))}</span>${u?' <span class="level-pill">'+escapeHtml(levelLabel(u.nivel))+'</span>':''}</td><td data-label="Acesso (lojas)">${u && u.lojas ? (u.lojas.map(comNomeLoja).map(escapeHtml).join(', ') || '<span class="muted">nenhuma</span>') : '<span class="muted">sem login</span>'}</td>
+      return `<tr><td class="cel-titulo"><span class="nome-func">${escapeHtml(nomeExibicaoFuncionario(f))}</span>${u?' <span class="level-pill">'+escapeHtml(nomeFuncaoUsuario(u))+'</span>':''}</td><td data-label="Acesso (lojas)">${u && u.lojas ? (u.lojas.map(comNomeLoja).map(escapeHtml).join(', ') || '<span class="muted">nenhuma</span>') : '<span class="muted">sem login</span>'}</td>
         <td data-label="Loja-base"><select data-lb="${id}" aria-label="Loja-base de ${escapeHtml(nomeExibicaoFuncionario(f))}" ${pode?'':'disabled'}><option value="">${auto ? 'Automático: ' + escapeHtml(comNomeLoja(auto)) : 'Definir…'}</option>${lojas.map(l=>`<option value="${l.id}" ${atual===l.id?'selected':''}>${escapeHtml(l.abreviacao||l.nome)}</option>`).join('')}</select></td></tr>`; }).join('')}
     </tbody></table>` : estadoHtml('usuarios', 'Nenhum funcionário ativo', 'Cadastre os funcionários na aba Funcionários.')}
     ${pode ? '' : '<p class="muted" style="margin-top:10px;">Só a diretoria altera.</p>'}</div>`;
@@ -1856,7 +2171,7 @@ function renderFuncionarios(main){
           </div>
           <div class="field"><label for="func_emailNovo">E-mail <span class="opc">(opcional)</span></label><input type="email" id="func_emailNovo" placeholder="email@exemplo.com"><p class="dica">Se preencher, a pessoa recebe o link para completar o cadastro.</p></div>
         </div>
-        <div class="field"><label class="rot">Função</label>
+        <div class="field"><label class="rot">Cargo</label>
           <div class="cargo-checks">
             <label><input type="checkbox" value="vendedora" class="func_cargo_new"> Vendedora</label>
             <label><input type="checkbox" value="oficina" class="func_cargo_new"> Oficina</label>
@@ -1864,6 +2179,9 @@ function renderFuncionarios(main){
             <label><input type="checkbox" value="diretor" class="func_cargo_new"> Diretor(a)</label>
           </div>
         </div>
+        ${currentUser.nivel==='diretoria' ? `<div class="field" style="max-width:360px;"><label for="func_funcaoNova">Função de acesso</label>
+          <select id="func_funcaoNova">${funcoesAcesso().map(f=>`<option value="${f.id}" ${f.id==='fn_vendedora'?'selected':''}>${escapeHtml(f.nome)}</option>`).join('')}</select>
+          <p class="dica">Define o que a pessoa acessa no sistema. Você pode personalizar depois, na ficha dela.</p></div>` : ''}
         <div style="display:flex; justify-content:flex-end;"><button class="btn btn-accent" id="btnAddFunc">${ic('mais')} Adicionar</button></div>
       </div>
       ` : ''}
@@ -1888,11 +2206,14 @@ function renderFuncionarios(main){
         if(!rCriar || !rCriar.ok){ showToast((rCriar && rCriar.error) || 'Não foi possível cadastrar o funcionário.'); return; }
         const novoId = rCriar.funcionarioId;
         await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, loja: lojaEscolhida });
-        let mensagem = 'Funcionário cadastrado.';
+        const selFuncaoNova = document.getElementById('func_funcaoNova');
+        let avisoFuncao = '';
+        if(selFuncaoNova && selFuncaoNova.value){ const okF = await atribuirFuncaoAoFuncionario(novoId, selFuncaoNova.value, [lojaEscolhida]); if(!okF) avisoFuncao = ' Atenção: não foi possível aplicar a função de acesso; defina em Acesso, na ficha dela.'; }
+        let mensagem = 'Funcionário cadastrado.' + avisoFuncao;
         if(email){
           const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
           mensagem = (rConvite && rConvite.ok)
-            ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).'
+            ? 'Funcionário cadastrado! Link de cadastro enviado por e-mail (válido por 1 dia).' + avisoFuncao
             : 'Funcionário cadastrado, mas não foi possível enviar o link por e-mail: ' + ((rConvite && rConvite.error) || 'erro desconhecido');
         }
         funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
@@ -1921,11 +2242,12 @@ function escolaridadeOpcoes(){
   }
   return config.escolaridadeOpcoes;
 }
-async function abrirFuncionarioCompletoModal(funcionario){
+async function abrirFuncionarioCompletoModal(funcionario, abaInicial){
   const podeEditar = podeEditarFuncionario(funcionario);
   const todosPerfis = await funcionariosGet(); // sempre busca fresco (funcionariosGet não usa cache)
   let perfil = todosPerfis.find(p=>p.funcionarioId===funcionario.id);
   const abasVisiveis = podeEditarDP() ? ABAS_FUNC_COMPLETO : ABAS_FUNC_COMPLETO.filter(a=>a!=='Acesso');
+  if(currentUser.nivel==='diretoria' && garantirFuncoes()){ await configSave(); }   // primeira vez: cria as funções padrão (sem mudar acessos)
   const usuarioAcesso = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
   const d = {
     nome: funcionario.nome, apelido: funcionario.apelido||'', cargos: [...(funcionario.cargos||[])], foto: perfil?(perfil.foto||''):'',
@@ -1944,9 +2266,10 @@ async function abrirFuncionarioCompletoModal(funcionario){
     banco: perfil?perfil.banco:'', agencia: perfil?perfil.agencia:'', conta: perfil?perfil.conta:'', tipoConta: perfil?(perfil.tipoConta||'corrente'):'corrente',
     tipoPix: perfil?(perfil.tipoPix||''):'', chavePix: perfil?perfil.chavePix:'',
     nivelAcesso: usuarioAcesso?usuarioAcesso.nivel:'vendedora',
+    funcaoId: usuarioAcesso ? ((funcaoDoUsuario(usuarioAcesso)||{}).id || '') : 'fn_vendedora',
     lojasAcesso: usuarioAcesso&&Array.isArray(usuarioAcesso.lojas)?[...usuarioAcesso.lojas]:[],
   };
-  let abaAtiva = 'Básico';
+  let abaAtiva = (abaInicial && abasVisiveis.includes(abaInicial)) ? abaInicial : 'Básico';
   openModal(`
     <div class="modal-head"><h2>${podeEditar?'Cadastro de':'Meus dados —'} ${escapeHtml(funcionario.nome)}</h2>${podeEditar?'<p>As abas Básico, Pessoais, Profissionais e Bancários são gravadas no botão “Salvar cadastro”.</p>':''}</div>
     <div class="mini-tabs" id="fcAbas">${abasVisiveis.map(a=>`<button type="button" data-fctab="${a}">${a}</button>`).join('')}</div>
@@ -1979,7 +2302,7 @@ async function abrirFuncionarioCompletoModal(funcionario){
           <p class="dica">É o nome que aparece nas listas dos outros módulos (venda, O.S., orçamento, transferências, Venda PG). Em branco, usa o nome completo.</p>
         </div>
         </div>
-        <div class="field"><label class="rot">Função <span class="opc">(usada nos módulos de venda, O.S., Venda PG…)</span></label>
+        <div class="field"><label class="rot">Cargo <span class="opc">(usado nos módulos de venda, O.S., Venda PG…)</span></label>
         <div class="cargo-checks">
           <label><input type="checkbox" value="vendedora" class="fc_cargo" ${d.cargos.includes('vendedora')?'checked':''} ${podeEditarDP()?'':'disabled'}> Vendedora</label>
           <label><input type="checkbox" value="oficina" class="fc_cargo" ${d.cargos.includes('oficina')?'checked':''} ${podeEditarDP()?'':'disabled'}> Oficina</label>
@@ -2240,14 +2563,15 @@ async function abrirFuncionarioCompletoModal(funcionario){
       const statusLabel = bloqueado ? 'Bloqueado: 6 senhas erradas seguidas' : status==='ativo' ? 'Ativo, já tem senha' : status==='pendente' ? 'Convite enviado, aguardando o cadastro' : 'Ainda sem acesso';
       const statusBadge = bloqueado ? 'badge-erro' : status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
       const usuarioLogin = (d.apelido || funcionario.apelido || '').trim() || funcionario.nome;
-      const NIVEL_LABEL = { diretoria:'Diretoria', gerente:'Gerente', vendedora:'Vendedora', oficina:'Oficina' };
       const souDiretoria = currentUser.nivel==='diretoria';
+      const fnAtual = usuarioLigado ? funcaoDoUsuario(usuarioLigado) : null;
+      const nAj = usuarioLigado ? qtdAjustes(usuarioLigado.ajustes) : 0;
       body.innerHTML = `
         <div class="bloco">
-          <h3>Nível e loja de trabalho</h3>
+          <h3>Função e loja de trabalho</h3>
           <div class="grid-2">
-            <div class="field"><label for="fc_nivelAcesso">Nível de acesso</label>
-              <select id="fc_nivelAcesso" ${souDiretoria?'':'disabled'}>${Object.keys(NIVEL_LABEL).map(n=>`<option value="${n}" ${d.nivelAcesso===n?'selected':''}>${NIVEL_LABEL[n]}</option>`).join('')}</select>
+            <div class="field"><label for="fc_nivelAcesso">Função de acesso</label>
+              <select id="fc_nivelAcesso" ${souDiretoria?'':'disabled'}>${funcoesAcesso().map(f=>`<option value="${f.id}" ${d.funcaoId===f.id?'selected':''}>${escapeHtml(f.nome)}</option>`).join('')}${(!funcaoPorId(d.funcaoId) && usuarioLigado) ? `<option value="" selected>Sem função (acesso antigo)</option>` : ''}</select>
             </div>
             <div class="field"><label for="fc_lojaTrabalho">Loja de trabalho</label>
               <select id="fc_lojaTrabalho" ${souDiretoria?'':'disabled'}>
@@ -2256,9 +2580,14 @@ async function abrirFuncionarioCompletoModal(funcionario){
               </select>
             </div>
           </div>
+          ${souDiretoria ? `<div class="pers-linha">
+            ${nAj ? `<span class="badge badge-wait">Personalizado · ${nAj} ajuste${nAj===1?'':'s'}</span>` : `<span class="muted">Segue o padrão da função.</span>`}
+            <button type="button" class="btn btn-ghost btn-sm" id="btnPersonalizar" ${(usuarioLigado && fnAtual) ? '' : 'disabled'}>${ic('lapis')} Personalizar</button>
+            ${nAj ? `<button type="button" class="btn btn-ghost btn-sm" id="btnRestaurarFuncao">Restaurar função</button>` : ''}
+          </div>` : ''}
           <p class="dica" style="margin:-4px 0 10px;">A pessoa já entra no sistema nesta loja. Para trabalhar em outra, ela usa o cartão OUTRA LOJA com a senha da gerência.</p>
           ${d.lojasAcesso.length>1 ? `<div class="aviso-faixa perigo">${ic('alerta')}<div>Hoje esta pessoa tem ${d.lojasAcesso.length} lojas liberadas (modelo antigo). Escolha a loja de trabalho: ao salvar, ela fica só com essa.</div></div>` : ''}
-          ${souDiretoria ? `<button type="button" class="btn btn-ghost" id="btnSalvarAcesso">Salvar nível e loja</button> <span class="dica">Grava na hora, sem precisar do “Salvar cadastro”.</span>` : `<p class="muted" style="margin:0;">Só a diretoria pode alterar nível e loja.</p>`}
+          ${souDiretoria ? `<button type="button" class="btn btn-ghost" id="btnSalvarAcesso">Salvar função e loja</button> <span class="dica">Grava na hora, sem precisar do “Salvar cadastro”.</span>` : `<p class="muted" style="margin:0;">Só a diretoria pode alterar nível e loja.</p>`}
         </div>
         <div class="bloco">
           <h3>Senha e login</h3>
@@ -2284,29 +2613,47 @@ async function abrirFuncionarioCompletoModal(funcionario){
           <button type="button" class="btn btn-danger btn-sm" id="btnExcluirFuncionario">Excluir cadastro</button>
         </div>` : ''}
       `;
-      document.getElementById('fc_nivelAcesso').addEventListener('change', e=>{ d.nivelAcesso = e.target.value; });
+      const selFn = document.getElementById('fc_nivelAcesso');
+      selFn.addEventListener('change', ()=>{ d.funcaoId = selFn.value; const f = funcaoPorId(selFn.value); if(f) d.nivelAcesso = f.nivelBase; });
       const selLojaTrab = document.getElementById('fc_lojaTrabalho');
       if(selLojaTrab) selLojaTrab.addEventListener('change', ()=>{ d.lojasAcesso = selLojaTrab.value ? [selLojaTrab.value] : []; });
       const btnSalvarAcesso = document.getElementById('btnSalvarAcesso');
       if(btnSalvarAcesso) btnSalvarAcesso.addEventListener('click', async ()=>{
         // Lê direto do DOM no momento do clique — evita depender só do estado acumulado
         // pelos listeners de 'change', que pode ficar dessincronizado em alguns casos.
-        const nivelParaSalvar = document.getElementById('fc_nivelAcesso').value;
+        const funcaoEscolhida = funcaoPorId(document.getElementById('fc_nivelAcesso').value);
+        if(!funcaoEscolhida){ showToast('Escolha a função de acesso desta pessoa.'); return; }
         const lojaTrab = document.getElementById('fc_lojaTrabalho').value;
         const lojasParaSalvar = lojaTrab ? [lojaTrab] : [];
         if(d.lojasAcesso.length>1 && !lojaTrab){ showToast('Escolha a loja de trabalho desta pessoa.'); return; }
+        const atual = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
+        if(atual && atual.funcaoId && atual.funcaoId!==funcaoEscolhida.id && qtdAjustes(atual.ajustes) && !confirm('Esta pessoa tem acessos personalizados. Ao trocar a função, a personalização é descartada. Continuar?')) return;
         btnSalvarAcesso.disabled = true; btnSalvarAcesso.textContent = 'Salvando…';
-        const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId: funcionario.id, nivel: nivelParaSalvar, lojas: lojasParaSalvar });
-        btnSalvarAcesso.disabled = false; btnSalvarAcesso.textContent = 'Salvar nível e loja';
-        if(r && r.ok){
-          d.nivelAcesso = nivelParaSalvar;
-          d.lojasAcesso = lojasParaSalvar;
+        const ok = await atribuirFuncaoAoFuncionario(funcionario.id, funcaoEscolhida.id, lojasParaSalvar);
+        btnSalvarAcesso.disabled = false; btnSalvarAcesso.textContent = 'Salvar função e loja';
+        if(ok){
+          d.funcaoId = funcaoEscolhida.id; d.nivelAcesso = funcaoEscolhida.nivelBase; d.lojasAcesso = lojasParaSalvar;
           showToast('Acesso atualizado.');
-          const configAtualizada = await configGetUnificada();
-          if(configAtualizada) config.users = configAtualizada.users || [];
-        } else {
-          showToast((r && r.error) || 'Não foi possível salvar o acesso.');
+          renderCorpo();
         }
+      });
+      const btnPers = document.getElementById('btnPersonalizar');
+      if(btnPers) btnPers.addEventListener('click', ()=>{
+        const u = (config.users||[]).find(x=>x.funcionarioId===funcionario.id);
+        const f = u && funcaoDoUsuario(u);
+        if(!u || !f || selFn.value !== f.id){ showToast('Salve a função e a loja antes de personalizar.'); return; }
+        abrirPersonalizarModal(u.id, ()=> abrirFuncionarioCompletoModal(funcionario, 'Acesso'));
+      });
+      const btnRest = document.getElementById('btnRestaurarFuncao');
+      if(btnRest) btnRest.addEventListener('click', async ()=>{
+        if(!confirm('Voltar esta pessoa para o padrão da função? A personalização será descartada.')) return;
+        btnRest.disabled = true;
+        const ok = await alterarFuncoesEGravar(()=>{
+          const alvo = (config.users||[]).find(x=>x.funcionarioId===funcionario.id); const f = alvo && funcaoDoUsuario(alvo); if(!alvo || !f) return false;
+          delete alvo.ajustes; aplicarFuncaoAoUsuario(alvo, f);
+        });
+        btnRest.disabled = false;
+        if(ok){ showToast('Acesso igual ao da função.'); renderCorpo(); }
       });
       document.getElementById('btnSalvarSenha').addEventListener('click', async ()=>{
         const novaSenha = document.getElementById('fc_senhaAcesso').value.trim();
