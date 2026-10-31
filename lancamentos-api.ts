@@ -112,7 +112,11 @@ Deno.serve(async (req: Request) => {
   try {
     const user = await usuarioValido(b.senha);
     if (!user) return json({ error: "não autorizado" }, 401);
-    if (user.nivel !== "diretoria" && user.nivel !== "gerente") return json({ error: "sem permissão (só diretoria/gerente)" }, 403);
+    const total = user.nivel === "diretoria" || user.nivel === "gerente";
+    // vendedora: lança (vendedora/loja) e vê conferência/fator; oficina não acessa; folha de PG foi suprimida
+    if (!total && user.nivel !== "vendedora") return json({ error: "sem permissão" }, 403);
+    if ((b.op === "salvar" || b.op === "excluir") && String(b.tipo || "") === "folha") return json({ error: "folha de pagamento desativada" }, 403);
+    if (!total && (b.op === "salvar" || b.op === "excluir") && String(b.tipo || "") !== "vendedora" && String(b.tipo || "") !== "loja") return json({ error: "sem permissão (fator é só para diretoria/gerente)" }, 403);
     if (b.op === "meses") {
       const { data, error } = await admin.from("lancamentos_mensais").select("mes, tipo, chave, dados").in("tipo", ["vendedora", "loja"]).order("mes", { ascending: false }).limit(5000);
       if (error) throw error;
@@ -130,7 +134,7 @@ Deno.serve(async (req: Request) => {
       if (atual.error) throw atual.error;
       if (hist.error) throw hist.error;
       if (fat.error) throw fat.error;
-      return json({ ok: true, data: (atual.data || []).filter((x: any) => x.tipo !== "fator"), historico: hist.data || [], fatores: fat.data || [] });
+      return json({ ok: true, data: (atual.data || []).filter((x: any) => x.tipo !== "fator" && (total || x.tipo !== "folha")), historico: (hist.data || []).filter((x: any) => total || x.tipo !== "folha"), fatores: fat.data || [] });
     }
     if (b.op === "salvar") {
       const tipo = String(b.tipo || "");
