@@ -183,6 +183,7 @@ table.ger input.din,table.ger input.pct{width:100px;padding:5px 6px;font-size:12
     <button data-tab="lojas">Lojas</button>
     <button data-tab="conferencia">Conferência</button>
     <button data-tab="fator">Fator</button>
+    <button data-tab="folha" id="tabFolha" style="display:none">Folha de PG</button>
   </div>
 
   <!-- VENDEDORAS -->
@@ -290,7 +291,7 @@ table.ger input.din,table.ger input.pct{width:100px;padding:5px 6px;font-size:12
   </section>
 
   <!-- FOLHA DE PG -->
-  <section data-sec="folha" style="display:none" hidden aria-hidden="true">
+  <section data-sec="folha" style="display:none">
     <div class="card">
       <div class="card-cab">
         <div>
@@ -431,6 +432,7 @@ async function carregarMes(){
   dadosMes = { vendedora:{}, loja:{}, folha:{} };
   (r.data||[]).forEach(x=>{ if(dadosMes[x.tipo]) dadosMes[x.tipo][x.chave] = x; });
   fatoresAte = r.fatores || [];
+  INATIVOS = Array.isArray(r.inativos) ? r.inativos : [];
   fecharFormVend(); renderResumoVend(); renderLoja(); renderConferencia(); renderFator(); renderComissao();
   carregarEstadoFolha(); renderFolha();
 }
@@ -448,7 +450,10 @@ function somaVendedorasPorLoja(){
 
 /* ---------- VENDEDORAS ---------- */
 /* cada vendedora tem um único lançamento por mês: "Incluir" só oferece quem ainda não lançou */
-function vendedorasPendentes(){ return VENDEDORAS.filter(v=> !dadosMes.vendedora[v]); }
+/* funcionário inativo (desligado no DP) não entra na lista de lançamento; o que já foi lançado continua visível */
+let INATIVOS = [];
+function vendedorasAtivas(){ return VENDEDORAS.filter(v=> !INATIVOS.includes(v) || dadosMes.vendedora[v]); }
+function vendedorasPendentes(){ return VENDEDORAS.filter(v=> !INATIVOS.includes(v) && !dadosMes.vendedora[v]); }
 function abrirFormVend(nome){
   const sel = document.getElementById('selVend');
   if(nome){
@@ -530,7 +535,7 @@ function renderResumoVend(){
   const totLoja = {}; LOJAS.forEach(l=> totLoja[l]=0); let totGeral = 0;
   const lancadas = VENDEDORAS.filter(v=> dadosMes.vendedora[v]);
   const pend = vendedorasPendentes();
-  document.getElementById('contVend').innerHTML = (pend.length ? seloHtml(`${lancadas.length} de ${VENDEDORAS.length} lançadas`, 'pend') : seloHtml(`${lancadas.length} de ${VENDEDORAS.length} lançadas`, 'ok', 'check'))
+  document.getElementById('contVend').innerHTML = (pend.length ? seloHtml(`${lancadas.length} de ${vendedorasAtivas().length} lançadas`, 'pend') : seloHtml(`${lancadas.length} de ${vendedorasAtivas().length} lançadas`, 'ok', 'check'))
     + (pend.length ? ` <span>Faltam: ${pend.join(', ')}</span>` : ' <span>Todas as vendedoras lançaram.</span>');
   if(!lancadas.length){ tab.innerHTML = `<tbody><tr><td style="white-space:normal"><div class="vazio" style="border:0"><b>Nenhum lançamento neste mês</b>Clique em “Incluir lançamento” para digitar as vendas da primeira vendedora.</div></td></tr></tbody>`; return; }
   const linhas = lancadas.map(v=>{
@@ -1229,6 +1234,8 @@ window.addEventListener('message', async ev=>{
 });
 /* vendedora: lança em Vendedoras e Lojas; Conferência e Fator só para ver */
 function aplicarNivel(){
+  /* Folha de PG: só a diretoria vê (as demais abas aparecem para todos) */
+  const tf = document.getElementById('tabFolha'); if(tf) tf.style.display = (currentUser && currentUser.nivel==='diretoria') ? '' : 'none';
   const soVer = currentUser && currentUser.nivel==='vendedora';
   document.getElementById('app').classList.toggle('so-leitura', !!soVer);
   ['addFaixa','salvarFator'].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.display = soVer ? 'none' : ''; });
