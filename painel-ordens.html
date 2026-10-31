@@ -1244,6 +1244,20 @@ function carimbarPagamentosOS(pags){
   return (pags||[]).map(p=>{ const q = { ...p }; if(!q.data) q.data = hoje; return q; });
 }
 function dataLocalDeMs(ms){ const d = new Date(ms); if(!ms || isNaN(d)) return hojeStr(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/* Fechamento do caixa do dia (por loja): gravado em painel_ordens_kv, chave caixa_fech:<loja>:<data>. Fechado = não lança nem cancela até reabrir (gerente/diretoria). */
+async function caixaFechadoEm(lojaId, data){
+  if(!lojaId) return null;
+  try{
+    const r = await gatewayCall({ op:'kvGet', table:'painel_ordens_kv', params:{ key:'caixa_fech:'+lojaId+':'+data } });
+    return (r && r.value && r.value.fechado) ? r.value : null;
+  }catch(e){ return null; }
+}
+async function bloqueadoPorCaixaFechado(lojaId){
+  const f = await caixaFechadoEm(lojaId, hojeStr());
+  if(!f) return false;
+  showToast('O caixa de hoje desta loja já foi fechado por '+(f.por||'—')+'. Peça à gerente ou diretoria para reabrir em Resumo do caixa › Fechar caixa.');
+  return true;
+}
 function hojeStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** Aplica o cancelamento em cima do objeto `order` em memória (não salva sozinho —
  * quem chama decide quando persistir, pra poder combinar com outras alterações). */
@@ -1285,6 +1299,7 @@ function perguntarDestinoEstorno(recebido, temCliente, quem){
 }
 /** Retorna false se a pessoa voltou atrás na escolha do destino (nada foi alterado). */
 async function aplicarCancelamentoOrdem(order, motivo){
+  if(await bloqueadoPorCaixaFechado(order.lojaId)) return false;
   const recebido = valorRecebidoDe(order);
   let dest = null;
   if(recebido > 0.004){
@@ -1316,9 +1331,10 @@ async function aplicarCancelamentoOrdem(order, motivo){
   return true;
 }
 /** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
-function abrirCancelarOrdem(order){
+async function abrirCancelarOrdem(order){
   if(!order || order.status==='cancelado') return;
   if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); return; }
+  if(await bloqueadoPorCaixaFechado(order.lojaId)) return;
   const recebido = valorRecebidoDe(order);
   openModal(`
     <h3>Cancelar pedido</h3>
@@ -4414,6 +4430,7 @@ function renderNovaOrdem(main){
     const loja = lojaSel.value;
     const sid = servicoSel.value;
     const dt = dataInp.value;
+    if(await bloqueadoPorCaixaFechado(loja)) return;
 
     // ── Highlight visual dos campos faltando ──────────────────────
     const camposFaltando = [

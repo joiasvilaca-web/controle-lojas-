@@ -2994,6 +2994,7 @@ function renderNovaVenda(main){
   document.getElementById('btnSalvarVenda').addEventListener('click', travarCliqueDuplo(async ()=>{
     const lojaId = document.getElementById('v_loja').value;
     if(!lojaId){ showToast('Escolha a loja no topo da tela antes de lançar a venda.'); return; }
+    if(await bloqueadoPorCaixaFechado(lojaId)) return;
     const observacaoGeral = (document.getElementById('v_observacaoGeral')?.value||'').trim();
     const infoInterna = (document.getElementById('v_infoInterna')?.value||'').trim();
     const vendedora = document.getElementById('v_vendedora').value.trim();
@@ -3169,10 +3170,11 @@ function motivoSemEdicao(reg){
 function podeCancelarVenda(){
   return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
 }
-function abrirCancelarVenda(venda){
+async function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
   if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem cancelar uma venda.'); return; }
   if(!podeEditarRegistro(venda)){ showToast(motivoSemEdicao(venda)); return; }
+  if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
   if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
   const recebido = valorRecebidoDe(venda);
   openModal(`
@@ -3303,6 +3305,20 @@ async function executarCancelamentoVenda(venda, motivo, dest){
   await vendaSalvar(venda);
   showToast('Venda cancelada.');
   renderTabs(); renderView();
+}
+/* Fechamento do caixa do dia (por loja): gravado em painel_ordens_kv, chave caixa_fech:<loja>:<data>. Fechado = não lança nem cancela até reabrir (gerente/diretoria). */
+async function caixaFechadoEm(lojaId, data){
+  if(!lojaId) return null;
+  try{
+    const r = await gatewayCall({ op:'kvGet', table:'painel_ordens_kv', params:{ key:'caixa_fech:'+lojaId+':'+data } });
+    return (r && r.value && r.value.fechado) ? r.value : null;
+  }catch(e){ return null; }
+}
+async function bloqueadoPorCaixaFechado(lojaId){
+  const f = await caixaFechadoEm(lojaId, hoje());
+  if(!f) return false;
+  showToast('O caixa de hoje desta loja já foi fechado por '+(f.por||'—')+'. Peça à gerente ou diretoria para reabrir em Resumo do caixa › Fechar caixa.');
+  return true;
 }
 function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** De qual loja o estoque deve ser descontado/devolvido: por padrão, a própria

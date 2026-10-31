@@ -392,7 +392,7 @@ function mensagemConfiavel(ev){
           <button class="btn btn-ghost" id="cx_hoje" title="Mostrar só o dia de hoje">${ic('calendario')} Hoje</button>
           <button class="btn btn-ghost" id="cx_atualizar" title="Buscar de novo no servidor (se alguém lançou algo agora)">${ic('atualizar')} Atualizar dados</button>
           <button class="btn btn-accent" id="cx_pesquisar">${ic('busca')} Pesquisar</button>
-          <button class="btn btn-ghost" id="cx_fechar" title="Pendências de nota fiscal do período e da loja escolhidos">${ic('check')} Fechar caixa</button>
+          <button class="btn btn-ghost" id="cx_fechar" title="Fecha o caixa do dia da loja escolhida (um dia e uma loja) ou lista as pendências de nota">${ic('check')} Fechar caixa</button>
         </div>
         <div class="barra-linha" role="group" aria-label="O que mostrar">
           <span class="rot">Mostrar</span>
@@ -496,21 +496,62 @@ function mensagemConfiavel(ev){
       closeModal(); showToast('Nota registrada.'); if(aoSalvar) aoSalvar();
     });
   }
-  function abrirFecharCaixa(de, ate, lojaId){
+  /* Fechamento do dia: um dia + uma loja. Gravado em painel_ordens_kv (caixa_fech:<loja>:<data>). Reabrir: só gerente/diretoria. */
+  const chaveFech = (loja, dia)=> 'caixa_fech:'+loja+':'+dia;
+  async function lerFechamento(loja, dia){
+    const r = await gatewayCall({ op:'kvGet', table:'painel_ordens_kv', params:{ key: chaveFech(loja, dia) } });
+    return (r && r.value) || null;
+  }
+  async function gravarFechamento(loja, dia, valor){
+    return gatewayCall({ op:'kvSet', table:'painel_ordens_kv', params:{ key: chaveFech(loja, dia), value: valor } });
+  }
+  async function abrirFecharCaixa(de, ate, lojaId){
+    const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+    const umDia = de && de===ate && !!lojaId;
+    const fech = umDia ? await lerFechamento(lojaId, de) : null;
+    const fechado = !!(fech && fech.fechado);
     const todos = registrosFiscais(de, ate, lojaId);
     const emitir = todos.filter(x=> x.reg.emissaoNota!=='sim' && pagouPixOuCartao(x.reg));
     const faltaNum = todos.filter(x=> x.reg.emissaoNota==='sim' && !String(x.reg.numeroNota||'').trim());
+    const tudoOk = !emitir.length && !faltaNum.length;
     const linha = (x,motivo,i,grupo)=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
       <div><b>${escapeHtml(x.origem)} ${escapeHtml(viaDe(x.reg))}</b> · ${fmtDate(x.reg.data)} · ${escapeHtml(nomeLojaCaixa(x.reg.lojaId)||'')}<div class="muted" style="font-size:12.5px;">${escapeHtml(x.reg.cliente||'')} · ${fmtMoeda(x.reg.valorTotal)}${motivo?' · '+motivo:''}</div></div>
       <button class="btn btn-ghost btn-sm" data-fc="${grupo}:${i}" type="button">${grupo==='e'?'Nota emitida':'Informar nº'}</button></div>`;
     const periodo = de===ate ? fmtDate(de) : fmtDate(de)+' a '+fmtDate(ate);
+    const quando = ms=> ms ? new Date(ms).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}) : '';
+    let acao = '';
+    if(!umDia) acao = `<div class="muted" style="margin:10px 0;">Para fechar o caixa, escolha <b>um único dia</b> e <b>uma loja</b> nos filtros.</div>`;
+    else if(fechado) acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">${ic('cadeado')} Caixa fechado por ${escapeHtml(fech.por||'—')} em ${quando(fech.em)}.</div>
+      ${gestao ? '' : `<div class="muted" style="margin-bottom:8px;">Só gerente ou diretoria podem reabrir o caixa.</div>`}`;
+    else if(!tudoOk) acao = `<div class="muted" style="margin:10px 0;">Resolva as pendências abaixo para poder fechar o caixa do dia.</div>`;
+    else acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>`;
     openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):''}</h3>
-      ${(!emitir.length && !faltaNum.length) ? `<div style="padding:14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>` : ''}
+      ${acao}
       ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão sem nota</div>${emitir.map((x,i)=>linha(x,'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
-      <div class="modal-actions"><button class="btn" id="fc_fechar" type="button">Fechar</button></div>`);
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="fc_fechar" type="button" data-fechar>Voltar</button>
+        ${umDia && fechado && gestao ? `<button class="btn btn-danger" id="fc_reabrir" type="button">Reabrir caixa</button>` : ''}
+        ${umDia && !fechado && tudoOk ? `<button class="btn btn-accent" id="fc_confirmar" type="button">Fechar caixa do dia</button>` : ''}
+      </div>`);
     document.getElementById('fc_fechar').addEventListener('click', closeModal);
     document.querySelectorAll('[data-fc]').forEach(b=> b.addEventListener('click', ()=>{ const [g,i]=b.dataset.fc.split(':'); const x=(g==='e'?emitir:faltaNum)[+i]; abrirNotaEmitida(x, ()=> abrirFecharCaixa(de, ate, lojaId)); }));
+    const bc = document.getElementById('fc_confirmar');
+    if(bc) bc.addEventListener('click', async ()=>{
+      bc.disabled = true;
+      const r = await gravarFechamento(lojaId, de, { fechado:true, por:currentUser.nome, em:Date.now(), historico:[...((fech&&fech.historico)||[])] });
+      if(r && r.error){ bc.disabled = false; showToast('Não consegui fechar o caixa: '+r.error); return; }
+      showToast('Caixa do dia fechado.'); abrirFecharCaixa(de, ate, lojaId);
+    });
+    const br = document.getElementById('fc_reabrir');
+    if(br) br.addEventListener('click', async ()=>{
+      if(!confirm('Reabrir o caixa de '+periodo+'? Vendas e pedidos poderão ser lançados e cancelados de novo nesta loja.')) return;
+      br.disabled = true;
+      const hist = [...((fech&&fech.historico)||[]), { fechadoPor:fech.por, fechadoEm:fech.em, reabertoPor:currentUser.nome, reabertoEm:Date.now() }];
+      const r = await gravarFechamento(lojaId, de, { fechado:false, reabertoPor:currentUser.nome, reabertoEm:Date.now(), historico:hist });
+      if(r && r.error){ br.disabled = false; showToast('Não consegui reabrir: '+r.error); return; }
+      showToast('Caixa reaberto.'); abrirFecharCaixa(de, ate, lojaId);
+    });
   }
   function destinoCancelHtml(d){
     if(!d) return '';
