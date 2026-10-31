@@ -4637,6 +4637,8 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     unidadeTributavel: base ? (base.unidadeTributavel||'') : '',
     exTipi: base ? (base.exTipi||'') : '',
     cest: base ? (base.cest||'') : '',
+    // Serviço (categoria SERVIÇO): dados para NFS-e / reforma tributária. Só vale quando a categoria é de serviço.
+    servicoFiscal: { itemLC116:'', codTribNacional:'', codTribMunicipal:'', nbs:'', cnae:'', aliquotaIss:'', issRetido:'nao', exigibilidadeIss:'1', ...((base && base.servicoFiscal) || {}) },
     cstIbsCbs: base ? (base.cstIbsCbs||'') : '000', // 000 = tributação integral (joias/relógios não têm redução na LC 214) — confirmar com o contador
     cClassTrib: base ? (base.cClassTrib||'') : '000001',
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
@@ -4670,6 +4672,12 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
   /** Categoria Relógio: subcategoria vira material da pulseira/caixa (não metal), custo é manual
    * (não tem cotação de metal pra calcular sozinho), e Preço de venda = Custo compra × Fator. */
   const SUBCATEGORIAS_RELOGIO = ['Prateado','Dourado','Misto','Couro','Borracha'];
+  /** Categoria SERVIÇO / SERVICO: item sem estoque físico, fiscal por NFS-e (ISS) em vez de NCM/CFOP/ICMS. */
+  function ehCategoriaServico(categoriaId){
+    const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
+    const nome = (cat?cat.nome:'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+    return nome.startsWith('servic');
+  }
   function ehCategoriaRelogio(categoriaId){
     const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
     const nome = (cat?cat.nome:'').toLowerCase();
@@ -5309,6 +5317,36 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         });
       }
     }
+    else if(peTabAtiva==='fiscal' && ehCategoriaServico(d.categoriaId)){
+      const sv = d.servicoFiscal;
+      body.innerHTML = `
+        <div class="cad-alerta info">${cadIco('info')}<span>Categoria SERVIÇO: a nota é de serviço (NFS-e, ISS), não de mercadoria — por isso não há NCM, CFOP, ICMS, origem nem GTIN. Preencher aqui não emite nota; confirme com o contador antes da primeira emissão.</span></div>
+        <div class="section-label">Serviço (NFS-e)</div>
+        <div class="grid-2">
+          <div class="field"><label>Item da lista de serviços (LC 116/2003)</label><input id="pe_sv_itemLC116" placeholder="Ex.: 14.01" maxlength="6" value="${escapeHtml(sv.itemLC116)}"></div>
+          <div class="field"><label>Código de tributação nacional (NFS-e nacional)</label><input id="pe_sv_codTribNacional" placeholder="6 dígitos — Ex.: 140101" maxlength="6" value="${escapeHtml(sv.codTribNacional)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Código de tributação do município</label><input id="pe_sv_codTribMunicipal" placeholder="Conforme a prefeitura" value="${escapeHtml(sv.codTribMunicipal)}"></div>
+          <div class="field"><label>NBS (Nomenclatura Brasileira de Serviços)</label><input id="pe_sv_nbs" placeholder="9 dígitos" maxlength="11" value="${escapeHtml(sv.nbs)}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>CNAE da atividade</label><input id="pe_sv_cnae" placeholder="7 dígitos" maxlength="9" value="${escapeHtml(sv.cnae)}"></div>
+          <div class="field"><label>Alíquota do ISS (%)</label><input id="pe_sv_aliquotaIss" inputmode="decimal" placeholder="Ex.: 2,00 — conforme o município" value="${escapeHtml(String(sv.aliquotaIss==null?'':sv.aliquotaIss).replace('.',','))}"></div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>ISS retido pelo tomador?</label><select id="pe_sv_issRetido"><option value="nao" ${sv.issRetido!=='sim'?'selected':''}>Não</option><option value="sim" ${sv.issRetido==='sim'?'selected':''}>Sim</option></select></div>
+          <div class="field"><label>Exigibilidade do ISS</label><select id="pe_sv_exigibilidadeIss">${[['1','1 - Exigível'],['2','2 - Não incidência'],['3','3 - Isenção'],['4','4 - Exportação'],['5','5 - Imunidade'],['6','6 - Suspensa por decisão judicial'],['7','7 - Suspensa por processo administrativo']].map(([v,t])=>`<option value="${v}" ${String(sv.exigibilidadeIss)===v?'selected':''}>${t}</option>`).join('')}</select></div>
+        </div>
+        <div class="section-label">Reforma tributária (IBS/CBS)</div>
+        <div class="grid-2">
+          <div class="field"><label>CST IBS/CBS</label><input id="pe_cstIbsCbs" maxlength="3" placeholder="3 dígitos — definir com o contador" value="${escapeHtml(d.cstIbsCbs)}"></div>
+          <div class="field"><label>Classificação tributária (cClassTrib)</label><input id="pe_cClassTrib" maxlength="6" placeholder="6 dígitos — definir com o contador" value="${escapeHtml(d.cClassTrib)}"></div>
+        </div>
+        <p class="cad-dica" style="margin:-2px 0 10px;">Serviços de reparo/conserto de joias costumam ser o item 14.01 da LC 116 (lubrificação, limpeza, lustração, revisão, conserto...). Alíquota do ISS e códigos municipais variam por prefeitura.</p>`;
+      [['pe_sv_itemLC116','itemLC116'],['pe_sv_codTribNacional','codTribNacional'],['pe_sv_codTribMunicipal','codTribMunicipal'],['pe_sv_nbs','nbs'],['pe_sv_cnae','cnae'],['pe_sv_aliquotaIss','aliquotaIss'],['pe_sv_issRetido','issRetido'],['pe_sv_exigibilidadeIss','exigibilidadeIss']].forEach(([id,k])=>{ const el = document.getElementById(id); const f = ()=>{ sv[k] = el.value; }; el.addEventListener('input', f); el.addEventListener('change', f); });
+      [['pe_cstIbsCbs','cstIbsCbs'],['pe_cClassTrib','cClassTrib']].forEach(([id,k])=>{ const el = document.getElementById(id); const f = ()=>{ d[k] = el.value; }; el.addEventListener('input', f); el.addEventListener('change', f); });
+    }
     else if(peTabAtiva==='fiscal'){
       body.innerHTML = `
         <div class="cad-alerta info">${cadIco('info')}<span>Preencher aqui não emite nota: só deixa o produto pronto. Confirme os valores com o contador antes da primeira emissão.</span></div>
@@ -5528,6 +5566,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       cstCsosn: (d.cstCsosn||'').trim(),
       origem: d.origem||'0',
       cfopSaida: (d.cfopSaida||'').trim(),
+      servicoFiscal: ehCategoriaServico(d.categoriaId) ? (()=>{ const sv = d.servicoFiscal||{}; const al = parseFloat(String(sv.aliquotaIss==null?'':sv.aliquotaIss).replace(',','.')); return {
+        itemLC116: (sv.itemLC116||'').trim(), codTribNacional: (sv.codTribNacional||'').replace(/\D/g,''), codTribMunicipal: (sv.codTribMunicipal||'').trim(),
+        nbs: (sv.nbs||'').replace(/\D/g,''), cnae: (sv.cnae||'').replace(/\D/g,''), aliquotaIss: isNaN(al) ? '' : al,
+        issRetido: sv.issRetido==='sim' ? 'sim' : 'nao', exigibilidadeIss: String(sv.exigibilidadeIss||'1') }; })() : undefined,
       cstIbsCbs: (d.cstIbsCbs||'').replace(/\D/g,''),
       cClassTrib: (d.cClassTrib||'').replace(/\D/g,''),
       regimeItem: d.regimeItem==='usado' ? 'usado' : 'novo',

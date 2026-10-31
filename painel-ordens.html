@@ -3597,6 +3597,14 @@ function itensSomenteLeituraHtml(order){
     <span class="num" style="font-weight:700;white-space:nowrap;">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):'—'}</span></div>
     ${(it.fotos&&it.fotos.length)?`<div class="foto-grid" data-itfotoleitura="1" style="margin:2px 0 8px;">${it.fotos.map(f=>`<div class="foto-thumb"><img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl||photoCache[f.id]||'')}" alt="${escapeHtml(f.nome||'')}" onclick="if(this.src)openPhotoModal(this.src)"></div>`).join('')}</div>`:''}`).join('')}</div>`;
 }
+/** Serviço = categoria SERVIÇO/SERVICO ou tipo "Serviço" no cadastro de produto. */
+function produtoEhServico(p){
+  if(!p) return false;
+  if(/^serv/i.test(String(p.tipo||''))) return true;
+  const cat=(config.categoriasProdutos||[]).find(c=>c.id===p.categoriaId);
+  const n=(cat?cat.nome:'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  return n.startsWith('servic');
+}
 function mountItens(container, holder, getLojaId, opts){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -3750,6 +3758,10 @@ function recalcularValorAjustado(it){
         const estoqueAqui=produtoAtual?(Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0):null;
         const outras=produtoAtual?outrasLojasComEstoque(produtoAtual,lojaAtual):[];
         __html+=`<div class="item-row" data-idx="${i}">
+          <div class="item-tipo" role="radiogroup" aria-label="Tipo do item" style="display:flex;gap:14px;margin-bottom:8px;font-size:13.5px;font-weight:600;">
+            <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="ittipo_${i}" data-ittipo="${i}" value="produto" ${it.tipoItem!=='servico'?'checked':''} style="width:auto;margin:0;"> Produto</label>
+            <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="ittipo_${i}" data-ittipo="${i}" value="servico" ${it.tipoItem==='servico'?'checked':''} style="width:auto;margin:0;"> Serviço</label>
+          </div>
           <div class="item-row-topo">
             <div class="prod-ac-wrap item-row-produto" id="pacWrap_${i}">
               ${it.avulso
@@ -3760,7 +3772,7 @@ function recalcularValorAjustado(it){
                      ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${escapeHtml(String(produtoAtual.fator))}</span>`:''}
                      <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto" aria-label="Trocar produto">${ico('x',14)}</button>
                    </div>`
-                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="Produto: nome, código ou bipe o código de barras" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: clique para ver todos ou digite o nome':'Produto: nome, código ou bipe o código de barras'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
                    <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
             </div>
             <div class="item-row-valor">
@@ -3822,6 +3834,7 @@ function recalcularValorAjustado(it){
       const i = Number(inp.dataset.pac);
       const drop = document.getElementById('pacDrop_'+i);
       let pacTimer=null, pacFocus=-1, pacAchados=[];
+      const baseLista = vendaveis.filter(p=> produtoEhServico(p) === (holder.itens[i] && holder.itens[i].tipoItem==='servico'));
       function fecharDrop(){ drop.style.display='none'; pacFocus=-1; }
       function renderDrop(lista){
         pacAchados=lista;
@@ -3833,15 +3846,16 @@ function recalcularValorAjustado(it){
           el.addEventListener('mousedown',e=>{ e.preventDefault(); selecionarProduto(i,pacAchados[Number(el.dataset.pk)]); });
         });
       }
+      inp.addEventListener('focus',()=>{ if(holder.itens[i] && holder.itens[i].tipoItem==='servico' && !inp.value.trim()) renderDrop(baseLista); });
       inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
         const t=inp.value.toLowerCase().trim();
-        if(!t){ fecharDrop(); return; }
+        if(!t){ if(holder.itens[i] && holder.itens[i].tipoItem==='servico') renderDrop(baseLista); else fecharDrop(); return; }
         const codigoExato=/^\d{6,}$/.test(inp.value.trim());
         if(codigoExato){
-          const porCod=vendaveis.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
+          const porCod=baseLista.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
           if(porCod){ selecionarProduto(i,porCod); fecharDrop(); return; }
         }
-        renderDrop(filtrarProdutosBusca(vendaveis, inp.value));
+        renderDrop(filtrarProdutosBusca(baseLista, inp.value));
       },120); });
       inp.addEventListener('keydown',e=>{
         const items=drop.querySelectorAll('.prod-ac-item[data-pk]');
@@ -3884,6 +3898,16 @@ function recalcularValorAjustado(it){
       });
     });
 
+    // Produto × Serviço: a lista de busca mostra só os cadastrados naquele tipo
+    wrap.querySelectorAll('[data-ittipo]').forEach(r=>{
+      r.addEventListener('change',()=>{
+        const it=holder.itens[Number(r.dataset.ittipo)]; if(!it || !r.checked) return;
+        it.tipoItem=r.value;
+        const atual=it.produtoEstoqueId?(produtosEstoque||[]).find(p=>p.id===it.produtoEstoqueId):null;
+        if(atual && produtoEhServico(atual)!==(it.tipoItem==='servico')){ it.produtoEstoqueId=''; it.produto=''; it.valorUnitario=''; }
+        drawRows();
+      });
+    });
     // Item avulso (sem estoque): troca o catálogo por uma descrição livre
     wrap.querySelectorAll('[data-itavulso]').forEach(cb=>{
       cb.addEventListener('change',()=>{
@@ -4019,11 +4043,13 @@ function recalcularValorAjustado(it){
   return { totalItens, refreshEstoque: drawRows };
 }
 
-/** Balão "×" flutuante: cancela o preenchimento (pede confirmação) e volta para a lista. */
+/** Botão Cancelar ao lado de Salvar: cancela o preenchimento (pede confirmação) e volta para a lista. */
 function balaoCancelarPreenchimento(main, aoCancelar){
-  if(!main || main.querySelector('.balao-x')) return;
+  if(!main || main.querySelector('#btnCancelarPreench')) return;
+  const alvo = main.querySelector('#btnSalvarRascunho');
+  if(!alvo) return;
   const b = document.createElement('button');
-  b.type = 'button'; b.className = 'balao-x'; b.textContent = '×';
+  b.type = 'button'; b.id = 'btnCancelarPreench'; b.className = 'btn btn-ghost'; b.textContent = 'Cancelar';
   b.title = 'Cancelar preenchimento'; b.setAttribute('aria-label', 'Cancelar preenchimento');
   b.addEventListener('click', ()=>{
     openModal(`<h3>Cancelar o preenchimento?</h3>
@@ -4035,7 +4061,7 @@ function balaoCancelarPreenchimento(main, aoCancelar){
     document.getElementById('bx_continuar').addEventListener('click', closeModal);
     document.getElementById('bx_cancelar').addEventListener('click', ()=>{ closeModal(); aoCancelar(); });
   });
-  main.appendChild(b);
+  alvo.parentNode.insertBefore(b, alvo);
 }
 
 function renderNovaOrdem(main){
