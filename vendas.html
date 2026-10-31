@@ -1116,7 +1116,23 @@ function buscarClientesComDebounce(termo, aoAchar){
     aoAchar((r && r.data) || []);
   }, 300);
 }
+/* Crédito do cliente selecionado: libera a forma CRÉDITO CLIENTE no pagamento e avisa a vendedora */
+window.__credCli = { id:null, valor:0 };
+function definirCreditoCliente(c, avisar){
+  const v = c ? Math.max(0, Number(c.credito)||0) : 0;
+  const mudou = window.__credCli.id !== (c && c.id || null) || window.__credCli.valor !== v;
+  window.__credCli = { id: c && c.id || null, valor: v };
+  if(mudou){
+    document.dispatchEvent(new CustomEvent('credito-cliente'));
+    if(avisar && v > 0) showToast('Este cliente tem '+fmtMoeda(v)+' de crédito disponível.');
+  }
+}
+function avisoCreditoHtml(c){
+  const v = c ? Number(c.credito)||0 : 0;
+  return v > 0 ? `<div class="aviso aviso-wait" style="margin-top:8px;">${ic('alerta')}<div><b>Cliente com crédito: ${fmtMoeda(v)}</b><small>Use a forma de pagamento CRÉDITO CLIENTE para abater.</small></div></div>` : '';
+}
 function montarClienteAutocomplete(wrap, onSel, inicial){
+  { const _o = onSel; onSel = c=>{ definirCreditoCliente(c, true); _o(c); }; definirCreditoCliente(inicial || null, false); }
   if(window.ClienteLojas) ClienteLojas.iniciar(gatewayCall, ()=>(config&&config.lojas)||[]);
   let clienteSel = inicial || null;
   let timer = null;
@@ -1131,6 +1147,7 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
           <button type="button" class="cli-ac-edit" id="cliAcEdit" title="Editar dados do cliente">${ic('lapis',14)} Editar</button>
           <button type="button" class="cli-ac-clear" id="cliAcClear" title="Tirar este cliente da venda" aria-label="Tirar este cliente da venda">${ic('x',14)}</button>
         </div>
+        ${avisoCreditoHtml(clienteSel)}
         <button type="button" class="btn btn-ghost btn-sm" id="cliAcCadastrar" style="margin-top:8px;">${ic('mais',14)} Cadastrar cliente novo</button>`;
       wrap.querySelector('#cliAcClear').addEventListener('click', ()=>{ clienteSel=null; onSel(null); renderWrap(); });
       wrap.querySelector('#cliAcEdit').addEventListener('click', ()=>{ abrirSeletorCliente(c=>{ clienteSel=c; onSel(c); renderWrap(); }, clienteSel); });
@@ -1551,6 +1568,8 @@ function pixSemPessoa(pagamentos){
 }
 
 function mountPagamentos(container, holder, getLojaVendaId){
+  const _onCred = ()=>{ if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
+  document.addEventListener('credito-cliente', _onCred);
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = ''; // sem pré-seleção — obrigatório escolher
   if(!holder.emissaoNota) holder.emissaoNota = ''; // sem pré-seleção — usuário deve escolher
@@ -1712,7 +1731,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const wrap = container.querySelector('#pagRows');
     wrap.innerHTML = holder.pagamentos.length===0 ? `<div class="pag-vazio">Nenhuma forma lançada ainda. Clique em “Adicionar forma de pagamento”.</div>` : holder.pagamentos.map((p,i)=>`
       <div class="pag-linha">
-        <select data-pagform="${i}" aria-label="Forma de pagamento">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}<option value="__credito" ${p.formaId==='__credito'?'selected':''}>Crédito do cliente</option><option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>Fiado</option></select>
+        <select data-pagform="${i}" aria-label="Forma de pagamento">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}${(window.__credCli.valor>0 || p.formaId==='__credito') ? `<option value="__credito" ${p.formaId==='__credito'?'selected':''}>CRÉDITO CLIENTE${window.__credCli.valor>0?' (disp. '+fmtMoeda(window.__credCli.valor)+')':''}</option>` : ''}<option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>Fiado</option></select>
         ${pessoaPixHtml(p,i)}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         ${btnIcone('lixeira','Remover esta forma de pagamento',`data-pagdel="${i}"`,true)}
@@ -3159,7 +3178,7 @@ function abrirCancelarVenda(venda){
   openModal(`
     <h3>Cancelar venda</h3>
     <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)} · <b>${fmtMoeda(venda.valorTotal)}</b></p>
-    ${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Esta venda já recebeu ${fmtMoeda(recebido)}.</b><small>Esse valor sai do caixa como estorno.</small></div></div>` : ''}
+    ${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Esta venda já recebeu ${fmtMoeda(recebido)}.</b><small>Ao confirmar, você escolhe: deixar como crédito do cliente ou devolver o valor.</small></div></div>` : ''}
     ${venda.estoqueConsumido && Object.keys(venda.estoqueConsumido).length>0 ? `<div class="aviso aviso-info">${ic('pacote')}<div>Os itens desta venda voltam ao estoque automaticamente.</div></div>` : `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Venda antiga, sem registro de baixa de estoque.</b><small>Se ela baixou estoque, ajuste à mão em Configurações › Cadastro › Produto.</small></div></div>`}
     <div class="field" style="margin-top:14px;"><label for="cv_motivo">Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="cv_motivo" style="min-height:70px;" placeholder="Ex.: cliente desistiu, erro de lançamento"></textarea></div>
     <div class="modal-actions">
@@ -3171,11 +3190,49 @@ function abrirCancelarVenda(venda){
   document.getElementById('cv_confirmar').addEventListener('click', async ()=>{
     const motivo = maiusc(document.getElementById('cv_motivo').value);
     if(!motivo){ showToast('Escreva o motivo do cancelamento.'); return; }
-    await executarCancelamentoVenda(venda, motivo);
+    let dest = null;
+    if(recebido > 0.004){
+      const cli = await localizarClienteDaVenda(venda);
+      dest = await perguntarDestinoEstorno(recebido, !!cli, 'Esta venda');
+      if(!dest){ closeModal(); return; }
+    }
+    await executarCancelamentoVenda(venda, motivo, dest);
     closeModal();
   });
 }
-async function executarCancelamentoVenda(venda, motivo){
+async function localizarClienteDaVenda(venda){
+  const telD = (venda.telefone||'').replace(/\D/g,'');
+  const nomeL = (venda.cliente||'').trim().toLowerCase();
+  let c = clientes.find(x=> (telD && (x.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (x.nome||'').trim().toLowerCase()===nomeL));
+  if(!c && telD) c = await buscarClientePorTelefoneOuCpf(venda.telefone, '');
+  return c || null;
+}
+/* Pergunta o destino do valor já recebido: crédito do cliente ou devolução (dinheiro / pix). Resolve null se voltar. */
+function perguntarDestinoEstorno(recebido, temCliente, quem){
+  return new Promise(resolve=>{
+    openModal(`
+      <h3>Destino do valor recebido</h3>
+      <p>${quem} já recebeu <b>${fmtMoeda(recebido)}</b>. O que fazer com esse valor?</p>
+      <div class="field" style="display:grid;gap:8px;">
+        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
+      </div>
+      <div class="field" id="dst_formaBox" style="display:${temCliente?'none':''};"><label for="dst_forma">Forma da devolução</label>
+        <select id="dst_forma"><option value="dinheiro">Dinheiro — sai direto do caixa</option><option value="pix">Pix — sai da conta bancária da loja</option></select></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="dst_voltar" data-fechar>Voltar</button>
+        <button class="btn btn-accent" id="dst_ok">Confirmar cancelamento</button>
+      </div>`);
+    const sync = ()=>{ const v = (document.querySelector('input[name=dst]:checked')||{}).value; document.getElementById('dst_formaBox').style.display = v==='devolver' ? '' : 'none'; };
+    document.querySelectorAll('input[name=dst]').forEach(r=> r.addEventListener('change', sync));
+    document.getElementById('dst_voltar').addEventListener('click', ()=> resolve(null));
+    document.getElementById('dst_ok').addEventListener('click', ()=>{
+      const v = (document.querySelector('input[name=dst]:checked')||{}).value;
+      resolve(v==='credito' ? { tipo:'credito' } : { tipo: document.getElementById('dst_forma').value });
+    });
+  });
+}
+async function executarCancelamentoVenda(venda, motivo, dest){
   const recebido = valorRecebidoDe(venda);
   // Devolve estoque — sempre na mesma loja de onde foi descontado (venda.estoqueLojaId).
   // Vendas antigas (antes do estoque virar por loja) não têm esse campo; nesse caso não
@@ -3230,6 +3287,19 @@ async function executarCancelamentoVenda(venda, motivo){
   venda.canceladoPor = currentUser.nome;
   venda.canceladoEm = Date.now();
   venda.caixaSaidaCancelamento = recebido;
+  if(dest && recebido > 0.004){
+    venda.cancelamentoDestino = { tipo: dest.tipo, valor: recebido };
+    if(dest.tipo === 'credito'){
+      const cli = clienteCadastro || await localizarClienteDaVenda(venda);
+      if(cli){
+        cli.credito = (Number(cli.credito)||0) + recebido;
+        if(!cli.creditoMovimentos) cli.creditoMovimentos = [];
+        cli.creditoMovimentos.push({ data: hoje(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento venda ${String(venda.id).slice(-8)}` });
+        await salvarUmCliente(cli);
+        venda.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
+      }
+    }
+  }
   await vendaSalvar(venda);
   showToast('Venda cancelada.');
   renderTabs(); renderView();
@@ -3686,8 +3756,6 @@ function renderVendas(main){
                 </div>
                 ${temMais ? `<div class="menu-acoes" role="menu" data-menu="${v.id}">
                   <button type="button" role="menuitem" data-editar="${v.id}">${ic('lapis')} Editar venda</button>
-                  <button type="button" role="menuitem" data-trocar="${v.id}">${ic('trocar')} Registrar troca</button>
-                  <button type="button" role="menuitem" data-devolver="${v.id}">${ic('devolver')} Devolver item</button>
                   <hr>
                   <button type="button" role="menuitem" class="perigo" data-cancelar="${v.id}">${ic('cancelar')} Cancelar venda</button>
                 </div>` : ''}
@@ -3704,8 +3772,6 @@ function renderVendas(main){
     wrap.querySelectorAll('[data-itens]').forEach(b=> b.addEventListener('click', ()=> abrirItensVenda(vendas.find(x=>x.id===b.dataset.itens)) ));
     wrap.querySelectorAll('[data-nota]').forEach(b=> b.addEventListener('click', ()=> abrirNotaVenda(vendas.find(x=>x.id===b.dataset.nota)) ));
     wrap.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditarVenda(vendas.find(x=>x.id===b.dataset.editar)) ));
-    wrap.querySelectorAll('[data-trocar]').forEach(b=> b.addEventListener('click', ()=> abrirTrocaVenda(vendas.find(x=>x.id===b.dataset.trocar)) ));
-    wrap.querySelectorAll('[data-devolver]').forEach(b=> b.addEventListener('click', ()=> abrirDevolucaoItem(vendas.find(x=>x.id===b.dataset.devolver)) ));
     wrap.querySelectorAll('[data-cancelar]').forEach(b=> b.addEventListener('click', ()=> abrirCancelarVenda(vendas.find(x=>x.id===b.dataset.cancelar)) ));
   }
   [fLoja,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
@@ -3830,15 +3896,13 @@ function abrirEditarVenda(v){
     openModal(`
       <h3>Esta venda não pode ser editada</h3>
       <p>A nota fiscal já foi emitida. Editar agora deixaria a nota diferente do sistema.</p>
-      <p>Faça uma <b>troca</b> ou um <b>cancelamento</b> — e lembre de refletir a mudança no sistema de nota fiscal (fora deste app).</p>
+      <p>Faça o <b>cancelamento</b> — e lembre de refletir a mudança no sistema de nota fiscal (fora deste app).</p>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="ev_fechar">Fechar</button>
-        <button class="btn btn-ghost" id="ev_irTrocar">${ic('trocar')} Registrar troca</button>
         <button class="btn btn-danger" id="ev_irCancelar">${ic('cancelar')} Cancelar venda</button>
       </div>
     `);
     document.getElementById('ev_fechar').addEventListener('click', closeModal);
-    document.getElementById('ev_irTrocar').addEventListener('click', ()=>{ closeModal(); abrirTrocaVenda(v); });
     document.getElementById('ev_irCancelar').addEventListener('click', ()=>{ closeModal(); abrirCancelarVenda(v); });
   });
   document.getElementById('ev_nao').addEventListener('click', ()=> abrirFormularioEdicaoVenda(v));
@@ -4087,7 +4151,7 @@ function abrirFormularioEdicaoCompleta(v){
 
 function abrirDetalheVenda(v){
   if(!v) return;
-  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; }); paymentTypesMap['__credito']='Crédito do cliente'; paymentTypesMap['__fiado']='Fiado';
+  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; }); paymentTypesMap['__credito']='CRÉDITO CLIENTE'; paymentTypesMap['__fiado']='Fiado';
   const nomeLoja = (id)=> { const l = (config.lojas||[]).find(x=>x.id===id); return l ? l.nome : '—'; };
   openModal(`
     <h3>Venda — ${escapeHtml(v.cliente || 'cliente não identificado')}</h3>
@@ -4216,7 +4280,7 @@ ${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/J
 }
 
 function printVenda(v){
-  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; }); paymentTypesMap['__credito']='Crédito do cliente'; paymentTypesMap['__fiado']='Fiado';
+  const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=pt.nome; }); paymentTypesMap['__credito']='CRÉDITO CLIENTE'; paymentTypesMap['__fiado']='Fiado';
   const imp = (config.impressao && config.impressao.vendas) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 

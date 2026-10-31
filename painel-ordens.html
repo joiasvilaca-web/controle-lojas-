@@ -1247,16 +1247,73 @@ function dataLocalDeMs(ms){ const d = new Date(ms); if(!ms || isNaN(d)) return h
 function hojeStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** Aplica o cancelamento em cima do objeto `order` em memória (não salva sozinho —
  * quem chama decide quando persistir, pra poder combinar com outras alterações). */
+async function localizarClienteDaOrdem(order){
+  const telD = onlyDigits(order.telefone||'');
+  const nomeL = (order.cliente||'').trim().toLowerCase();
+  let c = clientes.find(x=> (telD && onlyDigits(x.telefone||'')===telD) || (nomeL && (x.nome||'').trim().toLowerCase()===nomeL)) || null;
+  if(!c && telD) c = await buscarClientePorTelefoneOuCpf(order.telefone, '');
+  if(!c && nomeL){
+    try{ const r = await gatewayCall({ op:'searchClients', params:{ termo: (order.cliente||'').trim() } });
+      c = ((r && r.data) || []).find(x=> (x.nome||'').trim().toLowerCase()===nomeL) || null; }catch(e){ c = null; }
+  }
+  return c;
+}
+/* Pergunta o destino do valor já recebido: crédito do cliente ou devolução (dinheiro / pix). Resolve null se voltar. */
+function perguntarDestinoEstorno(recebido, temCliente, quem){
+  return new Promise(resolve=>{
+    openModal(`
+      <h3>Destino do valor recebido</h3>
+      <p>${quem} já recebeu <b>${fmtMoeda(recebido)}</b>. O que fazer com esse valor?</p>
+      <div class="field" style="display:grid;gap:8px;">
+        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
+      </div>
+      <div class="field" id="dst_formaBox" style="display:${temCliente?'none':''};"><label for="dst_forma">Forma da devolução</label>
+        <select id="dst_forma"><option value="dinheiro">Dinheiro — sai direto do caixa</option><option value="pix">Pix — sai da conta bancária da loja</option></select></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="dst_voltar" data-fechar>Voltar</button>
+        <button class="btn btn-accent" id="dst_ok">Confirmar cancelamento</button>
+      </div>`);
+    const sync = ()=>{ const v = (document.querySelector('input[name=dst]:checked')||{}).value; document.getElementById('dst_formaBox').style.display = v==='devolver' ? '' : 'none'; };
+    document.querySelectorAll('input[name=dst]').forEach(r=> r.addEventListener('change', sync));
+    document.getElementById('dst_voltar').addEventListener('click', ()=> resolve(null));
+    document.getElementById('dst_ok').addEventListener('click', ()=>{
+      const v = (document.querySelector('input[name=dst]:checked')||{}).value;
+      resolve(v==='credito' ? { tipo:'credito' } : { tipo: document.getElementById('dst_forma').value });
+    });
+  });
+}
+/** Retorna false se a pessoa voltou atrás na escolha do destino (nada foi alterado). */
 async function aplicarCancelamentoOrdem(order, motivo){
   const recebido = valorRecebidoDe(order);
+  let dest = null;
+  if(recebido > 0.004){
+    const cliDest = await localizarClienteDaOrdem(order);
+    dest = await perguntarDestinoEstorno(recebido, !!cliDest, 'Este pedido');
+    if(!dest) return false;
+  }
   await reverterFiadoECreditoOrdem(order);
   order.status = 'cancelado';
   order.motivoCancelamento = motivo;
   order.canceladoPor = currentUser.nome;
   order.canceladoEm = Date.now();
   order.caixaSaidaCancelamento = recebido;
+  if(dest){
+    order.cancelamentoDestino = { tipo: dest.tipo, valor: recebido };
+    if(dest.tipo === 'credito'){
+      const cli = await localizarClienteDaOrdem(order);
+      if(cli){
+        cli.credito = (Number(cli.credito)||0) + recebido;
+        if(!cli.creditoMovimentos) cli.creditoMovimentos = [];
+        cli.creditoMovimentos.push({ data: hojeStr(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento O.S. ${order.via||''}` });
+        await salvarUmCliente(cli);
+        order.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
+      }
+    }
+  }
   // Estoque: libera a reserva (e oferece devolver se já tinha baixado). Nunca bloqueia.
   await estoqueAoCancelarOuExcluir(order, 'cancelado');
+  return true;
 }
 /** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
 function abrirCancelarOrdem(order){
@@ -1266,7 +1323,7 @@ function abrirCancelarOrdem(order){
   openModal(`
     <h3>Cancelar pedido</h3>
     <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(order.via||'—')} · <b>${fmtMoeda(order.valorTotal)}</b></p>
-    ${recebido>0 ? `<div class="aviso-linha excede" style="margin-bottom:12px;">${ico('alerta')}<span>Este pedido já recebeu ${fmtMoeda(recebido)}. Esse valor sai do caixa como estorno.</span></div>` : ''}
+    ${recebido>0 ? `<div class="aviso-linha excede" style="margin-bottom:12px;">${ico('alerta')}<span>Este pedido já recebeu ${fmtMoeda(recebido)}. Ao confirmar, você escolhe: crédito do cliente ou devolução.</span></div>` : ''}
     <div class="field"><label>Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="co_motivo" style="min-height:70px;" placeholder="Ex: cliente desistiu, erro de lançamento..."></textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="co_fechar">Voltar</button>
@@ -1277,7 +1334,7 @@ function abrirCancelarOrdem(order){
   document.getElementById('co_confirmar').addEventListener('click', async ()=>{
     const motivo = maiusc(document.getElementById('co_motivo').value);
     if(!motivo){ showToast('Informe o motivo do cancelamento.'); return; }
-    await aplicarCancelamentoOrdem(order, motivo);
+    if(await aplicarCancelamentoOrdem(order, motivo) === false){ closeModal(); return; }
     await saveOrders();
     showToast('O.S. cancelada.');
     closeModal();
@@ -1488,7 +1545,23 @@ function clienteCardHtml(c, idx){
   </div>`;
 }
 
+/* Crédito do cliente selecionado: libera a forma CRÉDITO CLIENTE no pagamento e avisa a vendedora */
+window.__credCli = { id:null, valor:0 };
+function definirCreditoCliente(c, avisar){
+  const v = c ? Math.max(0, Number(c.credito)||0) : 0;
+  const mudou = window.__credCli.id !== (c && c.id || null) || window.__credCli.valor !== v;
+  window.__credCli = { id: c && c.id || null, valor: v };
+  if(mudou){
+    document.dispatchEvent(new CustomEvent('credito-cliente'));
+    if(avisar && v > 0) showToast('Este cliente tem '+fmtMoeda(v)+' de crédito disponível.');
+  }
+}
+function avisoCreditoHtml(c){
+  const v = c ? Number(c.credito)||0 : 0;
+  return v > 0 ? `<div class="aviso-linha" style="margin-top:8px;background:var(--wait-soft);border:1px solid var(--wait);color:var(--ink);">${ico('alerta')}<span><b>Cliente com crédito: ${fmtMoeda(v)}</b> — use a forma de pagamento CRÉDITO CLIENTE para abater.</span></div>` : '';
+}
 function montarClienteAutocomplete(wrap, onSel, inicial){
+  { const _o = onSel; onSel = c=>{ definirCreditoCliente(c, true); _o(c); }; definirCreditoCliente(inicial || null, false); }
   if(window.ClienteLojas) ClienteLojas.iniciar(gatewayCall, ()=>(config&&config.lojas)||[]);
   let clienteSel=inicial||null, timer=null, focusIdx=-1;
   function renderWrap(){
@@ -1499,6 +1572,7 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
         <button type="button" class="cli-ac-edit" id="cliAcEdit_os">${ico('lapis',14)} Editar dados</button>
         <button type="button" class="cli-ac-clear" id="cliAcClear_os" title="Trocar de cliente" aria-label="Trocar de cliente">${ico('x')}</button>
       </div>
+      ${avisoCreditoHtml(clienteSel)}
       <button type="button" class="btn-texto" id="cliAcCad_os" style="margin-top:6px;">${ico('mais',14)} Cadastrar cliente novo</button>`;
       wrap.querySelector('#cliAcClear_os').addEventListener('click',()=>{clienteSel=null;onSel(null);renderWrap();});
       wrap.querySelector('#cliAcEdit_os').addEventListener('click',()=>{abrirSeletorCliente(c=>{clienteSel=c;onSel(c);renderWrap();},clienteSel);});
@@ -2022,6 +2096,8 @@ function pixSemPessoa(pagamentos){
 }
 
 function mountPagamentos(container, holder, getLojaVendaId){
+  const _onCred = ()=>{ if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
+  document.addEventListener('credito-cliente', _onCred);
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = ''; // sem pré-seleção — obrigatório escolher
   if(!holder.emissaoNota) holder.emissaoNota = ''; // sem pré-seleção — usuário deve escolher
@@ -2184,7 +2260,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const wrap = container.querySelector('#pagRows');
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="pag-linha">
-        <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId)}</select>
+        <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
         <div style="display:flex; gap:6px; align-items:center;">
           ${pessoaPixHtml(p,i)}
           <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor (R$)" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
@@ -2356,10 +2432,11 @@ function mountPagamentosEdicao(container, holder){
    Administração › Cadastro › Formas de Pagamento. Ordens antigas lançadas com
    Crédito do cliente / Fiado / Sem custo mantêm a opção só na própria linha,
    pra edição não mostrar a forma errada. */
-function opcoesFormaPagamentoHtml(formaIdAtual){
+function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
   const formas = (config.paymentTypes||[]);
   let html = formas.map(pt=>`<option value="${pt.id}" ${formaIdAtual===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('');
-  const legado = { '__credito':'Crédito do cliente', '__fiado':'Fiado', '__sem_custo':'Sem custo' };
+  const legado = { '__credito':'CRÉDITO CLIENTE', '__fiado':'Fiado', '__sem_custo':'Sem custo' };
+  if(permitirCredito && window.__credCli.valor>0 && formaIdAtual!=='__credito') html += `<option value="__credito">CRÉDITO CLIENTE (disp. ${fmtMoeda(window.__credCli.valor)})</option>`;
   if(legado[formaIdAtual]) html += `<option value="${formaIdAtual}" selected>${legado[formaIdAtual]}</option>`;
   return html;
 }
@@ -3014,7 +3091,7 @@ function montarMensagemOS(order, template){
 function printOrder(order){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
-  paymentTypesMap['__credito'] = 'Crédito do cliente'; paymentTypesMap['__fiado'] = 'Fiado';
+  paymentTypesMap['__credito'] = 'CRÉDITO CLIENTE'; paymentTypesMap['__fiado'] = 'Fiado';
   const imp = (config.impressao && config.impressao.os) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 
@@ -4115,6 +4192,7 @@ function renderNovaOrdem(main){
   mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
 
   const tempPagHolder = { valorTotal: null, pagamentos: [], momentoPagamento: '', emissaoNota: '' };
+  tempPagHolder.permitirCredito = true;
   mountPagamentos(document.getElementById('pagamentoContainerNova'), tempPagHolder);
 
   // Toggle info interna
@@ -4893,7 +4971,7 @@ function openEditModalCompleto(order, opts){
       if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); return; }
       const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
       if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); return; }
-      await aplicarCancelamentoOrdem(order, motivo);
+      if(await aplicarCancelamentoOrdem(order, motivo) === false){ closeModal(); renderView(); return; }
       await saveOrders();
       closeModal();
       showToast('O.S. cancelada.');
@@ -5160,7 +5238,7 @@ function renderPainel(main){
           if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); sel.value = previous; applyStatusClass(sel); return; }
           const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
           if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); sel.value = previous; applyStatusClass(sel); return; }
-          await aplicarCancelamentoOrdem(ord, motivo);
+          if(await aplicarCancelamentoOrdem(ord, motivo) === false){ sel.value = previous; applyStatusClass(sel); closeModal(); return; }
           await saveOrders();
           showToast('O.S. cancelada.');
           renderTable();
