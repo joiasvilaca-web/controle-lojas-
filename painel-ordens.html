@@ -137,6 +137,9 @@
   .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;line-height:1.4;white-space:nowrap;background:var(--surface-2);color:var(--ink-soft);}
   .badge .ico{width:13px;height:13px;}
   .badge-encaixe{background:var(--accent-soft);color:var(--accent);}
+  .badge-aut-pend{background:var(--danger-soft);color:var(--danger);}
+  .badge-aut-ok{background:var(--ok-soft);color:var(--ok);}
+  .badge-aut-rec{background:var(--wait-soft);color:var(--wait);}
   .badge-loja{background:var(--surface-2);color:var(--ink-soft);font-weight:700;letter-spacing:.02em;}
   .badge-flag{background:var(--danger-soft);color:var(--danger);}
   .badge-aviso{background:var(--wait-soft);color:var(--wait);}
@@ -1001,6 +1004,7 @@ async function loadAll(){
   ]);
   orders = ordersR; codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
   produtosEstoque = produtosR || [];
+  setTimeout(sincronizarAutorizacoesPendentes, 1500); setInterval(sincronizarAutorizacoesPendentes, 20000);
   if(!clientes) clientes = [];
   // Clientes NÃO são mais baixados aqui, nem em segundo plano (22 mil+ linhas, ~7,5 MB
   // em 23 viagens a cada abertura). Busca e checagem de duplicidade consultam o servidor.
@@ -1429,6 +1433,34 @@ function abrirExcluirOrdem(order){
 }
 /* ── Solicitações de permissão (pedido fora do padrão → Oficina libera no cartão CÓDIGO) ──
    Lista em painel_ordens_kv chave 'autorizacoes': [{id, criadoEm, lojaId, solicitante, status: pendente|liberado|recusado|cancelado, motivo, via:{…}, codigo, liberadoPor}] */
+/** Aplica nos pedidos da loja a resposta da Oficina (liberado → encaixe verde; recusado → amarelo + data mais próxima aceita). */
+async function sincronizarAutorizacoesPendentes(){
+  try{
+    const pend = orders.filter(o=> o && o.autorizacao && o.autorizacao.status==='pendente');
+    if(!pend.length) return;
+    const lista = await autorizacoesGet();
+    let mudou = false;
+    for(const o of pend){
+      const r = lista.find(x=> x.id===o.autorizacao.solicitacaoId);
+      if(!r) continue;
+      if(r.status==='liberado'){
+        o.autorizacao = { ...o.autorizacao, status:'liberado', por:r.liberadoPor||'', em:r.respondidoEm||Date.now() };
+        o.encaixe = true; o.autorizadoPor = r.liberadoPor || 'OFICINA';
+        showToast('Encaixe do pedido '+(o.via||'')+' liberado por '+(r.liberadoPor||'Oficina')+'.');
+      } else if(r.status==='recusado'){
+        const nova = (o.status==='cancelado') ? null : proximaDataDisponivel(o.serviceTypeId, o.id);
+        o.autorizacao = { ...o.autorizacao, status:'recusado', por:r.recusadoPor||'', motivoRecusa:r.motivoRecusa||'', dataAnterior:o.data, em:r.respondidoEm||Date.now() };
+        if(nova) o.data = nova;
+        o.encaixe = false; o.autorizadoPor = null;
+        showToast('Pedido '+(o.via||'')+': autorização recusada'+(nova?'. Nova data: '+fmtDate(nova):'')+'.');
+      } else continue;
+      mudou = true;
+      const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:o.id, payload:o, updated_at:new Date().toISOString() } } });
+      if(rr && rr.error) console.error('erro ao salvar resposta da autorização', o.id, rr.error);
+    }
+    if(mudou && typeof currentTab!=='undefined' && currentTab==='painel' && !modoNovaOrdem){ try{ renderView(); }catch(e){} }
+  }catch(e){ console.error('sincronizar autorizações', e); }
+}
 async function autorizacoesGet(){ const l = await storageGet('autorizacoes', true); return Array.isArray(l) ? l : []; }
 async function autorizacoesMut(fn){ const l = await autorizacoesGet(); fn(l); return storageSet('autorizacoes', l.slice(0,300), true); }
 async function saveCodes(){ await storageSet('codes', codes, true); }
@@ -4265,7 +4297,7 @@ function renderNovaOrdem(main){
   })();
 
   // ── Fora do padrão: pedido de permissão à Oficina ─────────────────────────────
-  let foraPadrao = false, tenhoCodigo = false, solicitacaoAtual = null, pollSol = null, motivoForaPadrao = '';
+  let pendenciaReq = null, foraPadrao = false, tenhoCodigo = false, solicitacaoAtual = null, pollSol = null, motivoForaPadrao = '';
   const btnLancar = document.getElementById('btnSalvarOrdem'), btnSolic = document.getElementById('btnSolicitarPerm'), btnTenho = document.getElementById('btnTenhoCodigo'), solBox = document.getElementById('solicitacaoBox');
   function atualizarBotoesPermissao(){
     const liberado = !!(solicitacaoAtual && solicitacaoAtual.status==='liberado');
@@ -4313,12 +4345,10 @@ function renderNovaOrdem(main){
         pagamento: { pagamentos: tempPagHolder.pagamentos||[], valorTotal: tempPagHolder.valorTotal||0, momentoPagamento: tempPagHolder.momentoPagamento||'', emissaoNota: tempPagHolder.emissaoNota||'', numeroNota: tempPagHolder.numeroNota||'', lojaSaidaId: tempPagHolder.lojaSaidaId||'', lojaPagamentoId: tempPagHolder.lojaPagamentoId||'' },
         fotos: (tempFotoHolder.fotos||[]).map(f=>({ id:f.id, nome:f.nome, driveUrl:f.driveUrl||'' })),
         observacoes: tempObsHolder.observacoes||[], infoInterna: (document.getElementById('f_infoInterna')?.value||'').trim() } };
+    // O pedido é lançado já, com pendência de autorização; a Oficina responde depois (lista mostra vermelho → verde / amarelo)
+    pendenciaReq = req;
     btnSolic.disabled = true;
-    const ok = await autorizacoesMut(l=>{ l.unshift(req); });
-    btnSolic.disabled = false;
-    if(!ok){ showToast('Não consegui enviar a solicitação. Tente de novo.'); return; }
-    solicitacaoAtual = req; atualizarBotoesPermissao(); iniciarPollSolicitacao();
-    showToast('Solicitação enviada para a Oficina.');
+    try{ await lancarPedido(); } finally { pendenciaReq = null; btnSolic.disabled = false; }
   });
 
   function updateBanner(){
@@ -4337,7 +4367,7 @@ function renderNovaOrdem(main){
       if(!res.quantidadeOk) motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
       motivoForaPadrao = motivos.join(' e ');
       foraPadrao = true;
-      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Preencha os dados da via e clique em <b>Solicitar permissão</b> — a Oficina libera por aqui. Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
+      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Clique em <b>Solicitar permissão</b>: o pedido é lançado agora e fica com <b>pendência de autorização</b> até a Oficina liberar (vira encaixe) ou recusar (a data volta para a mais próxima aceita). Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
       // Busca os códigos mais atuais (podem ter sido gerados agora mesmo em outro
       // dispositivo/sessão) pra validar em tempo real o que a vendedora digitar.
       storageGet('codes', true).then(c=>{ if(c) codes = c; });
@@ -4446,7 +4476,7 @@ function renderNovaOrdem(main){
     renderTabs(); renderView();
   });
 
-  document.getElementById('btnSalvarOrdem').addEventListener('click', async ()=>{
+  async function lancarPedido(){
     const cli = collectClienteFields();
     const { cliente, telefone } = cli;
     const via = viaInp.value.trim();
@@ -4519,8 +4549,9 @@ function renderNovaOrdem(main){
     let encaixe = false;
     let autorizadoPor = null;
     let codeObjParaUsar = null;
+    if(res.ok) pendenciaReq = null;   // dentro do padrão: lança normal
 
-    if(!res.ok){
+    if(!res.ok && !pendenciaReq){
       const codigoDigitado = document.getElementById('f_codigo').value.trim().toUpperCase();
       if(!codigoDigitado){
         showToast('Digite o código de autorização para lançar o encaixe.');
@@ -4563,6 +4594,7 @@ function renderNovaOrdem(main){
       data: dt,
       status: STATUS.AGUARDANDO,
       encaixe, autorizadoPor,
+      autorizacao: pendenciaReq ? { status:'pendente', solicitacaoId: pendenciaReq.id, dataSolicitada: dt, motivo: pendenciaReq.motivo||'', em: Date.now(), por: null } : undefined,
       valorTotal: tempPagHolder.valorTotal,
       pagamentos: carimbarPagamentosOS(tempPagHolder.pagamentos),
       momentoPagamento: tempPagHolder.momentoPagamento,
@@ -4628,8 +4660,14 @@ function renderNovaOrdem(main){
     }
     orders.unshift(novaOrdem);
     await saveOrders();
+    if(pendenciaReq){
+      pendenciaReq.ordemId = novaOrdem.id; pendenciaReq.via.numeroVia = novaOrdem.via || pendenciaReq.via.numeroVia;
+      const reqSalva = pendenciaReq;
+      const okReq = await autorizacoesMut(l=>{ l.unshift(reqSalva); });
+      if(!okReq) showToast('Pedido lançado, mas não consegui avisar a Oficina. Avise por outro meio.');
+    }
     await upsertClienteFromOrder(cli);
-    showToast(encaixe ? 'Pedido lançado como encaixe autorizado.' : 'Pedido lançado.');
+    showToast(pendenciaReq ? 'Pedido lançado com pendência de autorização. A Oficina foi avisada.' : (encaixe ? 'Pedido lançado como encaixe autorizado.' : 'Pedido lançado.'));
     await sincronizarReservasOrdem(novaOrdem, planoNova);
     if(orcamentoOrigem) await marcarOrcamentoConvertido(orcamentoOrigem, novaOrdem);
     novaOrdemPrefill = null;
@@ -4638,7 +4676,8 @@ function renderNovaOrdem(main){
     renderTabs(); renderView();
     renderAlerts();
     openNotifyModal(novaOrdem);
-  });
+  }
+  document.getElementById('btnSalvarOrdem').addEventListener('click', lancarPedido);
 }
 
 /* ============================================================
@@ -5336,7 +5375,11 @@ function renderPainel(main){
     const oficina = currentUser.nivel==='oficina';
     const marcas = [
       isRascunho ? `<span class="badge rascunho-badge">Rascunho</span>` : '',
-      o.encaixe ? `<span class="badge badge-encaixe" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</span>` : '',
+      (()=>{ const a = o.autorizacao; if(!a) return o.encaixe ? `<span class="badge badge-encaixe" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</span>` : '';
+        if(a.status==='pendente') return `<span class="badge badge-aut-pend" title="Fora do padrão (${escapeHtml(a.motivo||'')}). Aguardando a Oficina liberar o encaixe.">${ico('cadeado',12)} Pendência de autorização</span>`;
+        if(a.status==='liberado') return `<span class="badge badge-aut-ok" title="Encaixe liberado por ${escapeHtml(a.por||o.autorizadoPor||'')}">${ico('check',12)} Encaixe autorizado${a.por?' por '+escapeHtml(a.por):''}</span>`;
+        if(a.status==='recusado') return `<span class="badge badge-aut-rec" title="Recusado${a.por?' por '+escapeHtml(a.por):''}${a.motivoRecusa?': '+escapeHtml(a.motivoRecusa):''}. Data original ${a.dataAnterior?fmtDate(a.dataAnterior):''} voltou para a mais próxima aceita.">${ico('alerta',12)} Autorização recusada · data ajustada</span>`;
+        return o.encaixe ? `<span class="badge badge-encaixe">Encaixe</span>` : ''; })(),
       pendObs ? `<span class="badge badge-flag">${ico('sino',12)} Observação pendente</span>` : '',
       semPag && o.status!=='cancelado' ? `<span class="badge badge-flag">Sem pagamento lançado</span>` : '',
     ].filter(Boolean).join('');
@@ -5678,11 +5721,12 @@ function renderGerarCodigo(main){
     });
     document.getElementById('solLiberar').addEventListener('click', async ()=>{
       const b = document.getElementById('solLiberar'); b.disabled = true;
-      const codigo = Array.from({length:6}, ()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
+      const codigo = r.ordemId ? '' : Array.from({length:6}, ()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
       const quem = maiusc(currentUser.nome||'');
       let liberou = false;
       await autorizacoesMut(l=>{ const x=l.find(y=>y.id===r.id); if(x && x.status==='pendente'){ x.status='liberado'; x.codigo=codigo; x.liberadoPor=quem; x.respondidoEm=Date.now(); liberou=true; } });
       if(!liberou){ showToast('Esta solicitação já foi respondida.'); closeModal(); desenharSolicitacoes(); return; }
+      if(r.ordemId){ closeModal(); showToast('Liberado. O pedido da loja virou encaixe autorizado.'); desenharSolicitacoes(); return; }
       codes = await storageGet('codes', true) || codes;
       codes.unshift({ codigo, autorizadoPor: quem, nivelGerador: currentUser.nivel, geradoPor: currentUser.nome, criadoEm: Date.now(), usado:false, solicitacaoId: r.id, viaNumero: (r.via&&r.via.numeroVia)||'', lojaId: r.lojaId, solicitante: r.solicitante||'' });
       await saveCodes(); renderCodeHistory();
