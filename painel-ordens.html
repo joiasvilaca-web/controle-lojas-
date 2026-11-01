@@ -2276,6 +2276,27 @@ function pixSemPessoa(pagamentos){
 
 const __pixAsked = new WeakSet();
 function soPixPF(pags){ const v=(pags||[]).filter(p=>(Number(p.valor)||0)>0); return v.length>0 && v.every(p=>formaEhPix(p.formaId)&&p.pessoa==='PF'); }
+/* Regra da nota pelo tipo de Pix: Pix loja (PJ) = nota "Sim" fixa (cobra o número no fechamento do caixa);
+   só Pix pessoa física (PF) = nota "Não" como padrão (pode trocar) e o fechamento do caixa não cobra número. */
+function regraNotaPix(container, holder){
+  const pix = (holder.pagamentos||[]).filter(p=> formaEhPix(p.formaId) && p.pessoa);
+  const temPJ = pix.some(p=> p.pessoa==='PJ');
+  const soPF = soPixPF(holder.pagamentos) || (pix.length>0 && !temPJ && (holder.pagamentos||[]).every(p=> !p.formaId || (formaEhPix(p.formaId) && p.pessoa==='PF')));
+  const set = (k,v)=> Object.defineProperty(holder, k, { value:v, writable:true, configurable:true, enumerable:false });
+  if(temPJ){
+    if(holder.emissaoNota!=='sim'){ holder.emissaoNota = 'sim'; }
+    set('_notaPixLoja', true);
+  } else {
+    if(holder._notaPixLoja){ set('_notaPixLoja', false); if(!String(holder.numeroNota||'').trim()) holder.emissaoNota = soPF ? 'nao' : ''; }
+    else if(soPF && !holder.emissaoNota){ holder.emissaoNota = 'nao'; }
+  }
+  const rs = container.querySelector('#pagNotaSim'), rn = container.querySelector('#pagNotaNao');
+  if(rs) rs.checked = holder.emissaoNota==='sim';
+  if(rn){ rn.checked = holder.emissaoNota==='nao'; rn.disabled = temPJ; if(rn.parentNode) rn.parentNode.style.opacity = temPJ ? '.45' : ''; }
+  const nh = container.querySelector('#pagNotaPfHint');
+  if(nh) nh.textContent = temPJ ? 'Pix loja: nota fiscal obrigatória — o fechamento do caixa cobra o número da nota.'
+                        : soPF ? 'Pix de pessoa física: nota "Não" como padrão; o fechamento do caixa não cobra o número.' : '';
+}
 /* Pergunta de onde veio o Pix: da loja (PJ) ou de pessoa física (PF). */
 function perguntarPixTipo(){
   return new Promise(resolve=>{
@@ -2525,7 +2546,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   function updateHint(){
-    { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
+    regraNotaPix(container, holder);
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
     { let cbEl = container.querySelector('#pagCashbackAviso'); if(!cbEl){ cbEl = document.createElement('div'); cbEl.id = 'pagCashbackAviso'; hint.parentNode.insertBefore(cbEl, hint); } cbEl.innerHTML = cbAvisoHtml(totalPag()); }
@@ -2690,7 +2711,7 @@ function mountPagamentosEdicao(container, holder){
   }
 
   function updateHint(){
-    { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
+    regraNotaPix(container, holder);
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
     { let cbEl = container.querySelector('#pagCashbackAviso'); if(!cbEl){ cbEl = document.createElement('div'); cbEl.id = 'pagCashbackAviso'; hint.parentNode.insertBefore(cbEl, hint); } cbEl.innerHTML = cbAvisoHtml(totalPag()); }
