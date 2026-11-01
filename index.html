@@ -1319,7 +1319,8 @@ const CAIXA_SUBMODULOS = {
   insumos:{ label:'Oficina', icon:'🛠️', src:'insumos.html', permModulo:'insumos' },
   aniv:   { label:'Aniversário', icon:'🎂', src:'marketing.html?secao=aniversario', permModulo:'marketing' },
   codigo: { label:'Código', icon:'🔑', src:'painel-ordens.html?aba=codigo', permModulo:'oscodigo' },   // Oficina: gerador de código de autorização (era a aba Código do Pedido)
-  inventario:{ label:'Inventário', icon:'📋', src:'inventario.html', permModulo:'inventario' }, // usa a permissão de Transferências (ver subCaixaPermitidos)
+  inventario:{ label:'Inventário', icon:'📋', src:'inventario.html', permModulo:'inventario' },
+  preco:  { label:'Consulta preço', icon:'🏷️', src:'consulta-preco.html', permModulo:'precos' },   // leitor/busca de preço — liberado pra quem vende ou tem caixa // usa a permissão de Transferências (ver subCaixaPermitidos)
 };
 let caixaSubAtual = null; // null = tela de cartões; senão, a sub-tela aberta
 function subVendasPermitidos(){
@@ -1333,6 +1334,7 @@ function subVendasPermitidos(){
 }
 function subCaixaPermitidos(){
   const out = subVendasPermitidos();
+  if(['vendas','os','orcamentos','caixa'].some(k=>currentPermissoes[k] && currentPermissoes[k].ativo)) out.push('preco');
   if(currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) out.push('resumo');
   if(currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo) out.push('gastos');
   if(currentPermissoes['conciliacao'] && currentPermissoes['conciliacao'].ativo) out.push('conciliacao');
@@ -1393,7 +1395,7 @@ function podeVerModulo(m){
   // Ajuda é liberada pra todo mundo, sempre
   if(m.id==='ajuda') return true;
   if(m.id==='caixa') return subCaixaPermitidos().length>0;
-  if(m.id==='dashboard') return true; // PAINEL sempre tem a aba Avisos
+  if(m.id==='dashboard') return !(currentUser && currentUser.nivel==='vendedora'); // PAINEL (Avisos) pra todos, menos vendedoras (pedido do Felipe, 01/11)
   if(m.id==='config'){
     return (currentPermissoes['config'] && currentPermissoes['config'].ativo) ||
            (currentPermissoes['dp'] && currentPermissoes['dp'].ativo);
@@ -1950,6 +1952,7 @@ const GRUPO_CARDS = {
     conciliacao:{ icone:'check',   titulo:'CONCILIAÇÃO',     desc:'Confere cartões e PIX recebidos com o que foi vendido' },
     reforma:    { icone:'gem',     titulo:'REFORMA',         desc:'Pedidos de reforma: orçamento, custódia e O.S.' },
     insumos:    { icone:'package', titulo:'OFICINA',         desc:'Vias de todas as lojas (leitor de código), status Oficina pronto, material usado e insumos' },
+    preco:      { icone:'tag',     titulo:'CONSULTA PREÇO',  desc:'Leia o código da etiqueta ou digite parte do nome e veja o preço na hora' },
     inventario: { icone:'scan',    titulo:'INVENTÁRIO',      desc:'Relatório de estoque por loja e contagem das peças com leitor de código' },
     codigo:     { icone:'cadeado',    titulo:'CÓDIGO',          desc:'Gerar código de autorização para pedidos fora do prazo ou do limite de vagas' },
     aniv:       { icone:'megaphone', titulo:'ANIVERSÁRIO',   desc:'Aniversariantes do dia e do mês, e mala direta' },
@@ -2137,6 +2140,11 @@ function selecionarModulo(moduloId, subVendas){
     // atalho pra uma sub-tela específica: abre direto nela (nunca na tela de cartões)
     if(subAtualDoGrupo(grupo)) return selecionarModulo(grupo);
     return abrirGrupoDireto(grupo);
+  }
+  // Vendedora não tem PAINEL: qualquer ida pra lá (tela inicial, Voltar, atalho) cai no CAIXA.
+  if(moduloId==='dashboard' && !podeVerModulo({id:'dashboard'})){
+    const alt = SIDEBAR_MODULES.filter(podeVerModulo).find(m=>m.id==='caixa') || SIDEBAR_MODULES.find(m=>m.id!=='dashboard' && podeVerModulo(m));
+    if(alt) return selecionarModulo(alt.id);
   }
   if(!SIDEBAR_MODULES.find(m=>m.id===moduloId)){
     // Módulo desconhecido (ex.: excluído): cai no primeiro permitido em vez de quebrar.
@@ -2655,6 +2663,7 @@ window.addEventListener('message', (ev)=>{
     if(mod==='reforma' && iframesCriados['caixa_reforma']) return iframesCriados['caixa_reforma'];
     if(mod==='insumos' && iframesCriados['caixa_insumos']) return iframesCriados['caixa_insumos'];
     if(mod==='inventario' && iframesCriados['caixa_inventario']) return iframesCriados['caixa_inventario'];
+    if(mod==='precos' && iframesCriados['caixa_preco']) return iframesCriados['caixa_preco'];
     if(mod==='marketing' && iframesCriados['caixa_aniv']) return iframesCriados['caixa_aniv'];
     if(mod==='caixa' && iframesCriados['caixa_resumo']) return iframesCriados['caixa_resumo'];
     if(mod==='gastos' && iframesCriados['caixa_gastos']) return iframesCriados['caixa_gastos'];
@@ -4433,7 +4442,8 @@ function pedraCalcular(pc, dolar, meiaCrav){
   const usd=Number(pc&&pc.custoUSD)||0, mult=Number(pc&&pc.mult)||0;
   if(!usd || !dolar) return { custoBRL: 0, venda: 0 };
   const custoBRL=Math.round(usd*dolar*100)/100;
-  return { custoBRL, venda: Math.round((usd*dolar*mult + (pc.cravacao?meiaCrav:0))*100)/100 };
+  const v=Math.round((usd*dolar*mult + (pc.cravacao?meiaCrav:0))*100)/100;
+  return { custoBRL, venda: Math.ceil(v-0.000001) };   // preço de venda sempre inteiro (centavos arredondam pra cima)
 }
 function aplicarPrecoPedras(lista){
   const dolar=pedraDolarDia(); if(!dolar||!Array.isArray(lista)) return lista;
@@ -4859,7 +4869,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     if(!campo) return;
     const custoNum = (d.custoCompra!=null && d.custoCompra!=='') ? parseFloat(String(d.custoCompra).replace(',','.')) : NaN;
     const fatorNum = (d.fator!=null && d.fator!=='') ? parseFloat(String(d.fator).replace(',','.')) : NaN;
-    const preco = (!isNaN(custoNum) && !isNaN(fatorNum)) ? Math.round(custoNum*fatorNum*100)/100 : null;
+    const preco = (!isNaN(custoNum) && !isNaN(fatorNum)) ? Math.ceil(Math.round(custoNum*fatorNum*100)/100 - 0.000001) : null;   // preço inteiro
     d.precoVenda = preco!=null ? preco : null;
     campo.value = preco!=null ? preco.toFixed(2) : '';
     recalcularTipoVenda();
@@ -5675,7 +5685,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       // pra manter o histórico. Aqui só preserva o que já estava, como placeholder.
       estoquePorLoja: editando ? {...(produto.estoquePorLoja||{})} : {},
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
-      precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
+      precoVenda: d.precoVenda===null || d.precoVenda==='' || isNaN(parseFloat(String(d.precoVenda).replace(',','.'))) ? null : Math.ceil(Math.round(parseFloat(String(d.precoVenda).replace(',','.'))*100)/100 - 0.000001),   // preço inteiro: centavos arredondam pra cima
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
       pedraCalc: ehCategoriaPedra(d.categoriaId) ? { custoUSD: pedraNum(d.pedraCalc.custoUSD), mult: pedraNum(d.pedraCalc.mult)||2.2, cravacao: !!d.pedraCalc.cravacao && pedraNum(d.pedraCalc.custoUSD)>0 } : undefined,

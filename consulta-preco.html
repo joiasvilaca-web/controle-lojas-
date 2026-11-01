@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-ds>
+<head>
+<script src="tema.js"></script>
+<script src="icones.js"></script>
+<script src="formato.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Consulta preço — Gestão e Controle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tema.css">
+<style>
+  :root{ --radius:12px; }
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:var(--font);background:var(--bg);color:var(--ink);min-height:100vh;font-size:14px;line-height:1.4;}
+  .wrap{padding:20px 24px 60px;max-width:760px;margin:0 auto;}
+  .page-title{font-size:20px;font-weight:700;margin:0 0 4px;} .page-sub{font-size:13px;color:var(--ink-faint);margin:0 0 16px;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px;}
+  .busca{position:relative;}
+  #q{width:100%;font-size:18px;padding:14px 16px;min-height:54px;border-radius:10px;font-family:inherit;}
+  #lista{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--surface);border:1px solid var(--line);border-radius:10px;max-height:360px;overflow:auto;z-index:20;display:none;box-shadow:0 8px 24px rgba(0,0,0,.12);}
+  #lista .it{padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);}
+  #lista .it:last-child{border-bottom:0;}
+  #lista .it.on,#lista .it:hover{background:var(--surface-2, rgba(0,0,0,.05));}
+  #lista .nm{font-weight:600;} #lista .cd{font-size:12px;color:var(--ink-faint);} #lista .pr{font-weight:700;white-space:nowrap;}
+  .res-nome{font-size:17px;font-weight:700;margin:0 0 4px;} .res-cod{font-size:13px;color:var(--ink-faint);}
+  .res-preco{font-size:44px;font-weight:800;letter-spacing:-.02em;margin:14px 0 6px;color:var(--accent, var(--ink));}
+  .res-info{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--ink-soft);}
+  .empty{padding:28px 16px;text-align:center;color:var(--ink-faint);}
+  .err{color:var(--danger);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 class="page-title">Consulta preço</h1>
+  <p class="page-sub">Leia o código da etiqueta com o leitor, ou digite qualquer parte do nome e aperte Enter.</p>
+  <div class="card">
+    <div class="busca">
+      <input id="q" type="text" autocomplete="off" placeholder="Carregando produtos..." disabled>
+      <div id="lista" role="listbox"></div>
+    </div>
+  </div>
+  <div id="res"></div>
+</div>
+<script>
+const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+const EMBEDDED = window.parent !== window;
+let __senha = null, currentUser = null, config = null, produtos = [], lojaId = null, carregado = false;
+let resultados = [], sel = -1;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const semAcento = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const brl = n => (Number(n) || 0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+const precoInteiro = v => { const n = Number(v); return isNaN(n) ? 0 : Math.ceil(Math.round(n*100)/100 - 0.000001); };
+function mensagemConfiavel(ev){ try{ if(ev.origin && ev.origin !== 'null' && ev.origin !== window.location.origin) return false; return true; }catch(e){ return false; } }
+async function gatewayCall(body){
+  try{
+    const res = await fetch(GATEWAY_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer ' + SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __senha, ...body }) });
+    if(res.status === 401 && EMBEDDED) parent.postMessage({ type:'sessaoExpirada', modulo:'precos' }, '*');
+    return await res.json();
+  }catch(e){ return { error:'Sem conexão.' }; }
+}
+/* ---------- PEDRAS: preço acompanha o dólar do dia ----------
+   Produto com `pedraCalc` = { custoUSD, mult, cravacao } (categoria PEDRA).
+   Custo R$ = custoUSD × dólar do dia (Fator); Venda = custo R$ × mult + (cravacao ? 50% do serviço Cravação : 0).
+   Custo zero = preço zero (pedra ainda sem valor). */
+function pedraDolarDia(){ const q=(typeof config!=='undefined' && config && config.fator && config.fator.dolar)||null; const v=q?Number(q.valor):NaN; return isNaN(v)||v<=0?null:v; }
+function pedraMeiaCravacao(lista){
+  const s=(lista||[]).find(p=>p && /SERVI[CÇ]O\s+CRAVA[CÇ][AÃ]O\s*$/i.test(String(p.nome||'').trim()));
+  const v=s?Number(s.precoVenda):NaN;
+  return isNaN(v)||v<=0 ? 7.5 : Math.round(v/2*100)/100;
+}
+function pedraCalcular(pc, dolar, meiaCrav){
+  const usd=Number(pc&&pc.custoUSD)||0, mult=Number(pc&&pc.mult)||0;
+  if(!usd || !dolar) return { custoBRL: 0, venda: 0 };
+  const custoBRL=Math.round(usd*dolar*100)/100;
+    const v=Math.round((usd*dolar*mult + (pc.cravacao?meiaCrav:0))*100)/100;
+  return { custoBRL, venda: Math.ceil(v-0.000001) };
+}
+function aplicarPrecoPedras(lista){
+  const dolar=pedraDolarDia(); if(!dolar||!Array.isArray(lista)) return lista;
+  const meia=pedraMeiaCravacao(lista);
+  lista.forEach(p=>{ if(p && p.pedraCalc && Number(p.pedraCalc.custoUSD)>0){ const r=pedraCalcular(p.pedraCalc,dolar,meia); p.custo=r.custoBRL; p.precoVenda=r.venda; } });
+  return lista;
+}
+async function carregar(){
+  const r = await gatewayCall({ op:'selectAll', table:'produtos_estoque' });
+  if(!r || r.error){ $('res').innerHTML = '<div class="card empty err">Não foi possível carregar os produtos. ' + esc(r && r.error || '') + '</div>'; return; }
+  produtos = aplicarPrecoPedras((r.data || []).map(x => x.payload).filter(p => p && p.nome && p.vendavel !== false));
+  produtos.forEach(p => { p._busca = semAcento(p.nome + ' ' + (p.codigoInterno || '') + ' ' + (p.gtin || '')); });
+  carregado = true;
+  $('q').disabled = false; $('q').placeholder = 'Leia o código ou digite parte do nome'; $('q').focus();
+}
+/* Código lido: PRD000123, só o número (123), ou GTIN. */
+function porCodigo(t){
+  const c = String(t || '').trim().toUpperCase(); if(!c) return null;
+  const alvo = /^\d+$/.test(c) && c.length < 8 ? 'PRD' + c.padStart(6, '0') : c;
+  return produtos.find(p => String(p.codigoInterno || '').toUpperCase() === alvo || (p.gtin && String(p.gtin) === c)) || null;
+}
+function buscar(t){
+  const ps = semAcento(t).split(/\s+/).filter(Boolean); if(!ps.length) return [];
+  return produtos.filter(p => ps.every(w => p._busca.includes(w))).slice(0, 40);
+}
+function desenharLista(){
+  const el = $('lista');
+  if(!resultados.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.innerHTML = resultados.map((p, i) => '<div class="it' + (i === sel ? ' on' : '') + '" data-i="' + i + '"><div><div class="nm">' + esc(p.nome) + '</div><div class="cd">' + esc(p.codigoInterno || '') + '</div></div><div class="pr">' + brl(precoInteiro(p.precoVenda)) + '</div></div>').join('');
+  el.style.display = 'block';
+  const on = el.querySelector('.on'); if(on) on.scrollIntoView({ block:'nearest' });
+}
+function mostrar(p){
+  resultados = []; sel = -1; desenharLista();
+  if(!p){ $('res').innerHTML = '<div class="card empty err">Produto não encontrado.</div>'; $('q').select(); return; }
+  const est = lojaId && p.estoquePorLoja ? Number(p.estoquePorLoja[lojaId]) : null;
+  const semEstoque = !!p.pedraCalc || /^serv/i.test(String(p.tipo || ''));
+  $('res').innerHTML = '<div class="card"><p class="res-nome">' + esc(p.nome) + '</p><div class="res-cod">' + esc(p.codigoInterno || '') + (p.gtin ? ' · ' + esc(p.gtin) : '') + '</div>'
+    + '<div class="res-preco">' + brl(precoInteiro(p.precoVenda)) + '</div>'
+    + '<div class="res-info">' + (!semEstoque && est != null && !isNaN(est) ? '<span>Estoque nesta loja: <b>' + est + '</b></span>' : '') + (p.pedraCalc && !(Number(p.pedraCalc.custoUSD) > 0) ? '<span class="err">Pedra ainda sem valor cadastrado</span>' : '') + '</div></div>';
+  $('q').value = p.nome; $('q').select();
+}
+$('q').addEventListener('input', e => {
+  if(!carregado) return;
+  const t = e.target.value;
+  resultados = t.trim().length >= 2 ? buscar(t) : []; sel = resultados.length ? 0 : -1; desenharLista();
+});
+$('q').addEventListener('keydown', e => {
+  if(e.key === 'ArrowDown' && resultados.length){ e.preventDefault(); sel = Math.min(sel + 1, resultados.length - 1); desenharLista(); }
+  else if(e.key === 'ArrowUp' && resultados.length){ e.preventDefault(); sel = Math.max(sel - 1, 0); desenharLista(); }
+  else if(e.key === 'Escape'){ resultados = []; desenharLista(); }
+  else if(e.key === 'Enter'){
+    e.preventDefault(); if(!carregado) return;
+    const t = e.target.value;
+    const exato = porCodigo(t);            // leitor de código: acha direto
+    if(exato) return mostrar(exato);
+    if(resultados.length) return mostrar(resultados[Math.max(sel, 0)]);
+    const r = buscar(t); mostrar(r[0] || null);
+  }
+});
+$('lista').addEventListener('mousedown', e => { const it = e.target.closest('.it'); if(!it) return; e.preventDefault(); mostrar(resultados[Number(it.dataset.i)]); });
+document.addEventListener('click', e => { if(!e.target.closest('.busca')){ resultados = []; desenharLista(); } });
+window.addEventListener('message', async ev => {
+  if(!mensagemConfiavel(ev)) return;
+  const d = ev.data || {};
+  if(d.type === 'auth'){
+    currentUser = d.user; __senha = currentUser ? currentUser.senha : null; config = d.configCache || null;
+    if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'precos', tabs:[], active:null }, '*');
+    if(!currentUser){ $('res').innerHTML = '<div class="card empty">Entre no app para consultar preços.</div>'; return; }
+    if(!carregado) carregar();
+  } else if(d.type === 'lojaAtual'){ lojaId = d.lojaId || null; }
+});
+window.addEventListener('load', () => { if(EMBEDDED) parent.postMessage({ type:'ready', modulo:'precos' }, '*'); });
+(function(){ var u = 0; function a(){ var n = Date.now(); if(n - u < 5000) return; u = n; try{ if(EMBEDDED) parent.postMessage({ type:'atividade' }, '*'); }catch(e){} } ['click','keydown','touchstart'].forEach(function(e){ document.addEventListener(e, a, { passive:true, capture:true }); }); })();
+</script>
+</body>
+</html>
