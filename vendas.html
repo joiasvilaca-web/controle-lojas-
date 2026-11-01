@@ -3666,6 +3666,11 @@ async function abrirCancelarVenda(venda){
     <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)} · <b>${fmtMoeda(venda.valorTotal)}</b></p>
     ${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Esta venda já recebeu ${fmtMoeda(recebido)}.</b><small>Ao confirmar, você escolhe: deixar como crédito do cliente ou devolver o valor.</small></div></div>` : ''}
     ${venda.estoqueConsumido && Object.keys(venda.estoqueConsumido).length>0 ? `<div class="aviso aviso-info">${ic('pacote')}<div>Os itens desta venda voltam ao estoque automaticamente.</div></div>` : `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Venda antiga, sem registro de baixa de estoque.</b><small>Se ela baixou estoque, ajuste à mão em Configurações › Cadastro › Produto.</small></div></div>`}
+    <div class="field" style="margin-top:14px;display:grid;gap:8px;">
+      <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="cancelar" checked> <span><b>Cancelar e manter o registro</b><br><small class="muted">A venda fica na lista como cancelada, para consulta.</small></span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="excluir"> <span><b>Desfazer tudo — a venda deixa de existir</b><br><small class="muted">Estoque volta, crédito/fiado/cashback do cliente são desfeitos${recebido>0?', o valor recebido ('+fmtMoeda(recebido)+') é devolvido ao cliente':''} e a venda some das listas, do caixa e dos relatórios.</small></span></label>
+    </div>
+    <div id="cv_avisoExcluir" style="display:none;">${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Devolva ${fmtMoeda(recebido)} ao cliente</b><small>Pela mesma forma em que foi pago: ${escapeHtml((venda.pagamentos||[]).filter(p=>!['__fiado','__credito','__cashback'].includes(p.formaId)).map(p=>(((config.formasPagamento||[]).find(f=>f.id===p.formaId)||{nome:'—'}).nome)+' '+fmtMoeda(p.valor)).join(' · '))}. Cartão: estorne na maquininha.</small></div></div>` : ''}</div>
     <div class="field" style="margin-top:14px;"><label for="cv_motivo">Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="cv_motivo" style="min-height:70px;" placeholder="Ex.: cliente desistiu, erro de lançamento"></textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="cv_fechar">Voltar</button>
@@ -3673,9 +3678,21 @@ async function abrirCancelarVenda(venda){
     </div>
   `);
   document.getElementById('cv_fechar').addEventListener('click', closeModal);
+  document.querySelectorAll('input[name=cv_modo]').forEach(r=> r.addEventListener('change', ()=>{
+    const ex = (document.querySelector('input[name=cv_modo]:checked')||{}).value === 'excluir';
+    document.getElementById('cv_avisoExcluir').style.display = ex ? '' : 'none';
+    document.getElementById('cv_confirmar').innerHTML = ex ? ic('lixeira')+' Desfazer e excluir venda' : ic('cancelar')+' Cancelar venda';
+  }));
   document.getElementById('cv_confirmar').addEventListener('click', async ()=>{
     const motivo = maiusc(document.getElementById('cv_motivo').value);
     if(!motivo){ showToast('Escreva o motivo do cancelamento.'); return; }
+    if((document.querySelector('input[name=cv_modo]:checked')||{}).value === 'excluir'){
+      if(!confirm('Desfazer tudo e excluir esta venda? Ela deixa de aparecer no sistema.')) return;
+      const btn = document.getElementById('cv_confirmar'); btn.disabled = true; btn.textContent = 'Desfazendo…';
+      try{ await excluirVendaDefinitivo(venda, motivo); closeModal(); }
+      catch(e){ btn.disabled = false; btn.innerHTML = ic('lixeira')+' Desfazer e excluir venda'; showToast(String(e.message||e)); }
+      return;
+    }
     let dest = null;
     if(recebido > 0.004){
       const cli = await localizarClienteDaVenda(venda);
@@ -3718,8 +3735,8 @@ function perguntarDestinoEstorno(recebido, temCliente, quem){
     });
   });
 }
-async function executarCancelamentoVenda(venda, motivo, dest){
-  const recebido = valorRecebidoDe(venda);
+/* Desfaz os efeitos da venda: estoque volta, crédito usado volta, fiado some, cashback é estornado. */
+async function reverterEfeitosVenda(venda, acao){
   // Devolve estoque — sempre na mesma loja de onde foi descontado (venda.estoqueLojaId).
   // Vendas antigas (antes do estoque virar por loja) não têm esse campo; nesse caso não
   // dá pra saber com certeza a loja certa, então pula a devolução automática.
@@ -3749,7 +3766,7 @@ async function executarCancelamentoVenda(venda, motivo, dest){
     if(venda.creditoUsado > 0){
       clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + venda.creditoUsado;
       if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
-      clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: venda.creditoUsado, tipo:'estorno', obs:`Cancelamento venda ${String(venda.id).slice(-8)}` });
+      clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: venda.creditoUsado, tipo:'estorno', obs:`${acao} venda ${String(venda.id).slice(-8)}` });
       mudou = true;
     }
     if(venda.fiadoDebitoId && Array.isArray(clienteCadastro.fiadoDebitos)){
@@ -3760,7 +3777,7 @@ async function executarCancelamentoVenda(venda, motivo, dest){
         if(jaPago > 0){
           if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
           clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + jaPago;
-          clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: jaPago, tipo:'estorno', obs:`Cancelamento venda ${String(venda.id).slice(-8)} (parcela de fiado já paga)` });
+          clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: jaPago, tipo:'estorno', obs:`${acao} venda ${String(venda.id).slice(-8)} (parcela de fiado já paga)` });
         }
         clienteCadastro.fiadoDebitos.splice(idx,1);
         mudou = true;
@@ -3769,6 +3786,24 @@ async function executarCancelamentoVenda(venda, motivo, dest){
     if(mudou) await salvarUmCliente(clienteCadastro);
   }
   if(venda.cashback && venda.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, venda.cashback.clienteId, venda.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback desta venda.'); }
+  return clienteCadastro;
+}
+/* Desfazer tudo: guarda cópia de segurança (painel_ordens_kv › venda_excluida_<id>), desfaz estoque/crédito/fiado/cashback
+   e apaga a venda — ela some das listas, do caixa e dos relatórios (tudo é calculado das vendas existentes).
+   O valor recebido é devolvido ao cliente fora do sistema (dinheiro/pix/estorno no cartão). */
+async function excluirVendaDefinitivo(venda, motivo){
+  const copia = { ...venda, excluidoPor: currentUser.nome, excluidoEm: Date.now(), motivoExclusao: motivo, valorDevolvido: valorRecebidoDe(venda) };
+  const { error: eBk } = await supabaseClient.from('painel_ordens_kv').upsert({ key:'venda_excluida_'+venda.id, value: copia, updated_at: new Date().toISOString() });
+  if(eBk) throw new Error('Não foi possível guardar a cópia de segurança. Nada foi alterado.');
+  if(venda.status !== 'cancelada') await reverterEfeitosVenda(venda, 'Exclusão');
+  if(!(await vendaExcluir(venda.id))) throw new Error('Estoque e cliente já foram desfeitos, mas a venda não foi apagada no servidor. Tente de novo.');
+  vendas = vendas.filter(x=>x.id!==venda.id);
+  showToast('Venda desfeita e excluída.' + (copia.valorDevolvido>0 ? ' Devolva '+fmtMoeda(copia.valorDevolvido)+' ao cliente.' : ''));
+  renderTabs(); renderView();
+}
+async function executarCancelamentoVenda(venda, motivo, dest){
+  const recebido = valorRecebidoDe(venda);
+  const clienteCadastro = await reverterEfeitosVenda(venda, 'Cancelamento');
   venda.status = 'cancelada';
   venda.motivoCancelamento = motivo;
   venda.canceladoPor = currentUser.nome;
