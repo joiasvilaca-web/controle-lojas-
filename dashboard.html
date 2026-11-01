@@ -508,7 +508,7 @@
   function vazioHtml(titulo, dica){ return `<div class="empty"><b>${escapeHtml(titulo)}</b>${dica?escapeHtml(dica):""}</div>`; }
   function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + (Number(p.valor)||0), 0); }
   function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
-  function semPagamentoLancado(o){ return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
+  function semPagamentoLancado(o){ if((o.itens||[]).length && o.itens.every(it=>it.semCobranca)) return false; return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
 
   /* ================= MODAL DE GRÁFICO (reutilizável em qualquer seção) ================= */
   function closeModal(){
@@ -2008,6 +2008,9 @@
       const entregue = lista.filter(o=>o.status==="entregue").length;
       const cancelado = lista.filter(o=>o.status==="cancelado").length;
       const faturamento = lista.reduce((acc,o)=> acc + (Number(o.valorTotal)||0), 0);
+      // Itens de Cortesia / Garantia (sem cobrança no Pedido) — quantidade e valor que deixou de ser cobrado
+      const semCob = { cortesia:{ q:0, v:0 }, garantia:{ q:0, v:0 } };
+      lista.filter(o=>o.status!=="cancelado").forEach(o=> (o.itens||[]).forEach(it=>{ const t=semCob[it.semCobranca]; if(t){ t.q += Number(it.quantidade)||1; t.v += (Number(it.valorCheio)||0)*(Number(it.quantidade)||1); } }));
 
       kpisWrap.innerHTML = `
         ${kpiHtml("Total", fmtNum(total))}
@@ -2016,6 +2019,8 @@
         ${kpiHtml("Entregue", fmtNum(entregue), "accent")}
         ${kpiHtml("Cancelado", fmtNum(cancelado), "danger")}
         ${mostraFinanceiro ? kpiHtml("Faturamento", fmtMoeda(faturamento), "accent", "", "menor") : ""}
+        ${kpiHtml("Cortesias", fmtNum(semCob.cortesia.q), "", mostraFinanceiro && semCob.cortesia.v ? fmtMoeda(semCob.cortesia.v)+" sem cobrança" : "")}
+        ${kpiHtml("Garantias", fmtNum(semCob.garantia.q), "", mostraFinanceiro && semCob.garantia.v ? fmtMoeda(semCob.garantia.v)+" sem cobrança" : "")}
       `;
 
       const wrap = document.getElementById("tabelaOrdens");
