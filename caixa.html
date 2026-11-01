@@ -544,6 +544,7 @@ function mensagemConfiavel(ev){
       const r = await gravarFechamento(lojaId, de, { fechado:true, por:currentUser.nome, em:Date.now(), historico:[...((fech&&fech.historico)||[])] });
       if(r && r.error){ bc.disabled = false; showToast('Não consegui fechar o caixa: '+r.error); return; }
       showToast('Caixa do dia fechado.'); abrirFecharCaixa(de, ate, lojaId);
+      enviarResumoCaixa(lojaId, de);
     });
     const br = document.getElementById('fc_reabrir');
     if(br) br.addEventListener('click', async ()=>{
@@ -554,6 +555,44 @@ function mensagemConfiavel(ev){
       if(r && r.error){ br.disabled = false; showToast('Não consegui reabrir: '+r.error); return; }
       showToast('Caixa reaberto.'); abrirFecharCaixa(de, ate, lojaId);
     });
+  }
+  /* Resumo do dia para a diretoria pelo WhatsApp (Configurações › Resumo do caixa). Não bloqueia o fechamento. */
+  function textoResumoCaixa(lojaId, dia){
+    const m = v => fmtMoeda(v);
+    const daLoja = r => !lojaId || r.lojaId === lojaId;
+    const vds = vendas.filter(v=> v.data===dia && daLoja(v));
+    const ativas = vds.filter(v=> v.status!=='cancelada');
+    const oss = caixaOrdens.filter(o=> o.data===dia && daLoja(o) && o.status!=='rascunho' && o.status!=='cancelado');
+    const formas = {}; let recebido = 0;
+    const somaPag = (p)=>{ const nome = nomeForma(p); if(!nome) return; const v = Number(p.valor)||0; formas[nome] = (formas[nome]||0) + v; recebido += v; };
+    ativas.forEach(v=> (v.pagamentos||[]).forEach(somaPag));
+    caixaOrdens.filter(o=> daLoja(o) && o.status!=='rascunho' && o.status!=='cancelado').forEach(o=> (o.pagamentos||[]).forEach(p=>{ if((p.data||o.data)===dia) somaPag(p); }));
+    const aReceber = ativas.reduce((a,v)=>a+valorAReceberDe(v),0) + oss.reduce((a,o)=>a+valorAReceberDe(o),0);
+    const canc = vendas.filter(v=> v.status==='cancelada' && daLoja(v) && dataDeTimestamp(v.canceladoEm)===dia).length + caixaOrdens.filter(o=> o.status==='cancelado' && daLoja(o) && dataDeTimestamp(o.canceladoEm)===dia).length;
+    const contas = caixaGastos.filter(g=> g.pago && g.dataPagamento===dia && daLoja(g)).reduce((a,g)=>a+(Number(g.valor)||0),0);
+    const L = [];
+    L.push('*Fechamento de caixa — ' + (nomeLojaCaixa(lojaId)||'Loja') + '*');
+    L.push(fmtDate(dia) + ' · fechado por ' + ((currentUser&&currentUser.nome)||'—') + ' às ' + new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}));
+    L.push('');
+    L.push('🛍️ Vendas: ' + ativas.length + ' · ' + m(ativas.reduce((a,v)=>a+(Number(v.valorTotal)||0),0)));
+    L.push('🔧 Pedidos (O.S.): ' + oss.length + ' · ' + m(oss.reduce((a,o)=>a+(Number(o.valorTotal)||0),0)));
+    L.push('');
+    L.push('*Recebido: ' + m(recebido) + '*');
+    Object.keys(formas).sort().forEach(k=> L.push('• ' + k + ': ' + m(formas[k])));
+    L.push('');
+    L.push('A receber: ' + m(aReceber));
+    if(contas > 0) L.push('Contas pagas: ' + m(contas));
+    if(canc > 0) L.push('Cancelamentos: ' + canc);
+    return L.join('\n');
+  }
+  async function enviarResumoCaixa(lojaId, dia){
+    try{
+      const texto = textoResumoCaixa(lojaId, dia);
+      const r = await fetch(SUPABASE_URL + '/functions/v1/caixa-resumo', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op:'enviar', senha: __gatewaySenha, texto }) });
+      const j = await r.json().catch(()=>null);
+      if(j && j.enviados) showToast('Resumo enviado à diretoria pelo WhatsApp.');
+      else if(j && j.error) showToast('Resumo não enviado: ' + j.error);
+    }catch(e){ showToast('Resumo não enviado ao WhatsApp (sem conexão).'); }
   }
   function destinoCancelHtml(d){
     if(!d) return '';

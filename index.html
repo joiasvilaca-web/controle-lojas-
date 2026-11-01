@@ -2881,6 +2881,7 @@ const CFG_TABS = [
   { id:'impressao', label:'Impressão e etiquetas' },
   { id:'statusOrcamento', label:'Status e mensagens' },
   { id:'reserva', label:'Reserva' },
+  { id:'resumoCaixa', label:'Resumo do caixa' },
   { id:'backup', label:'Backup' },
 ];
 let currentCfgTab = 'clientes';
@@ -2899,9 +2900,9 @@ function abrirSubtelaProduto(main, id){
 function abasConfigPermitidas(){
   const permMod = currentPermissoes && currentPermissoes.config;
   const diretoria = currentUser && currentUser.nivel==='diretoria';
-  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => t.id!=='backup' || diretoria);
+  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa') || diretoria);
   // "Status e Mensagens" reúne as antigas abas statusOrcamento e mensagens: aparece se qualquer uma estiver liberada
-  return CFG_TABS.filter(t => t.id==='backup' ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
+  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
 }
 let statusMsgSub = 'status';
 function renderStatusMensagensTab(body){
@@ -2935,6 +2936,39 @@ function renderCfgTab(tab){
   if(tab==='statusOrcamento') return renderStatusMensagensTab(body);
   if(tab==='reserva') return renderReservaCfgTab(body);
   if(tab==='backup') return renderBackupCfgTab(body);
+  if(tab==='resumoCaixa') return renderResumoCaixaCfgTab(body);
+}
+/* ---------- RESUMO DO CAIXA (WhatsApp para a diretoria ao fechar o caixa) ---------- */
+function renderResumoCaixaCfgTab(main){
+  const rc = config.resumoCaixa || {};
+  const insts = Object.keys(config.atendimentoInstancias || {});
+  main.innerHTML = `
+    <div class="cad-head"><div><h2>Resumo do caixa</h2><p>Quando uma loja fecha o caixa do dia, o sistema manda pelo WhatsApp um resumo para a diretoria: vendas, pedidos, recebido por forma de pagamento, a receber, contas pagas e cancelamentos.</p></div></div>
+    <div class="card">
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:12px;"><input type="checkbox" id="rcAtivo" ${rc.ativo!==false?'checked':''}> Enviar resumo ao fechar o caixa</label>
+      <div class="field"><label for="rcNumeros">WhatsApp da diretoria <span class="muted">(um por linha, com DDD)</span></label><textarea id="rcNumeros" style="min-height:80px;" placeholder="32 99999-0000">${escapeHtml((rc.numeros||[]).join('\n'))}</textarea></div>
+      <div class="field" style="max-width:320px;"><label for="rcInst">Enviar pelo WhatsApp</label><select id="rcInst">${insts.map(i=>`<option value="${escapeHtml(i)}" ${(rc.instancia||insts[0])===i?'selected':''}>${escapeHtml(i)}</option>`).join('') || '<option value="">Nenhuma conexão no Atendimento</option>'}</select></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-accent" id="rcSalvar">${cadIco('check')} Salvar</button>
+        <button class="btn btn-ghost" id="rcTeste">Enviar teste</button>
+      </div>
+    </div>`;
+  const ler = ()=>({ ativo: document.getElementById('rcAtivo').checked, numeros: document.getElementById('rcNumeros').value.split(/\n|,|;/).map(x=>x.replace(/\D/g,'')).filter(x=>x.length>=10), instancia: document.getElementById('rcInst').value });
+  document.getElementById('rcSalvar').addEventListener('click', async ()=>{
+    config.resumoCaixa = ler();
+    if(config.resumoCaixa.ativo && !config.resumoCaixa.numeros.length){ showToast('Informe pelo menos um número com DDD.'); return; }
+    const ok = await configSave(); if(ok) showToast('Resumo do caixa salvo.');
+  });
+  document.getElementById('rcTeste').addEventListener('click', async (ev)=>{
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Enviando…';
+    config.resumoCaixa = ler(); await configSave();
+    try{
+      const r = await fetch(SUPABASE_URL + '/functions/v1/caixa-resumo', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op:'teste', senha: __gatewaySenha }) });
+      const j = await r.json();
+      showToast(j && j.enviados ? 'Teste enviado para ' + j.enviados + ' número(s).' : 'Não enviou: ' + ((j && j.error) || 'erro'));
+    }catch(e){ showToast('Sem conexão.'); }
+    b.disabled = false; b.textContent = 'Enviar teste';
+  });
 }
 /* ---------- BACKUP (Google Drive › APP GESTAO › BACKUP) ---------- */
 let backupTimer = null;
