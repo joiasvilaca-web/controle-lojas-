@@ -56,20 +56,13 @@
       return a + (Number(b)||0) * (Number(it.quantidade)||1);
     }, 0));
   }
-  /* Bloco do fim da via. */
+  /* Fim da via: só o à vista e o parcelado no cartão (pedido do Felipe, 01/nov). */
   function cupomHtml(itens, valorAVista, fmt){
-    var vista = r2(valorAVista), parc = parcelado(vista);
-    var bruto = Math.max(brutoItens(itens), vista);
+    var vista = r2(valorAVista);
     if(!(vista > 0)) return '';
-    var L = ['<div class="linha"></div><div><b>CONDIÇÕES DE PAGAMENTO</b></div>'];
-    L.push('<div>Valor total: '+fmt(bruto)+'</div>');
-    if(bruto - vista > 0.009) L.push('<div>Desconto à vista: −'+fmt(r2(bruto - vista))+'</div>');
-    L.push('<div class="destaque">À vista: '+fmt(vista)+'</div>');
-    L.push('<div style="font-size:11px;">Dinheiro, PIX, ouro ou fiado — 1x</div>');
-    if(bruto - parc > 0.009) L.push('<div style="margin-top:4px;">Desconto parcelado: −'+fmt(r2(bruto - parc))+'</div>');
-    L.push('<div class="destaque"'+(bruto - parc > 0.009 ? '' : ' style="margin-top:4px;"')+'>Parcelado: '+fmt(parc)+'</div>');
-    L.push('<div style="font-size:11px;">Cartão em até '+MAX_PARC+'x de '+fmt(r2(parc/MAX_PARC))+' sem acréscimo</div>');
-    return L.join('');
+    return '<div class="linha"></div>'
+      + '<div class="destaque">À vista: '+fmt(vista)+'</div>'
+      + '<div class="destaque">Ou até '+MAX_PARC+'x no cartão: '+fmt(parcelado(vista))+'</div>';
   }
   /* Linha da observação do item na via. */
   function obsItemHtml(it, esc){
