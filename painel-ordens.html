@@ -1039,7 +1039,7 @@ async function loadAll(){
     gatewayCall({ op:'selectAll', table:'produtos_estoque' }).then(r=>(r&&Array.isArray(r.data))?r.data.map(row=>row.payload):[])
   ]);
   orders = ordersR; codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
-  produtosEstoque = produtosR || [];
+  produtosEstoque = aplicarPrecoPedras(produtosR || []);
   setTimeout(sincronizarAutorizacoesPendentes, 1500); setInterval(sincronizarAutorizacoesPendentes, 20000);
   if(!clientes) clientes = [];
   // Clientes NÃO são mais baixados aqui, nem em segundo plano (22 mil+ linhas, ~7,5 MB
@@ -3777,6 +3777,29 @@ function itensSomenteLeituraHtml(order){
     ${(it.fotos&&it.fotos.length)?`<div class="foto-grid" data-itfotoleitura="1" style="margin:2px 0 8px;">${it.fotos.map(f=>`<div class="foto-thumb"><img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl||photoCache[f.id]||'')}" alt="${escapeHtml(f.nome||'')}" onclick="if(this.src)openPhotoModal(this.src)"></div>`).join('')}</div>`:''}`).join('')}</div>`;
 }
 /** Serviço = categoria SERVIÇO/SERVICO ou tipo "Serviço" no cadastro de produto. */
+/* ---------- PEDRAS: preço acompanha o dólar do dia ----------
+   Produto com `pedraCalc` = { custoUSD, mult, cravacao } (categoria PEDRA).
+   Custo R$ = custoUSD × dólar do dia (Fator); Venda = custo R$ × mult + (cravacao ? 50% do serviço Cravação : 0).
+   Custo zero = preço zero (pedra ainda sem valor). */
+function pedraDolarDia(){ const q=(typeof config!=='undefined' && config && config.fator && config.fator.dolar)||null; const v=q?Number(q.valor):NaN; return isNaN(v)||v<=0?null:v; }
+function pedraMeiaCravacao(lista){
+  const s=(lista||[]).find(p=>p && /SERVI[CÇ]O\s+CRAVA[CÇ][AÃ]O\s*$/i.test(String(p.nome||'').trim()));
+  const v=s?Number(s.precoVenda):NaN;
+  return isNaN(v)||v<=0 ? 7.5 : Math.round(v/2*100)/100;
+}
+function pedraCalcular(pc, dolar, meiaCrav){
+  const usd=Number(pc&&pc.custoUSD)||0, mult=Number(pc&&pc.mult)||0;
+  if(!usd || !dolar) return { custoBRL: 0, venda: 0 };
+  const custoBRL=Math.round(usd*dolar*100)/100;
+  return { custoBRL, venda: Math.round((usd*dolar*mult + (pc.cravacao?meiaCrav:0))*100)/100 };
+}
+function aplicarPrecoPedras(lista){
+  const dolar=pedraDolarDia(); if(!dolar||!Array.isArray(lista)) return lista;
+  const meia=pedraMeiaCravacao(lista);
+  lista.forEach(p=>{ if(p && p.pedraCalc && Number(p.pedraCalc.custoUSD)>0){ const r=pedraCalcular(p.pedraCalc,dolar,meia); p.custo=r.custoBRL; p.precoVenda=r.venda; } });
+  return lista;
+}
+
 function produtoEhServico(p){
   if(!p) return false;
   if(/^serv/i.test(String(p.tipo||''))) return true;
@@ -3975,7 +3998,7 @@ function recalcularValorAjustado(it){
                      ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${escapeHtml(String(produtoAtual.fator))}</span>`:''}
                      <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto" aria-label="Trocar produto">${ico('x',14)}</button>
                    </div>`
-                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: digite o nome':'Produto: digite o nome (só os que começam com 8)'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: digite o nome':'Produto: digite o nome (começam com 8, ou pedras)'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
                    <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
             </div>
             <div class="item-row-valor">
@@ -4039,7 +4062,7 @@ function recalcularValorAjustado(it){
       const i = Number(inp.dataset.pac);
       const drop = document.getElementById('pacDrop_'+i);
       let pacTimer=null, pacFocus=-1, pacAchados=[];
-      const baseLista = vendaveis.filter(p=> produtoEhServico(p) === (holder.itens[i] && holder.itens[i].tipoItem==='servico')).filter(p=> produtoEhServico(p) || String(p.nome||'').trim().startsWith('8'));
+      const baseLista = vendaveis.filter(p=> produtoEhServico(p) === (holder.itens[i] && holder.itens[i].tipoItem==='servico')).filter(p=> produtoEhServico(p) || String(p.nome||'').trim().startsWith('8') || !!p.pedraCalc);
       function fecharDrop(){ drop.style.display='none'; pacFocus=-1; }
       function renderDrop(lista){
         pacAchados=lista;

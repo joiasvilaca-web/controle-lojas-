@@ -767,6 +767,29 @@ const MENSAGEM_EMAIL_PADRAO = 'Olá {cliente},\n\nSegue seu orçamento na Vilaç
 let clientes = [];
 
 let produtosEstoque = [];
+/* ---------- PEDRAS: preço acompanha o dólar do dia ----------
+   Produto com `pedraCalc` = { custoUSD, mult, cravacao } (categoria PEDRA).
+   Custo R$ = custoUSD × dólar do dia (Fator); Venda = custo R$ × mult + (cravacao ? 50% do serviço Cravação : 0).
+   Custo zero = preço zero (pedra ainda sem valor). */
+function pedraDolarDia(){ const q=(typeof config!=='undefined' && config && config.fator && config.fator.dolar)||null; const v=q?Number(q.valor):NaN; return isNaN(v)||v<=0?null:v; }
+function pedraMeiaCravacao(lista){
+  const s=(lista||[]).find(p=>p && /SERVI[CÇ]O\s+CRAVA[CÇ][AÃ]O\s*$/i.test(String(p.nome||'').trim()));
+  const v=s?Number(s.precoVenda):NaN;
+  return isNaN(v)||v<=0 ? 7.5 : Math.round(v/2*100)/100;
+}
+function pedraCalcular(pc, dolar, meiaCrav){
+  const usd=Number(pc&&pc.custoUSD)||0, mult=Number(pc&&pc.mult)||0;
+  if(!usd || !dolar) return { custoBRL: 0, venda: 0 };
+  const custoBRL=Math.round(usd*dolar*100)/100;
+  return { custoBRL, venda: Math.round((usd*dolar*mult + (pc.cravacao?meiaCrav:0))*100)/100 };
+}
+function aplicarPrecoPedras(lista){
+  const dolar=pedraDolarDia(); if(!dolar||!Array.isArray(lista)) return lista;
+  const meia=pedraMeiaCravacao(lista);
+  lista.forEach(p=>{ if(p && p.pedraCalc && Number(p.pedraCalc.custoUSD)>0){ const r=pedraCalcular(p.pedraCalc,dolar,meia); p.custo=r.custoBRL; p.precoVenda=r.venda; } });
+  return lista;
+}
+
 async function produtosEstoqueGet(){
   try{
     const linhas = [];
@@ -783,7 +806,7 @@ async function loadAll(){
   config = await configGetUnificada();
   if(!config){ config = { lojas:[], formasPagamento:[], joiasProdutos:[], metais:[] }; }
   const [orcsR, prodsR] = await Promise.all([orcamentosGet(), produtosEstoqueGet()]);
-  orcamentos = orcsR; produtosEstoque = prodsR;
+  orcamentos = orcsR; produtosEstoque = aplicarPrecoPedras(prodsR);
   // Clientes NÃO são mais pré-carregados aqui (eram 22 mil+ registros, deixava o módulo
   // lento pra abrir). A busca de cliente agora consulta o banco sob demanda, ao digitar.
 }

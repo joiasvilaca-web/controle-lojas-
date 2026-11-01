@@ -4059,7 +4059,7 @@ async function renderProdutoUnificadoTab(main){
   garantirConfigProduto();
   // Carrega produtos do estoque se necessário
   if(!produtosEstoqueCarregado){
-    produtosEstoque = await produtosEstoqueGet();
+    produtosEstoque = aplicarPrecoPedras(await produtosEstoqueGet());
     produtosEstoqueCarregado = true;
   }
   const cats = config.produtosOtica.categorias||[];
@@ -4419,6 +4419,28 @@ function abrirGerenciarListaStrings(rotulo, lista, aoFechar){
 /* ---------- PRODUTOS & ESTOQUE (composição / BOM em cascata) ---------- */
 let produtosEstoque = [];
 let produtosEstoqueCarregado = false;
+/* ---------- PEDRAS: preço acompanha o dólar do dia ----------
+   Produto com `pedraCalc` = { custoUSD, mult, cravacao } (categoria PEDRA).
+   Custo R$ = custoUSD × dólar do dia (Fator); Venda = custo R$ × mult + (cravacao ? 50% do serviço Cravação : 0).
+   Custo zero = preço zero (pedra ainda sem valor). */
+function pedraDolarDia(){ const q=(typeof config!=='undefined' && config && config.fator && config.fator.dolar)||null; const v=q?Number(q.valor):NaN; return isNaN(v)||v<=0?null:v; }
+function pedraMeiaCravacao(lista){
+  const s=(lista||[]).find(p=>p && /SERVI[CÇ]O\s+CRAVA[CÇ][AÃ]O\s*$/i.test(String(p.nome||'').trim()));
+  const v=s?Number(s.precoVenda):NaN;
+  return isNaN(v)||v<=0 ? 7.5 : Math.round(v/2*100)/100;
+}
+function pedraCalcular(pc, dolar, meiaCrav){
+  const usd=Number(pc&&pc.custoUSD)||0, mult=Number(pc&&pc.mult)||0;
+  if(!usd || !dolar) return { custoBRL: 0, venda: 0 };
+  const custoBRL=Math.round(usd*dolar*100)/100;
+  return { custoBRL, venda: Math.round((usd*dolar*mult + (pc.cravacao?meiaCrav:0))*100)/100 };
+}
+function aplicarPrecoPedras(lista){
+  const dolar=pedraDolarDia(); if(!dolar||!Array.isArray(lista)) return lista;
+  const meia=pedraMeiaCravacao(lista);
+  lista.forEach(p=>{ if(p && p.pedraCalc && Number(p.pedraCalc.custoUSD)>0){ const r=pedraCalcular(p.pedraCalc,dolar,meia); p.custo=r.custoBRL; p.precoVenda=r.venda; } });
+  return lista;
+}
 async function produtosEstoqueGet(){
   try{
     const r = await gatewayCall({ op:'selectAll', table:'produtos_estoque' });
@@ -4651,6 +4673,8 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     estoquePorLoja: base && base.estoquePorLoja ? {...base.estoquePorLoja} : (base && base.estoque ? estoqueLegadoDivididoPorLoja(base.estoque) : {}),
     custo: base && base.custo!==undefined ? base.custo : null,
     precoVenda: base && base.precoVenda!==undefined ? base.precoVenda : null,
+    // Pedra (categoria PEDRA): custo base em US$, multiplicador e se a cravação já está somada no preço.
+    pedraCalc: { custoUSD:0, mult:2.2, cravacao:false, ...((base && base.pedraCalc) || {}) },
   };
   // Venda online (site e marketplaces). Fica em produto.site, o mesmo objeto que o módulo SITE edita.
   // Clone não herda (cada produto tem a própria página no site).
@@ -4684,6 +4708,31 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
     const nome = (cat?cat.nome:'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
     return nome.startsWith('servic');
+  }
+  /** Categoria PEDRA: preço segue o dólar do dia (Fator). Custo US$ ↔ Custo R$ ↔ Venda se preenchem sozinhos. */
+  function ehCategoriaPedra(categoriaId){
+    const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
+    const nome = (cat?cat.nome:'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+    return nome.startsWith('pedra');
+  }
+  function pedraNum(v){ const n=parseFloat(String(v==null?'':v).replace(/\s/g,'').replace(',','.')); return isNaN(n)?0:n; }
+  /** Recalcula a pedra a partir de qual campo foi digitado: 'usd' | 'brl' | 'venda' | 'mult' | null. */
+  function recalcularPedra(fonte, valorDigitado){
+    const pc = d.pedraCalc; const dolar = pedraDolarDia(); const meia = pedraMeiaCravacao(produtosEstoque);
+    const mult = pedraNum(pc.mult) || 0;
+    if(dolar){
+      if(fonte==='brl') pc.custoUSD = Math.round(pedraNum(valorDigitado)/dolar*10000)/10000;
+      else if(fonte==='venda'){ const liq = pedraNum(valorDigitado) - (pc.cravacao?meia:0); pc.custoUSD = (mult>0 && liq>0) ? Math.round(liq/mult/dolar*10000)/10000 : 0; }
+      else if(fonte==='usd') pc.custoUSD = pedraNum(valorDigitado);
+    }
+    const r = pedraCalcular(pc, dolar, meia);
+    d.custo = r.custoBRL; d.precoVenda = r.venda;
+    const set=(id,v)=>{ const el=document.getElementById(id); if(el && fonte!==({pe_pedraUSD:'usd',pe_pedraBRL:'brl',pe_precoVenda:'venda'})[id]) el.value=v; };
+    set('pe_pedraUSD', pc.custoUSD ? String(pc.custoUSD) : '');
+    set('pe_pedraBRL', r.custoBRL ? r.custoBRL.toFixed(2) : '');
+    set('pe_precoVenda', r.venda ? r.venda.toFixed(2) : '0.00');
+    const b=document.getElementById('btnPedraCravacao');
+    if(b) b.textContent = pc.cravacao ? `Remover cravação (− R$ ${meia.toFixed(2).replace('.',',')})` : `Incluir cravação (+ R$ ${meia.toFixed(2).replace('.',',')})`;
   }
   function ehCategoriaRelogio(categoriaId){
     const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===categoriaId);
@@ -4907,6 +4956,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     if(peTabAtiva==='nomenclatura'){
       garantirConfigFator();
       const relogioAtivo = ehCategoriaRelogio(d.categoriaId);
+      const pedraAtivo = !relogioAtivo && ehCategoriaPedra(d.categoriaId);
       if(relogioAtivo && !d.tipoVenda) d.tipoVenda = 'relogio'; sincronizarFiscalTipo();
       const subcategoriasOpcoes = subcategoriasParaCategoria();
       body.innerHTML = `
@@ -4980,7 +5030,25 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             <input type="text" id="pe_relogioKitObs" placeholder="Ex: caixa, manual, certificado..." value="${escapeHtml(d.relogioKitObs||'')}">
           </div>
         </div>
-        ` : `
+        ` : pedraAtivo ? (()=>{ const dol=pedraDolarDia(); const q=(config.fator||{}).dolar||{}; return `
+        <div class="grid-2">
+          <div class="field"><label>Custo (US$)</label>
+            <input type="text" inputmode="decimal" id="pe_pedraUSD" placeholder="0" value="${d.pedraCalc.custoUSD?escapeHtml(String(d.pedraCalc.custoUSD)):''}">
+          </div>
+          <div class="field"><label>Custo (R$)</label>
+            <input type="text" inputmode="decimal" id="pe_pedraBRL" placeholder="0,00" value="">
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="field"><label>Multiplicador</label>
+            <input type="text" inputmode="decimal" id="pe_pedraMult" value="${escapeHtml(String(d.pedraCalc.mult!=null?d.pedraCalc.mult:2.2))}">
+          </div>
+          <div class="field"><label>Cravação</label>
+            <button type="button" class="btn btn-ghost" id="btnPedraCravacao"></button>
+          </div>
+        </div>
+        <p class="cad-dica" style="margin:-6px 0 10px;">${dol?`Dólar do dia: <b>R$ ${dol.toFixed(4).replace('.',',')}</b>${q.dataCotacao?' ('+q.dataCotacao.split('-').reverse().join('/')+')':''} — vem do botão Fator.`:'<span style="color:var(--danger);">Dólar do dia ainda não buscado — abra o botão Fator para atualizar.</span>'} Digite o custo em US$, em R$ ou o preço de venda: os outros se preenchem. Venda = custo R$ × multiplicador + cravação. O preço acompanha o dólar sozinho.</p>
+        `; })() : `
         <div class="grid-2">
           <div class="field"><label>Fator</label>
             <input type="text" id="pe_fator" placeholder="Livre" value="${d.fator!=null?escapeHtml(String(d.fator)):''}">
@@ -5072,6 +5140,16 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         const campoKitObs = document.getElementById('pe_relogioKitObs');
         if(campoKitObs) campoKitObs.addEventListener('input', e=> d.relogioKitObs = e.target.value);
         document.getElementById('pe_relogioMostrador').addEventListener('change', e=>{ d.relogioMostrador = e.target.value; sincronizarNcm(); });
+      } else if(pedraAtivo){
+        document.getElementById('pe_pedraUSD').addEventListener('input', e=> recalcularPedra('usd', e.target.value));
+        document.getElementById('pe_pedraBRL').addEventListener('input', e=> recalcularPedra('brl', e.target.value));
+        document.getElementById('pe_precoVenda').addEventListener('input', e=> recalcularPedra('venda', e.target.value));
+        document.getElementById('pe_pedraMult').addEventListener('input', e=>{ d.pedraCalc.mult = pedraNum(e.target.value); recalcularPedra('mult'); });
+        document.getElementById('btnPedraCravacao').addEventListener('click', ()=>{
+          if(!(pedraNum(d.pedraCalc.custoUSD)>0)){ showToast('Lance o valor da pedra antes de incluir a cravação.'); return; }
+          d.pedraCalc.cravacao = !d.pedraCalc.cravacao; recalcularPedra(null);
+        });
+        recalcularPedra(null);
       } else {
         // Só auto-define a referência na abertura do formulário se ele ainda não tiver nenhuma salva
         // (produto novo). Em produto já existente, a escolha manual anterior é respeitada ao abrir —
@@ -5600,6 +5678,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       precoVenda: d.precoVenda===null || d.precoVenda==='' ? null : parseFloat(d.precoVenda),
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
+      pedraCalc: ehCategoriaPedra(d.categoriaId) ? { custoUSD: pedraNum(d.pedraCalc.custoUSD), mult: pedraNum(d.pedraCalc.mult)||2.2, cravacao: !!d.pedraCalc.cravacao && pedraNum(d.pedraCalc.custoUSD)>0 } : undefined,
     };
     if(siteOrig || online.publicado || online.marketplaces.length || online.lojasAuto){
       dados.site = { ...(siteOrig||{}), publicado: online.publicado, lojasAuto: online.lojasAuto, lojaIds: online.lojaIds,
