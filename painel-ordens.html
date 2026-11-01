@@ -3070,19 +3070,25 @@ function idsDoMesmoGrupo(serviceTypeId){
   if(!st || !st.grupoId) return [serviceTypeId];
   return config.serviceTypes.filter(s=>s.grupoId===st.grupoId).map(s=>s.id);
 }
-function checkSlot(serviceTypeId, dateStr, excludeOrderId){
+/** Quantas vagas a via ocupa: 1 por item de SERVIÇO lançado (mínimo 1). */
+function qtdServicosVia(itens){
+  const n = (itens||[]).filter(it=> it._modo==='ok' && it.tipoItem==='servico').reduce((a,it)=> a + Math.max(1, Number(it.quantidade)||1), 0);
+  return Math.max(1, n);
+}
+function checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd){
   const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
   if(!st || !dateStr) return null;
   const today = new Date(todayStr()+'T00:00:00');
   const target = new Date(dateStr+'T00:00:00');
   const diffDays = Math.round((target - today) / 86400000);
+  qtd = Math.max(1, Number(qtd)||1);
   const prazoOk = diffDays >= st.prazoMinimoDias;
   const idsGrupo = idsDoMesmoGrupo(serviceTypeId);
-  const countDay = orders.filter(o=> idsGrupo.includes(o.serviceTypeId) && o.data===dateStr && STATUS_OCUPA_VAGA.includes(o.status) && o.id!==excludeOrderId).length;
-  const quantidadeOk = countDay < st.maxPorDia;
+  const countDay = orders.filter(o=> idsGrupo.includes(o.serviceTypeId) && o.data===dateStr && STATUS_OCUPA_VAGA.includes(o.status) && o.id!==excludeOrderId).reduce((a,o)=> a + (Number(o.vagas)||1), 0);
+  const quantidadeOk = countDay + qtd <= st.maxPorDia;
   return {
     st, prazoOk, quantidadeOk, ok: prazoOk && quantidadeOk,
-    ocupadas:countDay, vagas: st.maxPorDia, diffDays
+    ocupadas:countDay, vagas: st.maxPorDia, diffDays, qtd
   };
 }
 
@@ -3093,14 +3099,14 @@ function checkSlot(serviceTypeId, dateStr, excludeOrderId){
  * 120 dias à frente; se não achar vaga nesse intervalo (configuração incomum),
  * devolve a data do prazo mínimo mesmo assim, pra não deixar o campo vazio.
  */
-function proximaDataDisponivel(serviceTypeId, excludeOrderId){
+function proximaDataDisponivel(serviceTypeId, excludeOrderId, qtd){
   const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
   if(!st) return null;
   const base = new Date(todayStr()+'T00:00:00');
   for(let i=st.prazoMinimoDias; i<=st.prazoMinimoDias+120; i++){
     const d = new Date(base); d.setDate(d.getDate()+i);
     const dateStr = d.toISOString().slice(0,10);
-    const res = checkSlot(serviceTypeId, dateStr, excludeOrderId);
+    const res = checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd);
     if(res && res.ok) return dateStr;
   }
   // Fallback: nenhuma vaga livre em 120 dias — devolve a data do prazo mínimo mesmo assim
@@ -4066,9 +4072,26 @@ function recalcularValorAjustado(it){
         const it=holder.itens[idx];
         if(it.avulso){ if(!String(it.produto||'').trim()){ showToast('Descreva o item avulso.'); return; } }
         else if(!it.produtoEstoqueId&&!it.valorUnitario) return;
-        it._modo='ok';
-        holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
-        drawRows(); updateTotalHint();
+        const tipoDe = x=> x.tipoItem==='servico' ? 'servico' : 'produto';
+        const outros = holder.itens.filter(x=> x!==it && x._modo==='ok');
+        const conflito = outros.some(x=> tipoDe(x)!==tipoDe(it)) || (tipoDe(it)==='produto' && outros.some(x=> tipoDe(x)==='produto'));
+        const confirmar = ()=>{
+          it._modo='ok';
+          holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
+          drawRows(); updateTotalHint();
+        };
+        if(!conflito || opts.semAvisoVias){ confirmar(); return; }
+        const motivo = tipoDe(it)==='produto' && outros.some(x=> tipoDe(x)==='produto')
+          ? 'Esta via já tem um produto. Cada produto tem a sua data de entrega.'
+          : 'Produto e serviço têm prazos e datas de entrega diferentes.';
+        openModal(`<h3>${ico('alerta',18)} Abra vias separadas</h3>
+          <p>${motivo} Abra uma <b>via separada</b> para este item, pois ele precisa de uma data de entrega diferente.</p>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" id="viaSepManter" type="button">Manter na mesma via</button>
+            <button class="btn btn-accent" id="viaSepOk" type="button">Entendi, vou abrir outra via</button>
+          </div>`);
+        document.getElementById('viaSepManter').addEventListener('click', ()=>{ closeModal(); confirmar(); });
+        document.getElementById('viaSepOk').addEventListener('click', ()=>{ closeModal(); holder.itens.splice(idx,1); if(!holder.itens.some(x=>x._modo==='editar')) holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'}); drawRows(); updateTotalHint(); });
       });
     });
     // lápis: volta ao modo editar
@@ -4223,6 +4246,7 @@ function recalcularValorAjustado(it){
     if(hint) hint.innerHTML = `Total dos itens: <b>${fmtMoeda(totalItens())}</b> · desconto ou acréscimo no total é dado em Pagamento.`;
     // Avisa o bloco de pagamento para recalcular o total
     if(typeof window.__pagRedraw==='function') window.__pagRedraw();
+    if(typeof opts.onChange==='function'){ try{ opts.onChange(); }catch(e){} }
   }
   draw();
   return { totalItens, refreshEstoque: drawRows };
@@ -4405,7 +4429,7 @@ function renderNovaOrdem(main){
   let itensApiNova = null;
   try {
     itensApiNova = mountItens(document.getElementById('itensContainerNova'), tempItensHolder,
-      ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''));
+      ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''), { onChange: ()=>{ if(window.__agendaItensMudou) window.__agendaItensMudou(); } });
   } catch(e) { console.error('mountItens OS:', e); }
   // Usado pelo "✓ É este" da lista de orçamentos em aberto do cliente
   window.__novaOrdemCtx = {
@@ -4535,14 +4559,19 @@ function renderNovaOrdem(main){
     banner.innerHTML = '';
     foraPadrao = false; motivoForaPadrao = '';
     if(!sid || !dt){ atualizarBotoesPermissao(); return; }
-    const res = checkSlot(sid, dt, null);
+    const qtdVia = qtdServicosVia(tempItensHolder.itens);
+    const res = checkSlot(sid, dt, null, qtdVia);
     if(!res){ atualizarBotoesPermissao(); return; }
     if(res.ok){
-      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dt)}, dentro do prazo mínimo.</div></div>`;
+      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dt)}${qtdVia>1?'; esta via usa '+qtdVia+' vagas':''}, dentro do prazo mínimo.</div></div>`;
     } else {
       const motivos = [];
       if(!res.prazoOk) motivos.push('a data está abaixo do prazo mínimo de confecção (' + res.st.prazoMinimoDias + ' dia(s))');
-      if(!res.quantidadeOk) motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
+      if(!res.quantidadeOk){
+        const livres = Math.max(0, res.vagas - res.ocupadas);
+        if(qtdVia>1) motivos.push(livres>0 ? ('neste dia cabem só ' + livres + ' de ' + qtdVia + ' serviços: você pode lançar ' + livres + ' aqui e abrir uma NOVA VIA para os ' + (qtdVia-livres) + ' restantes, ou escolher uma data que comporte os ' + qtdVia) : ('não há vaga neste dia para os ' + qtdVia + ' serviços; escolha outra data'));
+        else motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
+      }
       motivoForaPadrao = motivos.join(' e ');
       foraPadrao = true;
       banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Clique em <b>Solicitar permissão</b>: o pedido é lançado agora e fica com <b>pendência de autorização</b> até a Oficina liberar (vira encaixe) ou recusar (a data volta para a mais próxima aceita). Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
@@ -4555,11 +4584,13 @@ function renderNovaOrdem(main){
   // Ao escolher o tipo de ordem, sugere automaticamente a primeira data com vaga
   // livre (respeitando prazo mínimo e quantidade máxima cadastrados em Tipos de
   // Ordem). A vendedora pode trocar a data manualmente depois se precisar.
+  let dataAuto = true;
+  window.__agendaItensMudou = ()=>{ try{ aoTrocarServico(); }catch(e){ console.error(e); } };
   function aoTrocarServico(){
     const sid = servicoSel.value;
-    if(sid && !dataInp.value){
+    if(sid && (!dataInp.value || dataAuto)){
       try{
-        const sugerida = proximaDataDisponivel(sid, null);
+        const sugerida = proximaDataDisponivel(sid, null, qtdServicosVia(tempItensHolder.itens));
         if(sugerida) dataInp.value = sugerida;
       }catch(e){
         console.error('Falha ao calcular data automática, usando prazo mínimo simples:', e);
@@ -4578,7 +4609,7 @@ function renderNovaOrdem(main){
     updateBanner();
   }
   servicoSel.addEventListener('change', aoTrocarServico);
-  dataInp.addEventListener('change', updateBanner);
+  dataInp.addEventListener('change', ()=>{ dataAuto = false; updateBanner(); });
   wireCodigoHint('f_codigo','f_codigoHint');
   // Roda uma vez já na montagem: cobre o caso raro do navegador restaurar
   // um valor no <select> sem disparar 'change' (acontece ao recriar o
@@ -4624,6 +4655,7 @@ function renderNovaOrdem(main){
       descricao: maiusc(document.getElementById('f_descricao').value),
       lojaId: loja,
       serviceTypeId: sid,
+      vagas: qtdServicosVia(tempItensHolder.itens),
       serviceTypeName: st ? st.nome : '',
       data: dataInp.value,
       status: STATUS.RASCUNHO,
@@ -4775,6 +4807,7 @@ function renderNovaOrdem(main){
       ...cli,
       via, numeroNota, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja,
       serviceTypeId: sid,
+      vagas: qtdServicosVia(tempItensHolder.itens),
       serviceTypeName: st ? st.nome : '',
       data: dt,
       status: STATUS.AGUARDANDO,
@@ -5712,8 +5745,8 @@ function renderAgenda(main){
         const stO = config.serviceTypes.find(s=>s.id===o.serviceTypeId);
         const chave = stO && stO.grupoId ? 'g:'+stO.grupoId : o.serviceTypeId; // grupo = um chip só (vagas somadas)
         if(!byService[chave]) byService[chave] = { aguardando:0, total:0, nome:o.serviceTypeName, grupoId: stO && stO.grupoId, tipoId:o.serviceTypeId };
-        byService[chave].total++;
-        if(STATUS_OCUPA_VAGA.includes(o.status)) byService[chave].aguardando++;
+        byService[chave].total += (Number(o.vagas)||1);
+        if(STATUS_OCUPA_VAGA.includes(o.status)) byService[chave].aguardando += (Number(o.vagas)||1);
       });
       const chips = Object.keys(byService).slice(0,3).map(sid=>{
         const info = byService[sid];
