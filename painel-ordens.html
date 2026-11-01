@@ -493,6 +493,11 @@
     .level-pill{display:none;}
     .login-card{padding:26px 20px 22px;}
   }
+
+.aj-item{display:block;font-size:11.5px;font-weight:600;color:var(--ink-soft,#4A5A69);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.aj-item s{opacity:.75;}.aj-item.desconto{color:var(--ok,#0F6B40);}.aj-item.acrescimo{color:var(--warn,#7A4E0A);}
+.desc-total b{font-weight:800;}
+.btn-novo-item{margin:0 0 10px;}
 </style>
 </head>
 <body>
@@ -2137,11 +2142,29 @@ function formaEhPix(formaId){
 }
 function pessoaPixHtml(p, i){
   if(!formaEhPix(p.formaId)) return '';
-  return `<select data-pagpessoa="${i}" aria-label="Pix de pessoa física ou jurídica" title="Pix recebido de pessoa física (PF) ou jurídica (PJ)" style="max-width:110px;"><option value="">PF ou PJ?</option><option value="PF" ${p.pessoa==='PF'?'selected':''}>PF</option><option value="PJ" ${p.pessoa==='PJ'?'selected':''}>PJ</option></select>`;
+  const t = p.pessoa==='PF' ? 'Pix PF' : p.pessoa==='PJ' ? 'Pix loja' : 'Tipo do Pix?';
+  return `<button type="button" class="btn btn-ghost btn-sm pix-tipo" data-pagpessoa="${i}" title="Clique para trocar entre Pix loja e Pix pessoa física" style="white-space:nowrap;${p.pessoa?'':'border-color:var(--wait,#B7791F);color:var(--wait,#7A4E0A);'}">${t}</button>`;
 }
 function pixSemPessoa(pagamentos){
   return (pagamentos||[]).some(p=> formaEhPix(p.formaId) && (Number(p.valor)||0)>0 && !p.pessoa);
 }
+
+const __pixAsked = new WeakSet();
+function soPixPF(pags){ const v=(pags||[]).filter(p=>(Number(p.valor)||0)>0); return v.length>0 && v.every(p=>formaEhPix(p.formaId)&&p.pessoa==='PF'); }
+/* Pergunta de onde veio o Pix: da loja (PJ) ou de pessoa física (PF). */
+function perguntarPixTipo(){
+  return new Promise(resolve=>{
+    openModal(`
+      <h3>Pix recebido em…</h3>
+      <p class="muted">O Pix foi para a conta da loja ou para uma pessoa física?</p>
+      <div class="modal-actions" style="flex-wrap:wrap;gap:10px;margin-top:14px;">
+        <button class="btn btn-accent" type="button" data-pixtipo="PJ">Pix loja</button>
+        <button class="btn btn-ghost" type="button" data-pixtipo="PF">Pix pessoa física</button>
+      </div>`);
+    document.querySelectorAll('[data-pixtipo]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); resolve(b.dataset.pixtipo); }));
+  });
+}
+
 
 function mountPagamentos(container, holder, getLojaVendaId){
   const _onCred = ()=>{ if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
@@ -2174,6 +2197,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   function draw(){
+    const agora = holder.momentoPagamento==='na_encomenda';
     const subtotal = calcTotalItens();
     const totalFinal = calcTotalFinal(subtotal);
     container.innerHTML = `
@@ -2214,16 +2238,23 @@ function mountPagamentos(container, holder, getLojaVendaId){
           <div class="pag-toggle-inner toggle-group">
             <div class="toggle-opt">
               <input type="radio" name="pagMomento" id="pagMomEnc" value="na_encomenda" ${holder.momentoPagamento==='na_encomenda'?'checked':''}>
-              <label for="pagMomEnc">Pago agora</label>
+              <label for="pagMomEnc">Pagar agora</label>
             </div>
             <div class="toggle-opt">
               <input type="radio" name="pagMomento" id="pagMomVolta" value="na_volta" ${holder.momentoPagamento==='na_volta'?'checked':''}>
-              <label for="pagMomVolta">Paga na retirada</label>
+              <label for="pagMomVolta">Pagar depois</label>
             </div>
           </div>
         </div>
         <!-- Nota fiscal -->
-        <div class="pag-toggle-cel" style="flex:0 0 auto;">
+        
+      </div>
+      ${agora ? `
+
+      <div id="pagRows"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ico('mais',14)} Adicionar forma de pagamento</button>
+      <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+      <div class="pag-info-row" style="margin-top:12px;"><div class="pag-toggle-cel" style="flex:0 0 auto;">
           <div class="pag-info-cel-label">Nota fiscal ${ajudaPonto('Marque "Sim" só se a nota já foi emitida.')}</div>
           <div class="pag-toggle-inner toggle-group">
             <div class="toggle-opt">
@@ -2236,16 +2267,12 @@ function mountPagamentos(container, holder, getLojaVendaId){
             </div>
           </div>
           ${numeroNotaBtnHtml(holder)}
-        </div>
-      </div>
-
-      <div id="pagRows"></div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ico('mais',14)} Adicionar forma de pagamento</button>
-      <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+        <div class="muted" id="pagNotaPfHint" style="font-size:12px;margin-top:6px;"></div>
+        </div></div>` : ''}
     `;
     drawRows();
     container.querySelectorAll('input[name="pagMomento"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
+      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; draw(); });
     });
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
       r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; if(r.value!=='sim'){ holder.numeroNota = ''; const b2 = container.querySelector('[data-numnota]'); if(b2) b2.textContent = 'Número da nota'; } });
@@ -2254,11 +2281,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
     // pagValorTotal agora é hidden — valor vem dos itens + desconto/acréscimo
     const inpTotal = container.querySelector('#pagValorTotal');
     if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
-    container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
+    { const _ba=container.querySelector('#btnAddPagamento'); if(_ba) _ba.addEventListener('click', ()=>{
       const primeiraForma = (config.paymentTypes && config.paymentTypes[0]) ? config.paymentTypes[0].id : '';
       holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
       drawRows();
-    });
+    }); }
     // Botões desconto/acréscimo sobre o total
     function aplicarDescTotal(){
       const sub=calcTotalItens();
@@ -2306,6 +2333,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
 
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
+    if(!wrap){ updateHint(); return; }
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="pag-linha">
         <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
@@ -2319,8 +2347,8 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
     });
-    wrap.querySelectorAll('[data-pagpessoa]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagpessoa)].pessoa = sel.value; });
+    wrap.querySelectorAll('[data-pagpessoa]').forEach(b=>{
+      b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
       inp.addEventListener('input', ()=>{
@@ -2331,10 +2359,13 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
       b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
     });
+    { const _ip=holder.pagamentos.findIndex(p=>formaEhPix(p.formaId)&&!p.pessoa&&!__pixAsked.has(p));
+      if(_ip>=0){ const _p=holder.pagamentos[_ip]; __pixAsked.add(_p); perguntarPixTipo().then(t=>{ if(t) _p.pessoa=t; if(container.isConnected) drawRows(); }); } }
     updateHint();
   }
 
   function updateHint(){
+    { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
     const temSemCusto = holder.pagamentos.some(p=>p.formaId==='__sem_custo');
@@ -2364,6 +2395,7 @@ function mountPagamentosEdicao(container, holder){
   if(!holder.emissaoNota) holder.emissaoNota = '';
 
   function draw(){
+    const agora = holder.momentoPagamento==='na_encomenda';
     container.innerHTML = `
       <div class="section-label">Pagamento</div>
       <div class="pag-info-row">
@@ -2377,15 +2409,21 @@ function mountPagamentosEdicao(container, holder){
           <div class="pag-toggle-inner toggle-group">
             <div class="toggle-opt">
               <input type="radio" name="pagMomento" id="pagMomEnc" value="na_encomenda" ${holder.momentoPagamento==='na_encomenda'?'checked':''}>
-              <label for="pagMomEnc">Pago agora</label>
+              <label for="pagMomEnc">Pagar agora</label>
             </div>
             <div class="toggle-opt">
               <input type="radio" name="pagMomento" id="pagMomVolta" value="na_volta" ${holder.momentoPagamento==='na_volta'?'checked':''}>
-              <label for="pagMomVolta">Paga na retirada</label>
+              <label for="pagMomVolta">Pagar depois</label>
             </div>
           </div>
         </div>
-        <div class="pag-toggle-cel" style="flex:0 0 auto;">
+        
+      </div>
+      ${agora ? `
+      <div id="pagRows"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ico('mais',14)} Adicionar forma de pagamento</button>
+      <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+      <div class="pag-info-row" style="margin-top:12px;"><div class="pag-toggle-cel" style="flex:0 0 auto;">
           <div class="pag-info-cel-label">Nota fiscal</div>
           <div class="pag-toggle-inner toggle-group">
             <div class="toggle-opt">
@@ -2398,15 +2436,12 @@ function mountPagamentosEdicao(container, holder){
             </div>
           </div>
           ${numeroNotaBtnHtml(holder)}
-        </div>
-      </div>
-      <div id="pagRows"></div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ico('mais',14)} Adicionar forma de pagamento</button>
-      <div class="muted" id="pagSomaHint" style="margin-top:6px;"></div>
+        <div class="muted" id="pagNotaPfHint" style="font-size:12px;margin-top:6px;"></div>
+        </div></div>` : ''}
     `;
     drawRows();
     container.querySelectorAll('input[name="pagMomento"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
+      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; draw(); });
     });
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
       r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; if(r.value!=='sim'){ holder.numeroNota = ''; const b2 = container.querySelector('[data-numnota]'); if(b2) b2.textContent = 'Número da nota'; } });
@@ -2417,15 +2452,16 @@ function mountPagamentosEdicao(container, holder){
       holder.valorTotal = e.target.value === '' ? null : parseFloat(e.target.value);
       updateHint();
     });
-    container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
+    { const _ba=container.querySelector('#btnAddPagamento'); if(_ba) _ba.addEventListener('click', ()=>{
       const primeiraForma = (config.paymentTypes && config.paymentTypes[0]) ? config.paymentTypes[0].id : '';
       holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
       drawRows();
-    });
+    }); }
   }
 
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
+    if(!wrap){ updateHint(); return; }
     wrap.innerHTML = holder.pagamentos.map((p,i)=>`
       <div class="pag-linha">
         <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId)}</select>
@@ -2439,8 +2475,8 @@ function mountPagamentosEdicao(container, holder){
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
     });
-    wrap.querySelectorAll('[data-pagpessoa]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagpessoa)].pessoa = sel.value; });
+    wrap.querySelectorAll('[data-pagpessoa]').forEach(b=>{
+      b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
       inp.addEventListener('input', ()=>{
@@ -2451,10 +2487,13 @@ function mountPagamentosEdicao(container, holder){
     wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
       b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
     });
+    { const _ip=holder.pagamentos.findIndex(p=>formaEhPix(p.formaId)&&!p.pessoa&&!__pixAsked.has(p));
+      if(_ip>=0){ const _p=holder.pagamentos[_ip]; __pixAsked.add(_p); perguntarPixTipo().then(t=>{ if(t) _p.pessoa=t; if(container.isConnected) drawRows(); }); } }
     updateHint();
   }
 
   function updateHint(){
+    { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
     const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
@@ -3176,6 +3215,7 @@ function printOrder(order){
     linhas.push(`<div class="linha"></div>`);
     linhas.push(`<div><b>PAGAMENTO</b></div>`);
     linhas.push(`<div>Momento: ${order.momentoPagamento==='na_volta' ? 'Na retirada' : 'No ato'}</div>`);
+    linhasAjusteTotal(order).forEach(l=>linhas.push(l));
     if(order.valorTotal) linhas.push(`<div class="destaque">Valor total: ${fmtMoeda(order.valorTotal)}</div>`);
     (order.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
       linhas.push(`<div class="destaque">${escapeHtml(paymentTypesMap[p.formaId]||'—')}: ${fmtMoeda(p.valor||0)}</div>`);
@@ -3626,7 +3666,7 @@ function itensSomenteLeituraHtml(order){
   if(!itens.length) return `<div class="section-label">Itens do pedido</div><div class="muted">Nenhum item lançado.</div>`;
   return `<div class="section-label">Itens do pedido</div><div class="itens-leitura">${itens.map(it=>`
     <div class="linha-item"><span><b>${escapeHtml(it.produto||'Item')}</b>${Number(it.quantidade)>1?` <span class="muted">×${escapeHtml(String(it.quantidade))}</span>`:''}${it.avulso?' <span class="badge">avulso</span>':''}${it.observacaoItem?`<span class="obs">${escapeHtml(it.observacaoItem)}</span>`:''}</span>
-    <span class="num" style="font-weight:700;white-space:nowrap;">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):'—'}</span></div>
+    <span class="num" style="font-weight:700;white-space:nowrap;">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):'—'}${ajusteItemHtml(it)}</span></div>
     ${(it.fotos&&it.fotos.length)?`<div class="foto-grid" data-itfotoleitura="1" style="margin:2px 0 8px;">${it.fotos.map(f=>`<div class="foto-thumb"><img data-fotoimg="${f.id}" src="${escapeHtml(f.driveUrl||photoCache[f.id]||'')}" alt="${escapeHtml(f.nome||'')}" onclick="if(this.src)openPhotoModal(this.src)"></div>`).join('')}</div>`:''}`).join('')}</div>`;
 }
 /** Serviço = categoria SERVIÇO/SERVICO ou tipo "Serviço" no cadastro de produto. */
@@ -3637,6 +3677,32 @@ function produtoEhServico(p){
   const n=(cat?cat.nome:'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
   return n.startsWith('servic');
 }
+
+/* Desconto/acréscimo por item: mantém o valor original e mostra o valor do ajuste e o final */
+function ajusteTotalDoRegistro(rec){
+  if(!rec || !rec.descTotalTipo || rec.descTotalTipo==='nenhum') return null;
+  const sub=(rec.itens||[]).reduce((a,it)=>a+(Number(it.valorUnitario)||0),0), fin=Number(rec.valorTotal);
+  if(isNaN(fin)) return null;
+  const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return null;
+  const d=rec.descTotalTipo==='desconto';
+  return { sub, fin, delta, pct: rec.descTotalModo==='percentual'&&rec.descTotalPerc ? String(rec.descTotalPerc).replace('.',',')+'%' : '', rot:d?'Desconto':'Acréscimo', sinal:d?'−':'+' };
+}
+function resumoAjusteTotalHtml(rec){ const a=ajusteTotalDoRegistro(rec); return a ? `<div class="aj-total" style="margin-top:10px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);font-size:13px;text-align:right;font-variant-numeric:tabular-nums;">Itens ${fmtMoeda(a.sub)} · ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''} · <b>Valor final ${fmtMoeda(a.fin)}</b></div>` : ''; }
+function linhasAjusteTotal(rec){ const a=ajusteTotalDoRegistro(rec); return a ? [`<div>Total dos itens: ${fmtMoeda(a.sub)}</div>`,`<div>${a.rot}${a.pct?' ('+a.pct+')':''}: ${a.sinal}${fmtMoeda(a.delta)}</div>`] : []; }
+function ajusteDoItem(it){
+  if(!it || !it.ajusteTipo || it.ajusteTipo==='nenhum') return null;
+  if(it.valorUnitario===''||it.valorUnitario==null||it.precoOriginal===''||it.precoOriginal==null) return null;
+  const base=Number(it.precoOriginal), fin=Number(it.valorUnitario);
+  if(isNaN(base)||isNaN(fin)) return null;
+  const delta=Math.round(Math.abs(base-fin)*100)/100; if(!delta) return null;
+  return { tipo:it.ajusteTipo, base, fin, delta, pct: it.ajusteModo==='percentual'&&it.ajustePerc ? String(it.ajustePerc).replace('.',',')+'%' : '',
+           rot: it.ajusteTipo==='desconto'?'Desconto':'Acréscimo', sinal: it.ajusteTipo==='desconto'?'−':'+' };
+}
+function ajusteItemTexto(it){ const a=ajusteDoItem(it); return a ? `Original ${fmtMoeda(a.base)} · ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''} · Final ${fmtMoeda(a.fin)}` : ''; }
+function ajusteItemHtml(it){ const a=ajusteDoItem(it); return a ? `<span class="aj-item ${a.tipo}"><s>${fmtMoeda(a.base)}</s> ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''}</span>` : ''; }
+function ajusteResumoEdicao(it){ const a=ajusteDoItem(it); return a ? `${a.rot} ${a.sinal}${fmtMoeda(a.delta)} → <b>Final ${fmtMoeda(a.fin)}</b>` : ''; }
+function valorBaseItem(it){ const v = (it.ajusteTipo && it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null) ? it.precoOriginal : it.valorUnitario; return (v!==undefined&&v!==null&&v!=='') ? v : ''; }
+
 function mountItens(container, holder, getLojaId, opts){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -3678,16 +3744,15 @@ function mountItens(container, holder, getLojaId, opts){
   /* Recalcula o valor final após um ajuste de desconto/acréscimo via botões.
    Atualiza o campo de valor e o span de total inline sem redesenhar a linha. */
 function recalcularAjusteNovo(it, idx, row){
-  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ return; }
+  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ if(it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null){ it.valorUnitario=it.precoOriginal; const sp=document.getElementById('descTotal_'+idx); if(sp) sp.innerHTML=''; updateTotalHint(); } return; }
   const base = Number(it.precoOriginal)||0;
   if(!base) return;
   const qtd = Number(it.ajusteQtd)||0;
   const delta = it.ajusteModo==='percentual' ? base*qtd/100 : qtd;
   it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
   const inpVal=row ? row.querySelector('[data-itfield="valorUnitario"]') : null;
-  if(inpVal) inpVal.value=Number(it.valorUnitario).toFixed(2);
   const span=document.getElementById('descTotal_'+idx);
-  if(span) span.textContent='= '+fmtMoeda(it.valorUnitario);
+  if(span) span.innerHTML=ajusteResumoEdicao(it);
   updateTotalHint();
 }
 function recalcularValorAjustado(it){
@@ -3772,11 +3837,10 @@ function recalcularValorAjustado(it){
     holder.itens.forEach((it,i)=>{
       if(it._modo==='ok'){
         const temObs=!!(it.observacaoItem||'').trim();
-        const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
-          ?` (${it.ajusteTipo==='desconto'?'−':'+'}${it.ajustePerc?String(it.ajustePerc).replace('.',',')+'%':fmtMoeda(it.ajusteValR)})`:'';
+        const descInfoHtml=ajusteItemHtml(it);
         __html+=`<div class="venda-item-compact" data-idx="${i}">
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${Number(it.quantidade)>1?` <span class="muted">×${escapeHtml(String(it.quantidade))}</span>`:''}${it.avulso?` <span class="badge" title="Item avulso — não mexe no estoque">avulso</span>`:(!it.produtoEstoqueId?` <span class="badge badge-flag" title="Clique no lápis para ligar ao catálogo ou marcar como avulso">sem vínculo</span>`:'')}</span>
-          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${escapeHtml(descInfo)}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfoHtml}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button type="button" class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="Ver observação: ${escapeHtml(it.observacaoItem)}" aria-label="Ver observação do item">${ico('mensagem')}</button>`:''}
             <button type="button" class="venda-compact-btn" data-iteditar="${i}" title="Editar item" aria-label="Editar item">${ico('lapis')}</button>
@@ -3809,7 +3873,7 @@ function recalcularValorAjustado(it){
             </div>
             <div class="item-row-valor">
               <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="Valor" aria-label="Valor do item (R$)" title="Valor do item (R$)"
-                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+                value="${valorBaseItem(it)}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)">
             </div>
             <div class="item-row-desc">
               <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}" title="Desconto neste item">Desc.</button>
@@ -3820,7 +3884,7 @@ function recalcularValorAjustado(it){
               <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
                 value="${it.ajusteValR!==undefined&&it.ajusteValR!==''?it.ajusteValR:''}">
               <span class="desc-total" id="descTotal_${i}">${(()=>{
-                if(it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null) return '= '+fmtMoeda(it.valorUnitario);
+                if(it.ajusteTipo!=='nenhum') return ajusteResumoEdicao(it);
                 return '';
               })()}</span>
             </div>
@@ -3857,11 +3921,13 @@ function recalcularValorAjustado(it){
         </div>`;
       }
     });
-    wrap.innerHTML=__html;
+    const _semEdicao = !holder.itens.some(x=>x._modo!=='ok'); const _btnNovo = _semEdicao ? `<button type="button" class="btn btn-accent btn-sm btn-novo-item" data-itnovo>${ico('mais',14)} Adicionar item</button>` : '';
+    wrap.innerHTML=_btnNovo + __html;
     if(container.querySelector('[data-estinfo]')) carregarReservadas();
     ligarFotosItens(wrap);
 
     // ── Autocomplete de produto ──
+        { const _bn=wrap.querySelector('[data-itnovo]'); if(_bn) _bn.addEventListener('click',()=>{ holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'}); drawRows(); updateTotalHint(); }); }
     wrap.querySelectorAll('[data-pac]').forEach(inp=>{
       const i = Number(inp.dataset.pac);
       const drop = document.getElementById('pacDrop_'+i);
@@ -4001,14 +4067,10 @@ function recalcularValorAjustado(it){
         const it=holder.itens[idx];
 
         if(field==='valorUnitario'){
-          it.valorUnitario=el.value===''?'':parseFloat(el.value);
-          it.precoOriginal=it.valorUnitario;
-          // limpa desconto ao editar valor manualmente
-          it.ajustePerc=''; it.ajusteValR=''; it.ajusteTipo='nenhum';
-          row.querySelectorAll('[data-aidbtn]').forEach(b=>b.classList.remove('ativo-desc','ativo-acr'));
-          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
-          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
-          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          const nv=el.value===''?'':parseFloat(el.value);
+          it.precoOriginal=nv;
+          it.valorUnitario=nv;
+          if(it.ajusteTipo!=='nenhum' && nv!=='' && it.ajusteQtd!==''&&it.ajusteQtd!=null){ recalcularAjusteNovo(it, idx, row); return; }
           updateTotalHint(); return;
         }
         if(field==='ajustePerc'){
@@ -4132,6 +4194,11 @@ function renderNovaOrdem(main){
       <!-- ITENS VENDIDOS -->
       <div class="divider-nova"></div>
       <div id="itensContainerNova"></div>
+<div class="info-interna-box" id="osInfoInternaBox" style="display:none;margin-top:10px;">
+        <div class="info-interna-badge">${ico('cadeado',13)} Observação interna — só a equipe vê</div>
+        <textarea id="f_infoInterna" placeholder="Anotações internas (o cliente não vê)"></textarea>
+      </div>
+      <button type="button" class="btn-texto" id="btnToggleInfoInternaOS" style="margin-top:10px;">${ico('cadeado',14)} Adicionar observação interna</button>
 
       <!-- TIPO DE SERVIÇO + AGENDAMENTO (depende do que foi lançado acima) -->
       <div class="divider-nova"></div>
@@ -4173,11 +4240,7 @@ function renderNovaOrdem(main){
       <div id="obsContainerNova"></div>
 
       <!-- INFO INTERNA -->
-      <div class="info-interna-box" id="osInfoInternaBox" style="display:none;margin-top:10px;">
-        <div class="info-interna-badge">${ico('cadeado',13)} Informação interna — só a equipe vê</div>
-        <textarea id="f_infoInterna" placeholder="Anotações internas (o cliente não vê)"></textarea>
-      </div>
-      <button type="button" class="btn-texto" id="btnToggleInfoInternaOS" style="margin-top:10px;">${ico('cadeado',14)} Adicionar informação interna</button>
+      
       <div class="barra-acoes">
         <button class="btn btn-ghost" id="btnLimparOrdem" title="Apaga o que foi preenchido e recomeça">Limpar</button>
         <span class="espaco"></span>
@@ -4275,7 +4338,7 @@ function renderNovaOrdem(main){
     const btn=document.getElementById('btnToggleInfoInternaOS');
     const vis=box.style.display!=='none';
     box.style.display=vis?'none':'block';
-    btn.innerHTML=ico('cadeado',14)+(vis?' Adicionar informação interna':' Ocultar informação interna');
+    btn.innerHTML=ico('cadeado',14)+(vis?' Adicionar observação interna':' Ocultar observação interna');
     if(!vis) document.getElementById('f_infoInterna').focus();
   });
   const servicoSel = document.getElementById('f_servico');
@@ -4342,7 +4405,7 @@ function renderNovaOrdem(main){
       via: { numeroVia: viaInp.value.trim(), cliente: cli.cliente, telefone: cli.telefone, vendedora: (document.getElementById('f_vendedora').value||'').trim(), serviceTypeId: sid, servico: st?st.nome:'', dataPedida: dt,
              descricao: (document.getElementById('f_descricao').value||'').trim(), itens: itens.map((it,i)=>({ nome: nomeItemOs(it,i), quantidade: it.quantidade||1 })), valorTotal: tempPagHolder.valorTotal||0, observacoes: tempObsHolder.observacoes||'' },
       completa: { cliente: cli, itens: itens, descricao: (document.getElementById('f_descricao').value||'').trim(),
-        pagamento: { pagamentos: tempPagHolder.pagamentos||[], valorTotal: tempPagHolder.valorTotal||0, momentoPagamento: tempPagHolder.momentoPagamento||'', emissaoNota: tempPagHolder.emissaoNota||'', numeroNota: tempPagHolder.numeroNota||'', lojaSaidaId: tempPagHolder.lojaSaidaId||'', lojaPagamentoId: tempPagHolder.lojaPagamentoId||'' },
+        pagamento: { pagamentos: tempPagHolder.pagamentos||[], valorTotal: tempPagHolder.valorTotal||0, momentoPagamento: tempPagHolder.momentoPagamento||'', emissaoNota: tempPagHolder.emissaoNota||'', numeroNota: tempPagHolder.numeroNota||'', descTotalTipo: tempPagHolder.descTotalTipo||'nenhum', descTotalModo: tempPagHolder.descTotalModo||'', descTotalPerc: tempPagHolder.descTotalPerc||'', descTotalR: tempPagHolder.descTotalR||'', lojaSaidaId: tempPagHolder.lojaSaidaId||'', lojaPagamentoId: tempPagHolder.lojaPagamentoId||'' },
         fotos: (tempFotoHolder.fotos||[]).map(f=>({ id:f.id, nome:f.nome, driveUrl:f.driveUrl||'' })),
         observacoes: tempObsHolder.observacoes||[], infoInterna: (document.getElementById('f_infoInterna')?.value||'').trim() } };
     // O pedido é lançado já, com pendência de autorização; a Oficina responde depois (lista mostra vermelho → verde / amarelo)
@@ -4453,6 +4516,7 @@ function renderNovaOrdem(main){
       itens: itensOsParaSalvar(tempItensHolder),
       orcamentoOrigemId: orcamentoOrigem ? orcamentoOrigem.id : undefined,
       valorTotal: tempPagHolder.valorTotal,
+      descTotalTipo: tempPagHolder.descTotalTipo||'nenhum', descTotalModo: tempPagHolder.descTotalModo||'percentual', descTotalPerc: tempPagHolder.descTotalPerc||'', descTotalR: tempPagHolder.descTotalR||'',
       pagamentos: carimbarPagamentosOS(tempPagHolder.pagamentos),
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
@@ -4537,9 +4601,12 @@ function renderNovaOrdem(main){
       if(config.viaSequences) config.viaSequences[loja] = proximo;
       viaInp.value = `${abrev}-${proximo}`;
     }
-    if(!tempPagHolder.momentoPagamento){ showToast('Em Pagamento, escolha quando o cliente paga: "Pago agora" ou "Paga na retirada".'); return; }
-    if(!tempPagHolder.emissaoNota){ showToast('Em Pagamento, responda se a nota fiscal já foi emitida (Sim ou Não).'); return; }
-    if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha PF ou PJ.'); return; }
+    if(!tempPagHolder.momentoPagamento){ showToast('Em Pagamento, escolha: "Pagar agora" ou "Pagar depois".'); return; }
+    if(tempPagHolder.momentoPagamento==='na_volta'){ tempPagHolder.pagamentos=[]; tempPagHolder.emissaoNota=''; tempPagHolder.numeroNota=''; }
+    else {
+      if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { showToast('Em Pagamento, responda se a nota fiscal já foi emitida (Sim ou Não).'); return; } }
+      if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
+    }
     const erroNota = notaEmpresasErro(tempPagHolder);
     if(erroNota){
       showToast(erroNota);
@@ -4596,6 +4663,7 @@ function renderNovaOrdem(main){
       encaixe, autorizadoPor,
       autorizacao: pendenciaReq ? { status:'pendente', solicitacaoId: pendenciaReq.id, dataSolicitada: dt, motivo: pendenciaReq.motivo||'', em: Date.now(), por: null } : undefined,
       valorTotal: tempPagHolder.valorTotal,
+      descTotalTipo: tempPagHolder.descTotalTipo||'nenhum', descTotalModo: tempPagHolder.descTotalModo||'percentual', descTotalPerc: tempPagHolder.descTotalPerc||'', descTotalR: tempPagHolder.descTotalR||'',
       pagamentos: carimbarPagamentosOS(tempPagHolder.pagamentos),
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
@@ -5680,7 +5748,7 @@ function renderGerarCodigo(main){
     const campo = (rot, val) => val ? `<div><div class="muted" style="font-size:12px;">${rot}</div>${escapeHtml(String(val))}</div>` : '';
     const forma = id => { const f=(config.formasPagamento||config.pagamentos||[]).find(x=>x.id===id); return f ? (f.nome||f.label||id) : (id==='__credito'?'Crédito do cliente':id==='__fiado'?'Fiado':id==='__sem_custo'?'Sem custo':id); };
     const endereco = [cl.endereco, cl.numero, cl.complemento, cl.bairro, cl.cidade, cl.estado, cl.cep].filter(Boolean).join(', ');
-    const itens = (c.itens||[]).map((it,i)=>{ const q=Number(it.quantidade)||1, u=Number(it.valorUnitario)||0; const aj = it.ajusteTipo && it.ajusteTipo!=='nenhum' ? `${it.ajusteTipo==='desconto'?'Desconto':'Acréscimo'}: ${it.ajusteModo==='percentual'?(it.ajustePerc||0)+'%':fmtMoeda(Number(it.ajusteValR)||0)}` : '';
+    const itens = (c.itens||[]).map((it,i)=>{ const q=Number(it.quantidade)||1, u=Number(it.valorUnitario)||0; const aj = ajusteItemTexto(it);
       const extra = [it.metal?'Metal: '+it.metal:'', aj].filter(Boolean).join(' · ');
       return `<div style="padding:8px 0;border-bottom:1px solid var(--line);">${escapeHtml(nomeItemOs(it,i))}${it.avulso?' <span class="muted">(avulso)</span>':''}${extra?`<div class="muted" style="font-size:12px;">${escapeHtml(extra)}</div>`:''}${it.observacaoItem?`<div style="font-size:12.5px;margin-top:2px;"><b>Obs. do item:</b> ${escapeHtml(it.observacaoItem)}</div>`:''}${(it.fotos||[]).length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">${it.fotos.map(f=>`<img data-solfoto="${escapeHtml(f.id||'')}" src="${escapeHtml(f.driveUrl||'')}" alt="${escapeHtml(f.nome||'')}" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;background:var(--surface-2);">`).join('')}</div>`:''}</div>`; }).join('');
     const fotoImg = f => `<img data-solfoto="${escapeHtml(f.id||'')}" src="${escapeHtml(f.driveUrl||'')}" alt="${escapeHtml(f.nome||'')}" style="width:104px;height:104px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;background:var(--surface-2);">`;
@@ -5690,9 +5758,10 @@ function renderGerarCodigo(main){
       ${c.descricao?`<div style="margin-top:12px;"><div class="muted" style="font-size:12px;">Descrição do serviço</div>${escapeHtml(c.descricao)}</div>`:''}
       <div class="section-label" style="margin-top:16px;">Pagamento</div>
       <div class="grid-2">${campo('Quando paga',pg.momentoPagamento==='na_volta'?'Paga na retirada':pg.momentoPagamento==='agora'?'Pago agora':pg.momentoPagamento)}</div>
+      ${resumoAjusteTotalHtml({ ...pg, itens: c.itens })}
       ${(pg.pagamentos||[]).length?`<div style="margin-top:8px;">${pg.pagamentos.map(x=>`<div>${escapeHtml(forma(x.formaId))}${x.parcelas?` · ${escapeHtml(String(x.parcelas))}x`:''}</div>`).join('')}</div>`:''}
       ${obs?`<div class="section-label" style="margin-top:16px;">Observações da via (internas)</div>${obs}`:''}
-      ${c.infoInterna?`<div class="section-label" style="margin-top:16px;">Informação interna</div><div style="white-space:pre-wrap;">${escapeHtml(c.infoInterna)}</div>`:''}
+      ${c.infoInterna?`<div class="section-label" style="margin-top:16px;">Observação interna</div><div style="white-space:pre-wrap;">${escapeHtml(c.infoInterna)}</div>`:''}
       ${(c.fotos||[]).length?`<div class="section-label" style="margin-top:16px;">Fotos da via</div><div style="display:flex;gap:8px;flex-wrap:wrap;">${c.fotos.map(fotoImg).join('')}</div>`:''}`;
   }
   function verSolicitacao(r){

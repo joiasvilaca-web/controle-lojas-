@@ -378,6 +378,11 @@ html.embedded .mobile-tabbar{display:none !important;}
 html.embedded #mainContent{padding-bottom:32px;}
 html.embedded #mainContent.modo-pdv{padding-bottom:16px;}
 @media (prefers-reduced-motion:reduce){ .toast{transition:none;} }
+
+.aj-item{display:block;font-size:11.5px;font-weight:600;color:var(--ink-soft,#4A5A69);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.aj-item s{opacity:.75;}.aj-item.desconto{color:var(--ok,#0F6B40);}.aj-item.acrescimo{color:var(--warn,#7A4E0A);}
+.desc-total b{font-weight:800;}
+.btn-novo-item{margin:0 0 10px;}
 </style>
 </head>
 <body>
@@ -1561,17 +1566,35 @@ function formaEhPix(formaId){
 }
 function pessoaPixHtml(p, i){
   if(!formaEhPix(p.formaId)) return '';
-  return `<select data-pagpessoa="${i}" aria-label="Pix de pessoa física ou jurídica" title="Pix recebido de pessoa física (PF) ou jurídica (PJ)" style="max-width:110px;"><option value="">PF ou PJ?</option><option value="PF" ${p.pessoa==='PF'?'selected':''}>PF</option><option value="PJ" ${p.pessoa==='PJ'?'selected':''}>PJ</option></select>`;
+  const t = p.pessoa==='PF' ? 'Pix PF' : p.pessoa==='PJ' ? 'Pix loja' : 'Tipo do Pix?';
+  return `<button type="button" class="btn btn-ghost btn-sm pix-tipo" data-pagpessoa="${i}" title="Clique para trocar entre Pix loja e Pix pessoa física" style="white-space:nowrap;${p.pessoa?'':'border-color:var(--wait,#B7791F);color:var(--wait,#7A4E0A);'}">${t}</button>`;
 }
 function pixSemPessoa(pagamentos){
   return (pagamentos||[]).some(p=> formaEhPix(p.formaId) && (Number(p.valor)||0)>0 && !p.pessoa);
 }
 
+const __pixAsked = new WeakSet();
+function soPixPF(pags){ const v=(pags||[]).filter(p=>(Number(p.valor)||0)>0); return v.length>0 && v.every(p=>formaEhPix(p.formaId)&&p.pessoa==='PF'); }
+/* Pergunta de onde veio o Pix: da loja (PJ) ou de pessoa física (PF). */
+function perguntarPixTipo(){
+  return new Promise(resolve=>{
+    openModal(`
+      <h3>Pix recebido em…</h3>
+      <p class="muted">O Pix foi para a conta da loja ou para uma pessoa física?</p>
+      <div class="modal-actions" style="flex-wrap:wrap;gap:10px;margin-top:14px;">
+        <button class="btn btn-accent" type="button" data-pixtipo="PJ">Pix loja</button>
+        <button class="btn btn-ghost" type="button" data-pixtipo="PF">Pix pessoa física</button>
+      </div>`);
+    document.querySelectorAll('[data-pixtipo]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); resolve(b.dataset.pixtipo); }));
+  });
+}
+
+
 function mountPagamentos(container, holder, getLojaVendaId){
   const _onCred = ()=>{ if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
   document.addEventListener('credito-cliente', _onCred);
   if(!holder.pagamentos) holder.pagamentos = [];
-  if(!holder.momentoPagamento) holder.momentoPagamento = ''; // sem pré-seleção — obrigatório escolher
+  if(!holder.momentoPagamento) holder.momentoPagamento = 'na_encomenda'; // venda sempre fecha na hora (sem pagar depois)
   if(!holder.emissaoNota) holder.emissaoNota = ''; // sem pré-seleção — usuário deve escolher
   getLojaVendaId = getLojaVendaId || (()=>'');
 
@@ -1598,6 +1621,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   function draw(){
+    const agora = holder.momentoPagamento==='na_encomenda';
     const subtotal = calcTotalItens();
     const totalFinal = calcTotalFinal(subtotal);
     container.innerHTML = `
@@ -1628,20 +1652,16 @@ function mountPagamentos(container, holder, getLojaVendaId){
           <div class="pag-info-cel-val total" id="pagValorTotalDisplay">${fmtMoeda(totalFinal>0?totalFinal:0)}</div>
           <input type="hidden" id="pagValorTotal" value="${totalFinal>0?totalFinal.toFixed(2):''}">
         </div>
-        <div class="pag-toggle-cel">
-          <div class="pag-info-cel-label">Quando o cliente paga?</div>
-          <div class="pag-toggle-inner toggle-group" role="radiogroup" aria-label="Quando o cliente paga">
-            <div class="toggle-opt">
-              <input type="radio" name="pagMomento" id="pagMomEnc" value="na_encomenda" ${holder.momentoPagamento==='na_encomenda'?'checked':''}>
-              <label for="pagMomEnc">Pago agora</label>
-            </div>
-            <div class="toggle-opt">
-              <input type="radio" name="pagMomento" id="pagMomVolta" value="na_volta" ${holder.momentoPagamento==='na_volta'?'checked':''}>
-              <label for="pagMomVolta">Paga na volta</label>
-            </div>
-          </div>
-        </div>
-        <div class="pag-toggle-cel">
+        
+        
+      </div>
+
+      ${agora ? `
+      <div class="pag-info-cel-label" style="margin-bottom:8px;">Formas de pagamento</div>
+      <div id="pagRows"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ic('mais',14)} Adicionar forma de pagamento</button>
+      <div id="pagSomaHint" style="margin-top:4px;"></div>
+      <div class="pag-info-row" style="margin-top:12px;"><div class="pag-toggle-cel">
           <div class="pag-info-cel-label">Nota fiscal emitida? ${ajudaPonto('Marque "Sim" só se a nota já foi emitida.')}</div>
           <div class="pag-toggle-inner toggle-group" role="radiogroup" aria-label="Nota fiscal emitida">
             <div class="toggle-opt">
@@ -1654,17 +1674,12 @@ function mountPagamentos(container, holder, getLojaVendaId){
             </div>
           </div>
           ${numeroNotaBtnHtml(holder)}
-        </div>
-      </div>
-
-      <div class="pag-info-cel-label" style="margin-bottom:8px;">Formas de pagamento</div>
-      <div id="pagRows"></div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ic('mais',14)} Adicionar forma de pagamento</button>
-      <div id="pagSomaHint" style="margin-top:4px;"></div>
+        <div class="muted" id="pagNotaPfHint" style="font-size:12px;margin-top:6px;"></div>
+        </div></div>` : ''}
     `;
     drawRows();
     container.querySelectorAll('input[name="pagMomento"]').forEach(r=>{
-      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; });
+      r.addEventListener('change', ()=>{ holder.momentoPagamento = r.value; draw(); });
     });
     container.querySelectorAll('input[name="pagEmiteNota"]').forEach(r=>{
       r.addEventListener('change', ()=>{ holder.emissaoNota = r.value; if(r.value!=='sim'){ holder.numeroNota = ''; const b2 = container.querySelector('[data-numnota]'); if(b2) b2.textContent = 'Número da nota'; } });
@@ -1673,7 +1688,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     // pagValorTotal agora é hidden — valor vem dos itens + desconto/acréscimo
     const inpTotal = container.querySelector('#pagValorTotal');
     if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
-    container.querySelector('#btnAddPagamento').addEventListener('click', ()=>{
+    { const _ba=container.querySelector('#btnAddPagamento'); if(_ba) _ba.addEventListener('click', ()=>{
       const primeiraForma = (config.formasPagamento && config.formasPagamento[0]) ? config.formasPagamento[0].id : '';
       // Agiliza o balcão: a nova forma já vem com o valor que falta cobrir (dá pra mudar).
       const falta = (Number(holder.valorTotal)||calcTotalItens()) - holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
@@ -1681,7 +1696,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
       drawRows();
       const novos = container.querySelectorAll('[data-pagform]');
       if(novos.length) novos[novos.length-1].focus();
-    });
+    }); }
     // Botões desconto/acréscimo sobre o total
     function aplicarDescTotal(){
       const sub=calcTotalItens();
@@ -1729,6 +1744,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
 
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
+    if(!wrap){ updateHint(); return; }
     wrap.innerHTML = holder.pagamentos.length===0 ? `<div class="pag-vazio">Nenhuma forma lançada ainda. Clique em “Adicionar forma de pagamento”.</div>` : holder.pagamentos.map((p,i)=>`
       <div class="pag-linha">
         <select data-pagform="${i}" aria-label="Forma de pagamento">${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}${(window.__credCli.valor>0 || p.formaId==='__credito') ? `<option value="__credito" ${p.formaId==='__credito'?'selected':''}>CRÉDITO CLIENTE${window.__credCli.valor>0?' (disp. '+fmtMoeda(window.__credCli.valor)+')':''}</option>` : ''}<option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>Fiado</option></select>
@@ -1740,8 +1756,8 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
     });
-    wrap.querySelectorAll('[data-pagpessoa]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagpessoa)].pessoa = sel.value; });
+    wrap.querySelectorAll('[data-pagpessoa]').forEach(b=>{
+      b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
       inp.addEventListener('input', ()=>{
@@ -1752,10 +1768,13 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
       b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
     });
+    { const _ip=holder.pagamentos.findIndex(p=>formaEhPix(p.formaId)&&!p.pessoa&&!__pixAsked.has(p));
+      if(_ip>=0){ const _p=holder.pagamentos[_ip]; __pixAsked.add(_p); perguntarPixTipo().then(t=>{ if(t) _p.pessoa=t; if(container.isConnected) drawRows(); }); } }
     updateHint();
   }
 
   function updateHint(){
+    { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
     const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
@@ -1786,6 +1805,32 @@ function semPagamentoLancado(v){ return !v.valorTotal && (!v.pagamentos || v.pag
 /* ============================================================
    ITENS DA VENDA
    ============================================================ */
+
+/* Desconto/acréscimo por item: mantém o valor original e mostra o valor do ajuste e o final */
+function ajusteTotalDoRegistro(rec){
+  if(!rec || !rec.descTotalTipo || rec.descTotalTipo==='nenhum') return null;
+  const sub=(rec.itens||[]).reduce((a,it)=>a+(Number(it.valorUnitario)||0),0), fin=Number(rec.valorTotal);
+  if(isNaN(fin)) return null;
+  const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return null;
+  const d=rec.descTotalTipo==='desconto';
+  return { sub, fin, delta, pct: rec.descTotalModo==='percentual'&&rec.descTotalPerc ? String(rec.descTotalPerc).replace('.',',')+'%' : '', rot:d?'Desconto':'Acréscimo', sinal:d?'−':'+' };
+}
+function resumoAjusteTotalHtml(rec){ const a=ajusteTotalDoRegistro(rec); return a ? `<div class="aj-total" style="margin-top:10px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);font-size:13px;text-align:right;font-variant-numeric:tabular-nums;">Itens ${fmtMoeda(a.sub)} · ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''} · <b>Valor final ${fmtMoeda(a.fin)}</b></div>` : ''; }
+function linhasAjusteTotal(rec){ const a=ajusteTotalDoRegistro(rec); return a ? [`<div>Total dos itens: ${fmtMoeda(a.sub)}</div>`,`<div>${a.rot}${a.pct?' ('+a.pct+')':''}: ${a.sinal}${fmtMoeda(a.delta)}</div>`] : []; }
+function ajusteDoItem(it){
+  if(!it || !it.ajusteTipo || it.ajusteTipo==='nenhum') return null;
+  if(it.valorUnitario===''||it.valorUnitario==null||it.precoOriginal===''||it.precoOriginal==null) return null;
+  const base=Number(it.precoOriginal), fin=Number(it.valorUnitario);
+  if(isNaN(base)||isNaN(fin)) return null;
+  const delta=Math.round(Math.abs(base-fin)*100)/100; if(!delta) return null;
+  return { tipo:it.ajusteTipo, base, fin, delta, pct: it.ajusteModo==='percentual'&&it.ajustePerc ? String(it.ajustePerc).replace('.',',')+'%' : '',
+           rot: it.ajusteTipo==='desconto'?'Desconto':'Acréscimo', sinal: it.ajusteTipo==='desconto'?'−':'+' };
+}
+function ajusteItemTexto(it){ const a=ajusteDoItem(it); return a ? `Original ${fmtMoeda(a.base)} · ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''} · Final ${fmtMoeda(a.fin)}` : ''; }
+function ajusteItemHtml(it){ const a=ajusteDoItem(it); return a ? `<span class="aj-item ${a.tipo}"><s>${fmtMoeda(a.base)}</s> ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''}</span>` : ''; }
+function ajusteResumoEdicao(it){ const a=ajusteDoItem(it); return a ? `${a.rot} ${a.sinal}${fmtMoeda(a.delta)} → <b>Final ${fmtMoeda(a.fin)}</b>` : ''; }
+function valorBaseItem(it){ const v = (it.ajusteTipo && it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null) ? it.precoOriginal : it.valorUnitario; return (v!==undefined&&v!==null&&v!=='') ? v : ''; }
+
 function mountItens(container, holder, getLojaId){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -1798,16 +1843,15 @@ function mountItens(container, holder, getLojaId){
   /* Recalcula o valor final após um ajuste de desconto/acréscimo via botões.
    Atualiza o campo de valor e o span de total inline sem redesenhar a linha. */
 function recalcularAjusteNovo(it, idx, row){
-  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ return; }
+  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ if(it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null){ it.valorUnitario=it.precoOriginal; const sp=document.getElementById('descTotal_'+idx); if(sp) sp.innerHTML=''; updateTotalHint(); } return; }
   const base = Number(it.precoOriginal)||0;
   if(!base) return;
   const qtd = Number(it.ajusteQtd)||0;
   const delta = it.ajusteModo==='percentual' ? base*qtd/100 : qtd;
   it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
   const inpVal=row ? row.querySelector('[data-itfield="valorUnitario"]') : null;
-  if(inpVal) inpVal.value=Number(it.valorUnitario).toFixed(2);
   const span=document.getElementById('descTotal_'+idx);
-  if(span) span.textContent='= '+fmtMoeda(it.valorUnitario);
+  if(span) span.innerHTML=ajusteResumoEdicao(it);
   updateTotalHint();
 }
 function recalcularValorAjustado(it){
@@ -1846,11 +1890,10 @@ function recalcularValorAjustado(it){
       if(it._modo==='ok'){
         let __html='';
         const temObs=!!(it.observacaoItem||'').trim();
-        const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
-          ?`${it.ajusteTipo==='desconto'?'Desconto':'Acréscimo'} ${it.ajustePerc?String(it.ajustePerc).replace('.',',')+'%':fmtMoeda(it.ajusteValR)}`:'';
+        const descInfoHtml=ajusteItemHtml(it);
         __html+=`<div class="venda-item-compact" data-idx="${i}">
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${it.avulso?' <span class="badge selo-neutro">Avulso</span>':(!it.produtoEstoqueId?' <span class="badge selo-wait" title="Escolha o produto do catálogo ou marque como item avulso">Fora do catálogo</span>':'')}</span>
-          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfo?`<small>${escapeHtml(descInfo)}</small>`:''}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfoHtml}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button type="button" class="btn-icone venda-compact-btn tem-obs" data-itobstoggle="${i}" title="Ver observação: ${escapeHtml(it.observacaoItem)}" aria-label="Ver observação do item">${ic('mensagem')}</button>`:''}
             <button type="button" class="btn-icone venda-compact-btn" data-iteditar="${i}" title="Editar item" aria-label="Editar item">${ic('lapis')}</button>
@@ -1879,7 +1922,7 @@ function recalcularValorAjustado(it){
             </div>
             <div class="item-row-valor">
               <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00" aria-label="Valor do item"
-                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+                value="${valorBaseItem(it)}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)">
             </div>
             <div class="item-row-desc">
               <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}" title="Desconto neste item">Desc.</button>
@@ -1890,7 +1933,7 @@ function recalcularValorAjustado(it){
               <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
                 value="${it.ajusteValR!==undefined&&it.ajusteValR!==''?it.ajusteValR:''}">
               <span class="desc-total" id="descTotal_${i}">${(()=>{
-                if(it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null) return '= '+fmtMoeda(it.valorUnitario);
+                if(it.ajusteTipo!=='nenhum') return ajusteResumoEdicao(it);
                 return '';
               })()}</span>
             </div>
@@ -1918,13 +1961,15 @@ function recalcularValorAjustado(it){
       }
     });
     const __qtdOk = holder.itens.filter(x=>x._modo==='ok').length;
-    wrap.innerHTML=__html + (__htmlOk ? `<div class="pag-info-cel-label" style="margin:14px 0 8px;">Na venda (${__qtdOk} ${__qtdOk===1?'item':'itens'})</div><div class="lista-itens-ok">${__htmlOk}</div>` : '');
+    const _semEdicao = !holder.itens.some(x=>x._modo!=='ok'); const _btnNovo = _semEdicao ? `<button type="button" class="btn btn-accent btn-sm btn-novo-item" data-itnovo>${ic('mais',14)} Adicionar item</button>` : '';
+    wrap.innerHTML=_btnNovo + __html + (__htmlOk ? `<div class="pag-info-cel-label" style="margin:14px 0 8px;">Na venda (${__qtdOk} ${__qtdOk===1?'item':'itens'})</div><div class="lista-itens-ok">${__htmlOk}</div>` : '');
     if(lojaAtual && !__reservadasPorLoja[lojaAtual] && !__reservadasFalhou[lojaAtual] && !__reservadasCarregando[lojaAtual]
        && holder.itens.some(x=>x._modo!=='ok'&&x.produtoEstoqueId)){
       carregarReservadas(lojaAtual).then(m=>{ if(m && container.isConnected) drawRows(); });
     }
 
     // ── Autocomplete de produto ──
+        { const _bn=wrap.querySelector('[data-itnovo]'); if(_bn) _bn.addEventListener('click',()=>{ holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'}); drawRows(); updateTotalHint(); }); }
     wrap.querySelectorAll('[data-pac]').forEach(inp=>{
       const i = Number(inp.dataset.pac);
       const drop = document.getElementById('pacDrop_'+i);
@@ -2057,14 +2102,10 @@ function recalcularValorAjustado(it){
         const it=holder.itens[idx];
 
         if(field==='valorUnitario'){
-          it.valorUnitario=el.value===''?'':parseFloat(el.value);
-          it.precoOriginal=it.valorUnitario;
-          // limpa desconto ao editar valor manualmente
-          it.ajustePerc=''; it.ajusteValR=''; it.ajusteTipo='nenhum';
-          row.querySelectorAll('[data-aidbtn]').forEach(b=>b.classList.remove('ativo-desc','ativo-acr'));
-          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
-          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
-          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          const nv=el.value===''?'':parseFloat(el.value);
+          it.precoOriginal=nv;
+          it.valorUnitario=nv;
+          if(it.ajusteTipo!=='nenhum' && nv!=='' && it.ajusteQtd!==''&&it.ajusteQtd!=null){ recalcularAjusteNovo(it, idx, row); return; }
           updateTotalHint(); return;
         }
         if(field==='ajustePerc'){
@@ -2877,17 +2918,18 @@ function renderNovaVenda(main){
           <input type="hidden" id="v_cliente"><input type="hidden" id="v_telefone">
         </div>
         <div id="orcOrigemBanner"></div>
-        <div class="card"><div id="itensContainerNova"></div></div>
+        <div class="card"><div id="itensContainerNova"></div>
+<div class="info-interna-box" id="infoInternaBox" style="display:none;">
+            <div class="info-interna-badge">${ic('cadeado',12)} Observação interna — só a equipe vê</div>
+            <textarea id="v_infoInterna" placeholder="Anotações internas (não saem na via do cliente)"></textarea>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInterna" style="margin-top:10px;">${ic('cadeado',14)} Adicionar observação interna</button></div>
         <div class="card">
           <div class="obs-geral-box">
             <label for="v_observacaoGeral">Observação da venda <span class="muted">(opcional — sai na via impressa)</span></label>
             <textarea id="v_observacaoGeral" placeholder="Ex.: embrulhar para presente"></textarea>
           </div>
-          <div class="info-interna-box" id="infoInternaBox" style="display:none;">
-            <div class="info-interna-badge">${ic('cadeado',12)} Informação interna — só a equipe vê</div>
-            <textarea id="v_infoInterna" placeholder="Anotações internas (não saem na via do cliente)"></textarea>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInterna" style="margin-top:10px;">${ic('cadeado',14)} Adicionar informação interna</button>
+          
         </div>
       </div>
       <div class="pdv-lado">
@@ -2989,7 +3031,7 @@ function renderNovaVenda(main){
     const btn = document.getElementById('btnToggleInfoInterna');
     const visivel = box.style.display !== 'none';
     box.style.display = visivel ? 'none' : 'block';
-    btn.innerHTML = ic('cadeado',14) + (visivel ? ' Adicionar informação interna' : ' Esconder informação interna');
+    btn.innerHTML = ic('cadeado',14) + (visivel ? ' Adicionar observação interna' : ' Esconder observação interna');
     if(!visivel) document.getElementById('v_infoInterna').focus();
   });
 
@@ -3010,8 +3052,8 @@ function renderNovaVenda(main){
     { const semCat = itensSemCatalogo(tempItensHolder.itens); if(semCat.length){ showToast(mensagemItensSemCatalogo(semCat)); return; } }
     if(!cliente){ showToast('Escolha o cliente antes de lançar a venda (F4 vai direto para a busca).'); return; }
     if(!tempPagHolder.momentoPagamento){ showToast('Marque quando o cliente paga: “Pago agora” ou “Paga na volta”.'); return; }
-    if(!tempPagHolder.emissaoNota){ showToast('Marque se a nota fiscal foi emitida (Sim ou Não).'); return; }
-    if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha PF ou PJ.'); return; }
+    if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { showToast('Marque se a nota fiscal foi emitida (Sim ou Não).'); return; } }
+    if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
     if(!tempPagHolder.pagamentos || tempPagHolder.pagamentos.length===0){ showToast('Adicione pelo menos uma forma de pagamento.'); return; }
     const totalPago = tempPagHolder.pagamentos.reduce((acc,p)=>acc+(Number(p.valor)||0),0);
     const totalVenda = Number(tempPagHolder.valorTotal)||0;
@@ -3067,6 +3109,8 @@ function renderNovaVenda(main){
       lojaId, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), data, cliente, telefone,
       itens: itensValidos,
       valorTotal: tempPagHolder.valorTotal,
+      subtotalItens: itensValidos.reduce((a,it)=>a+(Number(it.quantidade)||1)*(Number(it.valorUnitario)||0),0),
+      descTotalTipo: tempPagHolder.descTotalTipo||'nenhum', descTotalModo: tempPagHolder.descTotalModo||'percentual', descTotalPerc: tempPagHolder.descTotalPerc||'', descTotalR: tempPagHolder.descTotalR||'',
       pagamentos: carimbarPagamentos(tempPagHolder.pagamentos, data),
       momentoPagamento: tempPagHolder.momentoPagamento,
       emissaoNota: tempPagHolder.emissaoNota,
@@ -3844,9 +3888,10 @@ function abrirItensVenda(v){
     <div style="overflow-x:auto;margin-top:12px;"><table>
       <thead><tr><th>Produto</th><th>Metal</th><th class="num">Qtd.</th><th class="num">Valor unit.</th><th class="num">Subtotal</th></tr></thead>
       <tbody>
-        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.6;"':''}><td>${escapeHtml(it.produto)}${it.devolvido?' <span class="badge selo-neutro">Devolvido</span>':(it.trocado?' <span class="badge selo-neutro">Trocado</span>':'')}</td><td>${escapeHtml(it.metal||'—')}</td><td class="num">${escapeHtml(String(it.quantidade))}</td><td class="num">${fmtMoeda(it.valorUnitario)}</td><td class="num">${fmtMoeda(Number(it.quantidade)*Number(it.valorUnitario||0))}</td></tr>`).join('')}
+        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.6;"':''}><td>${escapeHtml(it.produto)}${it.devolvido?' <span class="badge selo-neutro">Devolvido</span>':(it.trocado?' <span class="badge selo-neutro">Trocado</span>':'')}${ajusteItemHtml(it)}</td><td>${escapeHtml(it.metal||'—')}</td><td class="num">${escapeHtml(String(it.quantidade))}</td><td class="num">${fmtMoeda(it.valorUnitario)}</td><td class="num">${fmtMoeda(Number(it.quantidade)*Number(it.valorUnitario||0))}</td></tr>`).join('')}
       </tbody>
     </table></div>
+    ${resumoAjusteTotalHtml(v)}
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btnFecharItensVenda">Fechar</button>
     </div>
@@ -4179,9 +4224,10 @@ function abrirDetalheVenda(v){
     <div style="overflow-x:auto;"><table>
       <thead><tr><th>Produto</th><th>Metal</th><th class="num">Qtd.</th><th class="num">Valor unit.</th></tr></thead>
       <tbody>
-        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.6;"':''}><td>${escapeHtml(it.produto)}${it.devolvido?' <span class="badge selo-neutro">Devolvido</span>':(it.trocado?' <span class="badge selo-neutro">Trocado</span>':'')}</td><td>${escapeHtml(it.metal||'—')}</td><td class="num">${escapeHtml(String(it.quantidade))}</td><td class="num">${fmtMoeda(it.valorUnitario)}</td></tr>`).join('')}
+        ${(v.itens||[]).map(it=>`<tr${it.trocado?' style="opacity:.6;"':''}><td>${escapeHtml(it.produto)}${it.devolvido?' <span class="badge selo-neutro">Devolvido</span>':(it.trocado?' <span class="badge selo-neutro">Trocado</span>':'')}${ajusteItemHtml(it)}</td><td>${escapeHtml(it.metal||'—')}</td><td class="num">${escapeHtml(String(it.quantidade))}</td><td class="num">${fmtMoeda(it.valorUnitario)}</td></tr>`).join('')}
       </tbody>
     </table></div>
+    ${resumoAjusteTotalHtml(v)}
     ${(v.trocas&&v.trocas.length>0) ? `
     <div class="section-label">Trocas e devoluções</div>
     <div style="overflow-x:auto;"><table>
@@ -4323,11 +4369,13 @@ function printVenda(v){
     linhas.push(`<div><b>ITENS</b></div>`);
     (v.itens||[]).forEach(it=>{
       linhas.push(`<div>${escapeHtml(it.produto)}${it.metal?' ('+escapeHtml(it.metal)+')':''} x${it.quantidade} — ${fmtMoeda(it.valorUnitario)}</div>`);
+      { const _t=ajusteItemTexto(it); if(_t) linhas.push(`<div style="font-size:11px;">${escapeHtml(_t)}</div>`); }
     });
   }
 
   if(imp.valores !== false){
     linhas.push(`<div class="linha"></div>`);
+    linhasAjusteTotal(v).forEach(l=>linhas.push(l));
     linhas.push(`<div>Valor total: ${fmtMoeda(v.valorTotal)}</div>`);
     linhas.push(`<div>Recebido: ${fmtMoeda(valorRecebidoDe(v))}</div>`);
     linhas.push(`<div>A receber: ${fmtMoeda(valorAReceberDe(v))}</div>`);

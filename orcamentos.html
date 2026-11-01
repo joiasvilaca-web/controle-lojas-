@@ -322,6 +322,11 @@ html.embedded .mobile-tabbar{display:none !important;}
 .prod-ac-sel .pa-clr{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:none;border:none;border-radius:6px;cursor:pointer;color:var(--ink-soft);padding:0;flex-shrink:0;}
 .prod-ac-sel .pa-clr:hover{background:var(--surface-2);color:var(--danger);}
 .prod-ac-fator{font-size:11.5px;color:var(--ink-faint);margin-top:4px;}
+
+.aj-item{display:block;font-size:11.5px;font-weight:600;color:var(--ink-soft,#4A5A69);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.aj-item s{opacity:.75;}.aj-item.desconto{color:var(--ok,#0F6B40);}.aj-item.acrescimo{color:var(--warn,#7A4E0A);}
+.desc-total b{font-weight:800;}
+.btn-novo-item{margin:0 0 10px;}
 </style>
 </head>
 <body>
@@ -1318,18 +1323,19 @@ function renderNovo(main){
         </div>
       </div>
     </div>
-    <div class="card"><div id="orcItensContainer"></div></div>
+    <div class="card"><div id="orcItensContainer"></div>
+<div class="info-interna-box" id="orcInfoInternaBox" style="display:${editando&&orcamentoEditando.infoInterna?'block':'none'};margin-top:10px;">
+        <div class="info-interna-badge">${ic('cadeado',12)} Observação interna — só a equipe vê</div>
+        <textarea id="o_infoInterna" placeholder="Anotações internas (o cliente não vê)">${escapeHtml(editando?orcamentoEditando.infoInterna:'')}</textarea>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInternaOrc" style="margin-top:4px;">${editando&&orcamentoEditando.infoInterna?ic('cadeado',14)+' Ocultar observação interna':ic('cadeado',14)+' Adicionar observação interna'}</button></div>
     <div class="card">
       <div class="section-label">Observações</div>
       <div class="field">
         <label for="o_obs">Observações para o cliente</label>
         <textarea id="o_obs" rows="2" placeholder="Aparece no orçamento impresso e enviado">${escapeHtml(editando?orcamentoEditando.observacoes:'')}</textarea>
       </div>
-      <div class="info-interna-box" id="orcInfoInternaBox" style="display:${editando&&orcamentoEditando.infoInterna?'block':'none'};margin-top:10px;">
-        <div class="info-interna-badge">${ic('cadeado',12)} Informação interna — só a equipe vê</div>
-        <textarea id="o_infoInterna" placeholder="Anotações internas (o cliente não vê)">${escapeHtml(editando?orcamentoEditando.infoInterna:'')}</textarea>
-      </div>
-      <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInternaOrc" style="margin-top:4px;">${editando&&orcamentoEditando.infoInterna?ic('cadeado',14)+' Ocultar informação interna':ic('cadeado',14)+' Adicionar informação interna'}</button>
+      
     </div>
     <div class="barra-salvar">
       <div class="total-resumo"><span>Total do orçamento</span><b id="orcTotalBarra">${fmtMoeda(0)}</b></div>
@@ -1364,7 +1370,7 @@ function renderNovo(main){
     const btn=document.getElementById('btnToggleInfoInternaOrc');
     const vis=box.style.display!=='none';
     box.style.display=vis?'none':'block';
-    btn.innerHTML=ic('cadeado',14)+(vis?' Adicionar informação interna':' Ocultar informação interna');
+    btn.innerHTML=ic('cadeado',14)+(vis?' Adicionar observação interna':' Ocultar observação interna');
     if(!vis) document.getElementById('o_infoInterna').focus();
   });
 
@@ -1491,6 +1497,22 @@ function mensagemItensSemCatalogo(problemas){
   return `Itens sem produto do catálogo: ${problemas.join(', ')}. Escolha o produto na lista de busca ou marque "Item avulso (sem estoque)" e descreva o item.`;
 }
 
+
+/* Desconto/acréscimo por item: mantém o valor original e mostra o valor do ajuste e o final */
+function ajusteDoItem(it){
+  if(!it || !it.ajusteTipo || it.ajusteTipo==='nenhum') return null;
+  if(it.valorUnitario===''||it.valorUnitario==null||it.precoOriginal===''||it.precoOriginal==null) return null;
+  const base=Number(it.precoOriginal), fin=Number(it.valorUnitario);
+  if(isNaN(base)||isNaN(fin)) return null;
+  const delta=Math.round(Math.abs(base-fin)*100)/100; if(!delta) return null;
+  return { tipo:it.ajusteTipo, base, fin, delta, pct: it.ajusteModo==='percentual'&&it.ajustePerc ? String(it.ajustePerc).replace('.',',')+'%' : '',
+           rot: it.ajusteTipo==='desconto'?'Desconto':'Acréscimo', sinal: it.ajusteTipo==='desconto'?'−':'+' };
+}
+function ajusteItemTexto(it){ const a=ajusteDoItem(it); return a ? `Original ${fmtMoeda(a.base)} · ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''} · Final ${fmtMoeda(a.fin)}` : ''; }
+function ajusteItemHtml(it){ const a=ajusteDoItem(it); return a ? `<span class="aj-item ${a.tipo}"><s>${fmtMoeda(a.base)}</s> ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''}</span>` : ''; }
+function ajusteResumoEdicao(it){ const a=ajusteDoItem(it); return a ? `${a.rot} ${a.sinal}${fmtMoeda(a.delta)} → <b>Final ${fmtMoeda(a.fin)}</b>` : ''; }
+function valorBaseItem(it){ const v = (it.ajusteTipo && it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null) ? it.precoOriginal : it.valorUnitario; return (v!==undefined&&v!==null&&v!=='') ? v : ''; }
+
 function mountItens(container, holder, getLojaId){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -1503,16 +1525,15 @@ function mountItens(container, holder, getLojaId){
   /* Recalcula o valor final após um ajuste de desconto/acréscimo via botões.
    Atualiza o campo de valor e o span de total inline sem redesenhar a linha. */
 function recalcularAjusteNovo(it, idx, row){
-  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ return; }
+  if(it.ajusteTipo==='nenhum'||it.ajusteQtd===''||it.ajusteQtd==null){ if(it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null){ it.valorUnitario=it.precoOriginal; const sp=document.getElementById('descTotal_'+idx); if(sp) sp.innerHTML=''; updateTotalHint(); } return; }
   const base = Number(it.precoOriginal)||0;
   if(!base) return;
   const qtd = Number(it.ajusteQtd)||0;
   const delta = it.ajusteModo==='percentual' ? base*qtd/100 : qtd;
   it.valorUnitario = Math.max(0, it.ajusteTipo==='desconto' ? base-delta : base+delta);
   const inpVal=row ? row.querySelector('[data-itfield="valorUnitario"]') : null;
-  if(inpVal) inpVal.value=Number(it.valorUnitario).toFixed(2);
   const span=document.getElementById('descTotal_'+idx);
-  if(span) span.textContent='= '+fmtMoeda(it.valorUnitario);
+  if(span) span.innerHTML=ajusteResumoEdicao(it);
   updateTotalHint();
 }
 function recalcularValorAjustado(it){
@@ -1549,11 +1570,10 @@ function recalcularValorAjustado(it){
     holder.itens.forEach((it,i)=>{
       if(it._modo==='ok'){
         const temObs=!!(it.observacaoItem||'').trim();
-        const descInfo=it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null
-          ?` (${it.ajusteTipo==='desconto'?'desconto':'acréscimo'} ${it.ajustePerc?String(it.ajustePerc).replace('.',',')+'%':fmtMoeda(it.ajusteValR)})`:'';
+        const descInfoHtml=ajusteItemHtml(it);
         __html+=`<div class="venda-item-compact" data-idx="${i}">
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${it.avulso?' <span class="badge badge-avulso">Avulso</span>':(!it.produtoEstoqueId?' <span class="badge badge-semcat" title="Escolha o produto do catálogo ou marque como item avulso">'+ic('alerta',12)+' Sem catálogo</span>':'')}</span>
-          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfo?`<span class="aj">${escapeHtml(descInfo)}</span>`:''}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfoHtml}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button type="button" class="btn-icone venda-compact-btn tem-obs" data-itobstoggle="${i}" title="Ver observação: ${escapeHtml(it.observacaoItem)}" aria-label="Ver observação do item">${ic('mensagem')}</button>`:''}
             <button type="button" class="btn-icone venda-compact-btn" data-iteditar="${i}" title="Editar item" aria-label="Editar item">${ic('lapis')}</button>
@@ -1581,7 +1601,7 @@ function recalcularValorAjustado(it){
             </div>
             <div class="item-row-valor">
               <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="0,00" aria-label="Valor do item" title="Valor do item"
-                value="${it.valorUnitario!==undefined&&it.valorUnitario!==''?it.valorUnitario:''}">
+                value="${valorBaseItem(it)}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)">
             </div>
             <div class="item-row-desc">
               <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}" title="Dar desconto neste item">Desconto</button>
@@ -1592,7 +1612,7 @@ function recalcularValorAjustado(it){
               <input type="number" min="0" step="0.01" class="campo-val" data-itfield="ajusteValR" placeholder="R$" title="Valor em reais"
                 value="${it.ajusteValR!==undefined&&it.ajusteValR!==''?it.ajusteValR:''}">
               <span class="desc-total" id="descTotal_${i}">${(()=>{
-                if(it.ajusteTipo!=='nenhum'&&it.valorUnitario!==''&&it.valorUnitario!=null) return '= '+fmtMoeda(it.valorUnitario);
+                if(it.ajusteTipo!=='nenhum') return ajusteResumoEdicao(it);
                 return '';
               })()}</span>
             </div>
@@ -1620,13 +1640,15 @@ function recalcularValorAjustado(it){
         </div>`;
       }
     });
-    wrap.innerHTML=__html;
+    const _semEdicao = !holder.itens.some(x=>x._modo!=='ok'); const _btnNovo = _semEdicao ? `<button type="button" class="btn btn-accent btn-sm btn-novo-item" data-itnovo>${ic('mais',14)} Adicionar item</button>` : '';
+    wrap.innerHTML=_btnNovo + __html;
     if(lojaAtual && !__reservadasPorLoja[lojaAtual] && !__reservadasFalhou[lojaAtual] && !__reservadasCarregando[lojaAtual]
        && holder.itens.some(x=>x._modo!=='ok'&&x.produtoEstoqueId)){
       carregarReservadas(lojaAtual).then(m=>{ if(m && container.isConnected) drawRows(); });
     }
 
     // ── Autocomplete de produto ──
+        { const _bn=wrap.querySelector('[data-itnovo]'); if(_bn) _bn.addEventListener('click',()=>{ holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'}); drawRows(); updateTotalHint(); }); }
     wrap.querySelectorAll('[data-pac]').forEach(inp=>{
       const i = Number(inp.dataset.pac);
       const drop = document.getElementById('pacDrop_'+i);
@@ -1759,14 +1781,10 @@ function recalcularValorAjustado(it){
         const it=holder.itens[idx];
 
         if(field==='valorUnitario'){
-          it.valorUnitario=el.value===''?'':parseFloat(el.value);
-          it.precoOriginal=it.valorUnitario;
-          // limpa desconto ao editar valor manualmente
-          it.ajustePerc=''; it.ajusteValR=''; it.ajusteTipo='nenhum';
-          row.querySelectorAll('[data-aidbtn]').forEach(b=>b.classList.remove('ativo-desc','ativo-acr'));
-          const cp=row.querySelector('[data-itfield="ajustePerc"]'); if(cp) cp.value='';
-          const cv=row.querySelector('[data-itfield="ajusteValR"]'); if(cv) cv.value='';
-          const span=document.getElementById('descTotal_'+idx); if(span) span.textContent='';
+          const nv=el.value===''?'':parseFloat(el.value);
+          it.precoOriginal=nv;
+          it.valorUnitario=nv;
+          if(it.ajusteTipo!=='nenhum' && nv!=='' && it.ajusteQtd!==''&&it.ajusteQtd!=null){ recalcularAjusteNovo(it, idx, row); return; }
           updateTotalHint(); return;
         }
         if(field==='ajustePerc'){
@@ -2351,7 +2369,7 @@ function abrirDetalheOrcamento(o){
     </div>
     <table>
       <thead><tr><th>Produto</th><th class="num">Qtd.</th><th class="num">Valor unit.</th></tr></thead>
-      <tbody>${(o.itens||[]).length ? (o.itens||[]).map(it=>`<tr><td>${escapeHtml(it.produto)}${it.observacaoItem?`<span class="muted" style="display:block;font-size:12px;">${escapeHtml(it.observacaoItem)}</span>`:''}</td><td class="num">${it.quantidade}</td><td class="num">${fmtMoeda(it.valorUnitario)}</td></tr>`).join('') : `<tr><td colspan="3" class="muted">Nenhum item registrado.</td></tr>`}</tbody>
+      <tbody>${(o.itens||[]).length ? (o.itens||[]).map(it=>`<tr><td>${escapeHtml(it.produto)}${it.observacaoItem?`<span class="muted" style="display:block;font-size:12px;">${escapeHtml(it.observacaoItem)}</span>`:''}${ajusteItemHtml(it)}</td><td class="num">${it.quantidade}</td><td class="num">${fmtMoeda(it.valorUnitario)}</td></tr>`).join('') : `<tr><td colspan="3" class="muted">Nenhum item registrado.</td></tr>`}</tbody>
     </table>
     <div class="total-linha"><span>Total</span><b>${fmtMoeda(o.valorTotal)}</b></div>
     ${o.observacoes ? `<p class="obs-detalhe">${escapeHtml(o.observacoes)}</p>` : ''}
@@ -2533,6 +2551,7 @@ function printOrcamento(o){
     linhas.push(`<div><b>ITENS</b></div>`);
     (o.itens||[]).forEach(it=>{
       linhas.push(`<div>${escapeHtml(it.produto)} x${it.quantidade} — ${fmtMoeda(it.valorUnitario)}</div>`);
+      { const _t=ajusteItemTexto(it); if(_t) linhas.push(`<div style="font-size:11px;">${escapeHtml(_t)}</div>`); }
     });
   }
   if(imp.valores !== false){
