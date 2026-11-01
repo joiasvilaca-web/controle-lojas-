@@ -37,10 +37,13 @@
     },
     pronto: function(){ return !!idx; },
     lojasDe: function(c){
-      if(!idx || !c) return [];
+      if(!c) return [];
+      if(!idx) return Array.isArray(c.lojasImportadas) ? c.lojasImportadas.slice() : [];
       var set = {}, k = tel(c.telefone);
       if(k && idx.t[k]) Object.keys(idx.t[k]).forEach(function(l){ set[l] = 1; });
       else { var nm = nome(c.nome); if(nm && idx.n[nm]) Object.keys(idx.n[nm]).forEach(function(l){ set[l] = 1; }); }
+      /* clientes importados de planilha: a loja escolhida na importação também ganha bolinha */
+      if(Array.isArray(c.lojasImportadas)) c.lojasImportadas.forEach(function(l){ if(l) set[l] = 1; });
       var ordem = lojasFn().map(function(l){ return l.id; });
       return Object.keys(set).sort(function(a, b){ var i = ordem.indexOf(a), j = ordem.indexOf(b); return (i < 0 ? 99 : i) - (j < 0 ? 99 : j); });
     },
