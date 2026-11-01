@@ -54,6 +54,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   .status-banner.aguardando{ background:var(--wait-soft); color:var(--wait); }
   .status-banner.pronto{ background:var(--ok-soft); color:var(--ok); }
   .status-banner.entregue{ background:var(--delivered-soft); color:var(--delivered); }
+  .etapa-texto{ text-align:center; margin:-10px 0 18px; font-size:14px; color:var(--ink-soft); line-height:1.5; }
   .status-banner.cancelado{ background:var(--danger-soft); color:var(--danger); }
 
   .details{ font-size:14px; border-top:1px solid var(--line); }
@@ -112,34 +113,21 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   }
   function ico(nome, tam){ return window.Icone ? Icone(nome, { tam: tam || 16 }) : ""; }
   function marcaHtml(){ return `<div class="brand"><img src="logo-vilaca.png" alt="Vilaça Joias"></div>`; }
-  function statusIcone(s){
-    s = ["oficina_pronto","pendencia","enviado_fabrica"].includes(s) ? "aguardando" : s;
-    return ico(s==="aguardando" ? "relogio" : s==="pronto" ? "check" : s==="entregue" ? "pacote" : "cancelar", 18);
-  }
+  // Etapa atual da via, do jeito que o cliente entende (sem histórico).
+  const ETAPAS = {
+    aguardando:      { cls:"aguardando", ico:"relogio",    titulo:"Recebido na loja",          texto:"Sua peça foi recebida e está na fila para o serviço." },
+    enviado_fabrica: { cls:"aguardando", ico:"ferramenta", titulo:"Em produção na oficina",    texto:"Sua peça está na oficina, com o serviço em andamento." },
+    pendencia:       { cls:"aguardando", ico:"relogio",    titulo:"Em andamento",              texto:"O serviço está em andamento. Se precisarmos de algo, a loja entra em contato." },
+    oficina_pronto:  { cls:"aguardando", ico:"check",      titulo:"Em conferência na loja",    texto:"O serviço foi concluído e a loja está conferindo a peça." },
+    pronto:          { cls:"pronto",     ico:"check",      titulo:"Pronto para retirada",      texto:"Sua peça está pronta. Pode vir buscar na loja." },
+    entregue:        { cls:"entregue",   ico:"pacote",     titulo:"Entregue",                  texto:"Sua peça já foi entregue." },
+    cancelado:       { cls:"cancelado",  ico:"cancelar",   titulo:"Cancelado",                 texto:"Esta ordem foi cancelada. Dúvidas, fale com a loja." },
+  };
+  function etapa(s){ return ETAPAS[s] || ETAPAS.aguardando; }
   function getOrderId(){
     const params = new URLSearchParams(window.location.search);
     return params.get("id");
   }
-  function statusLabel(s){
-    if(s==="oficina_pronto" || s==="pendencia" || s==="enviado_fabrica") s = "aguardando"; // para o cliente, só fica pronto quando a loja confere
-    return s==="aguardando" ? "Aguardando" : s==="pronto" ? "Pronto para retirada" : s==="entregue" ? "Entregue" : "Cancelado";
-  }
-  function stepperHtml(status){
-    const steps = [
-      { key:"aguardando", label:"Recebido" },
-      { key:"pronto", label:"Pronto" },
-      { key:"entregue", label:"Entregue" },
-    ];
-    const order = ["aguardando","pronto","entregue"];
-    const currentIdx = order.indexOf(["oficina_pronto","pendencia","enviado_fabrica"].includes(status) ? "aguardando" : status);
-    return `<div class="stepper">${steps.map((s,i)=>{
-      let cls = "";
-      if(i < currentIdx) cls = "done";
-      else if(i === currentIdx) cls = "current";
-      return `<div class="step ${cls}"><div class="dot">${i < currentIdx ? ico("check", 15) : (i+1)}</div><div class="label">${s.label}</div></div>`;
-    }).join("")}</div>`;
-  }
-
   function showError(msg){
     document.getElementById("card").innerHTML = `
       ${marcaHtml()}
@@ -149,12 +137,13 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
 
   function render(o){
     const isFinal = o.status === "entregue" || o.status === "cancelado";
+    registrarLeitura(o);
     document.getElementById("card").innerHTML = `
       ${marcaHtml()}
       <h1>Olá, ${escapeHtml(o.cliente)}!</h1>
       <div class="sub">Acompanhe a sua ordem de serviço</div>
-      <div class="status-banner ${escapeHtml(["oficina_pronto","pendencia","enviado_fabrica"].includes(o.status)?"aguardando":o.status)}">${statusIcone(o.status)}${statusLabel(o.status)}</div>
-      ${o.status !== "cancelado" ? stepperHtml(o.status) : ""}
+      <div class="status-banner ${etapa(o.status).cls}">${ico(etapa(o.status).ico, 18)}${escapeHtml(etapa(o.status).titulo)}</div>
+      <p class="etapa-texto">${escapeHtml(etapa(o.status).texto)}</p>
       <div class="details">
         <div><span class="k">Loja</span><span class="v">${escapeHtml(o.loja)}</span></div>
         <div><span class="k">Serviço</span><span class="v">${escapeHtml(o.servico)}</span></div>
@@ -168,38 +157,15 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
     `;
   }
 
-  function renderConfirmGate(o){
-    document.getElementById("card").innerHTML = `
-      ${marcaHtml()}
-      <h1>Olá, ${escapeHtml(o.cliente)}!</h1>
-      <div class="sub">Há uma novidade na sua ordem de serviço</div>
-      <div class="confirm-box">
-        <div class="confirm-icon">${ico("sino", 24)}</div>
-        <p>Para ver como está a sua ordem, confirme que recebeu este aviso.</p>
-        <button class="confirm-btn" id="btnConfirmarLeitura" disabled>Carregando…</button>
-      </div>
-    `;
-    const btnInicial = document.getElementById("btnConfirmarLeitura");
-    // Espera um instante antes de liberar o botão: robôs de varredura de link (Outlook, filtros
-    // de e-mail corporativos, etc.) costumam agir instantaneamente, sem esperar — isso ajuda a
-    // evitar que a confirmação seja "gasta" antes do cliente de verdade abrir a página.
+  // A loja sabe que o cliente viu a etapa atual: registra uma vez por etapa, sem pedir clique.
+  let leituraRegistrada = "";
+  function registrarLeitura(o){
+    if(o.confirmadoStatusAtual || leituraRegistrada === o.status) return;
+    leituraRegistrada = o.status;
     setTimeout(()=>{
-      const btn = document.getElementById("btnConfirmarLeitura");
-      if(!btn) return;
-      btn.disabled = false;
-      btn.textContent = "Sim, recebi esta atualização";
+      if(document.visibilityState === "hidden"){ leituraRegistrada = ""; return; }
+      supabaseClient.functions.invoke("confirmar-leitura-os", { body: { id: getOrderId(), status: o.status } }).catch(e=>console.error("Falha ao registrar leitura:", e));
     }, 1500);
-    document.getElementById("btnConfirmarLeitura").addEventListener("click", async ()=>{
-      const btn = document.getElementById("btnConfirmarLeitura");
-      btn.disabled = true;
-      btn.textContent = "Confirmando…";
-      try{
-        await supabaseClient.functions.invoke("confirmar-leitura-os", { body: { id: getOrderId(), status: o.status } });
-      }catch(e){
-        console.error("Falha ao registrar confirmação de leitura:", e);
-      }
-      render(o);
-    });
   }
 
   async function loadStatus(){
@@ -213,11 +179,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
       if(error) throw error;
       if(!data || data.error) throw new Error((data && data.error) || "Ordem não encontrada.");
       if(!window.__rtMontado && window.RetiradaPublica){ window.__rtMontado = true; RetiradaPublica.montar(document.getElementById("retiradaBox"), { tipo:"os", id, client: supabaseClient }); }
-      if(!data.confirmadoStatusAtual){
-        renderConfirmGate(data);
-      }else{
-        render(data);
-      }
+      render(data);
     }catch(e){
       showError("Não foi possível abrir esta ordem agora. Confira se abriu o link completo e tente de novo em alguns minutos.");
     }
