@@ -1210,6 +1210,16 @@ async function bumpCodigoVia(tipo, lojaId){
     return null;
   }catch(e){ console.error('erro ao gerar código de via', e); return null; }
 }
+/** Evita lançar o mesmo pedido 2-3 vezes com cliques repetidos (gerava vias duplicadas). */
+function travarCliqueDuplo(fn){
+  return async function(ev){
+    const btn = ev && ev.currentTarget;
+    if(btn && btn.dataset.salvando) return;
+    if(btn){ btn.dataset.salvando = '1'; btn.disabled = true; }
+    try{ return await fn.apply(this, arguments); }
+    finally{ if(btn){ delete btn.dataset.salvando; btn.disabled = false; } }
+  };
+}
 async function saveOrders(){
   for(const order of orders){
     if(!order || !order.id) continue;
@@ -4636,7 +4646,7 @@ function renderNovaOrdem(main){
     };
   }
 
-  document.getElementById('btnSalvarRascunho').addEventListener('click', async ()=>{
+  document.getElementById('btnSalvarRascunho').addEventListener('click', travarCliqueDuplo(async ()=>{
     const cli = collectClienteFields();
     if(!cli.cliente){
       showToast('Informe ao menos o nome do cliente para salvar o rascunho.');
@@ -4685,7 +4695,7 @@ function renderNovaOrdem(main){
     currentTab = 'painel';
     modoNovaOrdem = false;
     renderTabs(); renderView();
-  });
+  }));
 
   async function lancarPedido(){
     const cli = collectClienteFields();
@@ -4896,7 +4906,7 @@ function renderNovaOrdem(main){
     renderAlerts();
     openNotifyModal(novaOrdem);
   }
-  document.getElementById('btnSalvarOrdem').addEventListener('click', lancarPedido);
+  document.getElementById('btnSalvarOrdem').addEventListener('click', travarCliqueDuplo(()=>lancarPedido()));
 }
 
 /* ============================================================
@@ -5229,7 +5239,8 @@ function openEditModalCompleto(order, opts){
   updateBanner();
 
   document.getElementById('editCancel').addEventListener('click', closeModal);
-  document.getElementById('editSave').addEventListener('click', async ()=>{
+  document.getElementById('editSave').addEventListener('click', async (ev)=>{
+    { const __b=ev.currentTarget; if(__b.dataset.salvando) return; __b.dataset.salvando='1'; setTimeout(()=>{ delete __b.dataset.salvando; }, 2500); }
     const cliente = maiusc(document.getElementById('e_cliente').value);
     const telefone = combinarTelefoneValidado('e');
     if(telefone === null) return;
