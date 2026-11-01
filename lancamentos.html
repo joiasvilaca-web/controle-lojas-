@@ -433,6 +433,7 @@ async function carregarMes(){
   (r.data||[]).forEach(x=>{ if(dadosMes[x.tipo]) dadosMes[x.tipo][x.chave] = x; });
   fatoresAte = r.fatores || [];
   INATIVOS = Array.isArray(r.inativos) ? r.inativos : [];
+  MES_AUTO = !!r.automatico;
   fecharFormVend(); renderResumoVend(); renderLoja(); renderConferencia(); renderFator(); renderComissao();
   carregarEstadoFolha(); renderFolha();
 }
@@ -452,6 +453,7 @@ function somaVendedorasPorLoja(){
 /* cada vendedora tem um único lançamento por mês: "Incluir" só oferece quem ainda não lançou */
 /* funcionário inativo (desligado no DP) não entra na lista de lançamento; o que já foi lançado continua visível */
 let INATIVOS = [];
+let MES_AUTO = false; /* mês com lançamento automático (vindo do Caixa) — a partir de novembro/2026 */
 function vendedorasAtivas(){ return VENDEDORAS.filter(v=> !INATIVOS.includes(v) || dadosMes.vendedora[v]); }
 function vendedorasPendentes(){ return VENDEDORAS.filter(v=> !INATIVOS.includes(v) && !dadosMes.vendedora[v]); }
 function abrirFormVend(nome){
@@ -489,7 +491,7 @@ function renderVendedora(){
     `<tr class="tot"><td>TOTAL</td><td class="num" id="vTotVenda"></td><td class="num" id="vTotDev"></td><td class="num" id="vTotSaldo"></td></tr>`;
   tb.querySelectorAll('input.din').forEach(i=> ligarFormatoDinheiro(i, recalcVendedora));
   recalcVendedora();
-  document.getElementById('infoVend').textContent = reg ? quando(reg) : '';
+  document.getElementById('infoVend').textContent = reg ? (reg.auto ? 'Valores automáticos do Caixa. Ao salvar, passam a ser manuais.' : quando(reg)) : '';
 }
 function lerVendedora(){
   const lojas = {};
@@ -523,10 +525,11 @@ async function salvarVendedora(){
 }
 async function excluirVendedora(chave){
   const mes = document.getElementById('mes').value;
-  if(!confirm('Excluir o lançamento de '+chave+' em '+nomeMes(mes)+'?')) return;
+  if(!confirm(MES_AUTO ? 'Voltar '+chave+' ao automático em '+nomeMes(mes)+'? O lançamento manual será apagado e valem os valores do Caixa.' : 'Excluir o lançamento de '+chave+' em '+nomeMes(mes)+'?')) return;
   const r = await api({ op:'excluir', mes, tipo:'vendedora', chave });
   if(r.error){ toast('Erro: '+r.error); return; }
-  delete dadosMes.vendedora[chave]; toast('Lançamento excluído');
+  delete dadosMes.vendedora[chave]; toast(MES_AUTO ? 'Voltou ao automático' : 'Lançamento excluído');
+  if(MES_AUTO){ await carregarMes(); return; }
   if(editandoVend===chave) fecharFormVend(); else if(editandoVend==null) fecharFormVend();
   renderResumoVend(); renderConferencia(); renderComissao(); renderFolha(); if(document.getElementById('selLoja').value) recalcLoja();
 }
@@ -535,7 +538,7 @@ function renderResumoVend(){
   const totLoja = {}; LOJAS.forEach(l=> totLoja[l]=0); let totGeral = 0;
   const lancadas = VENDEDORAS.filter(v=> dadosMes.vendedora[v]);
   const pend = vendedorasPendentes();
-  document.getElementById('contVend').innerHTML = (pend.length ? seloHtml(`${lancadas.length} de ${vendedorasAtivas().length} lançadas`, 'pend') : seloHtml(`${lancadas.length} de ${vendedorasAtivas().length} lançadas`, 'ok', 'check'))
+  document.getElementById('contVend').innerHTML = (MES_AUTO ? seloHtml('Lançamento automático ligado', 'ok', 'check') + ' <span>Cada venda/pedido que movimenta o Caixa entra sozinho. Edite o lápis para ajustar à mão.</span><br>' : '') + (pend.length ? seloHtml(`${lancadas.length} de ${vendedorasAtivas().length} lançadas`, 'pend') : seloHtml(`${lancadas.length} de ${vendedorasAtivas().length} lançadas`, 'ok', 'check'))
     + (pend.length ? ` <span>Faltam: ${pend.join(', ')}</span>` : ' <span>Todas as vendedoras lançaram.</span>');
   if(!lancadas.length){ tab.innerHTML = `<tbody><tr><td style="white-space:normal"><div class="vazio" style="border:0"><b>Nenhum lançamento neste mês</b>Clique em “Incluir lançamento” para digitar as vendas da primeira vendedora.</div></td></tr></tbody>`; return; }
   const linhas = lancadas.map(v=>{
@@ -544,8 +547,8 @@ function renderResumoVend(){
     let t = 0;
     const cels = LOJAS.map(l=>{ const s = r2((Number((lj[l]||{}).venda)||0) - (Number((lj[l]||{}).devolucao)||0)); t+=s; totLoja[l]+=s; return `<td class="num">${s?brl(s):'<span class="muted">—</span>'}</td>`; }).join('');
     totGeral += t;
-    return `<tr><td><b>${v}</b><div class="nome-sub">${quando(reg).replace('Última edição: ','')}</div></td>${cels}<td class="num"><b>${brl(t)}</b></td>
-      <td><div class="acoes"><button class="btn-icone" data-editar="${v}" title="Editar lançamento de ${v}" aria-label="Editar lançamento de ${v}">${ico('lapis')}</button><button class="btn-icone perigo" data-excluir="${v}" title="Excluir lançamento de ${v}" aria-label="Excluir lançamento de ${v}">${ico('lixeira')}</button></div></td></tr>`;
+    return `<tr><td><b>${v}</b><div class="nome-sub">${reg.auto ? seloHtml('Automático (Caixa)', 'ok') : (MES_AUTO ? seloHtml('Manual', 'pend') + ' ' : '') + quando(reg).replace('Última edição: ','')}</div></td>${cels}<td class="num"><b>${brl(t)}</b></td>
+      <td><div class="acoes"><button class="btn-icone" data-editar="${v}" title="Editar lançamento de ${v}" aria-label="Editar lançamento de ${v}">${ico('lapis')}</button>${reg.auto ? '' : `<button class="btn-icone perigo" data-excluir="${v}" title="${MES_AUTO?'Voltar ao automático':'Excluir lançamento de '+v}" aria-label="${MES_AUTO?'Voltar ao automático':'Excluir lançamento de '+v}">${ico(MES_AUTO?'atualizar':'lixeira')}</button>`}</div></td></tr>`;
   }).join('');
   tab.innerHTML = `<thead><tr><th>Vendedora</th>${LOJAS.map(l=>`<th>${LOJA_LABEL[l]}</th>`).join('')}<th>Total</th><th><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Ações</span></th></tr></thead><tbody>${linhas}
     <tr class="tot"><td>Total</td>${LOJAS.map(l=>`<td class="num">${brl(totLoja[l])}</td>`).join('')}<td class="num">${brl(totGeral)}</td><td></td></tr></tbody>`;
