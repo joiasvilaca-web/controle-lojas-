@@ -3070,20 +3070,81 @@ function idsDoMesmoGrupo(serviceTypeId){
   if(!st || !st.grupoId) return [serviceTypeId];
   return config.serviceTypes.filter(s=>s.grupoId===st.grupoId).map(s=>s.id);
 }
-function checkSlot(serviceTypeId, dateStr, excludeOrderId){
+function grupoKeyDe(serviceTypeId){
+  const st = (config.serviceTypes||[]).find(s=>s.id===serviceTypeId);
+  return st ? (st.grupoId || st.id) : serviceTypeId;
+}
+/** Vagas já ocupadas no dia por um grupo de agenda. Pedido novo guarda agendaVagas por grupo (1 vaga por item);
+ *  pedido antigo conta 1 vaga no tipo em que foi lançado. */
+function vagasUsadasNoDia(grupoKey, dateStr, excludeOrderId){
+  return orders.reduce((acc,o)=>{
+    if(o.data!==dateStr || !STATUS_OCUPA_VAGA.includes(o.status) || o.id===excludeOrderId) return acc;
+    if(o.agendaVagas) return acc + (Number(o.agendaVagas[grupoKey])||0);
+    return acc + (grupoKeyDe(o.serviceTypeId)===grupoKey ? 1 : 0);
+  },0);
+}
+function checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd){
   const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
   if(!st || !dateStr) return null;
+  qtd = Math.max(1, Number(qtd)||1);
   const today = new Date(todayStr()+'T00:00:00');
   const target = new Date(dateStr+'T00:00:00');
   const diffDays = Math.round((target - today) / 86400000);
   const prazoOk = diffDays >= st.prazoMinimoDias;
-  const idsGrupo = idsDoMesmoGrupo(serviceTypeId);
-  const countDay = orders.filter(o=> idsGrupo.includes(o.serviceTypeId) && o.data===dateStr && STATUS_OCUPA_VAGA.includes(o.status) && o.id!==excludeOrderId).length;
-  const quantidadeOk = countDay < st.maxPorDia;
+  const countDay = vagasUsadasNoDia(grupoKeyDe(serviceTypeId), dateStr, excludeOrderId);
+  const quantidadeOk = countDay + qtd <= st.maxPorDia;
   return {
     st, prazoOk, quantidadeOk, ok: prazoOk && quantidadeOk,
-    ocupadas:countDay, vagas: st.maxPorDia, diffDays
+    ocupadas:countDay, vagas: st.maxPorDia, diffDays, qtd
   };
+}
+/**
+ * Agenda POR ITEM: cada item lançado ocupa 1 vaga no grupo/tipo do seu serviço.
+ * A data e a quantidade que mandam são as do item de MAIOR prazo da via; procura o primeiro dia
+ * (a partir desse prazo) com vaga para todos os itens daquele grupo. Itens de outros grupos
+ * (prazo menor / prioridade menor) entram no mesmo dia mesmo sem vaga, e isso é registrado.
+ */
+function planejarAgenda(itens, excludeOrderId){
+  const lista = (itens||[]).filter(it=> it.serviceTypeId && (config.serviceTypes||[]).some(s=>s.id===it.serviceTypeId));
+  if(!lista.length) return null;
+  const grupos = {};
+  lista.forEach(it=>{
+    const st = config.serviceTypes.find(s=>s.id===it.serviceTypeId);
+    const k = grupoKeyDe(it.serviceTypeId);
+    const g = grupos[k] || (grupos[k] = { key:k, qty:0, prazo:0, max:Number(st.maxPorDia)||0, tipos:{} });
+    const q = Math.max(1, Number(it.quantidade)||1);
+    g.qty += q; g.prazo = Math.max(g.prazo, Number(st.prazoMinimoDias)||0); g.max = Math.max(g.max, Number(st.maxPorDia)||0);
+    g.tipos[st.id] = (g.tipos[st.id]||0) + q;
+  });
+  const arr = Object.values(grupos);
+  const principal = arr.slice().sort((a,b)=>b.prazo-a.prazo)[0];
+  // item (tipo) de maior prazo dentro do grupo principal
+  const tipoPrincipalId = Object.keys(principal.tipos).sort((a,b)=>{
+    const pa=config.serviceTypes.find(s=>s.id===a).prazoMinimoDias, pb=config.serviceTypes.find(s=>s.id===b).prazoMinimoDias; return pb-pa; })[0];
+  const base = new Date(todayStr()+'T00:00:00');
+  let data = null;
+  for(let i=principal.prazo; i<=principal.prazo+120; i++){
+    const d = new Date(base); d.setDate(d.getDate()+i);
+    const ds = d.toISOString().slice(0,10);
+    if(vagasUsadasNoDia(principal.key, ds, excludeOrderId) + principal.qty <= principal.max){ data = ds; break; }
+  }
+  if(!data){ const d=new Date(base); d.setDate(d.getDate()+principal.prazo); data=d.toISOString().slice(0,10); }
+  const vagasPorGrupo = {}; arr.forEach(g=>{ vagasPorGrupo[g.key]=g.qty; });
+  return { principal, tipoPrincipalId, data, grupos:arr, vagasPorGrupo, qtdPrincipal: principal.qty, itensAgendados: lista };
+}
+/** Grupos (que não são o principal) sem vaga na data escolhida. */
+function agendaSemVaga(plano, data, excludeOrderId){
+  if(!plano || !data) return [];
+  return plano.grupos.filter(g=> g.key!==plano.principal.key && vagasUsadasNoDia(g.key, data, excludeOrderId) + g.qty > g.max)
+    .map(g=>({ g, nomes:Object.keys(g.tipos).map(id=>{ const st=config.serviceTypes.find(x=>x.id===id); return (st?st.nome:'—')+(g.tipos[id]>1?' ('+g.tipos[id]+')':''); }),
+               ocupadas: vagasUsadasNoDia(g.key, data, excludeOrderId), max: g.max }));
+}
+function textoObsAgenda(plano, data){
+  const falt = agendaSemVaga(plano, data, null);
+  if(!falt.length) return '';
+  const stP = config.serviceTypes.find(s=>s.id===plano.tipoPrincipalId);
+  return 'AGENDADO DE ACORDO COM AS REGRAS DA AGENDA: A DATA ' + fmtDate(data) + ' FOI DEFINIDA PELO ITEM DE MAIOR PRAZO (' + (stP?stP.nome:'—') + ', ' + (stP?stP.prazoMinimoDias:'—') + ' DIAS). '
+    + 'NÃO HAVIA VAGA NESSA DATA PARA ' + falt.map(x=>x.nomes.join(', ')).join('; ') + ', MAS, POR SEREM ITENS DE MENOR PRAZO, O AGENDAMENTO FOI MANTIDO E OS ITENS FORAM LIBERADOS PARA QUE TODO O PEDIDO SEJA ENTREGUE JUNTO.';
 }
 
 /**
@@ -3931,7 +3992,7 @@ function recalcularValorAjustado(it){
         const descInfoHtml=ajusteItemHtml(it);
         __html+=`<div class="venda-item-compact" data-idx="${i}">
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${Number(it.quantidade)>1?` <span class="muted">×${escapeHtml(String(it.quantidade))}</span>`:''}${it.avulso?` <span class="badge" title="Item avulso — não mexe no estoque">avulso</span>`:(!it.produtoEstoqueId?` <span class="badge badge-flag" title="Clique no lápis para ligar ao catálogo ou marcar como avulso">sem vínculo</span>`:'')}</span>
-          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfoHtml}</span>
+          ${it.serviceTypeId?`<span class="badge" title="Tipo de serviço (agenda)">${escapeHtml(((config.serviceTypes||[]).find(t=>t.id===it.serviceTypeId)||{}).nome||'')}</span>`:''}<span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfoHtml}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button type="button" class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="Ver observação: ${escapeHtml(it.observacaoItem)}" aria-label="Ver observação do item">${ico('mensagem')}</button>`:''}
             <button type="button" class="venda-compact-btn" data-iteditar="${i}" title="Editar item" aria-label="Editar item">${ico('lapis')}</button>
@@ -3992,6 +4053,10 @@ function recalcularValorAjustado(it){
             <span class="fraco" style="display:block;margin-top:2px;">A peça é de outro CNPJ — combine com a gerência como fazer a baixa do estoque.</span></span>
           </div>`:''}
           `:''}
+          <div class="item-row-agenda" style="margin-top:8px;">
+            <label style="font-size:12px;font-weight:600;color:var(--ink-faint);display:block;margin-bottom:3px;">Tipo de serviço (agenda)</label>
+            <select data-itfield="serviceTypeId" aria-label="Tipo de serviço para agendamento"><option value="">Sem agendamento</option>${(config.serviceTypes||[]).map(t=>`<option value="${t.id}" ${it.serviceTypeId===t.id?'selected':''}>${escapeHtml(t.nome)} — prazo ${t.prazoMinimoDias}d</option>`).join('')}</select>
+          </div>
           <label class="item-avulso-chk">
             <input type="checkbox" data-itavulso="${i}" ${it.avulso?'checked':''} style="width:auto;margin:0;"> Item avulso (sem estoque)
             <span class="muted" style="font-weight:400;">— serviço, fabricação ou peça do cliente</span>
@@ -4196,6 +4261,7 @@ function recalcularValorAjustado(it){
           recalcularAjusteNovo(it, idx, row); return;
         }
         if(field==='observacaoItem'){ it.observacaoItem=el.value; return; }
+        if(field==='serviceTypeId'){ it.serviceTypeId=el.value; updateTotalHint(); return; }
         it[field]=el.value; updateTotalHint();
       });
     });
@@ -4222,6 +4288,7 @@ function recalcularValorAjustado(it){
   function updateTotalHint(){
     const hint = container.querySelector('#itensTotalHint');
     if(hint) hint.innerHTML = `Total dos itens: <b>${fmtMoeda(totalItens())}</b> · desconto ou acréscimo no total é dado em Pagamento.`;
+    if(typeof opts.onChange==='function'){ try{ opts.onChange(); }catch(e){ console.error(e); } }
     // Avisa o bloco de pagamento para recalcular o total
     if(typeof window.__pagRedraw==='function') window.__pagRedraw();
   }
@@ -4311,14 +4378,12 @@ function renderNovaOrdem(main){
     <div class="ticket">
       <!-- AGENDAMENTO -->
       <div class="section-label">Agendamento</div>
+      <input type="hidden" id="f_servico" value="">
+      <div id="agendaResumo" class="muted" style="margin-bottom:10px;">Escolha o <b>tipo de serviço</b> em cada item para calcular a agenda.</div>
       <div class="grid-2">
-        <div class="field">
-          <label for="f_servico">Tipo de serviço</label>
-          <select id="f_servico" autocomplete="off"><option value="">Selecione</option>${servicoOptionsHtml('')}</select>
-        </div>
         <div class="field"><label for="f_data">Data agendada</label><input type="date" id="f_data" min="${todayStr()}"></div>
       </div>
-      <p class="muted" style="margin:-4px 0 0;">Ao escolher o serviço, a primeira data com vaga é sugerida. Se você mudar para uma data sem vaga, o pedido vira encaixe e pede código de autorização.</p>
+      <p class="muted" style="margin:-4px 0 0;">A agenda é feita por item: cada item ocupa uma vaga. A data sugerida é a primeira com vaga para todos os itens do serviço de maior prazo. Se você mudar para uma data sem vaga, o pedido vira encaixe e pede código de autorização.</p>
       <div id="slotBanner"></div>
       <div id="codeArea" style="display:none;">
         <div class="field" style="margin-top:6px;">
@@ -4406,7 +4471,7 @@ function renderNovaOrdem(main){
   let itensApiNova = null;
   try {
     itensApiNova = mountItens(document.getElementById('itensContainerNova'), tempItensHolder,
-      ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''));
+      ()=> (window.__lojaAtual ? window.__lojaAtual.id : ''), { onChange: ()=>{ if(typeof atualizarAgendaItens==='function') atualizarAgendaItens(); } });
   } catch(e) { console.error('mountItens OS:', e); }
   // Usado pelo "✓ É este" da lista de orçamentos em aberto do cliente
   window.__novaOrdemCtx = {
@@ -4454,8 +4519,11 @@ function renderNovaOrdem(main){
   function coletarObsNova(){
     const txt = maiusc(document.getElementById('f_infoInterna')?.value||'');
     const para = Array.from(document.querySelectorAll('.osNotifChk:checked')).map(c=>c.value);
-    if(!txt || !para.length) return [];
-    return [{ id: uid('obs'), nome: (currentUser&&currentUser.nome)||'', descricao: txt, notificarPara: para, criadoEm: Date.now(), ciente:false, cienteNome:null, cienteEm:null, fotos:[] }];
+    const lista = [];
+    if(txt && para.length) lista.push({ id: uid('obs'), nome: (currentUser&&currentUser.nome)||'', descricao: txt, notificarPara: para, criadoEm: Date.now(), ciente:false, cienteNome:null, cienteEm:null, fotos:[] });
+    const ta = planoAgenda ? textoObsAgenda(planoAgenda, dataInp.value) : '';
+    if(ta) lista.push({ id: uid('obs'), nome: 'AGENDA', descricao: ta, notificarPara: [], criadoEm: Date.now(), ciente:false, cienteNome:null, cienteEm:null, fotos:[], auto:true });
+    return lista;
   }
   const servicoSel = document.getElementById('f_servico');
   const dataInp = document.getElementById('f_data');
@@ -4530,56 +4598,50 @@ function renderNovaOrdem(main){
     try{ await lancarPedido(); } finally { pendenciaReq = null; btnSolic.disabled = false; }
   });
 
+  let planoAgenda = null, dataAuto = true;
+  function itensAgendaAtuais(){ return (tempItensHolder.itens||[]).filter(it=> it._modo==='ok' && it.serviceTypeId); }
   function updateBanner(){
     const sid = servicoSel.value;
     const dt = dataInp.value;
     banner.innerHTML = '';
     foraPadrao = false; motivoForaPadrao = '';
-    if(!sid || !dt){ atualizarBotoesPermissao(); return; }
-    const res = checkSlot(sid, dt, null);
+    if(!sid || !dt || !planoAgenda){ atualizarBotoesPermissao(); return; }
+    const res = checkSlot(sid, dt, null, planoAgenda.qtdPrincipal);
     if(!res){ atualizarBotoesPermissao(); return; }
+    const falt = agendaSemVaga(planoAgenda, dt, null);
+    const avisoMenor = falt.length ? `<div style="margin-top:6px;font-size:12.5px;">${ico('alerta',13)} Sem vaga nesta data para ${escapeHtml(falt.map(x=>x.nomes.join(', ')).join('; '))}: por serem itens de menor prazo, o agendamento é mantido e tudo é entregue junto (fica registrado em observação).</div>` : '';
     if(res.ok){
-      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dt)}, dentro do prazo mínimo.</div></div>`;
+      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dt)}; este pedido usa ${res.qtd} vaga(s).${avisoMenor}</div></div>`;
     } else {
       const motivos = [];
       if(!res.prazoOk) motivos.push('a data está abaixo do prazo mínimo de confecção (' + res.st.prazoMinimoDias + ' dia(s))');
-      if(!res.quantidadeOk) motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
+      if(!res.quantidadeOk) motivos.push('não há vaga para ' + res.qtd + ' item(ns) neste dia (' + res.ocupadas + '/' + res.vagas + ' ocupadas)');
       motivoForaPadrao = motivos.join(' e ');
       foraPadrao = true;
-      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Clique em <b>Solicitar permissão</b>: o pedido é lançado agora e fica com <b>pendência de autorização</b> até a Oficina liberar (vira encaixe) ou recusar (a data volta para a mais próxima aceita). Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
-      // Busca os códigos mais atuais (podem ter sido gerados agora mesmo em outro
-      // dispositivo/sessão) pra validar em tempo real o que a vendedora digitar.
+      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Clique em "Solicitar permissão" ou informe o código de autorização.</div></div>`;
       storageGet('codes', true).then(c=>{ if(c) codes = c; });
     }
     atualizarBotoesPermissao();
   }
-  // Ao escolher o tipo de ordem, sugere automaticamente a primeira data com vaga
-  // livre (respeitando prazo mínimo e quantidade máxima cadastrados em Tipos de
-  // Ordem). A vendedora pode trocar a data manualmente depois se precisar.
-  function aoTrocarServico(){
-    const sid = servicoSel.value;
-    if(sid && !dataInp.value){
-      try{
-        const sugerida = proximaDataDisponivel(sid, null);
-        if(sugerida) dataInp.value = sugerida;
-      }catch(e){
-        console.error('Falha ao calcular data automática, usando prazo mínimo simples:', e);
-        // Fallback: pelo menos aplica o prazo mínimo do tipo, sem checar a agenda,
-        // pra nunca deixar o campo vazio por causa de um erro inesperado.
-        try{
-          const st = config.serviceTypes.find(s=>s.id===sid);
-          if(st){
-            const d = new Date(todayStr()+'T00:00:00');
-            d.setDate(d.getDate()+(Number(st.prazoMinimoDias)||0));
-            dataInp.value = d.toISOString().slice(0,10);
-          }
-        }catch(e2){ console.error('Fallback de data também falhou:', e2); }
-      }
+  // Recalcula a agenda sempre que os itens mudam (tipo de serviço por item).
+  function atualizarAgendaItens(){
+    const resumo = document.getElementById('agendaResumo'); if(!resumo) return;
+    planoAgenda = planejarAgenda(itensAgendaAtuais(), null);
+    if(!planoAgenda){
+      servicoSel.value = ''; resumo.innerHTML = 'Escolha o <b>tipo de serviço</b> em cada item e clique em Adicionar para calcular a agenda.';
+      banner.innerHTML=''; foraPadrao=false; motivoForaPadrao=''; atualizarBotoesPermissao(); return;
     }
+    servicoSel.value = planoAgenda.tipoPrincipalId;
+    const cont = {}; planoAgenda.itensAgendados.forEach(it=>{ cont[it.serviceTypeId]=(cont[it.serviceTypeId]||0)+(Math.max(1,Number(it.quantidade)||1)); });
+    const linhas = Object.keys(cont).map(id=>{ const st=config.serviceTypes.find(x=>x.id===id); return `<div>${cont[id]} × <b>${escapeHtml(st.nome)}</b> <span class="muted">— prazo ${st.prazoMinimoDias} dia(s)</span></div>`; }).join('');
+    const stP = config.serviceTypes.find(x=>x.id===planoAgenda.tipoPrincipalId);
+    resumo.innerHTML = `${linhas}<div style="margin-top:6px;">Manda a data o item de maior prazo: <b>${escapeHtml(stP.nome)}</b> (${planoAgenda.qtdPrincipal} vaga(s)).</div>`;
+    if(dataAuto || !dataInp.value) dataInp.value = planoAgenda.data;
     updateBanner();
   }
-  servicoSel.addEventListener('change', aoTrocarServico);
-  dataInp.addEventListener('change', updateBanner);
+  window.atualizarAgendaItens = atualizarAgendaItens;
+  function aoTrocarServico(){ atualizarAgendaItens(); }
+  dataInp.addEventListener('change', ()=>{ dataAuto = false; updateBanner(); });
   wireCodigoHint('f_codigo','f_codigoHint');
   // Roda uma vez já na montagem: cobre o caso raro do navegador restaurar
   // um valor no <select> sem disparar 'change' (acontece ao recriar o
@@ -4625,6 +4687,7 @@ function renderNovaOrdem(main){
       descricao: maiusc(document.getElementById('f_descricao').value),
       lojaId: loja,
       serviceTypeId: sid,
+      agendaVagas: planoAgenda ? planoAgenda.vagasPorGrupo : undefined,
       serviceTypeName: st ? st.nome : '',
       data: dataInp.value,
       status: STATUS.RASCUNHO,
@@ -4675,7 +4738,7 @@ function renderNovaOrdem(main){
       { vazio: !telefone,  ids: ['f_clienteAcWrap'],               label: null },
       { vazio: !vendedora, ids: ['f_vendedora'],                   label: 'vendedora' },
       { vazio: !loja,      ids: [],                                label: null }, // loja vem do shell
-      { vazio: !sid,       ids: ['f_servico'],                     label: 'tipo de serviço' },
+      { vazio: !sid,       ids: [],                                label: 'tipo de serviço em pelo menos um item (adicione o item com o tipo escolhido)' },
       { vazio: !dt,        ids: ['f_data'],                        label: 'data' },
     ];
     // Limpar highlights anteriores
@@ -4776,6 +4839,7 @@ function renderNovaOrdem(main){
       ...cli,
       via, numeroNota, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja,
       serviceTypeId: sid,
+      agendaVagas: planoAgenda ? planoAgenda.vagasPorGrupo : undefined,
       serviceTypeName: st ? st.nome : '',
       data: dt,
       status: STATUS.AGUARDANDO,
