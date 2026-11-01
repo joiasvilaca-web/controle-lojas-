@@ -54,12 +54,12 @@
       var b;
       if((b=el.querySelector('[data-gerar]'))) b.onclick=async function(){
         if(st==='ativo' && !confirm('Gerar um novo código? O código anterior deixa de valer.')) return;
-        b.disabled=true; b.textContent='Gerando…';
+        var me=this; me.disabled=true; me.textContent='Gerando…';
         var r=await chamar({acao:'gerar'});
         erro = r.error || ''; codigoNovo = r.codigo || '';
         desenhar(r.retirada || ret);
       };
-      if((b=el.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(codigoNovo); b.textContent='Copiado'; }catch(e){} };
+      if((b=el.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(codigoNovo); this.textContent='Copiado'; }catch(e){} };
       if((b=el.querySelector('[data-share]'))) b.onclick=function(){ navigator.share({ text:'Código para retirar minha via na Vilaça Joias: '+codigoNovo }).catch(function(){}); };
     }
     atualizar();

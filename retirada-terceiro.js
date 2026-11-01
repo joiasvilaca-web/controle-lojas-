@@ -79,14 +79,14 @@
        +((r.historico||[]).length?'<div class="rt-hist"><b>Registro</b>'+r.historico.slice().reverse().map(function(h){ return '<div>'+dh(h.em)+' — '+esc(h.acao)+(h.por?' · '+esc(h.por):'')+'</div>'; }).join('')+'</div>':'');
       box.querySelector('[data-x]').onclick=fechar;
       var b;
-      if((b=box.querySelector('[data-hab]'))) b.onclick=async function(){ b.disabled=true; var x=await chamar(Object.assign({acao:'habilitar',on:true},base)); desenhar(x.error||'Retirada por terceiros liberada. Envie o link ao cliente.', x.error?'err':'ok'); };
+      if((b=box.querySelector('[data-hab]'))) b.onclick=async function(){ this.disabled=true; var x=await chamar(Object.assign({acao:'habilitar',on:true},base)); desenhar(x.error||'Retirada por terceiros liberada. Envie o link ao cliente.', x.error?'err':'ok'); };
       if((b=box.querySelector('[data-deslig]'))) b.onclick=async function(){ if(!confirm('Desligar a retirada por terceiros? O código atual deixa de valer.')) return; var x=await chamar(Object.assign({acao:'habilitar',on:false},base)); desenhar(x.error||'Retirada por terceiros desligada.', x.error?'err':'ok'); };
-      if((b=box.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(link); b.textContent='Link copiado'; }catch(e){ prompt('Copie o link:',link); } };
+      if((b=box.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(link); this.textContent='Link copiado'; }catch(e){ prompt('Copie o link:',link); } };
       var inp=box.querySelector('.rt-cod');
       if(inp){ inp.addEventListener('input',function(){ inp.value=inp.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,4); }); inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ var c=box.querySelector('[data-conf]'); if(c && !c.disabled) c.click(); } }); if(podeConferir) setTimeout(function(){ inp.focus(); },50); }
       if((b=box.querySelector('[data-conf]'))) b.onclick=async function(){
         var cod=inp.value.trim(); if(cod.length!==4){ inp.focus(); return; }
-        b.disabled=true;
+        this.disabled=true;
         var x=await chamar(Object.assign({acao:'validar',codigo:cod},base));
         if(x.error){ desenhar(x.error,'err'); return; }
         codigoOk=cod;
