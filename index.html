@@ -2881,6 +2881,7 @@ const CFG_TABS = [
   { id:'impressao', label:'Impressão e etiquetas' },
   { id:'statusOrcamento', label:'Status e mensagens' },
   { id:'reserva', label:'Reserva' },
+  { id:'backup', label:'Backup' },
 ];
 let currentCfgTab = 'clientes';
 
@@ -2897,9 +2898,10 @@ function abrirSubtelaProduto(main, id){
 }
 function abasConfigPermitidas(){
   const permMod = currentPermissoes && currentPermissoes.config;
-  if(!permMod || !permMod.abas) return CFG_TABS;
+  const diretoria = currentUser && currentUser.nivel==='diretoria';
+  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => t.id!=='backup' || diretoria);
   // "Status e Mensagens" reúne as antigas abas statusOrcamento e mensagens: aparece se qualquer uma estiver liberada
-  return CFG_TABS.filter(t => t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
+  return CFG_TABS.filter(t => t.id==='backup' ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
 }
 let statusMsgSub = 'status';
 function renderStatusMensagensTab(body){
@@ -2932,6 +2934,51 @@ function renderCfgTab(tab){
   if(tab==='impressao') return renderImpressaoTab(body);
   if(tab==='statusOrcamento') return renderStatusMensagensTab(body);
   if(tab==='reserva') return renderReservaCfgTab(body);
+  if(tab==='backup') return renderBackupCfgTab(body);
+}
+/* ---------- BACKUP (Google Drive › APP GESTAO › BACKUP) ---------- */
+let backupTimer = null;
+async function backupCall(op){
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/backup-drive', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op, senha: __gatewaySenha }) });
+    return await r.json();
+  }catch(e){ return { error:'Não foi possível conectar. Verifique sua internet.' }; }
+}
+function renderBackupCfgTab(main){
+  main.innerHTML = `
+    <div class="cad-head"><div><h2>Backup</h2><p>Cópia da programação, de todos os dados e das fotos no Google Drive (APP GESTAO › BACKUP). Roda sozinho a cada 6 horas; as fotos novas são copiadas ao longo do dia.</p></div></div>
+    <div class="card" id="bkCard"><div class="muted">Carregando…</div></div>`;
+  const desenhar = async ()=>{
+    const card = document.getElementById('bkCard'); if(!card){ clearInterval(backupTimer); backupTimer=null; return; }
+    const r = await backupCall('status');
+    if(!r || r.error){ card.innerHTML = `<div class="muted">${escapeHtml((r&&r.error)||'Erro ao ler o backup.')}</div>`; return; }
+    const e = r.estado || {}, u = e.ultimo, sn = e.snap;
+    const dh = t => t ? new Date(t).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+    const mb = b => (Number(b||0)/1048576).toLocaleString('pt-BR',{maximumFractionDigits:1}) + ' MB';
+    const prox = e.ultimoInicio ? dh(Number(e.ultimoInicio) + 6*3600*1000) : 'em até 15 min';
+    const andamento = sn ? `<div class="aviso" style="margin:0 0 12px;padding:10px 12px;border-radius:10px;background:var(--surface-2);">Backup em andamento: ${sn.total - (sn.pendentes||[]).length} de ${sn.total} tabelas…</div>` : '';
+    card.innerHTML = `${andamento}
+      <div class="grid-3">
+        <div class="field"><label>Último backup completo</label><div><b>${u ? escapeHtml(u.nome) : 'Nenhum ainda'}</b>${u ? `<div class="muted" style="font-size:12px;">${u.tabelas} tabelas · ${Number(u.linhas).toLocaleString('pt-BR')} linhas · ${mb(u.bytes)} · por ${escapeHtml(u.por||'')}</div>` : ''}</div></div>
+        <div class="field"><label>Próximo automático</label><div><b>${prox}</b></div></div>
+        <div class="field"><label>Fotos no Drive</label><div><b>${e.fotosTotal!=null ? (e.fotosTotal - (e.fotosPendentes||0)) + ' de ' + e.fotosTotal : '—'}</b>${e.fotosPendentes ? '<div class="muted" style="font-size:12px;">copiando aos poucos</div>' : ''}</div></div>
+      </div>
+      ${e.drive ? `<p class="muted" style="margin:0 0 12px;font-size:12.5px;">Espaço livre no Drive (${escapeHtml(e.drive.conta||'')}): <b style="color:${e.drive.livre < 300*1048576 ? 'var(--danger)' : 'inherit'}">${mb(e.drive.livre)}</b></p>` : ''}
+      ${u && u.falhas && u.falhas.length ? `<p style="color:var(--danger);font-size:13px;">Tabelas que falharam no último backup: ${escapeHtml(u.falhas.join(', '))}</p>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+        <button class="btn btn-accent" id="bkAgora" ${sn||e.rodando?'disabled':''}>${cadIco('check')} ${sn||e.rodando ? 'Backup rodando…' : 'Fazer backup agora'}</button>
+        <a class="btn btn-ghost" target="_blank" rel="noopener" href="${r.pastas.programacao}">Pasta PROGRAMAÇÃO</a>
+        <a class="btn btn-ghost" target="_blank" rel="noopener" href="${r.pastas.dados}">Pasta DADOS</a>
+      </div>
+      <div class="section-label">Histórico</div>
+      <div style="font-size:12.5px;max-height:240px;overflow:auto;">${(e.log||[]).map(l=>`<div style="padding:4px 0;border-bottom:1px solid var(--line);"><span class="muted">${dh(l.em)}</span> — ${escapeHtml(l.msg)}</div>`).join('') || '<div class="muted">Sem registros.</div>'}</div>
+      <p class="muted" style="margin-top:12px;font-size:12px;">Guarda todos os backups das últimas 48 h e o último de cada dia por 30 dias. Senhas de sistemas externos (WhatsApp, Correios, chaves de API) não vão para o backup.</p>`;
+    const b = document.getElementById('bkAgora');
+    if(b) b.addEventListener('click', async ()=>{ b.disabled = true; b.textContent = 'Iniciando…'; const x = await backupCall('agora'); if(x && x.error) showToast(x.error); else showToast('Backup iniciado. Acompanhe aqui.'); setTimeout(desenhar, 4000); });
+  };
+  if(backupTimer) clearInterval(backupTimer);
+  backupTimer = setInterval(desenhar, 10000);
+  desenhar();
 }
 /* ---------- RESERVA (prazo do card Reservar) ---------- */
 function renderReservaCfgTab(main){
