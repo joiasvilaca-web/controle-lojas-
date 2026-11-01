@@ -3081,16 +3081,39 @@ function waLinkReserva(r){
   let tel = String(r.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel = '55'+tel;
   return 'https://wa.me/' + tel + '?text=' + encodeURIComponent(mensagemReserva(r));
 }
+function printReserva(r){
+  const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
+  const linhas = [];
+  linhas.push(`<div class="titulo">RESERVA</div>`);
+  linhas.push(`<div class="sub">${escapeHtml(resLojaNome(r.lojaId))}${r.codigoVia?' · Via '+escapeHtml(r.codigoVia):''}</div>`);
+  linhas.push(`<div class="sub">${fmtDate(r.data)}</div>`);
+  linhas.push(`<div class="linha"></div>`);
+  linhas.push(`<div><b>Cliente:</b> ${escapeHtml(r.cliente||'—')}</div>`);
+  if(r.telefone) linhas.push(`<div><b>Telefone:</b> ${escapeHtml(r.telefone)}</div>`);
+  linhas.push(`<div><b>Vendedora:</b> ${escapeHtml(r.vendedora||'—')}</div>`);
+  linhas.push(`<div class="linha"></div><div><b>JOIAS RESERVADAS</b></div>`);
+  (r.itens||[]).forEach(it=>{
+    linhas.push(`<div>${escapeHtml(it.produto)} x${it.quantidade||1} — ${fmtMoeda(it.valorUnitario)}</div>`);
+    { const _t = typeof ajusteItemTexto==='function' ? ajusteItemTexto(it) : ''; if(_t) linhas.push(`<div style="font-size:11px;">${escapeHtml(_t)}</div>`); }
+  });
+  linhas.push(`<div class="linha"></div><div>Valor total: ${fmtMoeda(r.valorTotal)}</div>`);
+  linhas.push(`<div class="linha"></div><div><b>Reservado até ${escapeHtml(fmtDataHora(r.venceEm))}</b></div>`);
+  linhas.push(`<div style="font-size:11px;">Reserva sem pagamento. Após o prazo, a peça volta para a venda.</div>`);
+  if(r.observacaoGeral) linhas.push(`<div style="margin-top:4px;"><b>Obs.:</b> ${escapeHtml(r.observacaoGeral)}</div>`);
+  abrirImpressaoBobina('Reserva', linhas.join(''), larguraMm, r.codigoVia);
+}
 function abrirEnvioReserva(r, titulo){
   openModal(`<h3>${escapeHtml(titulo||'Reserva salva')}</h3>
     <p class="muted" style="margin-top:-4px;">Status para o cliente: <b>Reservado</b> até ${escapeHtml(fmtDataHora(r.venceEm))}.</p>
     <textarea id="resMsg" style="width:100%;min-height:150px;">${escapeHtml(mensagemReserva(r))}</textarea>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="resMsgFechar" type="button">Fechar</button>
+      <button class="btn btn-ghost" id="resMsgImprimir" type="button">${ic('impressora',14)} Imprimir</button>
       <button class="btn btn-ghost" id="resMsgCopiar" type="button">${ic('copiar',14)} Copiar mensagem</button>
       ${r.telefone ? `<a class="btn btn-accent" id="resMsgWa" target="_blank" rel="noopener" href="${escapeHtml(waLinkReserva(r))}">${ic('whatsapp',14)} Enviar ao cliente</a>` : ''}
     </div>`);
   document.getElementById('resMsgFechar').addEventListener('click', closeModal);
+  document.getElementById('resMsgImprimir').addEventListener('click', ()=> printReserva(r));
   document.getElementById('resMsgCopiar').addEventListener('click', ()=>{ const t=document.getElementById('resMsg').value; try{ navigator.clipboard.writeText(t); showToast('Mensagem copiada.'); }catch(e){} });
   const wa = document.getElementById('resMsgWa');
   if(wa) wa.addEventListener('click', ()=>{ const t=document.getElementById('resMsg').value; let tel=String(r.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel='55'+tel; wa.href='https://wa.me/'+tel+'?text='+encodeURIComponent(t); });
@@ -3149,12 +3172,14 @@ function abrirDetalheReserva(r){
     ${sit==='vencida'?'<p class="muted">Prazo encerrado: a reserva não pode mais ser editada nem virar venda.</p>':''}
     <div class="modal-actions" style="flex-wrap:wrap;">
       <button class="btn btn-ghost" id="resDetFechar" type="button">Fechar</button>
+      <button class="btn btn-ghost" id="resDetImprimir" type="button">${ic('impressora',14)} Imprimir</button>
       ${ativa?`<button class="btn btn-ghost" id="resDetEnviar" type="button">${ic('whatsapp',14)} Enviar ao cliente</button>
       <button class="btn btn-ghost" id="resDetEditar" type="button">${ic('lapis',14)} Editar</button>
       <button class="btn btn-danger" id="resDetCancelar" type="button">${ic('cancelar',14)} Cancelar reserva</button>
       <button class="btn btn-accent" id="resDetVenda" type="button">${ic('carrinho',14)} Transformar em venda</button>`:''}
     </div>`);
   document.getElementById('resDetFechar').addEventListener('click', closeModal);
+  document.getElementById('resDetImprimir').addEventListener('click', ()=> printReserva(r));
   if(!ativa) return;
   document.getElementById('resDetEnviar').addEventListener('click', ()=> abrirEnvioReserva(r, 'Enviar reserva ao cliente'));
   document.getElementById('resDetEditar').addEventListener('click', ()=>{ closeModal(); __reservaEditando = r; modoNovaVenda = true; renderView(); });
@@ -3203,10 +3228,12 @@ function renderReservas(main){
         <td><span class="badge ${SELO_RESERVA[sit]||''}">${escapeHtml(ROTULO_RESERVA[sit]||sit)}</span></td>
         <td class="acoes"><div class="acoes-linha">
           ${btnIcone('olho','Ver reserva',`data-resver="${r.id}"`)}
+          ${btnIcone('impressora','Imprimir reserva',`data-resprint="${r.id}"`)}
           ${sit==='reservada' ? btnIcone('carrinho','Transformar em venda',`data-resvenda="${r.id}"`) : ''}
         </div></td></tr>`; }).join('')}
       </tbody></table>`;
     wrap.querySelectorAll('[data-resver]').forEach(b=> b.addEventListener('click', ()=> abrirDetalheReserva(reservas.find(x=>x.id===b.dataset.resver))));
+    wrap.querySelectorAll('[data-resprint]').forEach(b=> b.addEventListener('click', ()=> printReserva(reservas.find(x=>x.id===b.dataset.resprint))));
     wrap.querySelectorAll('[data-resvenda]').forEach(b=> b.addEventListener('click', ()=> transformarReservaEmVenda(reservas.find(x=>x.id===b.dataset.resvenda))));
   }
   fB.addEventListener('input', desenhar); fS.addEventListener('change', desenhar);
@@ -3282,7 +3309,7 @@ function renderNovaVenda(main){
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
             <button type="button" class="btn btn-ghost btn-sm" id="btnToggleObsVenda">${ic('mensagem',14)} Adicionar observação da venda</button>
             <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInterna">${ic('cadeado',14)} Adicionar observação interna</button>
-          </div></div>
+          </div>${!MODO_RESERVA && window.RetiradaTerceiro ? RetiradaTerceiro.checkboxHtml(false) : ''}</div>
       </div>
       <div class="pdv-lado">
         ${MODO_RESERVA ? `<div class="card"><div class="section-label">${ic('etiqueta')} Reserva</div><p style="margin:0 0 8px;">Sem pagamento e sem caixa. A joia fica reservada no estoque por <b>${__reservaPrazoDias} dia(s)</b>${__reservaEditando?' (vence em '+escapeHtml(fmtDataHora(__reservaEditando.venceEm))+')':''}.</p><p class="muted" style="margin:0;">Dentro do prazo, abra a reserva e use “Transformar em venda” para receber o pagamento.</p></div>` : ''}
@@ -3547,6 +3574,7 @@ function renderNovaVenda(main){
       __conversaoOrcamento = null;
       invalidarReservadas();
       if(lojaEstoque) carregarReservadas(lojaEstoque);
+      if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'venda', id:venda.id, senha:__gatewaySenha, usuario:currentUser.nome }); if(_rt && _rt.error) showToast('Venda lançada, mas a retirada por terceiros não foi liberada: '+_rt.error); }
       showToast('Venda lançada com sucesso.');
       currentTab = 'vendas';
       modoNovaVenda = false;
