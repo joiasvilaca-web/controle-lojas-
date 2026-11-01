@@ -495,7 +495,7 @@
   }
 
 .aj-item{display:block;font-size:11.5px;font-weight:600;color:var(--ink-soft,#4A5A69);font-variant-numeric:tabular-nums;white-space:nowrap;}
-.aj-item s{opacity:.75;}.aj-item.desconto{color:var(--ok,#0F6B40);}.aj-item.acrescimo{color:var(--warn,#7A4E0A);}
+.aj-item s{opacity:.75;}.aj-item.desconto{color:var(--danger,#B3261E);}.aj-item.acrescimo{color:var(--warn,#7A4E0A);}
 .desc-total b{font-weight:800;}
 .btn-novo-item{margin:0 0 10px;}
 </style>
@@ -2196,6 +2196,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
     return Math.max(0,holder.descTotalTipo==='desconto'?subtotal-delta:subtotal+delta);
   }
 
+  function ajusteLinhaHtml(sub,fin){
+    if(holder.descTotalTipo==='nenhum') return '';
+    const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return '';
+    const d=holder.descTotalTipo==='desconto';
+    const pct=holder.descTotalModo==='percentual'&&holder.descTotalPerc?' ('+String(holder.descTotalPerc).replace('.',',')+'%)':'';
+    return `<div style="width:100%;display:flex;justify-content:space-between;gap:8px;font-weight:700;font-variant-numeric:tabular-nums;color:${d?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};"><span>${d?'Desconto −':'Acréscimo +'}${fmtMoeda(delta)}${pct}</span><span>Saldo a pagar ${fmtMoeda(fin)}</span></div>`;
+  }
+
   function draw(){
     const agora = holder.momentoPagamento==='na_encomenda';
     const subtotal = calcTotalItens();
@@ -2216,11 +2224,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
             <span class="desc-sep">ou</span>
             <input type="number" min="0" step="0.01" class="campo-val" id="pagDescR" placeholder="R$" value="${escapeHtml(String(holder.descTotalR||''))}">
           </div>
-          ${(()=>{
-            if(holder.descTotalTipo!=='nenhum') return `<div class="pag-final ${holder.descTotalTipo==='desconto'?'desc':'acr'}">= ${fmtMoeda(totalFinal)}</div>`;
-            if(subtotal>0) return `<div class="pag-final">= ${fmtMoeda(subtotal)}</div>`;
-            return '';
-          })()}
+          <div id="pagAjusteLinha" style="flex:1 1 100%;">${ajusteLinhaHtml(subtotal,totalFinal)}</div>
         </div>
       </div>
 
@@ -2282,68 +2286,79 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const inpTotal = container.querySelector('#pagValorTotal');
     if(inpTotal && inpTotal.value) holder.valorTotal = parseFloat(inpTotal.value) || null;
     { const _ba=container.querySelector('#btnAddPagamento'); if(_ba) _ba.addEventListener('click', ()=>{
-      const primeiraForma = (config.paymentTypes && config.paymentTypes[0]) ? config.paymentTypes[0].id : '';
-      holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
+      holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
       drawRows();
+      const sels=container.querySelectorAll('[data-pagform]'); if(sels.length) sels[sels.length-1].focus();
     }); }
-    // Botões desconto/acréscimo sobre o total
-    function aplicarDescTotal(){
-      const sub=calcTotalItens();
-      const fin=calcTotalFinal(sub);
+    // Botões desconto/acréscimo sobre o total (aplicam no total dos itens; só o saldo final é cobrado)
+    function aplicarTotais(){
+      const sub=calcTotalItens(), fin=calcTotalFinal(sub);
       const el=container.querySelector('#pagSubtotal'); if(el) el.textContent=fmtMoeda(sub);
-      const inpT=container.querySelector('#pagValorTotal');
-      if(inpT&&(holder.valorTotal===null||holder.valorTotal===undefined)){
-        inpT.value=fin.toFixed(2); holder.valorTotal=fin;
-      }
-      updateHint();
-      // atualiza o badge de total final inline
-      const finEl=container.querySelector('.ativo-desc,#pagBtnDesc')?.closest('div')?.querySelector('[style*="b91c1c"],[style*="17794a"]');
+      const ln=container.querySelector('#pagAjusteLinha'); if(ln) ln.innerHTML=ajusteLinhaHtml(sub,fin);
+      const dsp=container.querySelector('#pagValorTotalDisplay'); if(dsp) dsp.textContent=fmtMoeda(fin>0?fin:0);
+      const inpT=container.querySelector('#pagValorTotal'); if(inpT) inpT.value=fin>0?fin.toFixed(2):'';
+      holder.valorTotal = fin>0 ? fin : null;
+      drawRows();
     }
     const btnDesc=container.querySelector('#pagBtnDesc');
     const btnAcr=container.querySelector('#pagBtnAcr');
     const dpPerc=container.querySelector('#pagDescPerc');
     const dpR=container.querySelector('#pagDescR');
+    function marcaBotoes(){
+      if(btnDesc) btnDesc.classList.toggle('ativo-desc', holder.descTotalTipo==='desconto');
+      if(btnAcr) btnAcr.classList.toggle('ativo-acr', holder.descTotalTipo==='acrescimo');
+    }
     if(btnDesc) btnDesc.addEventListener('click',()=>{
       holder.descTotalTipo=holder.descTotalTipo==='desconto'?'nenhum':'desconto';
-      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw(); updateHint();
+      holder.descTotalPerc=''; holder.descTotalR=''; if(dpPerc) dpPerc.value=''; if(dpR) dpR.value='';
+      marcaBotoes(); aplicarTotais();
     });
     if(btnAcr) btnAcr.addEventListener('click',()=>{
       holder.descTotalTipo=holder.descTotalTipo==='acrescimo'?'nenhum':'acrescimo';
-      holder.descTotalPerc=''; holder.descTotalR=''; holder.valorTotal=null; draw(); updateHint();
+      holder.descTotalPerc=''; holder.descTotalR=''; if(dpPerc) dpPerc.value=''; if(dpR) dpR.value='';
+      marcaBotoes(); aplicarTotais();
     });
     if(dpPerc) dpPerc.addEventListener('input',()=>{
-      holder.descTotalPerc=dpPerc.value; holder.descTotalR=''; holder.descTotalModo='percentual';
-      // Ativa desconto automaticamente se ainda não clicou em nenhum botão
-      if(holder.descTotalTipo==='nenhum' && dpPerc.value!=='') { holder.descTotalTipo='desconto'; draw(); return; }
-      const dr=container.querySelector('#pagDescR'); if(dr) dr.value='';
-      const sub=calcTotalItens(); const fin=calcTotalFinal(sub);
-      const inpT=container.querySelector('#pagValorTotal'); if(inpT){ inpT.value=fin.toFixed(2); holder.valorTotal=fin; }
-      updateHint();
+      holder.descTotalPerc=dpPerc.value; holder.descTotalR=''; holder.descTotalModo='percentual'; if(dpR) dpR.value='';
+      if(holder.descTotalTipo==='nenhum' && dpPerc.value!=='') holder.descTotalTipo='desconto';
+      marcaBotoes(); aplicarTotais();
     });
     if(dpR) dpR.addEventListener('input',()=>{
-      holder.descTotalR=dpR.value; holder.descTotalPerc=''; holder.descTotalModo='valor';
-      // Ativa desconto automaticamente se ainda não clicou em nenhum botão
-      if(holder.descTotalTipo==='nenhum' && dpR.value!=='') { holder.descTotalTipo='desconto'; draw(); return; }
-      const dp2=container.querySelector('#pagDescPerc'); if(dp2) dp2.value='';
-      const sub=calcTotalItens(); const fin=calcTotalFinal(sub);
-      const inpT=container.querySelector('#pagValorTotal'); if(inpT){ inpT.value=fin.toFixed(2); holder.valorTotal=fin; }
-      updateHint();
+      holder.descTotalR=dpR.value; holder.descTotalPerc=''; holder.descTotalModo='valor'; if(dpPerc) dpPerc.value='';
+      if(holder.descTotalTipo==='nenhum' && dpR.value!=='') holder.descTotalTipo='desconto';
+      marcaBotoes(); aplicarTotais();
     });
   }
 
+  function nomeFormaPag(id){
+    if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
+    const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
+  }
+  function totalPag(){ return Number(holder.valorTotal)||calcTotalItens(); }
+  function somaConf(){ return holder.pagamentos.filter(p=>p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0); }
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
     if(!wrap){ updateHint(); return; }
-    wrap.innerHTML = holder.pagamentos.map((p,i)=>`
-      <div class="pag-linha">
-        <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        <div style="display:flex; gap:6px; align-items:center;">
-          ${pessoaPixHtml(p,i)}
-          <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor (R$)" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
-          <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
-        </div>
-      </div>
-    `).join('');
+    const falta = totalPag() - somaConf();
+    const temEdicao = holder.pagamentos.some(p=>p._modo==='editar');
+    const podeNovo = !temEdicao && (holder.pagamentos.length===0 || falta>0.009);
+    const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
+      <div class="pag-linha pag-edit">
+        <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolha a forma</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
+        ${pessoaPixHtml(p,i)}
+        <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor (R$)" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
+        <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
+        <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
+      </div>`).join('');
+    const okLista = holder.pagamentos.map((p,i)=> p._modo==='editar' ? '' : `
+      <div class="pag-ok" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);margin-top:6px;flex-wrap:wrap;">
+        <b style="flex:1 1 auto;">${escapeHtml(nomeFormaPag(p.formaId))}</b>${pessoaPixHtml(p,i)}
+        <span style="font-weight:700;font-variant-numeric:tabular-nums;">${fmtMoeda(p.valor)}</span>
+        <button type="button" class="icon-btn" data-pagedit="${i}" title="Editar esta forma" aria-label="Editar esta forma">${ico('lapis')}</button>
+        <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
+      </div>`).join('');
+    wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
+    const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
     });
@@ -2351,13 +2366,25 @@ function mountPagamentos(container, holder, getLojaVendaId){
       b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
-      inp.addEventListener('input', ()=>{
-        holder.pagamentos[Number(inp.dataset.pagvalor)].valor = inp.value === '' ? '' : parseFloat(inp.value);
-        updateHint();
+      inp.addEventListener('input', ()=>{ holder.pagamentos[Number(inp.dataset.pagvalor)].valor = inp.value === '' ? '' : parseFloat(inp.value); updateHint(); });
+    });
+    wrap.querySelectorAll('[data-pagok]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const p = holder.pagamentos[Number(b.dataset.pagok)];
+        if(!p.formaId){ showToast('Escolha a forma de pagamento.'); return; }
+        if(!(Number(p.valor)>0)){ showToast('Digite o valor desta forma de pagamento.'); return; }
+        if(formaEhPix(p.formaId) && !p.pessoa){ perguntarPixTipo().then(t=>{ if(t){ p.pessoa=t; drawRows(); } }); return; }
+        delete p._modo;
+        if(totalPag() - somaConf() > 0.009) holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
+        drawRows();
+        const sels=container.querySelectorAll('[data-pagform]'); if(sels.length) sels[sels.length-1].focus();
       });
     });
+    wrap.querySelectorAll('[data-pagedit]').forEach(b=>{
+      b.addEventListener('click', ()=>{ holder.pagamentos[Number(b.dataset.pagedit)]._modo='editar'; drawRows(); });
+    });
     wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
-      b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
+      b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); });
     });
     { const _ip=holder.pagamentos.findIndex(p=>formaEhPix(p.formaId)&&!p.pessoa&&!__pixAsked.has(p));
       if(_ip>=0){ const _p=holder.pagamentos[_ip]; __pixAsked.add(_p); perguntarPixTipo().then(t=>{ if(t) _p.pessoa=t; if(container.isConnected) drawRows(); }); } }
@@ -2370,7 +2397,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     if(!hint) return;
     const temSemCusto = holder.pagamentos.some(p=>p.formaId==='__sem_custo');
     if(temSemCusto){ holder.valorTotal = 0; }
-    const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
+    const soma = somaConf();
     const total = temSemCusto ? 0 : (Number(holder.valorTotal)||calcTotalItens());
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
@@ -3700,7 +3727,7 @@ function ajusteDoItem(it){
 }
 function ajusteItemTexto(it){ const a=ajusteDoItem(it); return a ? `Original ${fmtMoeda(a.base)} · ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''} · Final ${fmtMoeda(a.fin)}` : ''; }
 function ajusteItemHtml(it){ const a=ajusteDoItem(it); return a ? `<span class="aj-item ${a.tipo}"><s>${fmtMoeda(a.base)}</s> ${a.rot} ${a.sinal}${fmtMoeda(a.delta)}${a.pct?' ('+a.pct+')':''}</span>` : ''; }
-function ajusteResumoEdicao(it){ const a=ajusteDoItem(it); return a ? `${a.rot} ${a.sinal}${fmtMoeda(a.delta)} → <b>Final ${fmtMoeda(a.fin)}</b>` : ''; }
+function ajusteResumoEdicao(it){ const a=ajusteDoItem(it); return a ? `<span style="color:${a.tipo==='desconto'?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};font-weight:600;">${a.rot} ${a.sinal}${fmtMoeda(a.delta)} → <b>Final ${fmtMoeda(a.fin)}</b></span>` : ''; }
 function valorBaseItem(it){ const v = (it.ajusteTipo && it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null) ? it.precoOriginal : it.valorUnitario; return (v!==undefined&&v!==null&&v!=='') ? v : ''; }
 
 function mountItens(container, holder, getLojaId, opts){
@@ -4604,6 +4631,8 @@ function renderNovaOrdem(main){
     if(!tempPagHolder.momentoPagamento){ showToast('Em Pagamento, escolha: "Pagar agora" ou "Pagar depois".'); return; }
     if(tempPagHolder.momentoPagamento==='na_volta'){ tempPagHolder.pagamentos=[]; tempPagHolder.emissaoNota=''; tempPagHolder.numeroNota=''; }
     else {
+      if((tempPagHolder.pagamentos||[]).some(p=>p._modo==='editar' && (p.formaId||p.valor))){ showToast('Confirme a forma de pagamento clicando em “Adicionar”.'); return; }
+      tempPagHolder.pagamentos=(tempPagHolder.pagamentos||[]).filter(p=>p._modo!=='editar');
       if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { showToast('Em Pagamento, responda se a nota fiscal já foi emitida (Sim ou Não).'); return; } }
       if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
     }
