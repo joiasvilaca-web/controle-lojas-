@@ -1121,7 +1121,8 @@
      Vendas canceladas e O.S. em rascunho/canceladas ficam de fora; datas futuras
      (O.S. com data de entrega lançada à frente) também.
      ══════════════════════════════════════════════════════════════════════════ */
-  let vgDias = 30;
+  let vgPeriodo = "30"; // "dia" (hoje) · "7" · "30" · "ano" (01/jan até hoje)
+  const VG_PERIODOS = [["dia","Dia"],["7","7 dias"],["30","30 dias"],["ano","Ano"]];
   function vgDataStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
   /** Valor curto para eixo de gráfico: R$ 2,5 mil · R$ 12 mil · R$ 1,2 mi. */
   function vgMoedaCurta(v){
@@ -1141,7 +1142,9 @@
     if(!box) return;
     const hoje = new Date();
     const fim = vgDataStr(hoje);
-    const iniD = new Date(hoje); iniD.setDate(iniD.getDate() - (vgDias-1));
+    const vgDias = vgPeriodo === "dia" ? 1 : vgPeriodo === "ano" ? null : (Number(vgPeriodo) || 30);
+    const iniD = vgPeriodo === "ano" ? new Date(hoje.getFullYear(), 0, 1) : new Date(hoje);
+    if(vgDias) iniD.setDate(iniD.getDate() - (vgDias-1));
     const ini = vgDataStr(iniD);
     const noPeriodo = d=> d && d >= ini && d <= fim;
 
@@ -1155,12 +1158,25 @@
     const aReceber = ordensVisiveis().filter(o=> o.status !== "cancelado").reduce((s,o)=> s + valorAReceberDe(o), 0)
                    + (vendas||[]).filter(v=> v.status !== "cancelada").reduce((s,v)=> s + valorAReceberDe(v), 0);
 
-    // Série diária (vendas + O.S. empilhadas)
+    // Com nota × sem nota (vendas + O.S. do período)
+    const temNota = r=> r.emissaoNota === "sim";
+    const nota = { com:{ valor:0, qtd:0 }, sem:{ valor:0, qtd:0 } };
+    vendasP.concat(ordensP).forEach(r=>{ const k = temNota(r) ? "com" : "sem"; nota[k].valor += Number(r.valorTotal)||0; nota[k].qtd++; });
+    const pctNota = k=> total > 0 ? Math.round(nota[k].valor / total * 100) : 0;
+
+    // Série do gráfico (vendas + O.S. empilhadas): por dia, ou por mês na visão "Ano"
+    const MESES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
     const dias = [];
-    for(let i=0;i<vgDias;i++){ const d = new Date(iniD); d.setDate(d.getDate()+i); dias.push({ data:vgDataStr(d), v:0, o:0 }); }
+    if(vgPeriodo === "ano"){
+      for(let m=0;m<=hoje.getMonth();m++) dias.push({ data:`${hoje.getFullYear()}-${String(m+1).padStart(2,"0")}`, rotulo:MESES[m], v:0, o:0 });
+    } else {
+      const nDias = vgDias;
+      for(let i=0;i<nDias;i++){ const d = new Date(iniD); d.setDate(d.getDate()+i); dias.push({ data:vgDataStr(d), v:0, o:0 }); }
+    }
+    const chaveSerie = d=> vgPeriodo === "ano" ? String(d||"").slice(0,7) : d;
     const idx = {}; dias.forEach((d,i)=> idx[d.data] = i);
-    vendasP.forEach(v=>{ if(idx[v.data]!==undefined) dias[idx[v.data]].v += Number(v.valorTotal)||0; });
-    ordensP.forEach(o=>{ if(idx[o.data]!==undefined) dias[idx[o.data]].o += Number(o.valorTotal)||0; });
+    vendasP.forEach(v=>{ const k = chaveSerie(v.data); if(idx[k]!==undefined) dias[idx[k]].v += Number(v.valorTotal)||0; });
+    ordensP.forEach(o=>{ const k = chaveSerie(o.data); if(idx[k]!==undefined) dias[idx[k]].o += Number(o.valorTotal)||0; });
 
     // Por loja
     const porLoja = {};
@@ -1196,10 +1212,10 @@
       <div class="vg-head">
         <div>
           <h2 class="section-title">Visão geral</h2>
-          <p class="section-sub">${fmtDate(ini)} a ${fmtDate(fim)} · todas as lojas</p>
+          <p class="section-sub">${ini === fim ? `Hoje, ${fmtDate(fim)}` : `${fmtDate(ini)} a ${fmtDate(fim)}`} · todas as lojas</p>
         </div>
         <div class="vg-periodo" role="group" aria-label="Período">
-          ${[7,30,90].map(n=>`<button type="button" data-vg-dias="${n}" class="${n===vgDias?"active":""}" aria-pressed="${n===vgDias}">${n} dias</button>`).join("")}
+          ${VG_PERIODOS.map(([k,rot])=>`<button type="button" data-vg-periodo="${k}" class="${k===vgPeriodo?"active":""}" aria-pressed="${k===vgPeriodo}">${rot}</button>`).join("")}
         </div>
       </div>
       <div class="vg-kpis">
@@ -1208,10 +1224,18 @@
         <div class="vg-kpi${osAbertas?" alerta":""}"><div class="lbl">O.S. em aberto${osAbertas?` <span class="badge wait">Acompanhar</span>`:""}</div><div class="num">${fmtNum(osAbertas)}</div><div class="det">Ainda não entregues (todas as datas)</div></div>
         <div class="vg-kpi${aReceber>0?" alerta":""}"><div class="lbl">A receber${aReceber>0?` <span class="badge wait">Em aberto</span>`:""}</div><div class="num" title="${escapeHtml(fmtMoeda(aReceber))}">${fmtMoeda(aReceber)}</div><div class="det">Saldo de O.S. e vendas (todas as datas)</div></div>
       </div>
+      <div class="vg-card" style="margin-bottom:12px;">
+        <h3>Total com nota × sem nota</h3>
+        <p class="vg-sub">Vendas + O.S. no período, separadas pela emissão de nota fiscal</p>
+        <div class="vg-kpis" style="margin:8px 0 0;">
+          <div class="vg-kpi"><div class="lbl">Total com nota</div><div class="num" title="${escapeHtml(fmtMoeda(nota.com.valor))}">${fmtMoeda(nota.com.valor)}</div><div class="det">${fmtNum(nota.com.qtd)} lançamento(s) · ${pctNota("com")}% do total</div></div>
+          <div class="vg-kpi${nota.sem.valor>0?" alerta":""}"><div class="lbl">Total sem nota</div><div class="num" title="${escapeHtml(fmtMoeda(nota.sem.valor))}">${fmtMoeda(nota.sem.valor)}</div><div class="det">${fmtNum(nota.sem.qtd)} lançamento(s) · ${pctNota("sem")}% do total</div></div>
+        </div>
+      </div>
       <div class="vg-grid">
         <div class="vg-card">
-          <h3>Movimento por dia</h3>
-          <p class="vg-sub">Valor lançado em cada dia. Passe o mouse numa coluna para ver os valores.</p>
+          <h3>${vgPeriodo === "ano" ? "Movimento por mês" : "Movimento por dia"}</h3>
+          <p class="vg-sub">${vgPeriodo === "ano" ? "Valor lançado em cada mês do ano." : "Valor lançado em cada dia."} Passe o mouse numa coluna para ver os valores.</p>
           <div class="vg-legenda"><span><i class="cor-accent"></i>Vendas</span><span><i class="cor-wait"></i>O.S.</span></div>
           <div id="vgGraficoBox"></div>
         </div>
@@ -1230,8 +1254,8 @@
     `;
     const grafBox = document.getElementById("vgGraficoBox");
     grafBox.innerHTML = vgGraficoDiario(dias, grafBox.clientWidth);
-    box.querySelectorAll("[data-vg-dias]").forEach(b=> b.addEventListener("click", ()=>{
-      vgDias = Number(b.dataset.vgDias) || 30;
+    box.querySelectorAll("[data-vg-periodo]").forEach(b=> b.addEventListener("click", ()=>{
+      vgPeriodo = b.dataset.vgPeriodo || "30";
       renderVisaoGeral();
     }));
   }
@@ -1266,14 +1290,14 @@
     dias.forEach((d,i)=>{
       const x = padL + i*passo + (passo-larg)/2;
       const yV = y(d.v), yO = y(d.v + d.o);
-      const dica = `${fmtDate(d.data)}\nVendas: ${fmtMoeda(d.v)}\nO.S.: ${fmtMoeda(d.o)}\nTotal: ${fmtMoeda(d.v + d.o)}`;
+      const dica = `${d.rotulo ? d.rotulo + "/" + d.data.slice(0,4) : fmtDate(d.data)}\nVendas: ${fmtMoeda(d.v)}\nO.S.: ${fmtMoeda(d.o)}\nTotal: ${fmtMoeda(d.v + d.o)}`;
       svg += `<g class="dia"><title>${escapeHtml(dica)}</title>`;
       svg += `<rect class="alvo" x="${(padL + i*passo).toFixed(1)}" y="${padT}" width="${passo.toFixed(1)}" height="${areaH}"/>`;
       if(d.v > 0) svg += `<rect class="s-v" x="${x.toFixed(1)}" y="${yV.toFixed(1)}" width="${larg.toFixed(1)}" height="${Math.max(y(0)-yV, 0.5).toFixed(1)}" rx="1.5"/>`;
       if(d.o > 0) svg += `<rect class="s-o" x="${x.toFixed(1)}" y="${yO.toFixed(1)}" width="${larg.toFixed(1)}" height="${Math.max(yV-yO, 0.5).toFixed(1)}" rx="1.5"/>`;
       svg += `</g>`;
       if((dias.length-1-i) % cadaRotulo === 0){
-        svg += `<text x="${(padL + i*passo + passo/2).toFixed(1)}" y="${H-6}" text-anchor="middle">${escapeHtml(window.Fmt ? Fmt.dataCurta(d.data) : d.data.slice(8,10)+"/"+d.data.slice(5,7))}</text>`;
+        svg += `<text x="${(padL + i*passo + passo/2).toFixed(1)}" y="${H-6}" text-anchor="middle">${escapeHtml(d.rotulo || (window.Fmt ? Fmt.dataCurta(d.data) : d.data.slice(8,10)+"/"+d.data.slice(5,7)))}</text>`;
       }
     });
     return `<svg class="vg-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Movimento por dia: vendas e O.S. empilhadas, total ${escapeHtml(fmtMoeda(total))} no período">${svg}</svg>`;
