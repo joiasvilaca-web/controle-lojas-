@@ -2230,30 +2230,71 @@ function badgeDoCartao(grupo, sub){
   if(grupo==='caixa' && sub==='codigo') return __badgeCodigo || 0;
   return 0;
 }
+/* Ordem dos cartões definida pela Diretoria (arrastar com o mouse). Vale para todos: config.ordemCards[chave] = [ids]. */
+function ordenarCartoes(ids, chave){
+  const ordem = (config && config.ordemCards && Array.isArray(config.ordemCards[chave])) ? config.ordemCards[chave] : null;
+  if(!ordem) return ids;
+  const pos = id=>{ const i = ordem.indexOf(id); return i<0 ? 1e6 : i; };
+  return ids.map((id,i)=>({id,i})).sort((a,b)=> (pos(a.id)-pos(b.id)) || (a.i-b.i)).map(x=>x.id);
+}
+function ativarArrastarCartoes(wrap, chave, attr){
+  const hint = document.getElementById('cardsArrastarHint'); if(hint) hint.remove();
+  if(!currentUser || currentUser.nivel!=='diretoria' || window.matchMedia('(hover: none)').matches) return;
+  wrap.insertAdjacentHTML('beforebegin', '<div id="cardsArrastarHint" class="muted" style="font-size:12px;margin:-4px 0 8px;">Diretoria: arraste os cartões com o mouse para mudar a ordem (vale para todos).</div>');
+  let arrastando = null, moveu = false;
+  wrap.querySelectorAll('['+attr+']').forEach(card=>{
+    card.setAttribute('draggable','true');
+    card.addEventListener('dragstart', e=>{ arrastando = card; moveu = false; card.style.opacity = '.45'; e.dataTransfer.effectAllowed = 'move'; try{ e.dataTransfer.setData('text/plain', card.getAttribute(attr)); }catch(_){} });
+    card.addEventListener('dragend', async ()=>{
+      card.style.opacity = '';
+      const alvo = arrastando; arrastando = null;
+      if(!alvo || !moveu) return;
+      moveu = false;
+      const ids = [...wrap.querySelectorAll('['+attr+']')].map(el=>el.getAttribute(attr));
+      if(!config.ordemCards || typeof config.ordemCards!=='object') config.ordemCards = {};
+      const antiga = Array.isArray(config.ordemCards[chave]) ? config.ordemCards[chave] : [];
+      config.ordemCards[chave] = [...ids, ...antiga.filter(id=>!ids.includes(id))];   // cartões que a diretoria não vê agora mantêm o lugar no fim
+      const ok = await configSave();
+      if(ok) showToast('Ordem dos cartões salva.');
+    });
+    card.addEventListener('dragover', e=>{
+      if(!arrastando || arrastando===card) return;
+      e.preventDefault();
+      const r = card.getBoundingClientRect();
+      const depois = (e.clientY - r.top) > r.height/2 || ((e.clientX - r.left) > r.width/2 && Math.abs(e.clientY - (r.top + r.height/2)) < r.height/2);
+      wrap.insertBefore(arrastando, depois ? card.nextSibling : card);
+      moveu = true;
+    });
+  });
+}
 /* Tela de cartões de um grupo (generaliza a antiga tela de botões do CUPOM). */
 function mostrarGrupoHome(grupo){
   const meta = GRUPO_CARDS[grupo];
   document.getElementById('grupoHomeTitulo').textContent = meta.titulo;
   document.getElementById('grupoHomeSub').textContent = meta.sub;
   document.getElementById('mobileTopbarTitle').textContent = meta.titulo;
-  const subs = subsPermitidosDoGrupo(grupo).slice();
+  let subs = subsPermitidosDoGrupo(grupo).slice();
   if(grupo==='caixa'){   // Transferências e Resumo do caixa trocam de lugar nos cartões
     const it = subs.indexOf('transf'), ir = subs.indexOf('resumo');
     if(it>=0 && ir>=0){ subs[it] = 'resumo'; subs[ir] = 'transf'; }
   }
+  subs = ordenarCartoes(subs, grupo);
   const wrap = document.getElementById('vendasHomeBotoes');
   wrap.innerHTML = subs.map(s=>{
     const c = meta.itens[s] || { titulo:s };
     return cartaoGrupoHtml(`data-grupo="${grupo}" data-sub="${s}"`, c.icone, c.titulo, c.desc, badgeDoCartao(grupo, s));
   }).join('');
   wrap.querySelectorAll('[data-sub]').forEach(b=> b.addEventListener('click', ()=> abrirSubDoGrupo(grupo, b.dataset.sub)));
+  ativarArrastarCartoes(wrap, grupo, 'data-sub');
   renderLeitorBar(grupo==='caixa' && subVendasPermitidos().length>0);
   document.getElementById('vendasHome').style.display = 'block';
   atualizarCabecalho();
 }
 /* Administração › Cadastro: cartões dos cadastros liberados (abas do painel interno). */
 function mostrarCadastroHome(){
-  const abas = abasConfigPermitidas();
+  const _abas = abasConfigPermitidas();
+  const _ord = ordenarCartoes(_abas.map(t=>t.id), 'cadastro');
+  const abas = _ord.map(id=>_abas.find(t=>t.id===id));
   document.getElementById('grupoHomeTitulo').textContent = 'CADASTRO';
   document.getElementById('grupoHomeSub').textContent = 'Cadastros únicos e compartilhados: qualquer alteração aqui vale na hora para todos os módulos.';
   document.getElementById('mobileTopbarTitle').textContent = 'Cadastro';
@@ -2265,6 +2306,7 @@ function mostrarCadastroHome(){
   wrap.querySelectorAll('[data-cfg-card]').forEach(b=> b.addEventListener('click', ()=>{
     currentCfgTab = b.dataset.cfgCard; cadastroAberto = true; selecionarModulo('config');
   }));
+  ativarArrastarCartoes(wrap, 'cadastro', 'data-cfg-card');
   document.getElementById('vendasHomeLeitorBar').innerHTML = '';
   document.getElementById('vendasHome').style.display = 'block';
   atualizarCabecalho();
