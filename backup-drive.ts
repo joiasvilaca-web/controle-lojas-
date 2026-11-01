@@ -1,8 +1,8 @@
-// backup-drive v2 — backup automático do Gestão e Controle no Google Drive.
+// backup-drive v4 — backup automático do Gestão e Controle no Google Drive.
 // Pastas (Drive de joiasvilaca@gmail.com › APP GESTAO › BACKUP, compartilhada com vilacajoias3 como editor):
 //   PROGRAMACAO › programacao_<data>.zip (código do GitHub, só quando muda)
 //               › estrutura-banco_<data>.sql (tabelas, índices, funções, gatilhos, buckets, agendamentos; só quando muda)
-//   DADOS       › <AAAA-MM-DD HHhMM>/ uma tabela por arquivo (.json.gz) + resumo.json
+//   DADOS       › <AAAA-MM-DD HHhMM>/ uma tabela por arquivo (.json) + resumo.json
 //               › FOTOS/<bucket>/… espelho das fotos (só copia o que é novo ou mudou)
 // Roda sozinho (pg_cron a cada 15 min: snapshot a cada 6 h, fotos continuam aos poucos) e pelo botão em Configurações › Backup.
 // Não guarda segredos (tabelas *_segredos e a linha 'segredos' de reforma_config) nem as tabelas de backup/limpeza.
@@ -16,7 +16,8 @@ const PASTA_PROG = "1TJK8Xvi3VFtTRppWAW6tniQUwGzmzUNd";
 const PASTA_DADOS = "1jb3kG7OP5bzSXD7svJ34AMVEm7k1ou22";
 const REPO_ZIP = "https://codeload.github.com/joiasvilaca-web/controle-lojas-/zip/refs/heads/main";
 const INTERVALO_MS = 6 * 3600 * 1000;
-const ORCAMENTO_MS = 100 * 1000;
+const ORCAMENTO_MS = 25 * 1000;   // cada chamada faz um pedaço e chama a próxima (limite de CPU por chamada)
+const MAX_TABELAS = 6, MAX_FOTOS = 20;
 const EXCLUIR = /(_backup|backup_pre|^limpeza_|^backup_estado$|segredos$|^customers$|^inventory$)/;
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
@@ -65,7 +66,6 @@ const lixeira = (id: string) => drive(`files/${id}?supportsAllDrives=true`, { me
 
 // ---------- utilidades ----------
 const enc = new TextEncoder();
-async function gzip(txt: string) { return new Uint8Array(await new Response(new Blob([txt]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer()); }
 async function hash(b: Uint8Array) { return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", b))).map((x) => x.toString(16).padStart(2, "0")).join(""); }
 function agoraBR() {
   const p = Object.fromEntries(new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date()).map((x) => [x.type, x.value]));
@@ -97,8 +97,9 @@ async function sessaoDiretoria(senha: string) {
 async function executar(forcar: boolean, por: string) {
   const ini = Date.now();
   const tempo = () => Date.now() - ini < ORCAMENTO_MS;
+  let feitos = 0, continuar = false;
   let e: any = await lerEstado();
-  if (e.rodando && Date.now() - Number(e.rodandoDesde || 0) < 4 * 60 * 1000) return;
+  if (e.rodando && Date.now() - Number(e.rodandoDesde || 0) < 90 * 1000) return;
   e.rodando = true; e.rodandoDesde = Date.now(); await salvarEstado(e);
   try {
     // espaço no Drive (conta que grava os arquivos)
@@ -116,13 +117,14 @@ async function executar(forcar: boolean, por: string) {
       log(e, `Backup ${nome} iniciado (${por}).`);
       await salvarEstado(e);
     }
-    while (e.snap && e.snap.pendentes.length && tempo()) {
+    while (e.snap && e.snap.pendentes.length && tempo() && feitos < MAX_TABELAS) {
+      feitos++;
       const t = e.snap.pendentes[0];
       try {
         let linhas = await selectAll(t);
         if (t === "reforma_config") linhas = linhas.filter((r: any) => r.id !== "segredos");
-        const gz = await gzip(JSON.stringify({ tabela: t, geradoEm: new Date().toISOString(), linhas }));
-        await enviar(t + ".json.gz", e.snap.pasta, gz, "application/gzip");
+        const gz = enc.encode(JSON.stringify({ tabela: t, geradoEm: new Date().toISOString(), linhas }));
+        await enviar(t + ".json", e.snap.pasta, gz, "application/json");
         e.snap.resumo[t] = linhas.length; e.snap.bytes += gz.length; e.snap.pendentes.shift();
       } catch (x) {
         e.snap.falhas[t] = (e.snap.falhas[t] || 0) + 1;
@@ -131,9 +133,10 @@ async function executar(forcar: boolean, por: string) {
       }
       await salvarEstado(e);
     }
+    if (e.snap) continuar = true;
     if (e.snap && !e.snap.pendentes.length && tempo()) {
       const s = e.snap;
-      await enviar("resumo.json", s.pasta, enc.encode(JSON.stringify({ app: "Gestão e Controle — Vilaça Joias", backup: s.nome, geradoPor: s.por, inicio: new Date(s.inicio).toISOString(), fim: new Date().toISOString(), linhasPorTabela: s.resumo, comoRestaurar: "1) Rode o estrutura-banco_*.sql mais recente da pasta PROGRAMACAO no SQL Editor do Supabase. 2) Importe cada <tabela>.json.gz (campo 'linhas'). 3) Publique o programacao_*.zip no GitHub/Vercel. 4) Recoloque as senhas de sistemas externos (não ficam no backup).", aviso: "Não contém senhas de sistemas externos (WhatsApp/Evolution, Correios, chaves de API)." }, null, 2)), "application/json");
+      await enviar("resumo.json", s.pasta, enc.encode(JSON.stringify({ app: "Gestão e Controle — Vilaça Joias", backup: s.nome, geradoPor: s.por, inicio: new Date(s.inicio).toISOString(), fim: new Date().toISOString(), linhasPorTabela: s.resumo, comoRestaurar: "1) Rode o estrutura-banco_*.sql mais recente da pasta PROGRAMACAO no SQL Editor do Supabase. 2) Importe cada <tabela>.json (campo 'linhas'). 3) Publique o programacao_*.zip no GitHub/Vercel. 4) Recoloque as senhas de sistemas externos (não ficam no backup).", aviso: "Não contém senhas de sistemas externos (WhatsApp/Evolution, Correios, chaves de API)." }, null, 2)), "application/json");
       // estrutura do banco (só quando muda)
       try {
         const { data: ddl } = await admin.rpc("backup_estrutura");
@@ -156,15 +159,15 @@ async function executar(forcar: boolean, por: string) {
     }
 
     // 2) fotos: espelho incremental
-    if (!semEspaco && tempo()) {
-      const { data: arqs } = await admin.rpc("backup_arquivos");
+    if (!semEspaco && !continuar && tempo()) {
+      const { data: arqs } = await admin.rpc("backup_arquivos_json");
       e.fotos = e.fotos || {}; e.pastasFotos = e.pastasFotos || {};
       const novos = (arqs || []).filter((a: any) => { const k = a.bucket + "/" + a.nome; const f = e.fotos[k]; return !f || f.u !== a.atualizado; });
       e.fotosPendentes = novos.length; e.fotosTotal = (arqs || []).length;
       let n = 0;
       if (novos.length && !e.pastasFotos._raiz) e.pastasFotos._raiz = await acharOuCriarPasta("FOTOS", PASTA_DADOS);
       for (const a of novos) {
-        if (!tempo()) break;
+        if (!tempo() || n >= MAX_FOTOS) break;
         const k = a.bucket + "/" + a.nome;
         try {
           if (!e.pastasFotos[a.bucket]) e.pastasFotos[a.bucket] = await acharOuCriarPasta(a.bucket, e.pastasFotos._raiz);
@@ -174,10 +177,11 @@ async function executar(forcar: boolean, por: string) {
           if (e.fotos[k] && e.fotos[k].id) await lixeira(e.fotos[k].id);
           e.fotos[k] = { u: a.atualizado, id }; n++;
         } catch (x) { e.fotos[k] = { u: a.atualizado, erro: String((x as any)?.message || x).slice(0, 80) }; }
-        if (n % 25 === 0) await salvarEstado(e);
+        if (n % 10 === 0) await salvarEstado(e);
       }
       e.fotosPendentes = Math.max(0, novos.length - n);
-      if (n) log(e, `Fotos: ${n} arquivo(s) copiados${e.fotosPendentes ? `, faltam ${e.fotosPendentes} (continua sozinho)` : ""}.`);
+      if (e.fotosPendentes && n) continuar = true;
+      if (n && !e.fotosPendentes) log(e, `Fotos em dia: ${e.fotosTotal} arquivo(s) no Drive.`);
     }
   } catch (x) {
     log(e, "Erro: " + String((x as any)?.message || x).slice(0, 200));
@@ -185,6 +189,7 @@ async function executar(forcar: boolean, por: string) {
     e.rodando = false; e.ultimaExecucao = Date.now();
     await salvarEstado(e);
   }
+  if (continuar) await fetch(SUPABASE_URL + "/functions/v1/backup-drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: "continuar", token: e.cronToken }) }).catch(() => {});
 }
 
 // Guarda: todos das últimas 48 h + o último de cada dia por 30 dias. Programação/estrutura: as 60 versões mais novas de cada.
