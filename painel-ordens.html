@@ -1269,7 +1269,7 @@ function vendedoraIdPorNome(nome){
 /** Carimba a data local (AAAA-MM-DD) do recebimento em cada pagamento que ainda não tem. Base do regime de caixa no DP. */
 function carimbarPagamentosOS(pags){
   const hoje = hojeStr();
-  return (pags||[]).map(p=>{ const q = { ...p }; if(!q.data) q.data = hoje; return q; });
+  return (pags||[]).filter(p=>p._modo!=='editar').map(p=>{ const q = { ...p }; delete q._modo; if(!q.data) q.data = hoje; return q; });
 }
 function dataLocalDeMs(ms){ const d = new Date(ms); if(!ms || isNaN(d)) return hojeStr(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /* Fechamento do caixa do dia (por loja): gravado em painel_ordens_kv, chave caixa_fech:<loja>:<data>. Fechado = não lança nem cancela até reabrir (gerente/diretoria). */
@@ -2499,25 +2499,41 @@ function mountPagamentosEdicao(container, holder){
       updateHint();
     });
     { const _ba=container.querySelector('#btnAddPagamento'); if(_ba) _ba.addEventListener('click', ()=>{
-      const primeiraForma = (config.paymentTypes && config.paymentTypes[0]) ? config.paymentTypes[0].id : '';
-      holder.pagamentos.push({ formaId: primeiraForma, valor: '' });
+      holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
       drawRows();
+      const sels=container.querySelectorAll('[data-pagform]'); if(sels.length) sels[sels.length-1].focus();
     }); }
   }
 
+  function nomeFormaPag(id){
+    if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
+    const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
+  }
+  function totalPag(){ return Number(holder.valorTotal)||0; }
+  function somaConf(){ return holder.pagamentos.filter(p=>p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0); }
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
     if(!wrap){ updateHint(); return; }
-    wrap.innerHTML = holder.pagamentos.map((p,i)=>`
-      <div class="pag-linha">
-        <select data-pagform="${i}" aria-label="Forma de pagamento">${opcoesFormaPagamentoHtml(p.formaId)}</select>
-        <div style="display:flex; gap:6px; align-items:center;">
-          ${pessoaPixHtml(p,i)}
-          <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="Valor (R$)" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}" style="flex:1;">
-          <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
-        </div>
-      </div>
-    `).join('');
+    const falta = totalPag() - somaConf();
+    const temEdicao = holder.pagamentos.some(p=>p._modo==='editar');
+    const podeNovo = !temEdicao && (holder.pagamentos.length===0 || falta>0.009);
+    const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
+      <div class="pag-linha pag-edit">
+        <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
+        ${pessoaPixHtml(p,i)}
+        <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
+        <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
+        <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
+      </div>`).join('');
+    const okLista = holder.pagamentos.map((p,i)=> p._modo==='editar' ? '' : `
+      <div class="pag-ok" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);margin-top:6px;flex-wrap:wrap;">
+        <b style="flex:1 1 auto;">${escapeHtml(nomeFormaPag(p.formaId))}</b>${pessoaPixHtml(p,i)}
+        <span style="font-weight:700;font-variant-numeric:tabular-nums;">${fmtMoeda(p.valor)}</span>
+        <button type="button" class="icon-btn" data-pagedit="${i}" title="Editar esta forma" aria-label="Editar esta forma">${ico('lapis')}</button>
+        <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
+      </div>`).join('');
+    wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
+    const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
     });
@@ -2525,13 +2541,25 @@ function mountPagamentosEdicao(container, holder){
       b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
     });
     wrap.querySelectorAll('[data-pagvalor]').forEach(inp=>{
-      inp.addEventListener('input', ()=>{
-        holder.pagamentos[Number(inp.dataset.pagvalor)].valor = inp.value === '' ? '' : parseFloat(inp.value);
-        updateHint();
+      inp.addEventListener('input', ()=>{ holder.pagamentos[Number(inp.dataset.pagvalor)].valor = inp.value === '' ? '' : parseFloat(inp.value); updateHint(); });
+    });
+    wrap.querySelectorAll('[data-pagok]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const p = holder.pagamentos[Number(b.dataset.pagok)];
+        if(!p.formaId){ showToast('Escolha a forma de pagamento.'); return; }
+        if(!(Number(p.valor)>0)){ showToast('Digite o valor desta forma de pagamento.'); return; }
+        if(formaEhPix(p.formaId) && !p.pessoa){ perguntarPixTipo().then(t=>{ if(t){ p.pessoa=t; drawRows(); } }); return; }
+        delete p._modo;
+        if(totalPag() - somaConf() > 0.009) holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
+        drawRows();
+        const sels=container.querySelectorAll('[data-pagform]'); if(sels.length) sels[sels.length-1].focus();
       });
     });
+    wrap.querySelectorAll('[data-pagedit]').forEach(b=>{
+      b.addEventListener('click', ()=>{ holder.pagamentos[Number(b.dataset.pagedit)]._modo='editar'; drawRows(); });
+    });
     wrap.querySelectorAll('[data-pagdel]').forEach(b=>{
-      b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); updateHint(); });
+      b.addEventListener('click', ()=>{ holder.pagamentos.splice(Number(b.dataset.pagdel),1); drawRows(); });
     });
     { const _ip=holder.pagamentos.findIndex(p=>formaEhPix(p.formaId)&&!p.pessoa&&!__pixAsked.has(p));
       if(_ip>=0){ const _p=holder.pagamentos[_ip]; __pixAsked.add(_p); perguntarPixTipo().then(t=>{ if(t) _p.pessoa=t; if(container.isConnected) drawRows(); }); } }
@@ -2542,7 +2570,7 @@ function mountPagamentosEdicao(container, holder){
     { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
-    const soma = holder.pagamentos.reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
+    const soma = holder.pagamentos.filter(p=>p._modo!=='editar').reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
     const total = Number(holder.valorTotal)||0;
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
@@ -2576,6 +2604,11 @@ function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
 function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado/crédito não entram como recebido: fiado movimenta o caixa só quando as parcelas
    são pagas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
+function bloqueioSaldoEntrega(o){
+  const pend = valorAReceberDe({ valorTotal:o.valorTotal, pagamentos:(o.pagamentos||[]).filter(p=>p._modo!=='editar') });
+  if(pend > 0.009){ showToast('Há saldo a pagar de ' + fmtMoeda(pend) + '. Lance o pagamento antes de marcar como entregue.'); return true; }
+  return false;
+}
 /** Valor ainda pendente (nunca negativo). */
 function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
 /** true quando NENHUMA informação de pagamento foi lançada — dispara o aviso vermelho e o filtro. */
@@ -3914,12 +3947,12 @@ function recalcularValorAjustado(it){
                      ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${escapeHtml(String(produtoAtual.fator))}</span>`:''}
                      <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto" aria-label="Trocar produto">${ico('x',14)}</button>
                    </div>`
-                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: clique para ver todos ou digite o nome':'Produto: nome, código ou bipe o código de barras'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: clique para ver todos ou digite o nome':'Produto (código 8…): clique para ver ou digite nome/código'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
                    <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
             </div>
             <div class="item-row-valor">
               <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="Valor" aria-label="Valor do item (R$)" title="Valor do item (R$)"
-                value="${valorBaseItem(it)}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)">
+                value="${(()=>{const v=valorBaseItem(it);return v===''?'':Number(v).toFixed(2);})()}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)">
             </div>
             <div class="item-row-desc">
               <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}" title="Desconto neste item">Desc.</button>
@@ -3978,7 +4011,7 @@ function recalcularValorAjustado(it){
       const i = Number(inp.dataset.pac);
       const drop = document.getElementById('pacDrop_'+i);
       let pacTimer=null, pacFocus=-1, pacAchados=[];
-      const baseLista = vendaveis.filter(p=> produtoEhServico(p) === (holder.itens[i] && holder.itens[i].tipoItem==='servico'));
+      const baseLista = vendaveis.filter(p=> produtoEhServico(p) === (holder.itens[i] && holder.itens[i].tipoItem==='servico')).filter(p=> produtoEhServico(p) || String(p.codigo||'').trim().startsWith('8'));
       function fecharDrop(){ drop.style.display='none'; pacFocus=-1; }
       function renderDrop(lista){
         pacAchados=lista;
@@ -3990,10 +4023,10 @@ function recalcularValorAjustado(it){
           el.addEventListener('mousedown',e=>{ e.preventDefault(); selecionarProduto(i,pacAchados[Number(el.dataset.pk)]); });
         });
       }
-      inp.addEventListener('focus',()=>{ if(holder.itens[i] && holder.itens[i].tipoItem==='servico' && !inp.value.trim()) renderDrop(baseLista); });
+      inp.addEventListener('focus',()=>{ if(!inp.value.trim()) renderDrop(baseLista.slice(0,80)); });
       inp.addEventListener('input',()=>{ clearTimeout(pacTimer); pacTimer=setTimeout(()=>{
         const t=inp.value.toLowerCase().trim();
-        if(!t){ if(holder.itens[i] && holder.itens[i].tipoItem==='servico') renderDrop(baseLista); else fecharDrop(); return; }
+        if(!t){ renderDrop(baseLista.slice(0,80)); return; }
         const codigoExato=/^\d{6,}$/.test(inp.value.trim());
         if(codigoExato){
           const porCod=baseLista.find(p=>(p.codigoBarras&&String(p.codigoBarras).trim()===inp.value.trim())||(p.codigo&&String(p.codigo).trim()===inp.value.trim()));
@@ -4105,6 +4138,7 @@ function recalcularValorAjustado(it){
     });
 
     // ── Campos de valor e desconto ──
+    wrap.querySelectorAll('[data-itfield="valorUnitario"]').forEach(el=>{ el.addEventListener('blur',()=>{ if(el.value!=='' && !isNaN(parseFloat(el.value))) el.value = parseFloat(el.value).toFixed(2); }); });
     wrap.querySelectorAll('[data-itfield]').forEach(el=>{
       el.addEventListener('input',()=>{
         const row=el.closest('[data-idx]');
@@ -4240,11 +4274,18 @@ function renderNovaOrdem(main){
       <!-- ITENS VENDIDOS -->
       <div class="divider-nova"></div>
       <div id="itensContainerNova"></div>
-<div class="info-interna-box" id="osInfoInternaBox" style="display:none;margin-top:10px;">
+<div class="obs-geral-box" id="osObsBox" style="display:none;margin-top:12px;">
+        <label for="f_descricao">Observação do pedido <span class="muted">(o cliente vê na página de acompanhamento)</span></label>
+        <textarea id="f_descricao" placeholder="Ex.: troca de pedra, ajuste de aro"></textarea>
+      </div>
+      <div class="info-interna-box" id="osInfoInternaBox" style="display:none;">
         <div class="info-interna-badge">${ico('cadeado',13)} Observação interna — só a equipe vê</div>
         <textarea id="f_infoInterna" placeholder="Anotações internas (o cliente não vê)"></textarea>
       </div>
-      <button type="button" class="btn-texto" id="btnToggleInfoInternaOS" style="margin-top:10px;">${ico('cadeado',14)} Adicionar observação interna</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+        <button type="button" class="btn btn-ghost btn-sm" id="btnToggleObsOS">${ico('mensagem',14)} Adicionar observação do pedido</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnToggleInfoInternaOS">${ico('cadeado',14)} Adicionar observação interna</button>
+      </div>
 
       <!-- TIPO DE SERVIÇO + AGENDAMENTO (depende do que foi lançado acima) -->
       <div class="divider-nova"></div>
@@ -4266,20 +4307,9 @@ function renderNovaOrdem(main){
         </div>
       </div>
 
-      <!-- OBSERVAÇÃO -->
-      <div class="divider-nova"></div>
-      <div class="field" style="margin-top:0;">
-        <label for="f_descricao">Descrição do serviço <span class="muted">— o cliente vê na página de acompanhamento</span></label>
-        <textarea id="f_descricao" placeholder="Ex.: troca de pedra, ajuste de aro" style="min-height:72px;"></textarea>
-      </div>
-
       <!-- PAGAMENTO -->
       <div class="divider-nova"></div>
       <div id="pagamentoContainerNova"></div>
-
-      <!-- FOTOS -->
-      <div class="divider-nova"></div>
-      <div id="fotoContainerNova"></div>
 
       <!-- ANOTAÇÕES -->
       <div class="divider-nova"></div>
@@ -4370,7 +4400,6 @@ function renderNovaOrdem(main){
   };
 
   const tempFotoHolder = { fotos: [] };
-  mountFotos(document.getElementById('fotoContainerNova'), tempFotoHolder, false, false);
   const tempObsHolder = { observacoes: [] };
   mountObservacoes(document.getElementById('obsContainerNova'), tempObsHolder, false);
 
@@ -4384,8 +4413,15 @@ function renderNovaOrdem(main){
     const btn=document.getElementById('btnToggleInfoInternaOS');
     const vis=box.style.display!=='none';
     box.style.display=vis?'none':'block';
-    btn.innerHTML=ico('cadeado',14)+(vis?' Adicionar observação interna':' Ocultar observação interna');
+    btn.innerHTML=ico('cadeado',14)+(vis?' Adicionar observação interna':' Esconder observação interna');
     if(!vis) document.getElementById('f_infoInterna').focus();
+  });
+  document.getElementById('btnToggleObsOS').addEventListener('click',()=>{
+    const box=document.getElementById('osObsBox'), btn=document.getElementById('btnToggleObsOS');
+    const vis=box.style.display!=='none';
+    box.style.display=vis?'none':'block';
+    btn.innerHTML=ico('mensagem',14)+(vis?' Adicionar observação do pedido':' Esconder observação do pedido');
+    if(!vis) document.getElementById('f_descricao').focus();
   });
   const servicoSel = document.getElementById('f_servico');
   const dataInp = document.getElementById('f_data');
@@ -5179,6 +5215,7 @@ function openEditModalCompleto(order, opts){
     let recebidoPor = order.recebidoPor || null;
     let recebidoEm = order.recebidoEm || null;
     if(status === 'entregue'){
+      if(bloqueioSaldoEntrega({ valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal, pagamentos: editPagHolder ? editPagHolder.pagamentos : order.pagamentos })) return;
       recebidoPor = maiusc(document.getElementById('e_recebidoPor').value);
       if(!recebidoPor){
         showToast('Informe quem recebeu o produto.');
@@ -5421,6 +5458,7 @@ function renderPainel(main){
         const ord = orders.find(o=>o.id===sel.dataset.id);
         const previous = ord.status;
         if(sel.value === 'entregue'){
+          if(bloqueioSaldoEntrega(ord)){ sel.value = previous; applyStatusClass(sel); return; }
           promptRecebidoPor(async (nome)=>{
             ord.status = 'entregue';
             ord.recebidoPor = nome;
