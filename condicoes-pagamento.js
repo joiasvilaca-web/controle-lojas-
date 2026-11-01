@@ -26,9 +26,20 @@
     return (pags||[]).filter(filtro || function(){ return true; }).reduce(function(a,p){ return a + base(p, config); }, 0);
   }
   function parcelado(vista){ return r2((Number(vista)||0) * FATOR); }
+  /* Cartão sugerido pelo sistema (_auto) acompanha o à vista final: se o total mudar (desconto,
+     acréscimo, item), o valor da maquininha é refeito = (à vista que falta) × 1,2. Valor digitado à mão não muda. */
+  function ajustarAuto(pags, totalVista, config){
+    (pags||[]).forEach(function(p){
+      if(!p || !p._auto || !ehCartao(p.formaId, config)) return;
+      var outros = somaBase((pags||[]).filter(function(q){ return q!==p && q._modo!=='editar'; }), config);
+      var falta = Math.max(0, r2((Number(totalVista)||0) - outros));
+      p.valor = falta > 0.009 ? parcelado(falta) : p.valor;
+    });
+  }
   /* Ajusta os campos de cartão antes de gravar (parcelas e valorBase). */
   function carimbar(pags, config){
     (pags||[]).forEach(function(p){
+      delete p._auto;
       if(ehCartao(p.formaId, config)){
         p.parcelas = Math.min(MAX_PARC, Math.max(1, parseInt(p.parcelas,10) || 1));
         p.valorBase = base(p, config);
@@ -69,6 +80,6 @@
     var t = String((it && it.observacaoItem) || '').trim();
     return t ? '<div style="font-size:11px;">Obs.: '+esc(t)+'</div>' : '';
   }
-  window.CondPag = { FATOR:FATOR, MAX_PARC:MAX_PARC, r2:r2, ehCartao:ehCartao, base:base, somaBase:somaBase, parcelado:parcelado,
+  window.CondPag = { FATOR:FATOR, MAX_PARC:MAX_PARC, r2:r2, ehCartao:ehCartao, base:base, somaBase:somaBase, parcelado:parcelado, ajustarAuto:ajustarAuto,
     carimbar:carimbar, rotuloPag:rotuloPag, selectParcelasHtml:selectParcelasHtml, brutoItens:brutoItens, cupomHtml:cupomHtml, obsItemHtml:obsItemHtml };
 })();
