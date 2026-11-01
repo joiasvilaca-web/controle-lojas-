@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
 <script src="cupom.js"></script>
+<script src="condicoes-pagamento.js"></script>
 <script src="retirada-terceiro.js"></script>
 <script src="formato.js"></script>
 <script src="cashback.js"></script>
@@ -1558,6 +1559,7 @@ function carimbarPagamentos(pags, dataVenda, dataAntiga){
   return (pags||[]).map(p=>{
     const q = { ...p };
     if(!q.data || (dataAntiga && q.data===dataAntiga && dataAntiga!==dataVenda)) q.data = dataVenda;
+    if(window.CondPag) CondPag.carimbar([q], config);
     return q;
   });
 }
@@ -1860,7 +1862,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const f=(config.formasPagamento||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||calcTotalItens(); }
-  function somaConf(){ return holder.pagamentos.filter(p=>p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0); }
+  function somaConf(){ return CondPag.somaBase(holder.pagamentos, config, p=>p._modo!=='editar'); }
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
     if(!wrap){ updateHint(); return; }
@@ -1870,14 +1872,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('')}${(window.__credCli.valor>0 || p.formaId==='__credito') ? `<option value="__credito" ${p.formaId==='__credito'?'selected':''}>CRÉDITO CLIENTE${window.__credCli.valor>0?' (disp. '+fmtMoeda(window.__credCli.valor)+')':''}</option>` : ''}${cbOpcaoHtml(p.formaId)}<option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>Fiado</option></select>
-        ${pessoaPixHtml(p,i)}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ic('check',14)} Adicionar</button>
         ${btnIcone('lixeira','Remover esta forma de pagamento',`data-pagdel="${i}"`,true)}
       </div>`).join('');
     const okLista = holder.pagamentos.map((p,i)=> p._modo==='editar' ? '' : `
       <div class="pag-ok" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);margin-top:6px;flex-wrap:wrap;">
-        <b style="flex:1 1 auto;">${escapeHtml(nomeFormaPag(p.formaId))}</b>${pessoaPixHtml(p,i)}
+        <b style="flex:1 1 auto;">${escapeHtml(CondPag.rotuloPag(p, nomeFormaPag(p.formaId), config, fmtMoeda))}</b>${pessoaPixHtml(p,i)}
         <span style="font-weight:700;font-variant-numeric:tabular-nums;">${fmtMoeda(p.valor)}</span>
         <button type="button" class="icon-btn" data-pagedit="${i}" title="Editar esta forma" aria-label="Editar esta forma">${ic('lapis')}</button>
         ${btnIcone('lixeira','Remover esta forma de pagamento',`data-pagdel="${i}"`,true)}
@@ -1885,7 +1887,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+        // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
+        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009) pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); if(ehCart && !pg.parcelas) pg.parcelas = 1; }
+        drawRows(); });
+    });
+    wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagparc)].parcelas = parseInt(sel.value,10)||1; drawRows(); });
     });
     wrap.querySelectorAll('[data-pagpessoa]').forEach(b=>{
       b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
@@ -1944,7 +1953,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
 function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado e crédito não movimentam o caixa na venda: fiado só entra quando as parcelas
    são recebidas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
-function valorAReceberDe(v){ return Math.max(0, (Number(v.valorTotal)||0) - valorRecebidoDe(v)); }
+function valorAReceberDe(v){ return Math.max(0, (Number(v.valorTotal)||0) - CondPag.somaBase(v.pagamentos, config, p=>!(p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback'))); }  // cartão quita pela base (valor/1,2)
 function semPagamentoLancado(v){ return !v.valorTotal && (!v.pagamentos || v.pagamentos.length===0); }
 
 /* ============================================================
@@ -2176,7 +2185,7 @@ function recalcularValorAjustado(it){
         if(!it.produtoEstoqueId&&!it.avulso){ showToast('Escolha o produto na lista de busca ou marque "Item avulso (sem estoque)".'); return; }
         if(it.avulso&&!(it.produto||'').trim()){ showToast('Descreva o item avulso.'); return; }
         it._modo='ok';
-        holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
+  /* não abre outro item sozinho: para lançar mais um, clicar em “Adicionar item” */
         drawRows(); updateTotalHint();
       });
     });
@@ -3096,12 +3105,12 @@ function printReserva(r){
   if(imp.itens!==false) linhas.push(`<div class="linha"></div><div><b>JOIAS RESERVADAS</b></div>`);
   if(imp.itens!==false) (r.itens||[]).forEach(it=>{
     linhas.push(`<div>${escapeHtml(it.produto)} x${it.quantidade||1} — ${fmtMoeda(it.valorUnitario)}</div>`);
-    { const _t = typeof ajusteItemTexto==='function' ? ajusteItemTexto(it) : ''; if(_t) linhas.push(`<div style="font-size:11px;">${escapeHtml(_t)}</div>`); }
+    linhas.push(CondPag.obsItemHtml(it, escapeHtml));
   });
-  if(imp.valores!==false) linhas.push(`<div class="linha"></div><div>Valor total: ${fmtMoeda(r.valorTotal)}</div>`);
   if(imp.prazo!==false){ linhas.push(`<div class="linha"></div><div><b>Reservado até ${escapeHtml(fmtDataHora(r.venceEm))}</b></div>`);
   linhas.push(`<div style="font-size:11px;">Reserva sem pagamento. Após o prazo, a peça volta para a venda.</div>`); }
   if(r.observacaoGeral) linhas.push(`<div style="margin-top:4px;"><b>Obs.:</b> ${escapeHtml(r.observacaoGeral)}</div>`);
+  if(imp.valores!==false) linhas.push(CondPag.cupomHtml(r.itens, r.valorTotal, fmtMoeda));
   abrirImpressaoBobina('Reserva', linhas.join(''), larguraMm, r.codigoVia);
 }
 function abrirEnvioReserva(r, titulo){
@@ -3452,7 +3461,7 @@ function renderNovaVenda(main){
     if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { showToast('Marque se a nota fiscal foi emitida (Sim ou Não).'); return; } }
     if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
     if(!tempPagHolder.pagamentos || tempPagHolder.pagamentos.length===0){ showToast('Adicione pelo menos uma forma de pagamento.'); return; }
-    const totalPago = tempPagHolder.pagamentos.reduce((acc,p)=>acc+(Number(p.valor)||0),0);
+    const totalPago = CondPag.somaBase(tempPagHolder.pagamentos, config);  // cartão conta pela parte do à vista que quita
     const totalVenda = Number(tempPagHolder.valorTotal)||0;
     if(totalVenda>0 && Math.abs(totalPago-totalVenda)>0.009){ showToast(totalVenda>totalPago ? `Pagamento incompleto — falta cobrir ${fmtMoeda(totalVenda-totalPago)}.` : `As formas de pagamento passam do total em ${fmtMoeda(totalPago-totalVenda)}. Ajuste os valores.`); return; }
     const erroNota = notaEmpresasErro(tempPagHolder, lojaId);
@@ -4755,21 +4764,21 @@ function printVenda(v){
     linhas.push(`<div><b>ITENS</b></div>`);
     (v.itens||[]).forEach(it=>{
       linhas.push(`<div>${escapeHtml(it.produto)}${it.metal?' ('+escapeHtml(it.metal)+')':''} x${it.quantidade} — ${fmtMoeda(it.valorUnitario)}</div>`);
-      { const _t=ajusteItemTexto(it); if(_t) linhas.push(`<div style="font-size:11px;">${escapeHtml(_t)}</div>`); }
+      linhas.push(CondPag.obsItemHtml(it, escapeHtml));
     });
   }
+  if((v.observacaoGeral||'').trim()) linhas.push(`<div class="linha"></div><div><b>Obs.:</b> ${escapeHtml(v.observacaoGeral)}</div>`);
 
+  if(imp.formaPagamento !== false && (v.pagamentos||[]).some(p=>p.formaId)){
+    linhas.push(`<div class="linha"></div><div><b>PAGAMENTO</b></div>`);
+    (v.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
+      linhas.push(`<div>${escapeHtml(CondPag.rotuloPag(p, paymentTypesMap[p.formaId]||'—', config, fmtMoeda))}: ${fmtMoeda(p.valor)}</div>`);
+    });
+  }
   if(imp.valores !== false){
-    linhas.push(`<div class="linha"></div>`);
-    linhasAjusteTotal(v).forEach(l=>linhas.push(l));
-    linhas.push(`<div>Valor total: ${fmtMoeda(v.valorTotal)}</div>`);
     linhas.push(`<div>Recebido: ${fmtMoeda(valorRecebidoDe(v))}</div>`);
     linhas.push(`<div>A receber: ${fmtMoeda(valorAReceberDe(v))}</div>`);
-  }
-  if(imp.formaPagamento !== false){
-    (v.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
-      linhas.push(`<div>${escapeHtml(paymentTypesMap[p.formaId]||'—')}: ${fmtMoeda(p.valor)}</div>`);
-    });
+    linhas.push(CondPag.cupomHtml(v.itens, v.valorTotal, fmtMoeda));
   }
 
   abrirImpressaoBobina('Venda', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(v, escapeHtml) : ''), larguraMm, v.codigoVia);

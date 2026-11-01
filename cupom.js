@@ -26,6 +26,9 @@
       margemInfMm: Math.max(0, num(c.margemInfMm, 0)),
     };
   }
+  /* Área que a cabeça térmica realmente imprime (bobina 80 mm → 72 mm; 58 mm → 48 mm).
+   * Com a largura cheia da bobina o texto era cortado nas bordas (ex.: "liente:" em vez de "Cliente:"). */
+  function areaImpressaoMm(larg){ larg = Number(larg)||80; return larg>=80 ? larg-8 : (larg>=58 ? larg-10 : Math.max(30, larg-4)); }
   function html(c, titulo, conteudoHtml, codigoVia){
     var px = ESCALA[c.escalaTexto] || ESCALA.media;
     var peso = c.negrito ? 700 : 400;
@@ -36,7 +39,7 @@
     return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>'+esc(titulo)+'</title>'
       + (codigoVia ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>' : '')
       + '<style>@page{ margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }'
-      + 'body{ font-family:"Courier New", monospace; box-sizing:border-box; width:'+c.larguraBobina+'mm; margin:0 auto; padding:'+c.margemSupMm+'mm 2mm '+c.margemInfMm+'mm; '+alturaCss+' color:#000; font-weight:'+peso+'; font-size:'+px.base+'px; line-height:1.42; -webkit-font-smoothing:none; '+reforco+' }'
+      + 'body{ font-family:"Courier New", monospace; box-sizing:border-box; width:'+areaImpressaoMm(c.larguraBobina)+'mm; margin:0 auto; padding:'+c.margemSupMm+'mm 0 '+c.margemInfMm+'mm; '+alturaCss+' color:#000; font-weight:'+peso+'; font-size:'+px.base+'px; line-height:1.42; -webkit-font-smoothing:none; '+reforco+' }'
       + '.titulo{ font-size:'+px.titulo+'px; font-weight:800; text-align:center; letter-spacing:.02em; } .sub{ font-size:'+px.sub+'px; color:#000; text-align:center; }'
       + '.linha{ border-top:1px dashed #000; margin:6px 0; } .rodape{ text-align:center; margin-top:10px; font-size:'+px.sub+'px; } b{ font-weight:800; }'
       + '.assinatura{ border-top:1px solid #000; margin-top:26px; } .destaque{ font-weight:800; font-size:'+Math.round(px.base*1.25)+'px; }'

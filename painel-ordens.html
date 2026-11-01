@@ -4,6 +4,7 @@
 <script src="tema.js"></script>
 <script src="icones.js"></script>
 <script src="cupom.js"></script>
+<script src="condicoes-pagamento.js"></script>
 <script src="retirada-terceiro.js"></script>
 <script src="formato.js"></script>
 <script src="cashback.js"></script>
@@ -413,6 +414,8 @@
   .btn-ajuste:hover{background:var(--surface-2);color:var(--ink);}
   .btn-ajuste.ativo-desc{background:var(--danger-soft);color:var(--danger);border-color:var(--danger);}
   .btn-ajuste.ativo-acr{background:var(--ok-soft);color:var(--ok);border-color:var(--ok);}
+  .btn-ajuste.ativo-semcob{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .badge-semcob{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700;background:var(--accent);color:#fff;vertical-align:middle;}
   .btn-add-item{padding:0 14px;border:1px solid var(--t-primary-strong);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--t-primary-strong);color:var(--texto-sobre-cor);height:40px;white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:6px;}
   .btn-add-item:hover{filter:brightness(1.12);}
   .item-row-produto input[type=text]{width:100%;height:40px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;font-size:14px;}
@@ -1294,7 +1297,7 @@ function vendedoraIdPorNome(nome){
 /** Carimba a data local (AAAA-MM-DD) do recebimento em cada pagamento que ainda não tem. Base do regime de caixa no DP. */
 function carimbarPagamentosOS(pags){
   const hoje = hojeStr();
-  return (pags||[]).filter(p=>p._modo!=='editar').map(p=>{ const q = { ...p }; delete q._modo; if(!q.data) q.data = hoje; return q; });
+  return (pags||[]).filter(p=>p._modo!=='editar').map(p=>{ const q = { ...p }; delete q._modo; if(!q.data) q.data = hoje; if(window.CondPag) CondPag.carimbar([q], config); return q; });
 }
 function dataLocalDeMs(ms){ const d = new Date(ms); if(!ms || isNaN(d)) return hojeStr(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /* Fechamento do caixa do dia (por loja): gravado em painel_ordens_kv, chave caixa_fech:<loja>:<data>. Fechado = não lança nem cancela até reabrir (gerente/diretoria). */
@@ -2457,7 +2460,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||calcTotalItens(); }
-  function somaConf(){ return holder.pagamentos.filter(p=>p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0); }
+  function somaConf(){ return CondPag.somaBase(holder.pagamentos, config, p=>p._modo!=='editar'); }
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
     if(!wrap){ updateHint(); return; }
@@ -2467,14 +2470,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        ${pessoaPixHtml(p,i)}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
       </div>`).join('');
     const okLista = holder.pagamentos.map((p,i)=> p._modo==='editar' ? '' : `
       <div class="pag-ok" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);margin-top:6px;flex-wrap:wrap;">
-        <b style="flex:1 1 auto;">${escapeHtml(nomeFormaPag(p.formaId))}</b>${pessoaPixHtml(p,i)}
+        <b style="flex:1 1 auto;">${escapeHtml(CondPag.rotuloPag(p, nomeFormaPag(p.formaId), config, fmtMoeda))}</b>${pessoaPixHtml(p,i)}
         <span style="font-weight:700;font-variant-numeric:tabular-nums;">${fmtMoeda(p.valor)}</span>
         <button type="button" class="icon-btn" data-pagedit="${i}" title="Editar esta forma" aria-label="Editar esta forma">${ico('lapis')}</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
@@ -2482,7 +2485,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+        // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
+        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009) pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); if(ehCart && !pg.parcelas) pg.parcelas = 1; }
+        drawRows(); });
+    });
+    wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagparc)].parcelas = parseInt(sel.value,10)||1; drawRows(); });
     });
     wrap.querySelectorAll('[data-pagpessoa]').forEach(b=>{
       b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
@@ -2615,7 +2625,7 @@ function mountPagamentosEdicao(container, holder){
     const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||0; }
-  function somaConf(){ return holder.pagamentos.filter(p=>p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0); }
+  function somaConf(){ return CondPag.somaBase(holder.pagamentos, config, p=>p._modo!=='editar'); }
   function drawRows(){
     const wrap = container.querySelector('#pagRows');
     if(!wrap){ updateHint(); return; }
@@ -2625,14 +2635,14 @@ function mountPagamentosEdicao(container, holder){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        ${pessoaPixHtml(p,i)}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
       </div>`).join('');
     const okLista = holder.pagamentos.map((p,i)=> p._modo==='editar' ? '' : `
       <div class="pag-ok" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);margin-top:6px;flex-wrap:wrap;">
-        <b style="flex:1 1 auto;">${escapeHtml(nomeFormaPag(p.formaId))}</b>${pessoaPixHtml(p,i)}
+        <b style="flex:1 1 auto;">${escapeHtml(CondPag.rotuloPag(p, nomeFormaPag(p.formaId), config, fmtMoeda))}</b>${pessoaPixHtml(p,i)}
         <span style="font-weight:700;font-variant-numeric:tabular-nums;">${fmtMoeda(p.valor)}</span>
         <button type="button" class="icon-btn" data-pagedit="${i}" title="Editar esta forma" aria-label="Editar esta forma">${ico('lapis')}</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
@@ -2640,7 +2650,14 @@ function mountPagamentosEdicao(container, holder){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa; drawRows(); });
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+        // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
+        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009) pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); if(ehCart && !pg.parcelas) pg.parcelas = 1; }
+        drawRows(); });
+    });
+    wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagparc)].parcelas = parseInt(sel.value,10)||1; drawRows(); });
     });
     wrap.querySelectorAll('[data-pagpessoa]').forEach(b=>{
       b.addEventListener('click', async ()=>{ const pg=holder.pagamentos[Number(b.dataset.pagpessoa)]; const t=await perguntarPixTipo(); if(t){ pg.pessoa=t; if(container.isConnected) drawRows(); } });
@@ -2718,9 +2735,9 @@ function bloqueioSaldoEntrega(o){
   return false;
 }
 /** Valor ainda pendente (nunca negativo). */
-function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - valorRecebidoDe(o)); }
+function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - CondPag.somaBase(o.pagamentos, config, p=>!(p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback'))); }  // cartão quita pela base (valor/1,2)
 /** true quando NENHUMA informação de pagamento foi lançada — dispara o aviso vermelho e o filtro. */
-function semPagamentoLancado(o){ return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
+function semPagamentoLancado(o){ if((o.itens||[]).length && o.itens.every(it=>it.semCobranca)) return false; return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
 
 /* ============================================================
    OBSERVAÇÕES / NOTIFICAÇÕES INTERNAS
@@ -3390,9 +3407,6 @@ function printOrder(order){
   if(imp.servico !== false){
     linhas.push(`<div><b>Serviço:</b> ${escapeHtml(order.serviceTypeName||'—')}</div>`);
   }
-  if(imp.descricao !== false && order.descricao){
-    linhas.push(`<div><b>Descrição:</b> ${escapeHtml(order.descricao)}</div>`);
-  }
   if(imp.vendedora !== false){
     linhas.push(`<div><b>Vendedora:</b> ${escapeHtml(order.vendedora||'—')}</div>`);
   }
@@ -3404,14 +3418,24 @@ function printOrder(order){
     linhas.push(`<div><b>Nota nº:</b> ${escapeHtml(order.numeroNota)}</div>`);
   }
 
+  if(imp.itens !== false && (order.itens||[]).length){
+    linhas.push(`<div class="linha"></div><div><b>ITENS</b></div>`);
+    (order.itens||[]).forEach((it,i)=>{
+      const nome = it.produto || (typeof nomeItemOs==='function' ? nomeItemOs(it,i) : '') || 'Item';
+      linhas.push(`<div>${escapeHtml(nome)} x${it.quantidade||1}${it.semCobranca ? ' — '+(it.semCobranca==='cortesia'?'CORTESIA':'GARANTIA')+' (sem cobrança)' : (it.valorUnitario!==''&&it.valorUnitario!=null ? ' — '+fmtMoeda(it.valorUnitario) : '')}</div>`);
+      linhas.push(CondPag.obsItemHtml(it, escapeHtml));
+    });
+  }
+  if(String(order.descricao||'').trim()){
+    linhas.push(`<div class="linha"></div><div><b>Obs.:</b> ${escapeHtml(order.descricao)}</div>`);
+  }
+
   if(imp.valores !== false){
     linhas.push(`<div class="linha"></div>`);
     linhas.push(`<div><b>PAGAMENTO</b></div>`);
     linhas.push(`<div>Momento: ${order.momentoPagamento==='na_volta' ? 'Na retirada' : 'No ato'}</div>`);
-    linhasAjusteTotal(order).forEach(l=>linhas.push(l));
-    if(order.valorTotal) linhas.push(`<div class="destaque">Valor total: ${fmtMoeda(order.valorTotal)}</div>`);
     (order.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
-      linhas.push(`<div class="destaque">${escapeHtml(paymentTypesMap[p.formaId]||'—')}: ${fmtMoeda(p.valor||0)}</div>`);
+      linhas.push(`<div class="destaque">${escapeHtml(CondPag.rotuloPag(p, paymentTypesMap[p.formaId]||'—', config, fmtMoeda))}: ${fmtMoeda(p.valor||0)}</div>`);
     });
     linhas.push(`<div class="destaque">Recebido: ${fmtMoeda(valorRecebidoDe(order))}</div>`);
     linhas.push(`<div class="destaque">A receber: ${fmtMoeda(valorAReceberDe(order))}</div>`);
@@ -3426,6 +3450,7 @@ function printOrder(order){
     linhas.push(`<div class="assinatura"></div>`);
     linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
   }
+  if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, order.valorTotal, fmtMoeda));
 
   abrirImpressaoBobina('Ordem de Serviço', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(order, escapeHtml) : ''), larguraMm, order.codigoVia);
 }
@@ -3991,7 +4016,7 @@ function recalcularValorAjustado(it){
         const descInfoHtml=ajusteItemHtml(it);
         __html+=`<div class="venda-item-compact" data-idx="${i}">
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${Number(it.quantidade)>1?` <span class="muted">×${escapeHtml(String(it.quantidade))}</span>`:''}${it.avulso?` <span class="badge" title="Item avulso — não mexe no estoque">avulso</span>`:(!it.produtoEstoqueId?` <span class="badge badge-flag" title="Clique no lápis para ligar ao catálogo ou marcar como avulso">sem vínculo</span>`:'')}</span>
-          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${descInfoHtml}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${it.semCobranca?`<span class="badge-semcob" title="Sem cobrança${Number(it.valorCheio)>0?' — valor '+fmtMoeda(it.valorCheio):''}">${it.semCobranca==='cortesia'?'Cortesia':'Garantia'}</span>`:descInfoHtml}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button type="button" class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="Ver observação: ${escapeHtml(it.observacaoItem)}" aria-label="Ver observação do item">${ico('mensagem')}</button>`:''}
             <button type="button" class="venda-compact-btn" data-iteditar="${i}" title="Editar item" aria-label="Editar item">${ico('lapis')}</button>
@@ -4024,11 +4049,14 @@ function recalcularValorAjustado(it){
             </div>
             <div class="item-row-valor">
               <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="Valor" aria-label="Valor do item (R$)" title="Valor do item (R$)"
-                value="${(()=>{const v=valorBaseItem(it);return v===''?'':Number(v).toFixed(2);})()}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)">
+                value="${(()=>{const v=valorBaseItem(it);return v===''?'':Number(v).toFixed(2);})()}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)" ${it.semCobranca?'disabled':''}>
+              ${it.semCobranca?`<div class="muted" style="font-size:12px;margin-top:2px;">${it.semCobranca==='cortesia'?'Cortesia':'Garantia'} — sem cobrança${Number(it.valorCheio)>0?' (valor '+fmtMoeda(it.valorCheio)+')':''}</div>`:''}
             </div>
             <div class="item-row-desc">
               <button type="button" class="btn-ajuste ${it.ajusteTipo==='desconto'?'ativo-desc':''}" data-aidbtn="desconto" data-idx2="${i}" title="Desconto neste item">Desc.</button>
               <button type="button" class="btn-ajuste ${it.ajusteTipo==='acrescimo'?'ativo-acr':''}" data-aidbtn="acrescimo" data-idx2="${i}" title="Acréscimo neste item">Acrés.</button>
+              <button type="button" class="btn-ajuste ${it.semCobranca==='cortesia'?'ativo-semcob':''}" data-semcob="cortesia" data-idx2="${i}" title="Cortesia: item sem cobrança (valor zerado, a via sai normal)">Cortesia</button>
+              <button type="button" class="btn-ajuste ${it.semCobranca==='garantia'?'ativo-semcob':''}" data-semcob="garantia" data-idx2="${i}" title="Garantia: item sem cobrança (valor zerado, a via sai normal)">Garantia</button>
               <input type="number" min="0" step="0.01" class="campo-perc" data-itfield="ajustePerc" placeholder="%" title="Percentual"
                 value="${it.ajustePerc!==undefined&&it.ajustePerc!==''?it.ajustePerc:''}">
               <span class="desc-sep">ou</span>
@@ -4130,8 +4158,9 @@ function recalcularValorAjustado(it){
         const outros = holder.itens.filter(x=> x!==it && x._modo==='ok');
         const conflito = outros.some(x=> tipoDe(x)!==tipoDe(it)) || (tipoDe(it)==='produto' && outros.some(x=> tipoDe(x)==='produto'));
         const confirmar = ()=>{
+          if(it.semCobranca){ const v=Number(it.valorUnitario)||Number(it.precoOriginal)||0; if(v>0) it.valorCheio=v; it.valorUnitario=0; it.ajusteTipo='nenhum'; }
           it._modo='ok';
-          holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'});
+  /* não abre outro item sozinho: para lançar mais um, clicar em “Adicionar item” */
           drawRows(); updateTotalHint();
         };
         if(!conflito || opts.semAvisoVias){ confirmar(); return; }
@@ -4145,7 +4174,7 @@ function recalcularValorAjustado(it){
             <button class="btn btn-accent" id="viaSepOk" type="button">Entendi, vou abrir outra via</button>
           </div>`);
         document.getElementById('viaSepManter').addEventListener('click', ()=>{ closeModal(); confirmar(); });
-        document.getElementById('viaSepOk').addEventListener('click', ()=>{ closeModal(); holder.itens.splice(idx,1); if(!holder.itens.some(x=>x._modo==='editar')) holder.itens.splice(0,0,{id:uid('it'),produto:'',metal:'',quantidade:1,valorUnitario:'',produtoEstoqueId:'',precoOriginal:'',ajusteTipo:'nenhum',ajusteModo:'percentual',ajusteQtd:'',ajustePerc:'',ajusteValR:'',observacaoItem:'',_modo:'editar'}); drawRows(); updateTotalHint(); });
+        document.getElementById('viaSepOk').addEventListener('click', ()=>{ closeModal(); holder.itens.splice(idx,1); drawRows(); updateTotalHint(); });
       });
     });
     // lápis: volta ao modo editar
@@ -4188,6 +4217,24 @@ function recalcularValorAjustado(it){
         const i=Number(btn.dataset.paclear);
         const it=holder.itens[i];
         it.produtoEstoqueId=''; it.produto=''; it.precoOriginal=''; it.valorUnitario=''; it.ajusteTipo='nenhum'; it.ajusteQtd='';
+        drawRows(); updateTotalHint();
+      });
+    });
+
+    // ── Botões Cortesia / Garantia: zera o valor do item (sem cobrança), guarda o valor cheio p/ estatística ──
+    wrap.querySelectorAll('[data-semcob]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const idx=Number(btn.dataset.idx2), it=holder.itens[idx], tipo=btn.dataset.semcob;
+        if(it.semCobranca===tipo){
+          const v=Number(it.valorCheio)||0;
+          it.semCobranca=''; delete it.valorCheio;
+          it.valorUnitario = v>0 ? v : ''; if(v>0) it.precoOriginal = v;
+        } else {
+          if(!it.semCobranca){ const v=Number(valorBaseItem(it))||Number(it.valorUnitario)||Number(it.precoOriginal)||0; it.valorCheio = v; }
+          it.semCobranca=tipo;
+          it.ajusteTipo='nenhum'; it.ajustePerc=''; it.ajusteValR=''; it.ajusteQtd='';
+          it.valorUnitario=0;
+        }
         drawRows(); updateTotalHint();
       });
     });
@@ -5146,7 +5193,7 @@ function openEditModalCompleto(order, opts){
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
-  const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', _modo:'ok' })) };
+  const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', semCobranca:it.semCobranca||'', valorCheio:it.valorCheio, _modo:'ok' })) };
   if(!editItensHolder.itens.length) editItensHolder.itens.push({ id:uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'', _modo:'editar' });
   window.__itensHolder = editItensHolder;
   let itensApiEdit = null;
