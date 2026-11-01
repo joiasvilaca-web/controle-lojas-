@@ -471,6 +471,9 @@ const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 let config = null;
 let vendas = [];
 let currentUser = null;
+const MODO_RESERVA = new URLSearchParams(location.search).get('modo')==='reserva';   // card Reservar
+const MOD_SHELL = MODO_RESERVA ? 'reserva' : 'vendas';
+let reservas = []; let __reservaEditando = null; let __conversaoReserva = null; let __reservaPrazoDias = 7;
 let currentTab = 'vendas';
 let modoNovaVenda = false;
 
@@ -771,7 +774,7 @@ function carregarReservadas(lojaId){
   if(!lojaId) return Promise.resolve(null);
   if(__reservadasCarregando[lojaId]) return __reservadasCarregando[lojaId];
   const p = (async ()=>{
-    const r = await estoqueApi('reservadas', { lojaId });
+    const r = await estoqueApi('reservadas', { lojaId, ...(window.__excluirOrigemEstoque ? { excluirOrigem: window.__excluirOrigemEstoque } : {}) });
     if(r && r.ok && Array.isArray(r.data)){
       __reservadasPorLoja[lojaId] = reservadasMapaDeLinhas(r.data, lojaId);
       delete __reservadasFalhou[lojaId];
@@ -891,6 +894,7 @@ async function loadAll(){
   // paralelo, não uma esperando a outra, pra abrir a aba mais rápido.
   const [vendasR, produtosR, orcamentosR] = await Promise.all([vendasGet(), produtosEstoqueGet(), orcamentosGet()]);
   vendas = vendasR; produtosEstoque = aplicarPrecoPedras(produtosR); orcamentos = orcamentosR;
+  if(MODO_RESERVA) await carregarListaReservas();
   // O cadastro de clientes tem dezenas de milhares de linhas — baixar tudo isso
   // ANTES de abrir a aba é o que fazia a demora. A busca de cliente (no modal de
   // seleção) já não depende mais disso, já busca direto no servidor. Então aqui só
@@ -2015,7 +2019,7 @@ function recalcularValorAjustado(it){
   }
   function drawRows(){
     const wrap = container.querySelector('#itensRows');
-    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
+    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false).filter(p=> !MODO_RESERVA || String(p.nome||'').trim().startsWith('9'));
     const lojaAtual = getLojaId();
     if(vendaveis.length===0){
       wrap.innerHTML = `<div class="estado-vazio">${ic('pacote',32)}<b>Nenhum produto cadastrado</b>Cadastre os produtos em Configurações › Cadastro › Produto antes de lançar uma venda.</div>`;
@@ -2348,6 +2352,9 @@ if(EMBEDDED){
       window.__permissoesAbasOverride = ev.data.abas || null;
       await loadAll();
       enterApp();
+    } else if(ev.data.type === 'converterReserva'){
+      pendingConverterResId = ev.data.id;
+      processarConverterReservaPendente();
     } else if(ev.data.type === 'converterOrcamento'){
       // Veio do módulo Orçamento ("🛒 Converter em Venda") via shell. Se o app ainda
       // não terminou de carregar (login/auth), fica pendente e roda no enterApp().
@@ -2355,7 +2362,7 @@ if(EMBEDDED){
       processarConverterOrcamentoPendente();
     } else if(ev.data.type === 'pedirRascunho'){
       { const __ov = document.getElementById('modalOverlay'); if(__ov && __ov.classList.contains('show')) closeModal(); }
-      if(EMBEDDED) parent.postMessage({ type:'semRascunho', modulo:'vendas' }, '*');
+      if(EMBEDDED) parent.postMessage({ type:'semRascunho', modulo:MOD_SHELL }, '*');
     } else if(ev.data.type === 'gotoTab'){
       currentTab = ev.data.tabId;
       renderTabs();
@@ -2421,12 +2428,12 @@ function enterApp(){
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
   document.getElementById('linkConfigHub').style.display = currentUser.nivel==='diretoria' ? '' : 'none';
   buildTabs();
-  currentTab = 'vendas';
+  currentTab = MODO_RESERVA ? 'reservas' : 'vendas';
   modoNovaVenda = false;
   if(EMBEDDED){
     const permitido = tabsForLevel();
     if(!permitido.some(t=>t.id===currentTab)) currentTab = permitido[0] ? permitido[0].id : 'vendas';
-    parent.postMessage({ type:'tabs', modulo:'vendas', tabs: permitido, active: currentTab }, '*');
+    parent.postMessage({ type:'tabs', modulo:MOD_SHELL, tabs: permitido, active: currentTab }, '*');
   }
   renderTabs();
   renderView();
@@ -2439,12 +2446,14 @@ function enterApp(){
   if(window.__lojaAtual && window.__lojaAtual.id) carregarReservadas(window.__lojaAtual.id);
   __appPronto = true;
   if(pendingConverterOrcId) processarConverterOrcamentoPendente();
+  if(pendingConverterResId) processarConverterReservaPendente();
 }
 
 /* ============================================================
    NAVEGAÇÃO
    ============================================================ */
 function tabsForLevel(){
+  if(MODO_RESERVA) return [{ id:'reservas', label:'Reservas', icon:'🔖' }];
   const t = [
     { id:'vendas', label:'Lançadas', icon:'📋' },
   ];
@@ -2484,13 +2493,15 @@ function renderTabs(){
   document.querySelectorAll('nav.tabs button, .mobile-tabbar button').forEach(b=>{
     b.classList.toggle('active', b.dataset.tab === currentTab);
   });
-  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:'vendas', tabId: currentTab }, '*');
+  if(EMBEDDED) parent.postMessage({ type:'activeTab', modulo:MOD_SHELL, tabId: currentTab }, '*');
 }
 function renderView(){
   const main = document.getElementById('mainContent');
   main.innerHTML = '';
   main.classList.toggle('modo-pdv', !!modoNovaVenda);
   if(!modoNovaVenda) __conversaoOrcamento = null;
+  if(!modoNovaVenda){ __conversaoReserva = null; __reservaEditando = null; if(window.__excluirOrigemEstoque){ window.__excluirOrigemEstoque = null; invalidarReservadas(); } }
+  if(MODO_RESERVA){ if(modoNovaVenda) renderNovaVenda(main); else renderReservas(main); return; }
   if(modoNovaVenda) renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
   else if(currentTab==='semnota') renderSemNota(main);
@@ -2960,7 +2971,7 @@ async function marcarOrcamentoConvertidoEmVenda(orcamentoId, venda){
 async function avisoConsumoReservado(reservas, lojaId){
   const ids = Object.keys(reservas||{}).filter(id=> reservas[id] > 0);
   if(!lojaId || ids.length===0) return '';
-  const r = await estoqueApi('reservadas', { lojaId, produtoIds: ids });
+  const r = await estoqueApi('reservadas', { lojaId, produtoIds: ids, ...(window.__excluirOrigemEstoque ? { excluirOrigem: window.__excluirOrigemEstoque } : {}) });
   let mapa;
   if(r && r.ok && Array.isArray(r.data)){ mapa = reservadasMapaDeLinhas(r.data, lojaId); }
   else if(__reservadasPorLoja[lojaId]){ mapa = __reservadasPorLoja[lojaId]; }
@@ -2990,6 +3001,7 @@ function atualizarBarraPdv(total, pago){
   const elT = document.getElementById('pdvBarraTotal');
   const elS = document.getElementById('pdvBarraStatus');
   if(!elT || !elS) return;
+  if(MODO_RESERVA){ const t = (window.__itensHolder && window.__itensHolder.itens || []).filter(it=>it.produto).reduce((a,it)=>a+(Number(it.quantidade)||1)*(Number(it.valorUnitario)||0),0); elT.textContent = fmtMoeda(t); elS.className = 'pdv-barra-status neutro'; elS.textContent = t>0 ? 'Sem pagamento — reserva por '+__reservaPrazoDias+' dia(s).' : 'Adicione as joias da reserva.'; return; }
   const inp = document.getElementById('pagValorTotal');
   const t = inp && inp.value !== '' ? (Number(inp.value)||0) : (Number(total)||0);
   const p = Number(pago)||0;
@@ -3021,6 +3033,206 @@ function balaoCancelarPreenchimento(main, aoCancelar){
   alvo.parentNode.insertBefore(b, alvo);
 }
 
+/* ============================================================
+   RESERVAR (card próprio: vendas.html?modo=reserva)
+   Lançada como venda, sem caixa e sem pagamento: só reserva a joia (nome iniciado em 9)
+   no estoque até o prazo (Configurações › Cadastro › Reserva). Dentro do prazo vira venda
+   pelo card Vendas (aproveita cliente e itens). Vencida: só consulta.
+   ============================================================ */
+const RESERVAS_API_URL = SUPABASE_URL + "/functions/v1/reservas-api";
+async function reservasApi(op, params){
+  try{
+    const res = await fetch(RESERVAS_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({ senha: __gatewaySenha, op, ...(params||{}) }) });
+    return await res.json();
+  }catch(e){ return { error:'Não foi possível conectar. Verifique sua internet.' }; }
+}
+async function carregarListaReservas(){
+  const r = await reservasApi('listar');
+  if(r && r.ok){ reservas = r.data || []; __reservaPrazoDias = Number(r.prazoDias)||7; }
+  else console.error('erro ao carregar reservas', r && r.error);
+  return reservas;
+}
+function resLojaNome(id){ const l=(config.lojas||[]).find(x=>x.id===id); return l?l.nome:'—'; }
+function resLojaAbrev(id){ const l=(config.lojas||[]).find(x=>x.id===id); return l?(l.abreviacao||l.nome):'—'; }
+function situacaoReserva(r){
+  if(!r) return '';
+  if(r.status==='reservada' && r.venceEm && new Date(r.venceEm).getTime() < Date.now()) return 'vencida';
+  return r.status || 'reservada';
+}
+const ROTULO_RESERVA = { reservada:'Reservada', vencida:'Vencida', convertida:'Virou venda', cancelada:'Cancelada' };
+const SELO_RESERVA = { reservada:'selo-info', vencida:'selo-danger', convertida:'selo-ok', cancelada:'selo-neutro' };
+function fmtDataHora(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?'—':d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function linkClienteReserva(r){ return 'https://vilaca-controle-lojas.vercel.app/via.html?t=res&id=' + encodeURIComponent(r.id); }
+function mensagemReserva(r){
+  const loja = (config.lojas||[]).find(l=>l.id===r.lojaId);
+  const nomeLoja = loja ? (loja.nomeFantasia || loja.nome) : 'Vilaça Joias';
+  const pn = String(r.cliente||'').trim().split(/\s+/)[0] || '';
+  const itens = (r.itens||[]).map(it=> it.produto).join(', ');
+  return `Olá${pn?', '+pn:''}! Sua reserva na ${nomeLoja} está confirmada${r.codigoVia?' (via '+r.codigoVia+')':''}.\n`
+    + `Joia(s) reservada(s): ${itens}.\n`
+    + `A reserva vale por ${r.prazoDias||__reservaPrazoDias} dia(s), até ${fmtDataHora(r.venceEm)}. Depois desse prazo a peça volta para a venda.\n`
+    + `Acompanhe sua reserva: ${linkClienteReserva(r)}`;
+}
+function waLinkReserva(r){
+  let tel = String(r.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel = '55'+tel;
+  return 'https://wa.me/' + tel + '?text=' + encodeURIComponent(mensagemReserva(r));
+}
+function abrirEnvioReserva(r, titulo){
+  openModal(`<h3>${escapeHtml(titulo||'Reserva salva')}</h3>
+    <p class="muted" style="margin-top:-4px;">Status para o cliente: <b>Reservado</b> até ${escapeHtml(fmtDataHora(r.venceEm))}.</p>
+    <textarea id="resMsg" style="width:100%;min-height:150px;">${escapeHtml(mensagemReserva(r))}</textarea>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="resMsgFechar" type="button">Fechar</button>
+      <button class="btn btn-ghost" id="resMsgCopiar" type="button">${ic('copiar',14)} Copiar mensagem</button>
+      ${r.telefone ? `<a class="btn btn-accent" id="resMsgWa" target="_blank" rel="noopener" href="${escapeHtml(waLinkReserva(r))}">${ic('whatsapp',14)} Enviar ao cliente</a>` : ''}
+    </div>`);
+  document.getElementById('resMsgFechar').addEventListener('click', closeModal);
+  document.getElementById('resMsgCopiar').addEventListener('click', ()=>{ const t=document.getElementById('resMsg').value; try{ navigator.clipboard.writeText(t); showToast('Mensagem copiada.'); }catch(e){} });
+  const wa = document.getElementById('resMsgWa');
+  if(wa) wa.addEventListener('click', ()=>{ const t=document.getElementById('resMsg').value; let tel=String(r.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel='55'+tel; wa.href='https://wa.me/'+tel+'?text='+encodeURIComponent(t); });
+}
+async function salvarReservaDoForm(tempItensHolder){
+  const lojaId = document.getElementById('v_loja').value;
+  if(!lojaId){ showToast('Escolha a loja no topo da tela antes de reservar.'); return; }
+  const vendedora = document.getElementById('v_vendedora').value.trim();
+  const cliente = document.getElementById('v_cliente').value.trim();
+  const telefone = document.getElementById('v_telefone').value.trim();
+  const itensValidos = tempItensHolder.itens.filter(it=>it.produto);
+  if(!vendedora){ showToast('Escolha a vendedora.'); return; }
+  if(!cliente){ showToast('Escolha o cliente da reserva.'); return; }
+  if(itensValidos.length===0){ showToast('Adicione pelo menos uma joia (código 9).'); return; }
+  const semEstoque = itensValidos.filter(it=>!it.produtoEstoqueId);
+  if(semEstoque.length){ showToast('Reserva só aceita joias do estoque (nome iniciado em 9). Remova: ' + semEstoque.map(i=>i.produto).join(', ')); return; }
+  const fora = itensValidos.filter(it=>!String(it.produto||'').trim().startsWith('9'));
+  if(fora.length){ showToast('Só joias com código iniciado em 9 podem ser reservadas: ' + fora.map(i=>i.produto).join(', ')); return; }
+  const itens = itensValidos.map(it=>{ const c={...it}; delete c._modo; return c; });
+  const subtotal = itens.reduce((a,it)=>a+(Number(it.quantidade)||1)*(Number(it.valorUnitario)||0),0);
+  const loja = (config.lojas||[]).find(l=>l.id===lojaId);
+  const reg = {
+    id: __reservaEditando ? __reservaEditando.id : undefined,
+    lojaId, loja: loja ? loja.nome : '', vendedora, vendedoraId: vendedoraIdPorNome(vendedora), cliente, telefone,
+    cpf: (window.__cliSelReserva && window.__cliSelReserva.cpf) || (__reservaEditando && __reservaEditando.cpf) || '',
+    clienteId: (window.__cliSelReserva && window.__cliSelReserva.id) || (__reservaEditando && __reservaEditando.clienteId) || '',
+    itens, valorTotal: subtotal, subtotalItens: subtotal,
+    observacaoGeral: (document.getElementById('v_observacaoGeral')?.value||'').trim(),
+    infoInterna: (document.getElementById('v_infoInterna')?.value||'').trim(),
+  };
+  const r = await reservasApi('salvar', { reserva: reg });
+  if(!r || !r.ok){ showToast((r && r.error) || 'Não foi possível salvar a reserva.'); return; }
+  const editando = !!__reservaEditando;
+  __reservaEditando = null; window.__cliSelReserva = null;
+  invalidarReservadas(); if(lojaId) carregarReservadas(lojaId);
+  await carregarListaReservas();
+  modoNovaVenda = false; currentTab = 'reservas'; renderTabs(); renderView();
+  abrirEnvioReserva(r.data, editando ? 'Reserva atualizada' : 'Reserva salva');
+}
+function transformarReservaEmVenda(r){
+  if(situacaoReserva(r)!=='reservada'){ showToast('Só reserva dentro do prazo pode virar venda.'); return; }
+  if(!EMBEDDED){ showToast('Abra pelo app (CAIXA › Reservar) para transformar em venda.'); return; }
+  closeModal();
+  parent.postMessage({ type:'irParaModulo', alvo:'pdv', converterReserva: r.id }, '*');
+}
+function abrirDetalheReserva(r){
+  const sit = situacaoReserva(r);
+  const ativa = sit==='reservada';
+  openModal(`<h3>Reserva ${escapeHtml(r.codigoVia||'')} <span class="badge ${SELO_RESERVA[sit]||''}">${escapeHtml(ROTULO_RESERVA[sit]||sit)}</span></h3>
+    <p class="muted" style="margin-top:-4px;">${escapeHtml(r.cliente||'')}${r.telefone?' · '+escapeHtml(r.telefone):''} · ${escapeHtml(resLojaNome(r.lojaId))} · ${escapeHtml(vendedoraCurta(r))}</p>
+    <div class="code-list-item" style="display:block;"><b>Reservada em</b> ${escapeHtml(fmtDate(r.data))} · <b>vence</b> ${escapeHtml(fmtDataHora(r.venceEm))}${r.vendaCodigoVia?` · <b>venda</b> ${escapeHtml(r.vendaCodigoVia)}`:''}</div>
+    <table class="tabela-cartoes" style="margin-top:8px;"><tbody>${(r.itens||[]).map(it=>`<tr><td>${escapeHtml(it.produto)}${Number(it.quantidade)>1?' ×'+escapeHtml(String(it.quantidade)):''}</td><td class="num">${fmtMoeda((Number(it.quantidade)||1)*(Number(it.valorUnitario)||0))}</td></tr>`).join('')}
+      <tr><td><b>Total</b></td><td class="num"><b>${fmtMoeda(r.valorTotal)}</b></td></tr></tbody></table>
+    ${r.observacaoGeral?`<p><b>Observação:</b> ${escapeHtml(r.observacaoGeral)}</p>`:''}
+    ${(r.historico||[]).length?`<div class="muted" style="font-size:12.5px;margin-top:10px;">${r.historico.slice().reverse().map(h=>`${escapeHtml(fmtDataHora(h.em))} — ${escapeHtml(h.acao)}${h.por?' · '+escapeHtml(h.por):''}`).join('<br>')}</div>`:''}
+    ${sit==='vencida'?'<p class="muted">Prazo encerrado: a reserva não pode mais ser editada nem virar venda.</p>':''}
+    <div class="modal-actions" style="flex-wrap:wrap;">
+      <button class="btn btn-ghost" id="resDetFechar" type="button">Fechar</button>
+      ${ativa?`<button class="btn btn-ghost" id="resDetEnviar" type="button">${ic('whatsapp',14)} Enviar ao cliente</button>
+      <button class="btn btn-ghost" id="resDetEditar" type="button">${ic('lapis',14)} Editar</button>
+      <button class="btn btn-danger" id="resDetCancelar" type="button">${ic('cancelar',14)} Cancelar reserva</button>
+      <button class="btn btn-accent" id="resDetVenda" type="button">${ic('carrinho',14)} Transformar em venda</button>`:''}
+    </div>`);
+  document.getElementById('resDetFechar').addEventListener('click', closeModal);
+  if(!ativa) return;
+  document.getElementById('resDetEnviar').addEventListener('click', ()=> abrirEnvioReserva(r, 'Enviar reserva ao cliente'));
+  document.getElementById('resDetEditar').addEventListener('click', ()=>{ closeModal(); __reservaEditando = r; modoNovaVenda = true; renderView(); });
+  document.getElementById('resDetVenda').addEventListener('click', ()=> transformarReservaEmVenda(r));
+  document.getElementById('resDetCancelar').addEventListener('click', async ()=>{
+    const motivo = (prompt('Motivo do cancelamento da reserva:')||'').trim();
+    if(!motivo){ showToast('Cancelamento não confirmado: informe o motivo.'); return; }
+    const x = await reservasApi('cancelar', { id:r.id, motivo });
+    if(x.error){ showToast(x.error); return; }
+    closeModal(); invalidarReservadas(); await carregarListaReservas(); renderView(); showToast('Reserva cancelada e peça liberada.');
+  });
+}
+function renderReservas(main){
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">Reservas</h1>
+        <p class="page-sub">Joias reservadas (código 9). Não movimenta caixa: só segura a peça no estoque por ${__reservaPrazoDias} dia(s).</p>
+      </div>
+      <div class="page-acoes"><button class="btn btn-accent btn-lg" id="btnNovaReserva">${ic('mais',18)} Nova reserva</button></div>
+    </div>
+    <div class="filters" role="search">
+      <div class="campo-busca">${ic('busca')}<input type="text" id="resBusca" placeholder="Buscar por cliente, via ou joia" aria-label="Buscar"></div>
+      <select id="resStatus" aria-label="Situação"><option value="">Todas</option><option value="reservada" selected>Reservadas</option><option value="vencida">Vencidas</option><option value="convertida">Viraram venda</option><option value="cancelada">Canceladas</option></select>
+    </div>
+    <div class="card card-tabela"><div id="resTabela"><p class="muted" style="padding:16px;">Carregando…</p></div></div>`;
+  document.getElementById('btnNovaReserva').addEventListener('click', ()=>{ __reservaEditando = null; modoNovaVenda = true; renderView(); });
+  const fB = document.getElementById('resBusca'), fS = document.getElementById('resStatus');
+  function desenhar(){
+    const q = fB.value.trim().toLowerCase(), st = fS.value;
+    const lojaAtual = window.__lojaAtual && window.__lojaAtual.id;
+    let lista = reservas.slice();
+    if(st) lista = lista.filter(r=> situacaoReserva(r)===st);
+    if(q) lista = lista.filter(r=> [r.cliente, r.codigoVia, r.vendedora, ...(r.itens||[]).map(i=>i.produto)].join(' ').toLowerCase().includes(q));
+    const wrap = document.getElementById('resTabela');
+    if(!lista.length){ wrap.innerHTML = `<div class="estado-vazio">${ic('etiqueta',32)}<b>Nenhuma reserva</b>Clique em “Nova reserva” para reservar uma joia.</div>`; return; }
+    wrap.innerHTML = `<table class="tabela-cartoes"><thead><tr><th>Data</th><th>Loja</th><th>Cliente</th><th>Vendedora</th><th>Joias</th><th class="num">Valor</th><th>Vence em</th><th>Situação</th><th class="acoes"><span class="so-leitor">Ações</span></th></tr></thead><tbody>
+      ${lista.map(r=>{ const sit = situacaoReserva(r); return `<tr class="${sit==='vencida'||sit==='cancelada'?'linha-cancelada':''}">
+        <td style="white-space:nowrap;">${fmtDate(r.data)}${r.codigoVia?`<span class="td-via">${escapeHtml(r.codigoVia)}</span>`:''}</td>
+        <td>${escapeHtml(resLojaAbrev(r.lojaId))}</td>
+        <td><span class="cli-nome">${escapeHtml(String(r.cliente||'').trim().split(/\s+/).slice(0,2).join(' '))}</span></td>
+        <td>${escapeHtml(vendedoraCurta(r))}</td>
+        <td>${escapeHtml((r.itens||[]).map(i=>i.produto).join(', '))}</td>
+        <td class="num">${fmtMoeda(r.valorTotal)}</td>
+        <td style="white-space:nowrap;">${escapeHtml(fmtDataHora(r.venceEm))}</td>
+        <td><span class="badge ${SELO_RESERVA[sit]||''}">${escapeHtml(ROTULO_RESERVA[sit]||sit)}</span></td>
+        <td class="acoes"><div class="acoes-linha">
+          ${btnIcone('olho','Ver reserva',`data-resver="${r.id}"`)}
+          ${sit==='reservada' ? btnIcone('carrinho','Transformar em venda',`data-resvenda="${r.id}"`) : ''}
+        </div></td></tr>`; }).join('')}
+      </tbody></table>`;
+    wrap.querySelectorAll('[data-resver]').forEach(b=> b.addEventListener('click', ()=> abrirDetalheReserva(reservas.find(x=>x.id===b.dataset.resver))));
+    wrap.querySelectorAll('[data-resvenda]').forEach(b=> b.addEventListener('click', ()=> transformarReservaEmVenda(reservas.find(x=>x.id===b.dataset.resvenda))));
+  }
+  fB.addEventListener('input', desenhar); fS.addEventListener('change', desenhar);
+  desenhar();
+  carregarListaReservas().then(()=>{ if(document.getElementById('resTabela')) desenhar(); });
+}
+/* Card Vendas: abre a nova venda já preenchida com a reserva (Transformar em venda). */
+let pendingConverterResId = null;
+async function processarConverterReservaPendente(){
+  const id = pendingConverterResId;
+  if(!id || !__appPronto) return;
+  pendingConverterResId = null;
+  const r = await reservasApi('obter', { id });
+  if(!r || !r.ok){ showToast((r && r.error) || 'Reserva não encontrada.'); return; }
+  const res = r.data;
+  if(situacaoReserva(res)!=='reservada'){ showToast('Esta reserva está ' + (ROTULO_RESERVA[situacaoReserva(res)]||'encerrada').toLowerCase() + ' e não pode virar venda.'); return; }
+  let cliente = null;
+  try{ if(res.telefone || res.cpf) cliente = await buscarClientePorTelefoneOuCpf(res.telefone||'', res.cpf||''); }catch(e){}
+  if(!cliente) cliente = { nome: res.cliente, telefone: res.telefone||'' };
+  { const ov = document.getElementById('modalOverlay'); if(ov && ov.classList.contains('show')) closeModal(); }
+  __conversaoOrcamento = null;
+  __conversaoReserva = { reserva: res, cliente };
+  window.__excluirOrigemEstoque = { tipo:'reserva', id: res.id };
+  invalidarReservadas();
+  modoNovaVenda = true;
+  renderView();
+  showToast('Venda a partir da reserva ' + (res.codigoVia||'') + ' — confira os itens e lance o pagamento.');
+}
+
 function renderNovaVenda(main){
   if(!currentUser || !config){
     // config ainda não chegou do servidor — aguarda e tenta de novo
@@ -3031,11 +3243,11 @@ function renderNovaVenda(main){
   main.innerHTML = `
     <div class="page-head">
       <div>
-        <a href="#" id="linkVoltarVendas" class="link-voltar">${ic('voltar',14)} Voltar para a lista de vendas</a>
-        <h1 class="page-title">Nova venda</h1>
-        <p class="page-sub">Escolha o cliente, passe os itens e lance o pagamento.</p>
+        <a href="#" id="linkVoltarVendas" class="link-voltar">${ic('voltar',14)} ${MODO_RESERVA?'Voltar para as reservas':'Voltar para a lista de vendas'}</a>
+        <h1 class="page-title">${MODO_RESERVA ? (__reservaEditando ? 'Editar reserva '+escapeHtml(__reservaEditando.codigoVia||'') : 'Nova reserva') : 'Nova venda'}</h1>
+        <p class="page-sub">${MODO_RESERVA ? 'Escolha o cliente e as joias (código 9). Não tem pagamento nem caixa: a peça fica reservada por '+__reservaPrazoDias+' dia(s).' : 'Escolha o cliente, passe os itens e lance o pagamento.'}</p>
       </div>
-      <div class="atalhos" aria-hidden="true"><kbd>F4</kbd> cliente <kbd>Enter</kbd> adiciona item <kbd>F8</kbd> pagamento</div>
+      ${MODO_RESERVA?'':'<div class="atalhos" aria-hidden="true"><kbd>F4</kbd> cliente <kbd>Enter</kbd> adiciona item <kbd>F8</kbd> pagamento</div>'}
     </div>
     <div class="pdv-grid">
       <div class="pdv-principal">
@@ -3050,7 +3262,7 @@ function renderNovaVenda(main){
               <input type="hidden" id="v_loja" value="${window.__lojaAtual ? escapeHtml(window.__lojaAtual.id) : ''}">
             </div>
             <div class="field"><label for="v_vendedora">Vendedora</label>${vendedoraTravadaNoLogin() ? `<input id="v_vendedora" value="${escapeHtml(vendedoraTravadaNoLogin())}" readonly title="Preenchido com o seu login">` : `<select id="v_vendedora">${vendedoraOptionsHtml('')}</select>`}</div>
-            <div class="field"><label for="v_data">Data da venda</label><input type="date" id="v_data" value="${todayStr()}" readonly tabindex="-1" title="A data da venda é sempre o dia de hoje" style="pointer-events:none;"></div>
+            <div class="field"><label for="v_data">${MODO_RESERVA?'Data da reserva':'Data da venda'}</label><input type="date" id="v_data" value="${todayStr()}" readonly tabindex="-1" title="A data da venda é sempre o dia de hoje" style="pointer-events:none;"></div>
           </div>
           <input type="hidden" id="v_cliente"><input type="hidden" id="v_telefone">
         </div>
@@ -3070,20 +3282,21 @@ function renderNovaVenda(main){
           </div></div>
       </div>
       <div class="pdv-lado">
-        <div class="card"><div id="pagamentoContainerNova"></div></div>
+        ${MODO_RESERVA ? `<div class="card"><div class="section-label">${ic('etiqueta')} Reserva</div><p style="margin:0 0 8px;">Sem pagamento e sem caixa. A joia fica reservada no estoque por <b>${__reservaPrazoDias} dia(s)</b>${__reservaEditando?' (vence em '+escapeHtml(fmtDataHora(__reservaEditando.venceEm))+')':''}.</p><p class="muted" style="margin:0;">Dentro do prazo, abra a reserva e use “Transformar em venda” para receber o pagamento.</p></div>` : ''}
+        <div class="card" ${MODO_RESERVA?'style="display:none;"':''}><div id="pagamentoContainerNova"></div></div>
       </div>
     </div>
     <div class="pdv-barra" role="region" aria-label="Fechamento da venda">
-      <div class="pdv-barra-total"><span>Total da venda</span><strong id="pdvBarraTotal">${fmtMoeda(0)}</strong></div>
+      <div class="pdv-barra-total"><span>${MODO_RESERVA?'Total da reserva':'Total da venda'}</span><strong id="pdvBarraTotal">${fmtMoeda(0)}</strong></div>
       <div class="pdv-barra-status neutro" id="pdvBarraStatus">Adicione os itens da venda.</div>
       <div class="pdv-barra-acoes">
         <button class="btn btn-ghost" id="btnLimparVenda" title="Apagar tudo e começar de novo">Limpar</button>
-        <button class="btn btn-accent btn-lg" id="btnSalvarVenda">${ic('check',18)} Lançar venda</button>
+        <button class="btn btn-accent btn-lg" id="btnSalvarVenda">${ic('check',18)} ${MODO_RESERVA?'Salvar reserva':'Lançar venda'}</button>
       </div>
     </div>
   `;
   const linkVoltarV = document.getElementById('linkVoltarVendas');
-  if(linkVoltarV) linkVoltarV.addEventListener('click', (e)=>{ e.preventDefault(); __conversaoOrcamento = null; modoNovaVenda = false; currentTab = 'vendas'; renderTabs(); renderView(); });
+  if(linkVoltarV) linkVoltarV.addEventListener('click', (e)=>{ e.preventDefault(); __conversaoOrcamento = null; modoNovaVenda = false; currentTab = MODO_RESERVA ? 'reservas' : 'vendas'; renderTabs(); renderView(); });
   const tempItensHolder = { itens:[ { id: uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'', _modo:'editar' } ] };
   window.__itensHolder = tempItensHolder; // exposto para calcTotalItens() no bloco de pagamento
   // Venda a partir de um orçamento (Converter em Venda / "✓ É este"): carrega os itens
@@ -3092,6 +3305,8 @@ function renderNovaVenda(main){
   if(__conversaoOrcamento && __conversaoOrcamento.orcamento){
     tempItensHolder.itens.push(...itensDoOrcamentoParaVenda(__conversaoOrcamento.orcamento));
   }
+  // Reserva: editar (card Reservar) ou transformar em venda (card Vendas) — aproveita os itens lançados
+  { const _r = MODO_RESERVA ? __reservaEditando : (__conversaoReserva && __conversaoReserva.reserva); if(_r) tempItensHolder.itens.push(...itensDoOrcamentoParaVenda(_r)); }
   // Novo formulário = número de reservas fresco (outros módulos podem ter reservado).
   { const lj = window.__lojaAtual && window.__lojaAtual.id; if(lj){ delete __reservadasPorLoja[lj]; delete __reservadasFalhou[lj]; } }
   const __itensEl = document.getElementById('itensContainerNova');
@@ -3106,6 +3321,7 @@ function renderNovaVenda(main){
   function desenharBannerOrcamento(){
     const el = document.getElementById('orcOrigemBanner');
     if(!el) return;
+    if(!MODO_RESERVA && __conversaoReserva){ const rr = __conversaoReserva.reserva; el.innerHTML = `<div class="banner-orc"><span style="display:inline-flex;align-items:center;gap:8px;">${ic('etiqueta')} <span>Venda a partir da reserva <b>${escapeHtml(rr.codigoVia||'')}</b> — ${escapeHtml(rr.cliente||'')} · vence ${escapeHtml(fmtDataHora(rr.venceEm))}</span></span></div>`; return; }
     const o = __conversaoOrcamento && __conversaoOrcamento.orcamento;
     formState.orcamentoOrigemId = __conversaoOrcamento ? __conversaoOrcamento.orcamentoId : null;
     if(!o){ el.innerHTML = ''; return; }
@@ -3141,7 +3357,7 @@ function renderNovaVenda(main){
   }, 50);
 
   // Autocomplete inline de cliente
-  const clienteDaConversao = __conversaoOrcamento ? __conversaoOrcamento.cliente : null;
+  const clienteDaConversao = __conversaoOrcamento ? __conversaoOrcamento.cliente : (__conversaoReserva ? __conversaoReserva.cliente : (MODO_RESERVA && __reservaEditando ? { id: __reservaEditando.clienteId||undefined, nome: __reservaEditando.cliente, telefone: __reservaEditando.telefone||'', cpf: __reservaEditando.cpf||'' } : null));
   if(clienteDaConversao){
     document.getElementById('v_cliente').value = clienteDaConversao.nome || '';
     document.getElementById('v_telefone').value = clienteDaConversao.telefone || '';
@@ -3152,7 +3368,8 @@ function renderNovaVenda(main){
       if(clienteFinal){
         document.getElementById('v_cliente').value = clienteFinal.nome || '';
         document.getElementById('v_telefone').value = clienteFinal.telefone || '';
-        mostrarOrcamentosAbertosModal(clienteFinal, carregarOrcamentoNoCarrinho);
+        window.__cliSelReserva = clienteFinal;
+        if(!MODO_RESERVA) mostrarOrcamentosAbertosModal(clienteFinal, carregarOrcamentoNoCarrinho);
       } else {
         document.getElementById('v_cliente').value = '';
         document.getElementById('v_telefone').value = '';
@@ -3181,6 +3398,7 @@ function renderNovaVenda(main){
   });
 
   document.getElementById('btnSalvarVenda').addEventListener('click', travarCliqueDuplo(async ()=>{
+    if(MODO_RESERVA){ await salvarReservaDoForm(tempItensHolder); return; }
     const lojaId = document.getElementById('v_loja').value;
     if(!lojaId){ showToast('Escolha a loja no topo da tela antes de lançar a venda.'); return; }
     if(await bloqueadoPorCaixaFechado(lojaId)) return;
@@ -3240,6 +3458,8 @@ function renderNovaVenda(main){
     const avisoReserva = await avisoConsumoReservado(reservas, lojaEstoque);
     if(avisoReserva && !confirm(avisoReserva)) return;
     const convOrc = __conversaoOrcamento;
+    const convRes = __conversaoReserva;
+    if(convRes){ const pc = await reservasApi('podeConverter', { id: convRes.reserva.id }); if(!pc || !pc.ok){ showToast('A reserva ' + (convRes.reserva.codigoVia||'') + ' não pode mais virar venda (' + ((pc && (pc.situacao||pc.error)) || 'indisponível') + ').'); return; } }
 
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
     // ===== Crédito do cliente / Fiado =====
@@ -3280,6 +3500,7 @@ function renderNovaVenda(main){
       infoInterna: infoInterna || '',
     };
     if(convOrc && convOrc.orcamentoId) venda.orcamentoId = convOrc.orcamentoId;
+    if(convRes) venda.reservaId = convRes.reserva.id;
     // Código de barras da via, gerado só agora que a venda realmente vai ser salva
     // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
     venda.codigoVia = await bumpCodigoVia('venda', venda.lojaId||'');
@@ -3319,6 +3540,7 @@ function renderNovaVenda(main){
       await aplicarConsumosEstoque(reservas, lojaEstoque, venda.id);
       vendas.unshift(venda);
       if(venda.orcamentoId) await marcarOrcamentoConvertidoEmVenda(venda.orcamentoId, venda);
+      if(convRes){ const rc = await reservasApi('converter', { id: convRes.reserva.id, vendaId: venda.id, vendaCodigoVia: venda.codigoVia||'' }); if(rc && rc.error) showToast('Venda lançada, mas a reserva não foi marcada como convertida: ' + rc.error); __conversaoReserva = null; window.__excluirOrigemEstoque = null; }
       __conversaoOrcamento = null;
       invalidarReservadas();
       if(lojaEstoque) carregarReservadas(lojaEstoque);
@@ -4592,7 +4814,7 @@ function printVenda(v){
    ============================================================ */
 (async function init(){
   if(EMBEDDED){
-    parent.postMessage({ type:'ready', modulo:'vendas' }, '*');
+    parent.postMessage({ type:'ready', modulo:MOD_SHELL }, '*');
     return;
   }
   const hint = document.getElementById('loginHint');

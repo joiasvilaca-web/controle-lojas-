@@ -106,7 +106,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
   const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const p = new URLSearchParams(location.search);
-  const tipo = p.get("t") === "orc" ? "orc" : "venda";
+  const tipo = p.get("t") === "orc" ? "orc" : p.get("t") === "res" ? "res" : "venda";
   const id = p.get("id");
   function esc(s){ return (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   function brl(v){ return "R$ "+Number(v||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -114,14 +114,21 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   const marca = `<div class="brand"><img src="logo-vilaca.png" alt="Vilaça Joias"></div>`;
   function erro(m){ document.getElementById("card").innerHTML = marca + `<div class="error" role="alert">${esc(m)}</div>`; }
   function render(v){
-    const titulo = tipo === "orc" ? "Seu orçamento" : "Sua compra";
+    const titulo = tipo === "orc" ? "Seu orçamento" : tipo === "res" ? "Sua reserva" : "Sua compra";
+    const dh = s => { if(!s) return ""; const d = new Date(s); return isNaN(d) ? "" : d.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}); };
+    const banner = tipo !== "res" ? "" : (v.status === "reservada" ? `<div class="status-banner pronto">Reservado até ${esc(dh(v.venceEm))}</div>`
+      : v.status === "vencida" ? `<div class="status-banner cancelado">Reserva vencida em ${esc(dh(v.venceEm))}</div>`
+      : v.status === "convertida" ? `<div class="status-banner entregue">Reserva concluída: virou compra${v.vendaCodigo ? " (via " + esc(v.vendaCodigo) + ")" : ""}</div>`
+      : `<div class="status-banner cancelado">Reserva cancelada</div>`);
     document.getElementById("card").innerHTML = `${marca}
       <h1>Olá, ${esc(String(v.cliente||"").split(" ")[0] || "cliente")}!</h1>
       <div class="sub">${titulo}${v.via ? " · via " + esc(v.via) : ""}</div>
+      ${banner}
       <div class="details">
         <div><span class="k">Loja</span><span class="v">${esc(v.loja||"—")}</span></div>
         <div><span class="k">Data</span><span class="v">${fmtDate(v.data)}</span></div>
         ${tipo==="orc" && v.validade ? `<div><span class="k">Válido até</span><span class="v">${fmtDate(v.validade)}</span></div>` : ""}
+        ${tipo==="res" && v.status==="reservada" ? `<div><span class="k">Reservado até</span><span class="v">${esc(dh(v.venceEm))}</span></div>` : ""}
       </div>
       <table class="itens">${(v.itens||[]).map(it=>`<tr><td>${esc(it.nome)}${it.qtd>1?` <span style="color:var(--muted)">×${it.qtd}</span>`:""}</td><td class="r">${it.original && it.original>it.valor ? `<span class="orig">${brl(it.original*it.qtd)}</span>` : ""}${brl(it.valor*it.qtd)}</td></tr>`).join("")}</table>
       <div class="totais">
@@ -134,10 +141,12 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   async function carregar(){
     if(!id){ erro("Este link está incompleto. Abra de novo o link que a loja enviou."); return; }
     try{
-      const { data, error } = await supabaseClient.functions.invoke("retirada-terceiro", { body: { acao:"estado", tipo, id, resumo:true } });
+      const { data, error } = tipo === "res"
+        ? await supabaseClient.functions.invoke("reservas-api", { body: { op:"publico", id } })
+        : await supabaseClient.functions.invoke("retirada-terceiro", { body: { acao:"estado", tipo, id, resumo:true } });
       if(error || !data || data.error || !data.via) throw new Error((data && data.error) || "erro");
       render(data.via);
-      if(!window.__rt){ window.__rt = true; RetiradaPublica.montar(document.getElementById("retiradaBox"), { tipo, id, via: data.via.via, client: supabaseClient }); }
+      if(tipo !== "res" && !window.__rt){ window.__rt = true; RetiradaPublica.montar(document.getElementById("retiradaBox"), { tipo, id, via: data.via.via, client: supabaseClient }); }
     }catch(e){ erro("Não foi possível abrir esta via agora. Confira o link e tente de novo em alguns minutos."); }
   }
   carregar();
