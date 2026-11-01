@@ -62,7 +62,7 @@
     if(!(vista > 0)) return '';
     return '<div class="linha"></div>'
       + '<div class="destaque">À vista: '+fmt(vista)+'</div>'
-      + '<div class="destaque">Ou até '+MAX_PARC+'x no cartão: '+fmt(parcelado(vista))+'</div>';
+      + '<div class="destaque">Ou '+MAX_PARC+'x de '+fmt(r2(parcelado(vista)/MAX_PARC))+' no cartão</div>';
   }
   /* Linha da observação do item na via. */
   function obsItemHtml(it, esc){
