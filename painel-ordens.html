@@ -1776,7 +1776,7 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
           }
           drop.querySelector('#cliAcBtnCad2')?.addEventListener('mousedown',e=>{
             e.preventDefault();fechar();
-            abrirSeletorCliente(c=>{clienteSel=c;onSel(c);renderWrap();});
+            abrirSeletorCliente(c=>{clienteSel=c;onSel(c);renderWrap();}, prefillDaBusca(t));
           });
         }
       }
@@ -1922,6 +1922,13 @@ function wireClienteFields(prefix, opts){
   }
 }
 
+/** Ao cadastrar a partir da busca sem resultado, aproveita o que foi digitado (CPF, telefone ou nome). */
+function prefillDaBusca(t){
+  t = String(t||'').trim(); const d = t.replace(/\D/g,'');
+  if(/^[\d.\-\s]+$/.test(t) && d.length===11) return { cpf: t };
+  if(/^[\d()\s.\-+]+$/.test(t) && d.length>=8) return { telefone: d };
+  return t ? { nome: t.toUpperCase(), cliente: t.toUpperCase() } : null;
+}
 function abrirSeletorCliente(onConfirmar, clienteAtual){
   let selecionado = clienteAtual ? { ...clienteAtual } : null;
   openModal(`
@@ -1985,8 +1992,18 @@ function renderResultados(termo){
     if(tel === null) return;
     const cpf   = (document.getElementById('sel_cpf')||{}).value||'';
     if(!nome){ showToast('Informe o nome do cliente.'); return; }
+    // CPF é único: se já existe, usa o cadastro existente (cliente novo) ou bloqueia (edição de outro cliente)
+    { const _cpfD=String(cpf||'').replace(/\D/g,'');
+      if(_cpfD.length===11){
+        const _d = await buscarClientePorTelefoneOuCpf('', cpf);
+        if(_d && !(selecionado && selecionado.id===_d.id)){
+          if(selecionado && selecionado.id){ showToast('Este CPF já está cadastrado para '+(_d.nome||'outro cliente')+'. Não é permitido o mesmo CPF em dois cadastros.'); return; }
+          selecionado = { ..._d };
+          showToast('CPF já cadastrado: usando o cadastro de '+(_d.nome||'cliente')+'.');
+        }
+      } }
     const clienteFinal = {
-      ...(selecionado || { id: uid('cli'), credito:0, fiadoDebitos:[], creditoMovimentos:[], criadoEm:Date.now() }),
+      ...((selecionado && selecionado.id) ? selecionado : { ...(selecionado||{}), id: uid('cli'), credito:0, fiadoDebitos:[], creditoMovimentos:[], criadoEm:Date.now() }),
       nome, telefone: tel || (selecionado ? selecionado.telefone : ''),
       email:         (document.getElementById('sel_email')||{}).value||'',
       cpf,
