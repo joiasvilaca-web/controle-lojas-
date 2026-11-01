@@ -4,6 +4,7 @@
 <script src="tema.js"></script>
 <script src="icones.js"></script>
 <script src="formato.js"></script>
+<script src="cashback.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pedidos e O.S. — Gestão e Controle</title>
@@ -1358,6 +1359,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
     if(!dest) return false;
   }
   await reverterFiadoECreditoOrdem(order);
+  if(order.cashback && order.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, order.cashback.clienteId, order.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback deste pedido.'); }
   order.status = 'cancelado';
   order.motivoCancelamento = motivo;
   order.canceladoPor = currentUser.nome;
@@ -1640,12 +1642,69 @@ function clienteCardHtml(c, idx){
 }
 
 /* Crédito do cliente selecionado: libera a forma CRÉDITO CLIENTE no pagamento e avisa a vendedora */
+/* ---------- CASHBACK (regras em cashback.js) ---------- */
+window.__cbCli = { id:null, cli:null, info:null };
+function cbDataLimite(){ const el=document.getElementById('f_data'); return el && el.value ? el.value : null; }
+function definirCashbackCliente(c){
+  window.__cbCli = { id: c && c.id || null, cli: c || null, info: (c && c.id && window.Cashback) ? Cashback.info(c, cbDataLimite()) : null };
+  // Sempre relê o saldo no servidor (a busca/edição pode trazer uma cópia sem o cashback atualizado)
+  if(!c || !window.Cashback) return;
+  (async ()=>{
+    let id = c.id || null;
+    if(!id) id = await cbAcharClienteId({ telefone: c.telefone || '' });
+    if(!id) return;
+    const fresco = await Cashback.buscarCliente(gatewayCall, id);
+    if(!fresco || (window.__cbCli.cli !== c)) return;
+    window.__cbCli = { id, cli: fresco, info: Cashback.info(fresco, cbDataLimite()) };
+    document.dispatchEvent(new CustomEvent('credito-cliente'));
+  })();
+}
+function cbAtualizarInfo(){ if(window.__cbCli && window.__cbCli.cli && window.Cashback) window.__cbCli.info = Cashback.info(window.__cbCli.cli, cbDataLimite()); }
+document.addEventListener('change', e=>{ if(e.target && e.target.id==='f_data'){ cbAtualizarInfo(); document.dispatchEvent(new CustomEvent('credito-cliente')); } });
+function cbOpcaoHtml(formaId){
+  const inf = window.__cbCli && window.__cbCli.info;
+  if(!((inf && inf.disp>0) || formaId==='__cashback')) return '';
+  return `<option value="__cashback" ${formaId==='__cashback'?'selected':''}>CASHBACK${inf&&inf.disp>0?' (disp. '+fmtMoeda(inf.disp)+')':''}</option>`;
+}
+function cbAvisoHtml(total){ cbAtualizarInfo(); return (window.Cashback && window.__cbCli && window.__cbCli.info) ? Cashback.avisoPagamentoHtml(window.__cbCli.info, total) : ''; }
+/** Confere o valor em cashback de uma linha de pagamento. Devolve mensagem de erro ou ''. */
+function cbConferirLinha(holder, p, total){
+  if(p.formaId!=='__cashback' || !window.Cashback) return '';
+  const inf = window.__cbCli && window.__cbCli.info;
+  if(!inf) return 'Para usar cashback, escolha um cliente cadastrado na busca.';
+  const outros = holder.pagamentos.filter(x=>x!==p && x._modo!=='editar' && x.formaId==='__cashback').reduce((a,x)=>a+(Number(x.valor)||0),0);
+  const lim = Math.min(inf.disp, Cashback.maxUso(total)) - outros;
+  return Number(p.valor) > lim + 0.009 ? 'Cashback: pode abater no máximo '+fmtMoeda(Math.max(0,lim))+' (saldo disponível hoje e limite de 50% do total).' : '';
+}
+function cbTotais(pags){
+  const formas = (config.formasPagamento||config.paymentTypes||[]); let din=0, uso=0;
+  (pags||[]).forEach(p=>{ if(p._modo==='editar') return; const v=Number(p.valor)||0; if(p.formaId==='__cashback') uso+=v; else if(window.Cashback && Cashback.ehDinheiro(p.formaId, formas)) din+=v; });
+  return { din:Math.round(din*100)/100, uso:Math.round(uso*100)/100 };
+}
+async function cbAcharClienteId(reg){
+  const telD = String(reg.telefone||'').replace(/\D/g,''); if(!telD) return null;
+  try{ const r = await gatewayCall({ op:'searchClients', params:{ termo: telD } }); const a = ((r&&r.data)||[]).find(c=>String(c.telefone||'').replace(/\D/g,'')===telD); return a ? a.id : null; }catch(e){ return null; }
+}
+/** modo 'validar' (antes de salvar o registro) ou 'gravar' (depois). anterior = reg.cashback de ANTES desta gravação. */
+async function cashbackProcessar(reg, tipo, total, modo, anterior, clienteIdHint){
+  if(!window.Cashback) return { ok:true };
+  const t = cbTotais(reg.pagamentos);
+  if(!anterior && t.din<=0.004 && t.uso<=0.004) return { ok:true };
+  let cid = (anterior && anterior.clienteId) || clienteIdHint || null;
+  if(!cid) cid = await cbAcharClienteId(reg);
+  if(!cid){ if(t.uso>0.004) return { ok:false, erro:'Para usar cashback, escolha um cliente cadastrado na busca.' }; return { ok:true, semCliente:true }; }
+  const r = await Cashback.aplicar(gatewayCall, cid, { registroId:reg.id, tipo, via:reg.codigoVia||reg.via||'', loja:reg.lojaId||'', dinheiroTotal:t.din, usadoTotal:t.uso, total:Number(total)||0, anterior }, modo==='validar' ? 'validar' : null);
+  if(r.erro) return { ok:false, erro:r.erro };
+  return { ok:true, resumo:r.resumo };
+}
 window.__credCli = { id:null, valor:0 };
 function definirCreditoCliente(c, avisar){
+  const _cbAntes = window.__cbCli && window.__cbCli.id; definirCashbackCliente(c); const cbMudou = _cbAntes !== (c && c.id || null);
+  if(cbMudou && avisar && window.__cbCli.info && window.__cbCli.info.disp>0) setTimeout(()=>showToast('Cliente com '+fmtMoeda(window.__cbCli.info.disp)+' de cashback disponível.'), 1200);
   const v = c ? Math.max(0, Number(c.credito)||0) : 0;
   const mudou = window.__credCli.id !== (c && c.id || null) || window.__credCli.valor !== v;
   window.__credCli = { id: c && c.id || null, valor: v };
-  if(mudou){
+  if(mudou || cbMudou){
     document.dispatchEvent(new CustomEvent('credito-cliente'));
     if(avisar && v > 0) showToast('Este cliente tem '+fmtMoeda(v)+' de crédito disponível.');
   }
@@ -2372,7 +2431,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   function nomeFormaPag(id){
-    if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
+    if(id==='__cashback') return 'Cashback'; if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
     const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||calcTotalItens(); }
@@ -2414,6 +2473,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
         const p = holder.pagamentos[Number(b.dataset.pagok)];
         if(!p.formaId){ showToast('Escolha a forma de pagamento.'); return; }
         if(!(Number(p.valor)>0)){ showToast('Digite o valor desta forma de pagamento.'); return; }
+        { const _e = cbConferirLinha(holder, p, totalPag()); if(_e){ showToast(_e); return; } }
         if(formaEhPix(p.formaId) && !p.pessoa){ perguntarPixTipo().then(t=>{ if(t){ p.pessoa=t; drawRows(); } }); return; }
         delete p._modo;
         if(totalPag() - somaConf() > 0.009) holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
@@ -2436,6 +2496,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
+    { let cbEl = container.querySelector('#pagCashbackAviso'); if(!cbEl){ cbEl = document.createElement('div'); cbEl.id = 'pagCashbackAviso'; hint.parentNode.insertBefore(cbEl, hint); } cbEl.innerHTML = cbAvisoHtml(totalPag()); }
     const temSemCusto = holder.pagamentos.some(p=>p.formaId==='__sem_custo');
     if(temSemCusto){ holder.valorTotal = 0; }
     const soma = somaConf();
@@ -2528,7 +2589,7 @@ function mountPagamentosEdicao(container, holder){
   }
 
   function nomeFormaPag(id){
-    if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
+    if(id==='__cashback') return 'Cashback'; if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
     const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||0; }
@@ -2570,6 +2631,7 @@ function mountPagamentosEdicao(container, holder){
         const p = holder.pagamentos[Number(b.dataset.pagok)];
         if(!p.formaId){ showToast('Escolha a forma de pagamento.'); return; }
         if(!(Number(p.valor)>0)){ showToast('Digite o valor desta forma de pagamento.'); return; }
+        { const _e = cbConferirLinha(holder, p, totalPag()); if(_e){ showToast(_e); return; } }
         if(formaEhPix(p.formaId) && !p.pessoa){ perguntarPixTipo().then(t=>{ if(t){ p.pessoa=t; drawRows(); } }); return; }
         delete p._modo;
         if(totalPag() - somaConf() > 0.009) holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
@@ -2592,6 +2654,7 @@ function mountPagamentosEdicao(container, holder){
     { const nh=container.querySelector('#pagNotaPfHint'); if(nh) nh.textContent = soPixPF(holder.pagamentos) ? 'Pix de pessoa física: a nota é opcional e o fechamento do caixa não cobra.' : ''; }
     const hint = container.querySelector('#pagSomaHint');
     if(!hint) return;
+    { let cbEl = container.querySelector('#pagCashbackAviso'); if(!cbEl){ cbEl = document.createElement('div'); cbEl.id = 'pagCashbackAviso'; hint.parentNode.insertBefore(cbEl, hint); } cbEl.innerHTML = cbAvisoHtml(totalPag()); }
     const soma = holder.pagamentos.filter(p=>p._modo!=='editar').reduce((acc,p)=> acc + (Number(p.valor)||0), 0);
     const total = Number(holder.valorTotal)||0;
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
@@ -2620,10 +2683,11 @@ function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
   let html = formas.map(pt=>`<option value="${pt.id}" ${formaIdAtual===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('');
   const legado = { '__credito':'CRÉDITO CLIENTE', '__fiado':'Fiado', '__sem_custo':'Sem custo' };
   if(permitirCredito && window.__credCli.valor>0 && formaIdAtual!=='__credito') html += `<option value="__credito">CRÉDITO CLIENTE (disp. ${fmtMoeda(window.__credCli.valor)})</option>`;
+  html += cbOpcaoHtml(formaIdAtual);
   if(legado[formaIdAtual]) html += `<option value="${formaIdAtual}" selected>${legado[formaIdAtual]}</option>`;
   return html;
 }
-function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito') ? 0 : (Number(p.valor)||0)), 0); }
+function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado/crédito não entram como recebido: fiado movimenta o caixa só quando as parcelas
    são pagas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
 function bloqueioSaldoEntrega(o){
@@ -3285,7 +3349,7 @@ function montarMensagemOS(order, template){
 function printOrder(order){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
-  paymentTypesMap['__credito'] = 'CRÉDITO CLIENTE'; paymentTypesMap['__fiado'] = 'Fiado';
+  paymentTypesMap['__credito'] = 'CRÉDITO CLIENTE'; paymentTypesMap['__cashback'] = 'CASHBACK'; paymentTypesMap['__fiado'] = 'Fiado';
   const imp = (config.impressao && config.impressao.os) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 
@@ -3341,7 +3405,7 @@ function printOrder(order){
     linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
   }
 
-  abrirImpressaoBobina('Ordem de Serviço', linhas.join(''), larguraMm, order.codigoVia);
+  abrirImpressaoBobina('Ordem de Serviço', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(order, escapeHtml) : ''), larguraMm, order.codigoVia);
 }
 
 /** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
@@ -3372,7 +3436,7 @@ ${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/J
 <style>
   @page{ margin:0; }
   *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  body{ font-family:'Courier New', monospace; box-sizing:border-box; width:${larguraMm}mm; margin:0 auto; padding:1mm 2mm; color:#000; font-weight:${peso}; font-size:${px.base}px; line-height:1.42; -webkit-font-smoothing:none; ${reforcoCss} }
+  body{ font-family:'Courier New', monospace; box-sizing:border-box; width:${larguraMm}mm; margin:0 auto; padding:0 2mm; overflow:hidden; color:#000; font-weight:${peso}; font-size:${px.base}px; line-height:1.42; -webkit-font-smoothing:none; ${reforcoCss} }
   .titulo{ font-size:${px.titulo}px; font-weight:800; text-align:center; letter-spacing:.02em; }
   .sub{ font-size:${px.sub}px; color:#000; text-align:center; }
   .linha{ border-top:1px dashed #000; margin:6px 0; }
@@ -3383,6 +3447,8 @@ ${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/J
   .barcode-wrap{ text-align:center; margin-top:6px; }
   .barcode-wrap svg{ max-width:100%; }
   html{ margin:0; padding:0; height:auto; background:#fff; }
+  body > :first-child{ margin-top:0 !important; } body > :last-child{ margin-bottom:0 !important; }
+  @media print{ html, body{ height:auto !important; min-height:0 !important; } }
 </style>
 </head>
 <body>
@@ -3401,8 +3467,9 @@ ${codigoVia ? `<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/J
   const imprimirAjustado = ()=>{
     try{
       const d = printWin.document;
-      const h = Math.ceil(d.body.getBoundingClientRect().height);
-      const mm = Math.ceil(h * 25.4 / 96) + 2;
+      // Altura real do que foi escrito (sem margem em cima/embaixo). +1mm só pra última linha não cair numa 2ª página em branco.
+      const h = Math.max(d.body.scrollHeight, d.body.getBoundingClientRect().height);
+      const mm = Math.ceil(h * 25.4 / 96) + 1;
       const st = d.createElement('style');
       st.textContent = `@page{ size:${larguraMm}mm ${mm}mm; margin:0; }`;
       d.head.appendChild(st);
@@ -4870,6 +4937,10 @@ function renderNovaOrdem(main){
     // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
     // (rascunho não gera código — só quando vira uma O.S. de verdade).
     novaOrdem.codigoVia = await bumpCodigoVia('pedido', novaOrdem.lojaId||'');
+    // Cashback: confere o uso (saldo do dia e limite de 50%) antes de lançar
+    const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
+    if(!cbValO.ok){ showToast(cbValO.erro); return; }
+    if(cbValO.resumo) novaOrdem.cashback = cbValO.resumo;
     // Forma "Sem custo": zera o valorTotal e pula validações de Fiado/Crédito
     const temSemCustoNova = (tempPagHolder.pagamentos||[]).some(p=>p.formaId==='__sem_custo');
     if(temSemCustoNova){ novaOrdem.valorTotal = 0; }
@@ -4920,6 +4991,7 @@ function renderNovaOrdem(main){
       if(!okReq) showToast('Pedido lançado, mas não consegui avisar a Oficina. Avise por outro meio.');
     }
     await upsertClienteFromOrder(cli);
+    if(novaOrdem.cashback){ const _cb = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'gravar', null, novaOrdem.cashback.clienteId); if(!_cb.ok) showToast('Pedido lançado, mas o cashback não foi gravado: '+_cb.erro); }
     showToast(pendenciaReq ? 'Pedido lançado com pendência de autorização. A Oficina foi avisada.' : (encaixe ? 'Pedido lançado como encaixe autorizado.' : 'Pedido lançado.'));
     await sincronizarReservasOrdem(novaOrdem, planoNova);
     if(orcamentoOrigem) await marcarOrcamentoConvertido(orcamentoOrigem, novaOrdem);
@@ -5369,6 +5441,7 @@ function openEditModalCompleto(order, opts){
     }
 
     const st = config.serviceTypes.find(s=>s.id===sid);
+    const _snapCb = JSON.parse(JSON.stringify(order));
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
       via, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja, status,
@@ -5390,6 +5463,10 @@ function openEditModalCompleto(order, opts){
       descTotalPerc: editPagHolder ? editPagHolder.descTotalPerc : order.descTotalPerc,
       descTotalR: editPagHolder ? editPagHolder.descTotalR : order.descTotalR,
     });
+    const _cbAntO = order.cashback || null;
+    const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', order.valorTotal, 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
+    if(!_cbEO.ok){ Object.keys(order).forEach(k=>delete order[k]); Object.assign(order, _snapCb); showToast(_cbEO.erro); return; }
+    if(_cbEO.resumo) order.cashback = _cbEO.resumo;
     // Estoque: entregue → baixa; demais → (re)reserva os itens atuais. Nunca bloqueia.
     let sincronizarDepois = false;
     if(status === 'entregue'){
@@ -5402,6 +5479,7 @@ function openEditModalCompleto(order, opts){
     }
     await saveOrders();
     await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado });
+    if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', order.valorTotal, 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }
     closeModal();
     showToast('Pedido atualizado.');
     if(sincronizarDepois) await sincronizarReservasOrdem(order, planoEdit);
