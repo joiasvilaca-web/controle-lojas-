@@ -1,7 +1,7 @@
 // Service Worker — Vilaça Joias Gestão e Controle
 // Versão mínima: registra o app como PWA instalável.
 // NÃO faz cache de dados (o app busca dados frescos do Supabase a cada uso).
-const CACHE_NAME = 'vilaca-gestao-v3';
+const CACHE_NAME = 'vilaca-gestao-v4';
 
 self.addEventListener('install', (event) => {
   // Ativa imediatamente, sem esperar o fechamento de outras abas
