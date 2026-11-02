@@ -1,3 +1,4 @@
+// backup-drive v5 — v5: grava pela conta joiasvilaca@gmail.com (google_contas), com a antiga como reserva.
 // backup-drive v4 — backup automático do Gestão e Controle no Google Drive.
 // Pastas (Drive de joiasvilaca@gmail.com › APP GESTAO › BACKUP, compartilhada com vilacajoias3 como editor):
 //   PROGRAMACAO › programacao_<data>.zip (código do GitHub, só quando muda)
@@ -26,8 +27,12 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 let tk: { v: string; exp: number } | null = null;
 async function token() {
   if (tk && tk.exp > Date.now()) return tk.v;
-  const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: Deno.env.get("GOOGLE_OAUTH_CLIENT_ID")!, client_secret: Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET")!, refresh_token: Deno.env.get("GOOGLE_OAUTH_REFRESH_TOKEN")!, grant_type: "refresh_token" }) });
-  const j = await r.json();
+  // Conta principal: joiasvilaca@gmail.com (google_contas); se não estiver conectada, a conta antiga.
+  const { data: gc } = await admin.from("google_contas").select("refresh_token").eq("id", "drive").maybeSingle();
+  const pedir = (rt: string) => fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: Deno.env.get("GOOGLE_OAUTH_CLIENT_ID")!, client_secret: Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET")!, refresh_token: rt, grant_type: "refresh_token" }) }).then((x) => x.json());
+  let j = gc && gc.refresh_token ? await pedir(gc.refresh_token) : {};
+  if (!j.access_token) j = await pedir(Deno.env.get("GOOGLE_OAUTH_REFRESH_TOKEN")!);
+  const r = { status: j.access_token ? 200 : 400 };
   if (!j.access_token) throw new Error("Google Drive recusou o acesso: " + (j.error_description || j.error || r.status));
   tk = { v: j.access_token, exp: Date.now() + 50 * 60 * 1000 };
   return tk.v;

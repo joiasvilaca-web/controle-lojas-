@@ -1,3 +1,4 @@
+// upload-foto-drive v26 — v26: grava no Drive de joiasvilaca@gmail.com (APP GESTAO › FOTOS …), conectado em google_contas; se falhar, usa a conta antiga.
 // upload-foto-drive v25 — v25: devolve avisoPhotoroom quando cai no plano B.
 // upload-foto-drive v24 — v24: tratamento leve (sem laço pixel a pixel, que estourava o limite de CPU da função)
 //   e base64 em blocos (String.fromCharCode(...bytes) quebrava com imagens grandes). A Photoroom já entrega
@@ -39,6 +40,27 @@ const NOME_PASTA_TRANSFERENCIAS = "TRANSFERÊNCIAS - Fotos";
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
+const PASTA_APP_GESTAO = "1YhHrzfrkPHPbfpk_t1Vqj2W38weC3Ykd";   // Drive joiasvilaca › APP GESTAO
+const NOVAS_PASTAS: Record<string, string> = { produtos: "FOTOS PRODUTOS", funcionarios: "FOTOS FUNCIONARIOS", transferencias: "FOTOS TRANSFERENCIAS", os: "FOTOS PEDIDOS" };
+/** Conta principal (joiasvilaca, google_contas id='drive'); se não der, a conta antiga (variáveis de ambiente). */
+async function tokenPrincipal(): Promise<string | null> {
+  try {
+    const { data } = await admin.from("google_contas").select("refresh_token").eq("id", "drive").maybeSingle();
+    if (!data || !data.refresh_token) return null;
+    const r = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: Deno.env.get("GOOGLE_OAUTH_CLIENT_ID")!, client_secret: Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET")!, refresh_token: data.refresh_token, grant_type: "refresh_token" }) });
+    const j = await r.json();
+    if (!j.access_token) { console.error("Drive joiasvilaca indisponível:", JSON.stringify(j)); return null; }
+    return j.access_token as string;
+  } catch (e) { console.error("Drive joiasvilaca indisponível:", e); return null; }
+}
+async function pastaFilha(accessToken: string, nome: string, pai: string): Promise<string> {
+  const q = encodeURIComponent(`name='${nome}' and '${pai}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const l = await (await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)`, { headers: { Authorization: `Bearer ${accessToken}` } })).json();
+  if (l.files && l.files[0]) return l.files[0].id;
+  const c = await (await fetch("https://www.googleapis.com/drive/v3/files?fields=id", { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ name: nome, parents: [pai], mimeType: "application/vnd.google-apps.folder" }) })).json();
+  if (!c.id) throw new Error(`Falha ao criar a pasta "${nome}": ` + JSON.stringify(c));
+  return c.id;
+}
 async function getAccessToken(): Promise<string> {
   const clientId = Deno.env.get("GOOGLE_OAUTH_CLIENT_ID"), clientSecret = Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET"), refreshToken = Deno.env.get("GOOGLE_OAUTH_REFRESH_TOKEN");
   if (!clientId || !clientSecret || !refreshToken) throw new Error("Credenciais OAuth do Google nao configuradas");
@@ -130,8 +152,9 @@ Deno.serve(async (req: Request) => {
         }
       }
     }
-    const accessToken = await getAccessToken();
-    const folderId = pasta === "produtos" ? await getOrCreatePastaPorNome(accessToken, NOME_PASTA_PRODUTOS)
+    const principal = await tokenPrincipal();
+    const accessToken = principal || await getAccessToken();
+    const folderId = principal ? await pastaFilha(principal, NOVAS_PASTAS[pasta] || NOVAS_PASTAS.os, PASTA_APP_GESTAO) : pasta === "produtos" ? await getOrCreatePastaPorNome(accessToken, NOME_PASTA_PRODUTOS)
       : pasta === "funcionarios" ? await getOrCreatePastaPorNome(accessToken, NOME_PASTA_FUNCIONARIOS)
       : pasta === "transferencias" ? await getOrCreatePastaPorNome(accessToken, NOME_PASTA_TRANSFERENCIAS)
       : FOLDER_ID_OS;
