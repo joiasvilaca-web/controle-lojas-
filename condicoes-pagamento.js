@@ -20,6 +20,7 @@
   /* Quanto do valor à vista este pagamento quita. */
   function base(p, config){
     var v = Number(p && p.valor) || 0;
+    if(p && p.noTotal) return v;   // venda concluída: o valor da maquininha já está dentro do valorTotal
     return ehCartao(p && p.formaId, config) ? r2(v / FATOR) : v;
   }
   function somaBase(pags, config, filtro){
@@ -46,6 +47,33 @@
       } else { delete p.parcelas; delete p.valorBase; }
     });
     return pags;
+  }
+  /* Venda concluída (Felipe, 02/nov): o total passa a ser o que o cliente pagou de fato.
+     Os 20% do cartão entram no valorTotal; o à vista fica guardado em valorAVista. */
+  function fecharTotal(via, config){
+    if(!via) return via;
+    var acr = 0;
+    (via.pagamentos||[]).forEach(function(p){
+      if(!p || p.noTotal || !ehCartao(p.formaId, config)) return;
+      var v = Number(p.valor)||0;
+      acr += r2(v - r2(v / FATOR));
+      p.valorBase = v; p.noTotal = true;
+    });
+    acr = r2(acr);
+    if(acr > 0.009){
+      if(via.valorAVista == null) via.valorAVista = r2(via.valorTotal);
+      via.valorTotal = r2((Number(via.valorTotal)||0) + acr);
+      via.acrescimoCartao = r2((Number(via.acrescimoCartao)||0) + acr);
+    }
+    return via;
+  }
+  /* Ao editar: volta ao à vista (o fecharTotal refaz ao salvar). */
+  function abrirTotal(via, config){
+    if(!via) return via;
+    if(via.valorAVista != null) via.valorTotal = r2(via.valorAVista);
+    delete via.valorAVista; delete via.acrescimoCartao;
+    (via.pagamentos||[]).forEach(function(p){ if(p && p.noTotal){ delete p.noTotal; p.valorBase = r2((Number(p.valor)||0) / FATOR); } });
+    return via;
   }
   function rotuloPag(p, nomeForma, config, fmt){
     if(ehCartao(p.formaId, config)){
@@ -81,5 +109,5 @@
     return t ? '<div style="font-size:11px;">Obs.: '+esc(t)+'</div>' : '';
   }
   window.CondPag = { FATOR:FATOR, MAX_PARC:MAX_PARC, r2:r2, ehCartao:ehCartao, base:base, somaBase:somaBase, parcelado:parcelado, ajustarAuto:ajustarAuto,
-    carimbar:carimbar, rotuloPag:rotuloPag, selectParcelasHtml:selectParcelasHtml, brutoItens:brutoItens, cupomHtml:cupomHtml, obsItemHtml:obsItemHtml };
+    carimbar:carimbar, fecharTotal:fecharTotal, abrirTotal:abrirTotal, rotuloPag:rotuloPag, selectParcelasHtml:selectParcelasHtml, brutoItens:brutoItens, cupomHtml:cupomHtml, obsItemHtml:obsItemHtml };
 })();

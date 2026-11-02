@@ -11,7 +11,7 @@
 <script src="icones.js"></script>
 <script src="autorizacao.js"></script>
 <script src="cupom.js"></script>
-<script src="condicoes-pagamento.js"></script>
+<script src="condicoes-pagamento.js?v=20261102"></script>
 <script src="retirada-terceiro.js"></script>
 <script src="formato.js"></script>
 <script src="cashback.js"></script>
@@ -633,6 +633,7 @@ function showToast(msg){
   showToast._tm = setTimeout(()=>t.classList.remove('show'), 2600);
 }
 function closeModal(){
+  if(window.__itensHolderPrev){ window.__itensHolder = window.__itensHolderPrev; window.__itensHolderPrev = null; }
   document.getElementById('modalOverlay').classList.remove('show');
   document.getElementById('modalBox').innerHTML='';
   if(history.state && history.state.modalAberto) history.back();
@@ -1987,7 +1988,7 @@ function semPagamentoLancado(v){ return !v.valorTotal && (!v.pagamentos || v.pag
 /* Desconto/acréscimo por item: mantém o valor original e mostra o valor do ajuste e o final */
 function ajusteTotalDoRegistro(rec){
   if(!rec || !rec.descTotalTipo || rec.descTotalTipo==='nenhum') return null;
-  const sub=(rec.itens||[]).reduce((a,it)=>a+(Number(it.valorUnitario)||0),0), fin=Number(rec.valorTotal);
+  const sub=(rec.itens||[]).reduce((a,it)=>a+(Number(it.valorUnitario)||0),0), fin=Number(rec.valorAVista ?? rec.valorTotal);
   if(isNaN(fin)) return null;
   const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return null;
   const d=rec.descTotalTipo==='desconto';
@@ -3735,13 +3736,14 @@ function renderNovaVenda(main){
       observacaoGeral: observacaoGeral || '',
       infoInterna: infoInterna || '',
     };
+    CondPag.fecharTotal(venda, config);   // concluída: total = o que o cliente pagou (cartão com os 20%)
     if(convOrc && convOrc.orcamentoId) venda.orcamentoId = convOrc.orcamentoId;
     if(convRes) venda.reservaId = convRes.reserva.id;
     // Código de barras da via, gerado só agora que a venda realmente vai ser salva
     // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
     venda.codigoVia = await bumpCodigoVia('venda', venda.lojaId||'');
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de gravar a venda
-    const cbVal = await cashbackProcessar(venda, 'Venda', venda.valorTotal, 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
+    const cbVal = await cashbackProcessar(venda, 'Venda', (venda.valorAVista ?? venda.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
     if(!cbVal.ok){ showToast(cbVal.erro); return; }
     if(cbVal.resumo) venda.cashback = cbVal.resumo;
     let clienteCadastro = null;
@@ -3760,7 +3762,7 @@ function renderNovaVenda(main){
     }
     const ok = await vendaSalvar(venda);
     if(ok){
-      if(venda.cashback){ const _cb = await cashbackProcessar(venda, 'Venda', venda.valorTotal, 'gravar', null, venda.cashback.clienteId); if(!_cb.ok) showToast('Venda lançada, mas o cashback não foi gravado: '+_cb.erro); }
+      if(venda.cashback){ const _cb = await cashbackProcessar(venda, 'Venda', (venda.valorAVista ?? venda.valorTotal), 'gravar', null, venda.cashback.clienteId); if(!_cb.ok) showToast('Venda lançada, mas o cashback não foi gravado: '+_cb.erro); }
       if(clienteCadastro){
         if(totalCredito>0){
           clienteCadastro.credito = (Number(clienteCadastro.credito)||0) - totalCredito;
@@ -4758,11 +4760,14 @@ function abrirFormularioEdicaoCompleta(v){
     </div>
   `);
   document.getElementById('modalBox').classList.add('modal-largo');
-  const itensHolder = { itens: (v.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'' })) };
+  const itensHolder = { itens: (v.itens||[]).map(it=>({ ...it, _modo:'ok', id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'' })) };
   const itensApiEd = mountItens(document.getElementById('ed_itensContainer'), itensHolder, ()=> document.getElementById('ed_loja').value);
   document.getElementById('ed_loja').addEventListener('change', ()=> itensApiEd.refreshEstoque());
+  window.__itensHolderPrev = window.__itensHolder; window.__itensHolder = itensHolder;  // total dos itens = itens desta venda
+  const _vistaEd = CondPag.abrirTotal({ valorTotal:v.valorTotal, valorAVista:v.valorAVista, pagamentos:(v.pagamentos||[]).map(p=>({...p})) }, config);
   const pagHolder = {
-    valorTotal: v.valorTotal, pagamentos: (v.pagamentos||[]).map(p=>({...p})),
+    valorTotal: _vistaEd.valorTotal, pagamentos: _vistaEd.pagamentos,
+    descTotalTipo: v.descTotalTipo||'nenhum', descTotalModo: v.descTotalModo||'percentual', descTotalPerc: v.descTotalPerc||'', descTotalR: v.descTotalR||'',
     momentoPagamento: v.momentoPagamento, emissaoNota: v.emissaoNota, numeroNota: v.numeroNota,
     lojaSaidaId: '', lojaPagamentoId: '', lojaNotaId: '', lojaBaixaEstoqueId: '',
   };
@@ -4893,7 +4898,9 @@ function abrirFormularioEdicaoCompleta(v){
     v.cliente = cliente;
     v.itens = itensValidos;
     v.valorTotal = pagHolder.valorTotal;
+    v.descTotalTipo = pagHolder.descTotalTipo||'nenhum'; v.descTotalModo = pagHolder.descTotalModo||'percentual'; v.descTotalPerc = pagHolder.descTotalPerc||''; v.descTotalR = pagHolder.descTotalR||'';
     v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV);
+    delete v.valorAVista; delete v.acrescimoCartao; CondPag.fecharTotal(v, config);
     v.momentoPagamento = pagHolder.momentoPagamento;
     v.emissaoNota = pagHolder.emissaoNota;
     v.numeroNota = pagHolder.numeroNota || '';
@@ -4906,13 +4913,13 @@ function abrirFormularioEdicaoCompleta(v){
     v.creditoUsado = totalCredito;
     v.fiadoDebitoId = novoFiadoDebitoId;
     const _cbAntV = v.cashback || null;
-    const _cbE = v.status!=='cancelada' ? await cashbackProcessar(v, 'Venda', v.valorTotal, 'validar', _cbAntV, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
+    const _cbE = v.status!=='cancelada' ? await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'validar', _cbAntV, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
     if(!_cbE.ok){ showToast(_cbE.erro); return; }
     if(_cbE.resumo) v.cashback = _cbE.resumo;
 
     const ok = await vendaSalvar(v);
     if(ok){
-      if(_cbE.resumo){ const _r = await cashbackProcessar(v, 'Venda', v.valorTotal, 'gravar', _cbAntV, v.cashback.clienteId); if(!_r.ok) showToast('Venda salva, mas o cashback não foi gravado: '+_r.erro); }
+      if(_cbE.resumo){ const _r = await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'gravar', _cbAntV, v.cashback.clienteId); if(!_r.ok) showToast('Venda salva, mas o cashback não foi gravado: '+_r.erro); }
       showToast('Venda atualizada.');
       closeModal();
       renderTabs(); renderView();
@@ -5027,7 +5034,7 @@ function printVenda(v){
   if(imp.valores !== false){
     linhas.push(`<div>Recebido: ${fmtMoeda(valorRecebidoDe(v))}</div>`);
     linhas.push(`<div>A receber: ${fmtMoeda(valorAReceberDe(v))}</div>`);
-    linhas.push(CondPag.cupomHtml(v.itens, v.valorTotal, fmtMoeda));
+    linhas.push(`<div class="linha"></div><div class="destaque">Total: ${fmtMoeda(v.valorTotal)}</div>`);
   }
 
   abrirImpressaoBobina('Venda', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(v, escapeHtml) : ''), larguraMm, v.codigoVia);
