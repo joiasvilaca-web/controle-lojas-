@@ -1,3 +1,5 @@
+// db-gateway v63
+// v63: PRIMEIRO ACESSO. users[].primeiroAcesso (+hashPadrao) => entra com a senha padrão 123456 e é obrigado a criar a nova (op primeiroAcesso). A senha padrão NÃO fica gravada como hash: só vale enquanto senhaHash===hashPadrao (hash aleatório), então outras funções que conferem hash nunca aceitam 123456.
 // db-gateway v62
 // v62: VELOCIDADE. (1) a config (46 kB) é lida do cache de 4s nas operações só de leitura (antes, TODA chamada ia ao banco buscá-la);
 //      login/logout/saveConfig/loja extra seguem lendo fresco. (2) selectAll busca as páginas EM PARALELO (antes: uma depois da outra).
@@ -49,7 +51,7 @@ const MAX_TENTATIVAS_OUTRA_LOJA = 5;
 // tabelas que entram na auditoria de gravação/exclusão (kv de autosave e memória da IA ficam de fora: só geram ruído)
 const AUDITAR_TABELAS = ["vendas_pdv","ordens_servico","orcamentos","produtos_estoque","clientes_cadastro","gastos","gastos_fixos","dp_funcionarios","dp_registros","transferencias_controle","reposicao_controle","envio_diretoria_controle","gravacoes_pedidos","marketing_mensagens"];
 const CAMPOS_ACESSO_USER = ["nivel","lojas","permissoes","funcaoId","ajustes"];
-const CAMPOS_PROTEGIDOS_USER = ["senha","senhaHash","sessaoExpiraEm","sessoes","tentativasFalhas","bloqueado","bloqueadoEm"];
+const CAMPOS_PROTEGIDOS_USER = ["primeiroAcesso","hashPadrao","senha","senhaHash","sessaoExpiraEm","sessoes","tentativasFalhas","bloqueado","bloqueadoEm"];
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -176,6 +178,8 @@ function usuariosPorNome(config: any, usuario: any): any[] {
     return nomes.includes(alvo);
   });
 }
+const SENHA_PADRAO = "123456";
+function emPrimeiroAcesso(u: any): boolean { return !!(u && u.primeiroAcesso===true && u.hashPadrao && u.senhaHash===u.hashPadrao && !u.bloqueado); }
 function gerarTokenSessao(): string {
   const bytes = new Uint8Array(32); crypto.getRandomValues(bytes);
   return "sess_"+Array.from(bytes).map((b)=>b.toString(16).padStart(2,"0")).join("");
@@ -308,7 +312,7 @@ Deno.serve(async (req: Request) => {
   if (!op) return json({error:"operação obrigatória"},400);
 
   try {
-    const OPS_ESCRITA_CONFIG = ["login","logout","entrarOutraLoja","voltarMinhaLoja","saveConfig","mergeConfigKey"];
+    const OPS_ESCRITA_CONFIG = ["primeiroAcesso","login","logout","entrarOutraLoja","voltarMinhaLoja","saveConfig","mergeConfigKey"];
     const config = await getConfigPayload(OPS_ESCRITA_CONFIG.includes(op));
 
     if (op==="login") {
@@ -317,6 +321,7 @@ Deno.serve(async (req: Request) => {
       const candidatos = usuariosPorNome(config,usuario);
       if (candidatos.length===0) return json({ok:false});
       if (candidatos.every((u: any)=>u.bloqueado)) return json({ok:false,bloqueado:true});
+      if (String(senha)===SENHA_PADRAO) { const pa = candidatos.find((u: any)=>emPrimeiroAcesso(u)); if (pa) return json({ok:false,primeiroAcesso:true,usuario:pa.apelido||pa.nome||String(usuario)}); }
       let achado: any = null;
       for (const u of candidatos) { if (u.bloqueado||!u.senhaHash) continue; if (bcrypt.compareSync(String(senha),u.senhaHash)){achado=u;break;} }
       if (!achado) {
@@ -353,6 +358,27 @@ Deno.serve(async (req: Request) => {
         await salvarConfigPayload(config);
       }
       return json({ok:true});
+    }
+
+    if (op==="primeiroAcesso") {
+      const usuario = body.usuario; const nova = String(body.novaSenha||"");
+      if (!usuario) return json({ok:false,erro:"Informe o usuário."});
+      const cands = usuariosPorNome(config,usuario);
+      const alvo = cands.find((u: any)=>emPrimeiroAcesso(u));
+      if (!alvo||String(senha)!==SENHA_PADRAO) {
+        for (const u of cands) { if (u.bloqueado) continue; u.tentativasFalhas=(Number(u.tentativasFalhas)||0)+1; if (u.tentativasFalhas>=MAX_TENTATIVAS){u.bloqueado=true;u.bloqueadoEm=new Date().toISOString();derrubarTodasSessoes(u);} }
+        if (cands.length) await salvarConfigPayload(config);
+        return json({ok:false,erro:"Primeiro acesso não disponível para este usuário. Use sua senha atual para entrar."});
+      }
+      if (nova.length<6) return json({ok:false,erro:"A nova senha precisa ter pelo menos 6 caracteres."});
+      if (nova===SENHA_PADRAO) return json({ok:false,erro:"Escolha uma senha diferente da senha padrão."});
+      if (normalizarUsuario(nova)===normalizarUsuario(usuario)) return json({ok:false,erro:"A senha não pode ser igual ao usuário."});
+      alvo.senhaHash = bcrypt.hashSync(nova,10);
+      delete alvo.hashPadrao; delete alvo.primeiroAcesso; alvo.tentativasFalhas=0;
+      const s = abrirSessao(alvo,req.headers.get("user-agent"));
+      await salvarConfigPayload(config);
+      await auditar(alvo,s.token,{acao:"primeiro_acesso",modulo:"Acesso",resumo:"Criou a nova senha no primeiro acesso"},req);
+      return json({ok:true,token:s.token,expiraEm:s.exp,user:userPublico(alvo,s.token)});
     }
 
     const userBase = findUserBySenha(config,senha);
@@ -405,7 +431,7 @@ Deno.serve(async (req: Request) => {
 
     if (op==="getConfig") {
       const out = JSON.parse(JSON.stringify(config));
-      if (Array.isArray(out.users)) out.users=out.users.map((u: any)=>{const{senha:_s,senhaHash:_h,sessaoExpiraEm:_e,sessoes:_ss,...resto}=u;return resto;});
+      if (Array.isArray(out.users)) out.users=out.users.map((u: any)=>{const{senha:_s,senhaHash:_h,sessaoExpiraEm:_e,sessoes:_ss,hashPadrao:_hp,...resto}=u;return resto;});
       if (Array.isArray(out.funcionarios)) out.funcionarios=out.funcionarios.map((f: any)=>{const{senha:_s,senhaHash:_h,...resto}=f;return resto;});
       return json({data:out});
     }
@@ -440,7 +466,7 @@ Deno.serve(async (req: Request) => {
       const novoLojas=Array.isArray(payload.lojas)?payload.lojas:[];
       if (atualUsers.length>0&&novoUsers.length===0) return json({error:"salvamento bloqueado: a configuração enviada apagaria os usuários. Recarregue a página e tente de novo."},409);
       if (atualLojas.length>0&&novoLojas.length===0) return json({error:"salvamento bloqueado: a configuração enviada apagaria as lojas. Recarregue a página e tente de novo."},409);
-      if (novoUsers.length>0) payload.users=novoUsers.map((u: any)=>{if(!u)return u;const atual=atualUsers.find((a: any)=>a.id===u.id);const saida: any={...u};for(const campo of CAMPOS_PROTEGIDOS_USER){if(atual&&campo in atual)saida[campo]=atual[campo];else delete saida[campo];}if(!ehDiretoria){for(const campo of CAMPOS_ACESSO_USER){if(atual&&campo in atual)saida[campo]=atual[campo];else delete saida[campo];}if(!atual)saida.nivel="vendedora";}return saida;});
+      if (novoUsers.length>0) payload.users=novoUsers.map((u: any)=>{if(!u)return u;const atual=atualUsers.find((a: any)=>a.id===u.id);const saida: any={...u};for(const campo of CAMPOS_PROTEGIDOS_USER){if(atual&&campo in atual)saida[campo]=atual[campo];else delete saida[campo];}if(!ehDiretoria){for(const campo of CAMPOS_ACESSO_USER){if(atual&&campo in atual)saida[campo]=atual[campo];else delete saida[campo];}if(!atual)saida.nivel="vendedora";}if(!atual){const h=bcrypt.hashSync(crypto.randomUUID(),8);saida.senhaHash=h;saida.hashPadrao=h;saida.primeiroAcesso=true;}return saida;});
       if (!ehDiretoria) payload.funcoesAcesso=config.funcoesAcesso;
       if (Array.isArray(payload.funcionarios)) payload.funcionarios=payload.funcionarios.map((f: any)=>{if(!f)return f;const{senha:_s,senhaHash:_h,...resto}=f;return resto;});
       for (const k of ["atendimentoInstancias"]) if (config[k]!==undefined&&payload[k]===undefined) payload[k]=config[k];
