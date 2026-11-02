@@ -3,6 +3,7 @@
 <head>
 <script src="tema.js"></script>
 <script src="icones.js"></script>
+<script src="autorizacao.js"></script>
 <script src="cupom.js"></script>
 <script src="condicoes-pagamento.js"></script>
 <script src="retirada-terceiro.js"></script>
@@ -1308,11 +1309,20 @@ async function caixaFechadoEm(lojaId, data){
     return (r && r.value && r.value.fechado) ? r.value : null;
   }catch(e){ return null; }
 }
+/* Senha de gerente/diretoria libera a ação (fica no LOG). Quem já é gerente/diretoria passa direto. */
+const __pedidosLiberados = new Set();
+async function autorizarGerencia(acao, resumo, registroId){
+  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')) return { nome: currentUser.nome, proprio: true };
+  if(!window.Autorizacao){ showToast('Recarregue a página (Ctrl+F5) para pedir a autorização.'); return null; }
+  return Autorizacao.pedir({ sessao: __gatewaySenha, acao, modulo: 'Pedidos', registroId, resumo, texto: resumo + '. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
+}
 async function bloqueadoPorCaixaFechado(lojaId){
   const f = await caixaFechadoEm(lojaId, hojeStr());
   if(!f) return false;
-  showToast('O caixa de hoje desta loja já foi fechado por '+(f.por||'—')+'. Peça à gerente ou diretoria para reabrir em Resumo do caixa › Fechar caixa.');
-  return true;
+  const msg = 'O caixa de hoje desta loja foi fechado por '+(f.por||'—');
+  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')) return !confirm(msg + '. Fazer esta alteração mesmo assim?');
+  const a = await autorizarGerencia('caixa_fechado', msg + ' — liberar esta alteração', lojaId);
+  return !a;
 }
 function hojeStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** Aplica o cancelamento em cima do objeto `order` em memória (não salva sozinho —
@@ -1390,7 +1400,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
 /** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
 async function abrirCancelarOrdem(order){
   if(!order || order.status==='cancelado') return;
-  if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); return; }
+  if(!podeCancelarOrdem()){ const a = await autorizarGerencia('cancelar_pedido', 'Cancelar o pedido '+(order.via||'')+' de '+(order.cliente||''), order.id); if(!a) return; }
   if(await bloqueadoPorCaixaFechado(order.lojaId)) return;
   const recebido = valorRecebidoDe(order);
   openModal(`
@@ -5142,12 +5152,12 @@ function motivoSemEdicao(reg){
 function openEditModalCompleto(order, opts){
   opts = opts || {};
   // Ordem de outra loja: força somente leitura
-  const bloqueadoPorLoja = !podeEditarRegistro(order);
+  const bloqueadoPorLoja = !podeEditarRegistro(order) && !__pedidosLiberados.has(order.id);
   const somenteLeitura = !!opts.somenteLeitura || bloqueadoPorLoja;
   openModal(`
     <h3>${somenteLeitura ? 'Pedido' : 'Editar pedido'} ${escapeHtml(order.via||'')}</h3>
     <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <b style="color:var(--ink);">${escapeHtml(order.cliente||'')}</b>${order.encaixe?` <span class="badge badge-encaixe" title="Autorizado por ${escapeHtml(order.autorizadoPor||'')}">Encaixe autorizado por ${escapeHtml(order.autorizadoPor||'—')}</span>`:''}</div>
-    ${bloqueadoPorLoja ? `<div class="locked-note">${ico('cadeado')}<span>${escapeHtml(motivoSemEdicao(order))}</span></div>` : `<p>${somenteLeitura ? 'Só leitura. Para alterar, feche e clique no lápis da lista.' : 'Se a nova data ou o novo serviço saírem do padrão, o sistema pede o código de autorização.'}</p>`}
+    ${bloqueadoPorLoja ? `<div class="locked-note">${ico('cadeado')}<span>${escapeHtml(motivoSemEdicao(order))}</span> <button type="button" class="btn btn-ghost btn-sm" id="btnLiberarEdicao">Liberar edição (senha da gerência)</button></div>` : `<p>${somenteLeitura ? 'Só leitura. Para alterar, feche e clique no lápis da lista.' : 'Se a nova data ou o novo serviço saírem do padrão, o sistema pede o código de autorização.'}</p>`}
     <div class="section-label">Cliente</div>
     <div class="modal-acoes-topo">
       <button type="button" class="btn btn-ghost btn-sm" id="btnTrocarClienteEdit" ${somenteLeitura?'disabled':''}>${ico('busca',14)} Trocar cliente</button>
@@ -5298,9 +5308,13 @@ function openEditModalCompleto(order, opts){
   if(somenteLeitura){
     document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=>{ el.disabled = true; });
     document.querySelectorAll('#modalBox button').forEach(el=>{
-      if(el.id !== 'editCancel' && el.id !== 'printBtnCompleto') el.disabled = true;
+      if(el.id !== 'editCancel' && el.id !== 'printBtnCompleto' && el.id !== 'btnLiberarEdicao') el.disabled = true;
     });
     document.getElementById('editCancel').addEventListener('click', closeModal);
+    { const bl = document.getElementById('btnLiberarEdicao'); if(bl) bl.addEventListener('click', async ()=>{
+      const a = await autorizarGerencia('editar_outra_loja', 'Editar o pedido '+(order.via||'')+' de outra loja', order.id);
+      if(!a) return; __pedidosLiberados.add(order.id); openEditModalCompleto(order, {});
+    }); }
     return;
   }
 

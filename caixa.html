@@ -3,6 +3,7 @@
 <head>
 <script src="tema.js"></script>
 <script src="icones.js"></script>
+<script src="autorizacao.js"></script>
 <script src="formato.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -524,7 +525,7 @@ function mensagemConfiavel(ev){
     let acao = '';
     if(!umDia) acao = `<div class="muted" style="margin:10px 0;">Para fechar o caixa, escolha <b>um único dia</b> e <b>uma loja</b> nos filtros.</div>`;
     else if(fechado) acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">${ic('cadeado')} Caixa fechado por ${escapeHtml(fech.por||'—')} em ${quando(fech.em)}.</div>
-      ${gestao ? '' : `<div class="muted" style="margin-bottom:8px;">Só gerente ou diretoria podem reabrir o caixa.</div>`}`;
+      ${gestao ? '' : `<div class="muted" style="margin-bottom:8px;">Para reabrir, use a senha de um gerente ou da diretoria.</div>`}`;
     else if(!tudoOk) acao = `<div class="muted" style="margin:10px 0;">Resolva as pendências abaixo para poder fechar o caixa do dia.</div>`;
     else acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>`;
     openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):''}</h3>
@@ -533,7 +534,7 @@ function mensagemConfiavel(ev){
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="fc_fechar" type="button" data-fechar>Voltar</button>
-        ${umDia && fechado && gestao ? `<button class="btn btn-danger" id="fc_reabrir" type="button">Reabrir caixa</button>` : ''}
+        ${umDia && fechado ? `<button class="btn btn-danger" id="fc_reabrir" type="button">${gestao ? 'Reabrir caixa' : 'Reabrir caixa (senha da gerência)'}</button>` : ''}
         ${umDia && !fechado && tudoOk ? `<button class="btn btn-accent" id="fc_confirmar" type="button">Fechar caixa do dia</button>` : ''}
       </div>`);
     document.getElementById('fc_fechar').addEventListener('click', closeModal);
@@ -548,10 +549,16 @@ function mensagemConfiavel(ev){
     });
     const br = document.getElementById('fc_reabrir');
     if(br) br.addEventListener('click', async ()=>{
-      if(!confirm('Reabrir o caixa de '+periodo+'? Vendas e pedidos poderão ser lançados e cancelados de novo nesta loja.')) return;
+      let autorizadoPor = currentUser.nome;
+      if(gestao){ if(!confirm('Reabrir o caixa de '+periodo+'? Vendas e pedidos poderão ser lançados e cancelados de novo nesta loja.')) return; }
+      else {
+        if(!window.Autorizacao){ showToast('Recarregue a página (Ctrl+F5).'); return; }
+        const a = await Autorizacao.pedir({ sessao: __gatewaySenha, acao:'reabrir_caixa', modulo:'Caixa', registroId: lojaId+':'+de, resumo:'Reabrir o caixa de '+periodo+' · '+nomeLojaCaixa(lojaId) });
+        if(!a) return; autorizadoPor = a.nome;
+      }
       br.disabled = true;
-      const hist = [...((fech&&fech.historico)||[]), { fechadoPor:fech.por, fechadoEm:fech.em, reabertoPor:currentUser.nome, reabertoEm:Date.now() }];
-      const r = await gravarFechamento(lojaId, de, { fechado:false, reabertoPor:currentUser.nome, reabertoEm:Date.now(), historico:hist });
+      const hist = [...((fech&&fech.historico)||[]), { fechadoPor:fech.por, fechadoEm:fech.em, reabertoPor:currentUser.nome, autorizadoPor, reabertoEm:Date.now() }];
+      const r = await gravarFechamento(lojaId, de, { fechado:false, reabertoPor:currentUser.nome, autorizadoPor, reabertoEm:Date.now(), historico:hist });
       if(r && r.error){ br.disabled = false; showToast('Não consegui reabrir: '+r.error); return; }
       showToast('Caixa reaberto.'); abrirFecharCaixa(de, ate, lojaId);
     });

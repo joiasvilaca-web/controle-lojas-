@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
+<script src="autorizacao.js"></script>
 <script src="cupom.js"></script>
 <script src="condicoes-pagamento.js"></script>
 <script src="retirada-terceiro.js"></script>
@@ -3656,8 +3657,7 @@ function podeCancelarVenda(){
 }
 async function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
-  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem cancelar uma venda.'); return; }
-  if(!podeEditarRegistro(venda)){ showToast(motivoSemEdicao(venda)); return; }
+  if((!podeCancelarVenda() || !podeEditarRegistro(venda)) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id); if(!a) return; __vendasLiberadas.add(venda.id); }
   if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
   if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
   const recebido = valorRecebidoDe(venda);
@@ -3834,11 +3834,20 @@ async function caixaFechadoEm(lojaId, data){
     return (r && r.value && r.value.fechado) ? r.value : null;
   }catch(e){ return null; }
 }
+/* Senha de gerente/diretoria libera a ação (fica no LOG). Quem já é gerente/diretoria passa direto (o servidor registra o que for gravado). */
+const __vendasLiberadas = new Set();
+async function autorizarGerencia(acao, resumo, registroId){
+  if(ehGestaoLoja()) return { nome: currentUser.nome, proprio: true };
+  if(!window.Autorizacao){ showToast('Recarregue a página (Ctrl+F5) para pedir a autorização.'); return null; }
+  return Autorizacao.pedir({ sessao: __gatewaySenha, acao, modulo: 'Vendas', registroId, resumo, texto: resumo + '. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
+}
 async function bloqueadoPorCaixaFechado(lojaId){
   const f = await caixaFechadoEm(lojaId, hoje());
   if(!f) return false;
-  showToast('O caixa de hoje desta loja já foi fechado por '+(f.por||'—')+'. Peça à gerente ou diretoria para reabrir em Resumo do caixa › Fechar caixa.');
-  return true;
+  const msg = 'O caixa de hoje desta loja foi fechado por '+(f.por||'—');
+  if(ehGestaoLoja()) return !confirm(msg + '. Fazer esta alteração mesmo assim?');
+  const a = await autorizarGerencia('caixa_fechado', msg + ' — liberar esta alteração', lojaId);
+  return !a;
 }
 function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 /** De qual loja o estoque deve ser descontado/devolvido: por padrão, a própria
@@ -4297,7 +4306,7 @@ function renderVendas(main){
             ].filter(Boolean).join('');
             const itensBtn = `<button type="button" class="btn-link btn-link-itens" data-itens="${v.id}" title="Ver itens da venda">${qtdItens} ${qtdItens===1?'item':'itens'}</button>`;
             const notaBtn = `<button type="button" class="btn-link-nota" data-nota="${v.id}" title="Ver dados da nota fiscal" style="background:none;border:0;padding:0;cursor:pointer;"><span class="badge ${temNota?'selo-ok':'selo-neutro'}" style="white-space:nowrap;">${temNota?escapeHtml(notaTextoLista(v)):'Sem nota'}</span></button>`;
-            const temMais = !cancelada && gestao;
+            const temMais = !cancelada;
             return `
             <tr class="${cancelada?'linha-cancelada':''}">
               <td class="so-mesa" style="white-space:nowrap;">${fmtDate(v.data)}${v.codigoVia?`<span class="td-via">${escapeHtml(v.codigoVia)}</span>`:''}</td>
@@ -4452,9 +4461,9 @@ function abrirNotaVenda(v){
    Se não, abre um formulário com os campos administrativos (não mexe em itens nem
    em formas de pagamento — isso é o que Troca e Cancelamento já cobrem).
    ============================================================ */
-function abrirEditarVenda(v){
+async function abrirEditarVenda(v){
   if(!v || v.status==='cancelada') return;
-  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem editar uma venda.'); return; }
+  if(!podeCancelarVenda() && !__vendasLiberadas.has(v.id)){ const a = await autorizarGerencia('editar_venda', 'Editar a venda '+(v.codigoVia||'')+' de '+(v.cliente||''), v.id); if(!a) return; __vendasLiberadas.add(v.id); }
   openModal(`
     <h3>Editar venda</h3>
     <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
@@ -4468,22 +4477,28 @@ function abrirEditarVenda(v){
   document.getElementById('ev_cancelar').addEventListener('click', closeModal);
   document.getElementById('ev_sim').addEventListener('click', ()=>{
     openModal(`
-      <h3>Esta venda não pode ser editada</h3>
-      <p>A nota fiscal já foi emitida. Editar agora deixaria a nota diferente do sistema.</p>
-      <p>Faça o <b>cancelamento</b> — e lembre de refletir a mudança no sistema de nota fiscal (fora deste app).</p>
+      <h3>Nota fiscal já emitida</h3>
+      <p>Editar agora deixa a nota diferente do sistema. Se mudar valores ou itens, ajuste também no sistema de nota fiscal (fora deste app).</p>
+      <p class="muted">A edição fica registrada no LOG e o link do cliente passa a mostrar a versão nova.</p>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="ev_fechar">Fechar</button>
         <button class="btn btn-danger" id="ev_irCancelar">${ic('cancelar')} Cancelar venda</button>
+        <button class="btn btn-accent" id="ev_editarMesmo">${ic('lapis')} Editar mesmo assim</button>
       </div>
     `);
     document.getElementById('ev_fechar').addEventListener('click', closeModal);
+    document.getElementById('ev_editarMesmo').addEventListener('click', async ()=>{
+      const a = await autorizarGerencia('editar_venda_com_nota', 'Editar a venda '+(v.codigoVia||'')+' com nota já emitida', v.id);
+      if(!a) return;
+      __vendasLiberadas.add(v.id); closeModal(); abrirFormularioEdicaoVenda(v, true);
+    });
     document.getElementById('ev_irCancelar').addEventListener('click', ()=>{ closeModal(); abrirCancelarVenda(v); });
   });
   document.getElementById('ev_nao').addEventListener('click', ()=> abrirFormularioEdicaoVenda(v));
 }
-function abrirFormularioEdicaoVenda(v){
-  if(!podeEditarRegistro(v)){ showToast(motivoSemEdicao(v)); return; }
-  const podeEditarTudo = v.data === hoje() && (!v.trocas || v.trocas.length===0);
+async function abrirFormularioEdicaoVenda(v, liberado){
+  if(!podeEditarRegistro(v) && !__vendasLiberadas.has(v.id)){ const a = await autorizarGerencia('editar_outra_loja', 'Editar a venda '+(v.codigoVia||'')+' de outra loja', v.id); if(!a) return; __vendasLiberadas.add(v.id); }
+  const podeEditarTudo = (v.data === hoje() || liberado) && (!v.trocas || v.trocas.length===0);
   if(podeEditarTudo) abrirFormularioEdicaoCompleta(v);
   else abrirFormularioEdicaoRestrita(v, v.data!==hoje() ? null : 'Esta venda já teve troca registrada, então itens e pagamento não dá pra editar aqui — só os dados abaixo.');
 }
@@ -4507,10 +4522,15 @@ function abrirFormularioEdicaoRestrita(v, avisoExtra){
     <div class="field"><label>Cliente</label><input id="ed_cliente" value="${escapeHtml(v.cliente||'')}"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="ed_fechar">Cancelar</button>
+      ${(!v.trocas || !v.trocas.length) ? `<button class="btn btn-ghost" id="ed_liberarTudo">${ic('cadeado',14)} Editar itens e pagamento</button>` : ''}
       <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
     </div>
   `);
   wireTelefoneMask('ed');
+  { const bl = document.getElementById('ed_liberarTudo'); if(bl) bl.addEventListener('click', async ()=>{
+    const a = await autorizarGerencia('editar_venda_outro_dia', 'Editar itens e pagamento da venda '+(v.codigoVia||'')+' de '+fmtDate(v.data), v.id);
+    if(!a) return; closeModal(); abrirFormularioEdicaoCompleta(v);
+  }); }
   document.getElementById('ed_fechar').addEventListener('click', closeModal);
   document.getElementById('ed_salvar').addEventListener('click', async ()=>{
     const lojaId = document.getElementById('ed_loja').value;
