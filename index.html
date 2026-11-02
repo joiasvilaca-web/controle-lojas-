@@ -366,6 +366,13 @@
   .loja-btn .loja-btn-abrev{width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.25); display:flex; align-items:center; justify-content:center; font-size:14px;}
 
   /* ── Troca de usuário ── */
+  .termos-overlay{display:none; position:fixed; inset:0; background:rgba(15,42,61,.72); z-index:9500; align-items:center; justify-content:center; padding:14px;}
+  .termos-overlay.show{display:flex;}
+  .termos-box{background:#fff; color:#1b2733; width:100%; max-width:720px; max-height:calc(100dvh - 28px); border-radius:16px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,.35);}
+  .termos-head{padding:16px 20px 10px; border-bottom:1px solid #e3e8ee;} .termos-head h2{margin:0; font-size:18px;} .termos-head p{margin:4px 0 0; font-size:12.5px; color:#5b6b7a;}
+  .termos-texto{padding:14px 20px; overflow:auto; flex:1; font-size:14px; line-height:1.55;} .termos-texto h3{font-size:15px; margin:16px 0 6px;} .termos-texto p{margin:0 0 8px;} .termos-texto ul{margin:0 0 8px; padding-left:20px;} .termos-texto li{margin-bottom:4px;}
+  .termos-pe{padding:12px 20px 16px; border-top:1px solid #e3e8ee; background:#f6f8fa;} .termos-pe label{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; font-weight:600; margin-bottom:10px;} .termos-pe label input{margin-top:3px; width:18px; height:18px;}
+  .termos-pe .termos-btns{display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;} .termos-aviso{font-size:12.5px; color:#a15c00; margin-bottom:8px;} .termos-erro{font-size:12.5px; color:#b3261e; margin-bottom:8px;}
   .troca-overlay{display:none; position:fixed; inset:0; background:rgba(15,42,61,.55); z-index:9000; align-items:center; justify-content:center; padding:16px;}
   .troca-overlay.show{display:flex;}
   .troca-box{background:var(--surface,#fff); color:var(--ink,#222); border-radius:16px; width:min(420px,100%); max-height:88vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(15,42,61,.35); overflow:hidden;}
@@ -790,6 +797,18 @@
       <input type="password" id="trocaSenha" placeholder="Senha" autocomplete="off">
       <div class="troca-erro" id="trocaErro"></div>
       <button type="button" class="btn btn-accent" id="trocaEntrar" style="width:100%;">Entrar</button>
+    </div>
+  </div>
+</div>
+<div class="termos-overlay" id="termosOverlay">
+  <div class="termos-box" role="dialog" aria-modal="true" aria-label="Termo de Uso">
+    <div class="termos-head"><h2 id="termosTitulo">Termo de Uso</h2><p id="termosSub">Leia até o fim para poder aceitar.</p></div>
+    <div class="termos-texto" id="termosTexto"></div>
+    <div class="termos-pe">
+      <div class="termos-aviso" id="termosAviso">Role o texto até o final para liberar o aceite.</div>
+      <div class="termos-erro" id="termosErro" style="display:none"></div>
+      <label><input type="checkbox" id="termosCheck" disabled> <span>Li e concordo com o Termo de Uso e Confidencialidade.</span></label>
+      <div class="termos-btns"><button type="button" class="btn btn-ghost" id="termosRecusar">Não aceito (sair)</button><button type="button" class="btn btn-accent" id="termosAceitar" disabled>Aceitar e continuar</button></div>
     </div>
   </div>
 </div>
@@ -1470,6 +1489,12 @@ async function doLogin(){
     document.getElementById('loginPass').value = '';
     return;
   }
+  if(!(await exigirTermos(r.token))){
+    await sairPorRecusaTermos(r.token);
+    document.getElementById('loginPass').value = '';
+    err.textContent = 'Para usar o VILAÇA APP é preciso aceitar o Termo de Uso.'; err.classList.add('show');
+    return;
+  }
   __gatewaySenha = r.token;
   currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
@@ -1485,6 +1510,7 @@ async function tentarRestaurarSessao(){
   if(!s) return false;
   const r = await gatewayValidarSessao(s.senha);
   if(!r || !r.ok){ limparSessao(); return false; }
+  if(!(await exigirTermos(s.senha))){ await sairPorRecusaTermos(s.senha); limparSessao(); return false; }
   __gatewaySenha = s.senha;
   currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
@@ -1616,6 +1642,54 @@ desenharBotaoTema();
    Avatar ao lado da logo. Clicar abre a lista de usuários; escolhe um, digita a senha.
    A senha é conferida pelo mesmo login do db-gateway (6 erros seguidos bloqueiam o usuário).
    ─────────────────────────────────────────────────────────────────────────── */
+/* ---------- TERMO DE USO (aceite obrigatório no login; novo aceite quando a diretoria publica nova versão) ---------- */
+async function termosCall(body, senha){
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/termos-uso', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: senha || __gatewaySenha, ...body }) });
+    return await r.json();
+  }catch(e){ return { error:'Não foi possível conectar.' }; }
+}
+function termosTextoHtml(txt){
+  const out = []; let lista = false;
+  String(txt||'').split('\n').forEach(l=>{
+    const t = l.trim();
+    if(t.startsWith('- ')){ if(!lista){ out.push('<ul>'); lista = true; } out.push('<li>'+escapeHtml(t.slice(2))+'</li>'); return; }
+    if(lista){ out.push('</ul>'); lista = false; }
+    if(t.startsWith('## ')) out.push('<h3>'+escapeHtml(t.slice(3))+'</h3>');
+    else if(t) out.push('<p>'+escapeHtml(t)+'</p>');
+  });
+  if(lista) out.push('</ul>');
+  return out.join('');
+}
+/* Devolve true se o usuário pode entrar (já tinha aceito ou aceitou agora); false se recusou. Falha de rede não trava a loja: deixa entrar e pergunta de novo no próximo acesso. */
+async function exigirTermos(senha){
+  const r = await termosCall({ op:'status' }, senha);
+  if(!r || r.error || r.semTermo || r.aceito) return true;
+  return new Promise(resolve=>{
+    const ov = document.getElementById('termosOverlay'), box = document.getElementById('termosTexto');
+    const chk = document.getElementById('termosCheck'), bt = document.getElementById('termosAceitar'), rec = document.getElementById('termosRecusar');
+    const erro = document.getElementById('termosErro'), aviso = document.getElementById('termosAviso');
+    document.getElementById('termosTitulo').textContent = r.titulo || 'Termo de Uso';
+    document.getElementById('termosSub').textContent = 'Versão ' + r.versao + ' — é preciso aceitar para usar o VILAÇA APP.';
+    box.innerHTML = termosTextoHtml(r.texto); box.scrollTop = 0;
+    chk.checked = false; chk.disabled = true; bt.disabled = true; erro.style.display = 'none'; aviso.style.display = '';
+    const liberar = ()=>{ if(box.scrollTop + box.clientHeight >= box.scrollHeight - 12){ chk.disabled = false; aviso.style.display = 'none'; } };
+    box.onscroll = liberar; ov.classList.add('show'); setTimeout(liberar, 50);
+    chk.onchange = ()=>{ bt.disabled = !chk.checked; };
+    const fechar = (ok)=>{ ov.classList.remove('show'); box.onscroll = null; resolve(ok); };
+    rec.onclick = ()=> fechar(false);
+    bt.onclick = async ()=>{
+      bt.disabled = true; bt.textContent = 'Salvando…'; erro.style.display = 'none';
+      const a = await termosCall({ op:'aceitar', versao: r.versao }, senha);
+      bt.textContent = 'Aceitar e continuar';
+      if(a && a.ok) return fechar(true);
+      erro.textContent = (a && a.error) || 'Não foi possível salvar o aceite. Tente de novo.'; erro.style.display = ''; bt.disabled = !chk.checked;
+    };
+  });
+}
+async function sairPorRecusaTermos(token){
+  try{ await gatewayCall({ op:'logout', senha: token }); }catch(e){}
+}
 const TROCA_URL = SUPABASE_URL + '/functions/v1/trocar-usuario';
 let __trocaLista = [], __trocaSel = null, __trocaBusy = false;
 function iniciaisDe(nome){
@@ -1680,6 +1754,12 @@ async function confirmarTrocaUsuario(){
     else err.textContent = 'Usuário ou senha incorretos.';
     err.classList.add('show');
     document.getElementById('trocaSenha').value = ''; document.getElementById('trocaSenha').focus();
+    return;
+  }
+  if(!(await exigirTermos(r.token))){
+    await sairPorRecusaTermos(r.token);
+    err.textContent = 'Para entrar é preciso aceitar o Termo de Uso.'; err.classList.add('show');
+    document.getElementById('trocaSenha').value = '';
     return;
   }
   const antigo = __gatewaySenha;
@@ -2967,6 +3047,7 @@ const CFG_TABS = [
   { id:'reserva', label:'Reserva' },
   { id:'resumoCaixa', label:'Resumo do caixa' },
   { id:'backup', label:'Backup' },
+  { id:'termos', label:'Termo de uso' },
 ];
 let currentCfgTab = 'clientes';
 
@@ -2984,9 +3065,9 @@ function abrirSubtelaProduto(main, id){
 function abasConfigPermitidas(){
   const permMod = currentPermissoes && currentPermissoes.config;
   const diretoria = currentUser && currentUser.nivel==='diretoria';
-  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa') || diretoria);
+  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa' && t.id!=='termos') || diretoria);
   // "Status e Mensagens" reúne as antigas abas statusOrcamento e mensagens: aparece se qualquer uma estiver liberada
-  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
+  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa' || t.id==='termos') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
 }
 let statusMsgSub = 'status';
 function renderStatusMensagensTab(body){
@@ -3020,6 +3101,7 @@ function renderCfgTab(tab){
   if(tab==='statusOrcamento') return renderStatusMensagensTab(body);
   if(tab==='reserva') return renderReservaCfgTab(body);
   if(tab==='backup') return renderBackupCfgTab(body);
+  if(tab==='termos') return renderTermosCfgTab(body);
   if(tab==='resumoCaixa') return renderResumoCaixaCfgTab(body);
 }
 /* ---------- RESUMO DO CAIXA (WhatsApp para a diretoria ao fechar o caixa) ---------- */
@@ -3054,7 +3136,41 @@ function renderResumoCaixaCfgTab(main){
     b.disabled = false; b.textContent = 'Enviar teste';
   });
 }
-/* ---------- BACKUP (Google Drive › APP GESTAO › BACKUP) ---------- */
+/* ---------- TERMO DE USO (editor da diretoria) ---------- */
+async function renderTermosCfgTab(main){
+  main.innerHTML = `<div class="cad-head"><div><h2>Termo de uso</h2><p>Todo usuário precisa aceitar no próximo acesso. Ao publicar uma nova versão, todos precisam aceitar de novo e cada aceite fica salvo com data, hora e versão.</p></div></div><div class="card"><div class="muted">Carregando…</div></div>`;
+  const r = await termosCall({ op:'aceites' });
+  if(!r || r.error){ main.querySelector('.card').innerHTML = `<div class="muted">${escapeHtml((r&&r.error)||'Erro ao ler o Termo.')}</div>`; return; }
+  const dh = t => t ? new Date(t).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+  const ok = r.lista.filter(u=>u.versao===r.versaoVigente).length;
+  main.innerHTML = `
+    <div class="cad-head"><div><h2>Termo de uso</h2><p>Todo usuário precisa aceitar no próximo acesso. Ao publicar uma nova versão, todos precisam aceitar de novo e cada aceite fica salvo com data, hora e versão.</p></div></div>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:700; margin-bottom:6px;">Versão vigente: ${r.versaoVigente} <span class="muted" style="font-weight:400">· publicada ${escapeHtml(dh(r.criadoEm))} por ${escapeHtml(r.criadoPor||'—')}</span></div>
+      <div class="muted" style="margin-bottom:10px;">${ok} de ${r.lista.length} usuários já aceitaram esta versão.</div>
+      <div style="display:grid; gap:4px; font-size:13.5px;">${r.lista.map(u=>`<div style="display:flex; justify-content:space-between; gap:10px; border-bottom:1px solid var(--line,#e3e8ee); padding:4px 0;"><span>${escapeHtml(u.nome)} <span class="muted">(${escapeHtml(u.nivel)})</span></span><span style="color:${u.versao===r.versaoVigente?'#1a7f37':'#a15c00'}">${u.versao===r.versaoVigente?'Aceitou em '+escapeHtml(dh(u.em)):(u.versao?'Aceitou a versão '+u.versao+' (precisa aceitar a nova)':'Ainda não aceitou')}</span></div>`).join('')}</div>
+    </div>
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:8px;">Editar e publicar nova versão</div>
+      <label class="f">Título</label><input class="inp" id="termoTit" style="width:100%">
+      <label class="f" style="margin-top:8px;">Texto (use "## " para título de seção e "- " para itens de lista)</label>
+      <textarea class="inp" id="termoTxt" rows="22" style="width:100%; font-size:13px; line-height:1.45;"></textarea>
+      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;"><button class="btn btn-accent" id="termoPub">Publicar nova versão</button><button class="btn btn-ghost" id="termoVer">Ver como o usuário vê</button></div>
+    </div>`;
+  document.getElementById('termoTit').value = r.titulo; document.getElementById('termoTxt').value = r.texto;
+  document.getElementById('termoVer').addEventListener('click', ()=>{
+    const w = window.open('', '_blank', 'width=720,height=800'); if(!w) return;
+    w.document.write('<meta charset="utf-8"><title>Termo de Uso</title><body style="font:15px/1.55 sans-serif;max-width:680px;margin:20px auto;padding:0 16px"><h2>'+escapeHtml(document.getElementById('termoTit').value)+'</h2>'+termosTextoHtml(document.getElementById('termoTxt').value)); w.document.close();
+  });
+  document.getElementById('termoPub').addEventListener('click', async (ev)=>{
+    if(!confirm('Publicar nova versão? Todos os usuários terão que aceitar de novo no próximo acesso.')) return;
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Publicando…';
+    const p = await termosCall({ op:'publicar', titulo: document.getElementById('termoTit').value, texto: document.getElementById('termoTxt').value });
+    if(p && p.ok){ showToast('Versão ' + p.versao + ' publicada.'); renderTermosCfgTab(main); }
+    else { showToast((p && p.error) || 'Não foi possível publicar.'); b.disabled = false; b.textContent = 'Publicar nova versão'; }
+  });
+}
+/* ---------- BACKUP (Google Drive › BLINDADO › I.A. APP › BACKUP VILACA APP) ---------- */
 let backupTimer = null;
 async function backupCall(op){
   try{
@@ -3064,7 +3180,7 @@ async function backupCall(op){
 }
 function renderBackupCfgTab(main){
   main.innerHTML = `
-    <div class="cad-head"><div><h2>Backup</h2><p>Cópia da programação, de todos os dados e das fotos no Google Drive (APP GESTAO › BACKUP). Roda sozinho 1 vez por dia, às 01:00 (horário de Brasília), e copia as fotos novas logo em seguida.</p></div></div>
+    <div class="cad-head"><div><h2>Backup</h2><p>Cópia da programação, de todos os dados e das fotos no Google Drive (BLINDADO › I.A. APP › BACKUP VILACA APP). Roda sozinho 1 vez por dia, às 01:00 (horário de Brasília), e copia as fotos novas logo em seguida.</p></div></div>
     <div class="card" id="bkCard"><div class="muted">Carregando…</div></div>`;
   const desenhar = async ()=>{
     const card = document.getElementById('bkCard'); if(!card){ clearInterval(backupTimer); backupTimer=null; return; }
