@@ -1056,7 +1056,7 @@ function renderEnviarLinkDP(main){
     const status = document.getElementById('el_status');
     if(!nome){ showToast('Informe o nome do funcionário.'); return; }
     if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-    if(lojasEscolhidas.length===0){ showToast('Selecione ao menos uma loja de acesso.'); return; }
+    if(lojasEscolhidas.length===0 && !cargos.includes('diretor')){ showToast('Selecione ao menos uma loja de acesso.'); return; }
     if(!contato){ showToast(canal==='email' ? 'Informe o e-mail.' : 'Informe o celular.'); return; }
     const btn = document.getElementById('el_btnEnviar');
     btn.disabled = true; btn.textContent = 'Enviando…';
@@ -2211,7 +2211,7 @@ function renderFuncionarios(main){
         const email = document.getElementById('func_emailNovo').value.trim();
         if(!nome){ showToast('Informe o nome do funcionário.'); return; }
         if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
-        if(!lojaEscolhida){ showToast('Selecione a loja de acesso do funcionário.'); return; }
+        if(!lojaEscolhida && !cargos.includes('diretor')){ showToast('Selecione a loja de acesso do funcionário.'); return; }
         const rCriar = await chamarFuncionarioAcesso({ op:'criarFuncionario', senha: __gatewaySenha, nome, apelido, cargos });
         if(!rCriar || !rCriar.ok){ showToast((rCriar && rCriar.error) || 'Não foi possível cadastrar o funcionário.'); return; }
         const novoId = rCriar.funcionarioId;
@@ -2624,8 +2624,17 @@ async function abrirFuncionarioCompletoModal(funcionario, abaInicial){
         </div>` : ''}
       `;
       const selFn = document.getElementById('fc_nivelAcesso');
-      selFn.addEventListener('change', ()=>{ d.funcaoId = selFn.value; const f = funcaoPorId(selFn.value); if(f) d.nivelAcesso = f.nivelBase; });
       const selLojaTrab = document.getElementById('fc_lojaTrabalho');
+      const ehDiretoriaFn = ()=>{ const f = funcaoPorId(selFn.value); return !!(f && f.nivelBase==='diretoria'); };
+      const ajustarLojaDiretoria = ()=>{
+        if(!selLojaTrab) return;
+        const dir = ehDiretoriaFn();
+        if(dir){ selLojaTrab.value = ''; d.lojasAcesso = []; }
+        selLojaTrab.disabled = dir || !souDiretoria;
+        const opt0 = selLojaTrab.options[0]; if(opt0) opt0.textContent = dir ? 'Todas as lojas (diretoria)' : (d.lojasAcesso.length>1?'Escolha a loja…':'Nenhuma (sem loja definida)');
+      };
+      selFn.addEventListener('change', ()=>{ d.funcaoId = selFn.value; const f = funcaoPorId(selFn.value); if(f) d.nivelAcesso = f.nivelBase; ajustarLojaDiretoria(); });
+      ajustarLojaDiretoria();
       if(selLojaTrab) selLojaTrab.addEventListener('change', ()=>{ d.lojasAcesso = selLojaTrab.value ? [selLojaTrab.value] : []; });
       const btnSalvarAcesso = document.getElementById('btnSalvarAcesso');
       if(btnSalvarAcesso) btnSalvarAcesso.addEventListener('click', async ()=>{
@@ -2633,9 +2642,9 @@ async function abrirFuncionarioCompletoModal(funcionario, abaInicial){
         // pelos listeners de 'change', que pode ficar dessincronizado em alguns casos.
         const funcaoEscolhida = funcaoPorId(document.getElementById('fc_nivelAcesso').value);
         if(!funcaoEscolhida){ showToast('Escolha a função de acesso desta pessoa.'); return; }
-        const lojaTrab = document.getElementById('fc_lojaTrabalho').value;
+        const lojaTrab = funcaoEscolhida.nivelBase==='diretoria' ? '' : document.getElementById('fc_lojaTrabalho').value;   // diretoria: sem loja fixa = todas
         const lojasParaSalvar = lojaTrab ? [lojaTrab] : [];
-        if(d.lojasAcesso.length>1 && !lojaTrab){ showToast('Escolha a loja de trabalho desta pessoa.'); return; }
+        if(funcaoEscolhida.nivelBase!=='diretoria' && d.lojasAcesso.length>1 && !lojaTrab){ showToast('Escolha a loja de trabalho desta pessoa.'); return; }
         const atual = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
         if(atual && atual.funcaoId && atual.funcaoId!==funcaoEscolhida.id && qtdAjustes(atual.ajustes) && !confirm('Esta pessoa tem acessos personalizados. Ao trocar a função, a personalização é descartada. Continuar?')) return;
         btnSalvarAcesso.disabled = true; btnSalvarAcesso.textContent = 'Salvando…';
