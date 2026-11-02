@@ -80,6 +80,9 @@
       p.valorBase = v; p.noTotal = true;
     });
     acr = r2(acr);
+    if(!(Number(via.valorTotal) > 0)){   // segurança: sem total à vista, usa o que os pagamentos quitam (cartão pela base)
+      via.valorTotal = r2((via.pagamentos||[]).reduce(function(a,p){ return a + (p && p.noTotal ? r2((Number(p.valor)||0) / FATOR) : base(p, config)); }, 0));
+    }
     if(acr > 0.009){
       if(via.valorAVista == null) via.valorAVista = r2(via.valorTotal);
       via.valorTotal = r2((Number(via.valorTotal)||0) + acr);
@@ -2163,6 +2166,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   draw();
   // Expõe redraw globalmente para os itens chamarem quando mudam
   window.__pagRedraw = ()=>{ holder.valorTotal=null; draw(); };
+  window.__pagTotalAtual = ()=> calcTotalFinal(calcTotalItens());   // à vista final (itens + desconto/acréscimo), mesmo se o campo oculto ainda não foi preenchido
   return { redraw: window.__pagRedraw };
 }
 function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (Number(p.valor)||0)), 0); }
@@ -3848,6 +3852,8 @@ function renderNovaVenda(main){
     if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
     if(!tempPagHolder.pagamentos || tempPagHolder.pagamentos.length===0){ showToast('Adicione pelo menos uma forma de pagamento.'); return; }
     const totalPago = CondPag.somaBase(tempPagHolder.pagamentos, config);  // cartão conta pela parte do à vista que quita
+    // O total à vista sai sempre dos itens + desconto (antes, se o campo oculto ficasse vazio, a venda salvava com total 0 e o cupom mostrava só os 20% do cartão).
+    if(!(Number(tempPagHolder.valorTotal)>0) && window.__pagTotalAtual) tempPagHolder.valorTotal = Math.round(window.__pagTotalAtual()*100)/100 || null;
     const totalVenda = Number(tempPagHolder.valorTotal)||0;
     if(totalVenda>0 && Math.abs(totalPago-totalVenda)>0.009){ showToast(totalVenda>totalPago ? `Pagamento incompleto — falta cobrir ${fmtMoeda(totalVenda-totalPago)}.` : `As formas de pagamento passam do total em ${fmtMoeda(totalPago-totalVenda)}. Ajuste os valores.`); return; }
     const erroNota = notaEmpresasErro(tempPagHolder, lojaId);
