@@ -560,10 +560,24 @@ function renderResumoVend(){
 }
 
 /* ---------- LOJAS ---------- */
+/* "Todas as lojas": soma dos fechamentos de todas as lojas — só leitura */
+function somaFechamentosLojas(){
+  const out = { bruto:0, devolucao:0, categorias:{} };
+  LOJAS.forEach(l=>{
+    const d = (dadosMes.loja[l] && dadosMes.loja[l].dados) || {};
+    out.bruto += Number(d.bruto)||0; out.devolucao += Number(d.devolucao)||0;
+    const c = d.categorias || {};
+    Object.keys(c).forEach(k=> out.categorias[k] = (out.categorias[k]||0) + (Number(c[k])||0));
+  });
+  out.bruto=r2(out.bruto); out.devolucao=r2(out.devolucao);
+  Object.keys(out.categorias).forEach(k=> out.categorias[k]=r2(out.categorias[k]));
+  return out;
+}
 function renderLoja(){
   const l = document.getElementById('selLoja').value;
-  const reg = dadosMes.loja[l];
-  const d = (reg && reg.dados) || {};
+  const todas = l==='TODAS';
+  const reg = todas ? null : dadosMes.loja[l];
+  const d = todas ? somaFechamentosLojas() : ((reg && reg.dados) || {});
   document.getElementById('lBruto').value = fmt(d.bruto);
   document.getElementById('lDev').value = fmt(d.devolucao);
   const cats = d.categorias || {};
@@ -571,9 +585,14 @@ function renderLoja(){
     `<div class="linha"><label class="lb" for="lcat_${c.id}">${c.label}</label><input class="din" id="lcat_${c.id}" data-cat="${c.id}" inputmode="decimal" value="${fmt(cats[c.id])}"></div>`).join('') +
     `<div class="linha"><span class="lb">Total dos itens</span><div class="calc" id="lTotItens">0,00</div></div>`;
   document.querySelectorAll('#lCats input.din').forEach(i=> ligarFormatoDinheiro(i, recalcLoja));
+  ['lBruto','lDev'].map(id=>document.getElementById(id)).concat([...document.querySelectorAll('#lCats input.din')]).forEach(i=> i.readOnly = todas);
   recalcLoja();
-  document.getElementById('infoLoja').textContent = quando(reg);
-  document.getElementById('excluirLoja').style.display = reg ? '' : 'none';
+  if(todas){
+    const n = LOJAS.filter(x=> dadosMes.loja[x]).length;
+    document.getElementById('infoLoja').textContent = `Soma de todas as lojas (${n} de ${LOJAS.length} com fechamento) — só visualização`;
+  } else document.getElementById('infoLoja').textContent = quando(reg);
+  document.getElementById('salvarLoja').style.display = todas ? 'none' : '';
+  document.getElementById('excluirLoja').style.display = (!todas && reg) ? '' : 'none';
 }
 function lerLoja(){
   const categorias = {};
@@ -589,7 +608,10 @@ function recalcLoja(){
   const elItens = document.getElementById('lTotItens');
   elItens.textContent = fmt(itens);
   elItens.classList.toggle('diverge', itens !== liq);
-  const sv = somaVendedorasPorLoja()[l];
+  const svAll = somaVendedorasPorLoja();
+  const sv = l==='TODAS'
+    ? LOJAS.reduce((a,x)=>({ venda:r2(a.venda+svAll[x].venda), saldo:r2(a.saldo+svAll[x].saldo) }), {venda:0,saldo:0})
+    : svAll[l];
   const msgs = [];
   if(itens !== liq) msgs.push(`A soma das categorias (${brl(itens)}) não bate com o total líquido (${brl(liq)}). Diferença: ${brl(itens-liq)}.`);
   if(d.bruto !== sv.venda) msgs.push(`O total bruto da loja (${brl(d.bruto)}) não bate com a soma das vendas das vendedoras (${brl(sv.venda)}). Diferença: ${brl(d.bruto-sv.venda)}.`);
@@ -599,6 +621,7 @@ function recalcLoja(){
     : `<div class="alerta ok">${ico('check')}<span>Tudo batendo com as vendedoras (bruto ${brl(sv.venda)} · saldo ${brl(sv.saldo)}).</span></div>`;
 }
 async function salvarLoja(){
+  if(document.getElementById('selLoja').value==='TODAS') return;
   const btn = document.getElementById('salvarLoja'); btn.disabled=true;
   const mes = document.getElementById('mes').value, chave = document.getElementById('selLoja').value;
   const r = await api({ op:'salvar', mes, tipo:'loja', chave, dados: lerLoja() });
@@ -611,6 +634,7 @@ async function salvarLoja(){
 }
 async function excluirLoja(){
   const mes = document.getElementById('mes').value, chave = document.getElementById('selLoja').value;
+  if(chave==='TODAS') return;
   if(!confirm('Excluir o fechamento da loja '+LOJA_LABEL[chave]+' em '+nomeMes(mes)+'? Todos os valores dela neste mês serão apagados.')) return;
   const r = await api({ op:'excluir', mes, tipo:'loja', chave });
   if(r.error){ toast('Erro: '+r.error); return; }
@@ -1202,7 +1226,7 @@ function iniciarUI(){
   document.getElementById('selFatorLoja').addEventListener('change', renderFator);
   document.getElementById('addFaixa').addEventListener('click', adicionarFaixa);
   document.getElementById('salvarFator').addEventListener('click', salvarFator);
-  document.getElementById('selLoja').innerHTML = LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('');
+  document.getElementById('selLoja').innerHTML = LOJAS.map(l=>`<option value="${l}">${LOJA_LABEL[l]}</option>`).join('') + `<option value="TODAS">Todas as lojas</option>`;
   document.getElementById('selVend').addEventListener('change', renderVendedora);
   document.getElementById('selLoja').addEventListener('change', renderLoja);
   ['lBruto','lDev'].forEach(id=> ligarFormatoDinheiro(document.getElementById(id), recalcLoja));
