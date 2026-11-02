@@ -158,7 +158,7 @@ $("#formBusca").addEventListener("submit", (e) => { e.preventDefault(); const q 
 
 // ---------- páginas ----------
 // Reforma de joias: o pedido é feito na página reforma.html, com a cara e as lojas da Vilaça
-const URL_REFORMA = "https://vilaca-controle-lojas.vercel.app/reforma.html?marca=vilaca";
+const URL_REFORMA = "https://vilaca.app/reforma.html?marca=vilaca";
 const PASSOS_REFORMA = [
   ["Mande as fotos", "Toque em “Reformar minha joia”, informe seu nome e WhatsApp e adicione cada peça: o que precisa ser feito, uma descrição e até 6 fotos. Dá para mandar até 10 peças no mesmo pedido."],
   ["Diga como a peça chega e volta", "Você pode levar a peça em uma das nossas lojas ou enviar pelos Correios, e escolher retirar na loja ou receber em casa."],
