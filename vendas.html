@@ -11,7 +11,127 @@
 <script src="icones.js"></script>
 <script src="autorizacao.js"></script>
 <script src="cupom.js"></script>
-<script src="condicoes-pagamento.js?v=20261102"></script>
+<script>/* condicoes-pagamento (embutido em vendas.html) */
+/* Condições de pagamento — à vista x parcelado no cartão (Venda, Pedido, Reserva, Orçamento).
+ * Regra (Felipe, 01/nov):
+ *  - À vista (Dinheiro, PIX, Ouro, Fiado, Crédito, Cashback): 1x, valor após o desconto.
+ *  - Cartão: sempre 20% acima do à vista (mesmo em 1x), em até 12x sem acréscimo.
+ *  - No pagamento com cartão, `valor` é o que passa na maquininha (com os 20%);
+ *    `valorBase` é a parte do à vista que ele quita (valor / 1,2). O valorTotal da via
+ *    continua sendo o à vista — saldo/"a receber" é conferido pela base.
+ *  - Na via impressa: valor total sem desconto, desconto à vista e desconto parcelado
+ *    (em reais, sem porcentagem).
+ */
+(function(){
+  var FATOR = 1.2, MAX_PARC = 12;
+  function r2(n){ return Math.round((Number(n)||0)*100)/100; }
+  function formas(config){ return ((config && config.formasPagamento) || []).concat((config && config.paymentTypes) || []); }
+  function ehCartao(formaId, config){
+    if(!formaId || String(formaId).indexOf('__')===0) return false;
+    var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
+    return !!(f && /cart[aã]o|cr[eé]dito|d[eé]bito/i.test(f.nome||''));
+  }
+  /* Formas "a prazo": cartão e, quando o módulo liga CondPag.fiadoPrazo, o Fiado (Felipe, 02/nov). */
+  function ehPrazo(formaId, config){
+    return ehCartao(formaId, config) || (formaId==='__fiado' && !!(window.CondPag && window.CondPag.fiadoPrazo));
+  }
+  /* Quanto do valor à vista este pagamento quita. */
+  function base(p, config){
+    var v = Number(p && p.valor) || 0;
+    if(p && p.noTotal) return v;   // venda concluída: o valor da maquininha já está dentro do valorTotal
+    return ehPrazo(p && p.formaId, config) ? r2(v / FATOR) : v;
+  }
+  function somaBase(pags, config, filtro){
+    return (pags||[]).filter(filtro || function(){ return true; }).reduce(function(a,p){ return a + base(p, config); }, 0);
+  }
+  function parcelado(vista){ return r2((Number(vista)||0) * FATOR); }
+  /* Cartão sugerido pelo sistema (_auto) acompanha o à vista final: se o total mudar (desconto,
+     acréscimo, item), o valor da maquininha é refeito = (à vista que falta) × 1,2. Valor digitado à mão não muda. */
+  function ajustarAuto(pags, totalVista, config){
+    (pags||[]).forEach(function(p){
+      if(!p || !p._auto || !ehPrazo(p.formaId, config)) return;
+      var outros = somaBase((pags||[]).filter(function(q){ return q!==p && q._modo!=='editar'; }), config);
+      var falta = Math.max(0, r2((Number(totalVista)||0) - outros));
+      p.valor = falta > 0.009 ? parcelado(falta) : p.valor;
+    });
+  }
+  /* Ajusta os campos de cartão antes de gravar (parcelas e valorBase). */
+  function carimbar(pags, config){
+    (pags||[]).forEach(function(p){
+      delete p._auto;
+      if(ehCartao(p.formaId, config)){
+        p.parcelas = Math.min(MAX_PARC, Math.max(1, parseInt(p.parcelas,10) || 1));
+        p.valorBase = base(p, config);
+      } else if(ehPrazo(p.formaId, config)){ delete p.parcelas; p.valorBase = base(p, config); }
+      else { delete p.parcelas; delete p.valorBase; }
+    });
+    return pags;
+  }
+  /* Venda concluída (Felipe, 02/nov): o total passa a ser o que o cliente pagou de fato.
+     Os 20% do cartão entram no valorTotal; o à vista fica guardado em valorAVista. */
+  function fecharTotal(via, config){
+    if(!via) return via;
+    var acr = 0;
+    (via.pagamentos||[]).forEach(function(p){
+      if(!p || p.noTotal || !ehPrazo(p.formaId, config)) return;
+      var v = Number(p.valor)||0;
+      acr += r2(v - r2(v / FATOR));
+      p.valorBase = v; p.noTotal = true;
+    });
+    acr = r2(acr);
+    if(acr > 0.009){
+      if(via.valorAVista == null) via.valorAVista = r2(via.valorTotal);
+      via.valorTotal = r2((Number(via.valorTotal)||0) + acr);
+      via.acrescimoCartao = r2((Number(via.acrescimoCartao)||0) + acr);
+    }
+    return via;
+  }
+  /* Ao editar: volta ao à vista (o fecharTotal refaz ao salvar). */
+  function abrirTotal(via, config){
+    if(!via) return via;
+    if(via.valorAVista == null) return via;   // venda antiga sem acréscimo: o valor pago já é o total
+    via.valorTotal = r2(via.valorAVista);
+    delete via.valorAVista; delete via.acrescimoCartao;
+    (via.pagamentos||[]).forEach(function(p){ if(p && p.noTotal){ delete p.noTotal; p.valorBase = r2((Number(p.valor)||0) / FATOR); } });
+    return via;
+  }
+  function rotuloPag(p, nomeForma, config, fmt){
+    if(ehCartao(p.formaId, config)){
+      var n = Math.max(1, parseInt(p.parcelas,10) || 1);
+      return nomeForma + ' ' + n + 'x de ' + fmt(r2((Number(p.valor)||0)/n));
+    }
+    return nomeForma;
+  }
+  /* <select> de parcelas para a linha de pagamento em edição. */
+  function selectParcelasHtml(p, i, fmt){
+    var n = Math.max(1, parseInt(p.parcelas,10) || 1), v = Number(p.valor)||0, o = '';
+    for(var k=1;k<=MAX_PARC;k++) o += '<option value="'+k+'"'+(k===n?' selected':'')+'>'+k+'x'+(v>0?' de '+fmt(r2(v/k)):'')+'</option>';
+    return '<select data-pagparc="'+i+'" aria-label="Parcelas no cartão" title="Parcelas (até 12x sem acréscimo)">'+o+'</select>';
+  }
+  /* Valor bruto dos itens (preço de tabela, antes de qualquer desconto). */
+  function brutoItens(itens){
+    return r2((itens||[]).reduce(function(a,it){
+      var b = (it.ajusteTipo && it.ajusteTipo!=='nenhum' && it.precoOriginal!=='' && it.precoOriginal!=null) ? it.precoOriginal : it.valorUnitario;
+      return a + (Number(b)||0) * (Number(it.quantidade)||1);
+    }, 0));
+  }
+  /* Fim da via: só o à vista e o parcelado no cartão (pedido do Felipe, 01/nov). */
+  function cupomHtml(itens, valorAVista, fmt){
+    var vista = r2(valorAVista);
+    if(!(vista > 0)) return '';
+    return '<div class="linha"></div>'
+      + '<div class="destaque">À vista: '+fmt(vista)+'</div>'
+      + '<div class="destaque">Ou '+MAX_PARC+'x de '+fmt(r2(parcelado(vista)/MAX_PARC))+' no cartão</div>';
+  }
+  /* Linha da observação do item na via. */
+  function obsItemHtml(it, esc){
+    var t = String((it && it.observacaoItem) || '').trim();
+    return t ? '<div style="font-size:11px;">Obs.: '+esc(t)+'</div>' : '';
+  }
+  window.CondPag = { FATOR:FATOR, MAX_PARC:MAX_PARC, r2:r2, ehCartao:ehCartao, ehPrazo:ehPrazo, fiadoPrazo:false, base:base, somaBase:somaBase, parcelado:parcelado, ajustarAuto:ajustarAuto,
+    carimbar:carimbar, fecharTotal:fecharTotal, abrirTotal:abrirTotal, rotuloPag:rotuloPag, selectParcelasHtml:selectParcelasHtml, brutoItens:brutoItens, cupomHtml:cupomHtml, obsItemHtml:obsItemHtml };
+})();
+</script>
 <script src="retirada-terceiro.js"></script>
 <script src="formato.js"></script>
 <script src="cashback.js"></script>
@@ -1734,7 +1854,8 @@ function perguntarPixTipo(){
 
 
 function mountPagamentos(container, holder, getLojaVendaId){
-  const _onCred = ()=>{ if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
+  CondPag.fiadoPrazo = true;   // Fiado segue o preço do cartão (Felipe, 02/nov)
+  const _onCred = ()=>{ holder.__abatPerguntado = false; if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
   document.addEventListener('credito-cliente', _onCred);
   if(!holder.pagamentos) holder.pagamentos = [];
   if(!holder.momentoPagamento) holder.momentoPagamento = 'na_encomenda'; // venda sempre fecha na hora (sem pagar depois)
@@ -1771,6 +1892,71 @@ function mountPagamentos(container, holder, getLojaVendaId){
     return `<div style="display:flex;flex-direction:column;gap:8px;width:100%;margin-top:4px;"><div style="display:flex;justify-content:space-between;gap:8px;font-weight:700;font-variant-numeric:tabular-nums;color:${d?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};"><span>${d?'Desconto':'Acréscimo'}${pct}</span><span>${d?'−':'+'}${fmtMoeda(delta)}</span></div><div class="pag-saldo"><span>Saldo a pagar</span><strong>${fmtMoeda(fin)}</strong></div></div>`;
   }
 
+  /* Valor cheio = preço de tabela dos itens, antes de qualquer desconto (item ou final). */
+  function calcValorCheio(){
+    if(!window.__itensHolder) return 0;
+    return CondPag.r2(window.__itensHolder.itens.filter(it=>it._modo==='ok').reduce((a,it)=>a+(Number(valorBaseItem(it))||0),0));
+  }
+  function nomesFormas(prazo){
+    const n = (config.formasPagamento||[]).filter(f=>CondPag.ehPrazo(f.id, config)===prazo).map(f=>f.nome);
+    if(prazo) n.push('Fiado');
+    return n.join(', ');
+  }
+  /* Uma linha embaixo da outra: à vista e cartão, com o desconto sobre o valor cheio. */
+  function condicoesHtml(vista){
+    vista = CondPag.r2(vista>0 ? vista : 0);
+    const cheio = Math.max(calcValorCheio(), vista);
+    const linha = (rot, formas, valor, extra)=>{
+      const desc = CondPag.r2(cheio - valor);
+      const dTxt = desc>0.009 ? `Desconto ${fmtMoeda(desc)} (${String(Math.round(desc/cheio*1000)/10).replace('.',',')}%)` : 'Sem desconto';
+      return `<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:8px 0;border-top:1px solid var(--line);">
+        <div style="flex:1 1 200px;"><b>${rot}</b><div class="muted" style="font-size:12px;">${escapeHtml(formas)}</div></div>
+        <div style="flex:0 0 auto;font-size:13px;color:${desc>0.009?'var(--danger,#B3261E)':'var(--muted)'};">${dTxt}</div>
+        <div style="flex:0 0 auto;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;" ${rot==='À vista'?'id="pagValorTotalDisplay"':''}>${fmtMoeda(valor)}${extra||''}</div>
+      </div>`;
+    };
+    const cart = CondPag.parcelado(vista);
+    return linha('À vista', nomesFormas(false), vista)
+      + linha('No cartão', nomesFormas(true), cart, vista>0 ? `<span class="muted" style="font-size:12px;font-weight:400;"> · até ${CondPag.MAX_PARC}x de ${fmtMoeda(CondPag.r2(cart/CondPag.MAX_PARC))}</span>` : '');
+  }
+  /* Crédito do cliente / cashback: depois de escolher a forma, pergunta se abate. */
+  function perguntarAbatimento(cred, cb){
+    return new Promise(resolve=>{
+      openModal(`
+        <h3>Abater no valor?</h3>
+        <p class="muted">Este cliente tem saldo para usar nesta venda.</p>
+        ${cred>0.009?`<label style="display:flex;gap:8px;align-items:center;margin:8px 0;"><input type="checkbox" id="abatCred" checked> Crédito do cliente: <b>${fmtMoeda(cred)}</b></label>`:''}
+        ${cb>0.009?`<label style="display:flex;gap:8px;align-items:center;margin:8px 0;"><input type="checkbox" id="abatCb" checked> Cashback: <b>${fmtMoeda(cb)}</b> <span class="muted" style="font-size:12px;">(máx. 50% do total)</span></label>`:''}
+        <div class="modal-actions" style="flex-wrap:wrap;gap:10px;margin-top:14px;">
+          <button class="btn btn-ghost" type="button" id="abatNao">Não abater</button>
+          <button class="btn btn-accent" type="button" id="abatSim">Abater</button>
+        </div>`);
+      document.getElementById('abatNao').addEventListener('click', ()=>{ closeModal(); resolve(null); });
+      document.getElementById('abatSim').addEventListener('click', ()=>{ const r={ cred: !!document.getElementById('abatCred')?.checked, cb: !!document.getElementById('abatCb')?.checked }; closeModal(); resolve(r); });
+    });
+  }
+  async function oferecerAbatimento(pg){
+    if(holder.__abatPerguntado || !pg || !pg.formaId || pg.formaId==='__credito' || pg.formaId==='__cashback') return;
+    const usaCred = holder.pagamentos.some(p=>p.formaId==='__credito'), usaCb = holder.pagamentos.some(p=>p.formaId==='__cashback');
+    const outros = ()=> CondPag.somaBase(holder.pagamentos.filter(p=>p!==pg && p._modo!=='editar'), config);
+    const falta0 = Math.max(0, CondPag.r2(totalPag() - outros()));
+    const cred = (!usaCred && window.__credCli && window.__credCli.valor>0) ? Math.min(window.__credCli.valor, falta0) : 0;
+    const inf = window.__cbCli && window.__cbCli.info;
+    const cb = (!usaCb && inf && inf.disp>0 && window.Cashback) ? Math.min(inf.disp, Cashback.maxUso(totalPag()), falta0) : 0;
+    if(cred<=0.009 && cb<=0.009) return;
+    holder.__abatPerguntado = true;
+    const r = await perguntarAbatimento(cred, cb);
+    if(!r || !container.isConnected) return;
+    const idx = Math.max(0, holder.pagamentos.indexOf(pg));
+    if(r.cb && cb>0.009){ const v = Math.min(cb, Math.max(0, CondPag.r2(totalPag() - outros()))); if(v>0.009) holder.pagamentos.splice(idx, 0, { formaId:'__cashback', valor:CondPag.r2(v), data:'' }); }
+    if(r.cred && cred>0.009){ const v = Math.min(cred, Math.max(0, CondPag.r2(totalPag() - outros()))); if(v>0.009) holder.pagamentos.splice(holder.pagamentos.indexOf(pg), 0, { formaId:'__credito', valor:CondPag.r2(v), data:'' }); }
+    holder.pagamentos.forEach(p=>{ if(!p.data) delete p.data; });
+    const falta = Math.max(0, CondPag.r2(totalPag() - outros()));
+    pg.valor = falta>0.009 ? (CondPag.ehPrazo(pg.formaId, config) ? CondPag.parcelado(falta) : falta) : '';
+    pg._auto = CondPag.ehPrazo(pg.formaId, config);
+    drawRows();
+  }
+
   function draw(){
     const agora = holder.momentoPagamento==='na_encomenda';
     const subtotal = calcTotalItens();
@@ -1795,9 +1981,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
 
       <!-- Valor total + momento + nota fiscal -->
       <div class="pag-info-row">
-        <div class="pag-info-cel">
+        <div class="pag-info-cel" style="flex:1 1 100%;">
           <div class="pag-info-cel-label">Valor total da venda</div>
-          <div class="pag-info-cel-val total" id="pagValorTotalDisplay">${fmtMoeda(totalFinal>0?totalFinal:0)}</div>
+          <div id="pagCondicoes">${condicoesHtml(totalFinal)}</div>
           <input type="hidden" id="pagValorTotal" value="${totalFinal>0?totalFinal.toFixed(2):''}">
         </div>
         
@@ -1846,7 +2032,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
       const sub=calcTotalItens(), fin=calcTotalFinal(sub);
       const el=container.querySelector('#pagSubtotal'); if(el) el.textContent=fmtMoeda(sub);
       const ln=container.querySelector('#pagAjusteLinha'); if(ln) ln.innerHTML=ajusteLinhaHtml(sub,fin);
-      const dsp=container.querySelector('#pagValorTotalDisplay'); if(dsp) dsp.textContent=fmtMoeda(fin>0?fin:0);
+      const cnd=container.querySelector('#pagCondicoes'); if(cnd) cnd.innerHTML=condicoesHtml(fin);
       const inpT=container.querySelector('#pagValorTotal'); if(inpT) inpT.value=fin>0?fin.toFixed(2):'';
       holder.valorTotal = fin>0 ? fin : null;
       drawRows();
@@ -1912,11 +2098,12 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
-        // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
-        const ehCart = CondPag.ehCartao(pg.formaId, config);
-        if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = true; } if(ehCart && !pg.parcelas) pg.parcelas = 1; }
-        drawRows(); });
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehPrazo(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+        // Cartão/Fiado: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor
+        const ehCart = CondPag.ehPrazo(pg.formaId, config);
+        if(ehCart !== eraCartao || pg.valor==='' || pg.valor==null){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = ehCart; } }
+        if(CondPag.ehCartao(pg.formaId, config) && !pg.parcelas) pg.parcelas = 1;
+        drawRows(); oferecerAbatimento(pg); });
     });
     wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagparc)].parcelas = parseInt(sel.value,10)||1; drawRows(); });
@@ -1966,7 +2153,8 @@ function mountPagamentos(container, holder, getLojaVendaId){
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Passou do total em ${fmtMoeda(Math.abs(saldo))}</b><small>Diminua o valor de alguma forma de pagamento.</small></div></div>`;
     } else {
-      hint.innerHTML = `<div class="aviso aviso-ok">${ic('check')}<div><b>Pagamento completo — ${fmtMoeda(total)}</b></div></div>`;
+      const pago = CondPag.r2(holder.pagamentos.filter(p=>p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0));
+      hint.innerHTML = `<div class="aviso aviso-ok">${ic('check')}<div><b>Pagamento completo — ${fmtMoeda(pago)}</b></div></div>`;
     }
   }
 
@@ -5032,8 +5220,6 @@ function printVenda(v){
     });
   }
   if(imp.valores !== false){
-    linhas.push(`<div>Recebido: ${fmtMoeda(valorRecebidoDe(v))}</div>`);
-    linhas.push(`<div>A receber: ${fmtMoeda(valorAReceberDe(v))}</div>`);
     linhas.push(`<div class="linha"></div><div class="destaque">Total: ${fmtMoeda(v.valorTotal)}</div>`);
   }
 
