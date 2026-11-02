@@ -3,7 +3,7 @@
 "use strict";
 const API = "https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/site-public";
 const CANAL = "reforma";
-const URL_SERVICO = "https://vilaca-controle-lojas.vercel.app/reforma.html?marca=reforma"; // pedido de reforma (serviço)
+const URL_SERVICO = "https://vilaca.app/reforma.html?marca=reforma"; // pedido de reforma (serviço)
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
