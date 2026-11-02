@@ -475,7 +475,8 @@ let config = null;
 let vendas = [];
 let currentUser = null;
 const MODO_RESERVA = new URLSearchParams(location.search).get('modo')==='reserva';   // card Reservar
-const MOD_SHELL = MODO_RESERVA ? 'reserva' : 'vendas';
+const MODO_CANCEL = new URLSearchParams(location.search).get('modo')==='cancelamento';   // card Cancelamento
+const MOD_SHELL = MODO_RESERVA ? 'reserva' : (MODO_CANCEL ? 'cancelamento' : 'vendas');
 let reservas = []; let __reservaEditando = null; let __conversaoReserva = null; let __reservaPrazoDias = 7;
 let currentTab = 'vendas';
 let modoNovaVenda = false;
@@ -2464,7 +2465,7 @@ function enterApp(){
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
   document.getElementById('linkConfigHub').style.display = currentUser.nivel==='diretoria' ? '' : 'none';
   buildTabs();
-  currentTab = MODO_RESERVA ? 'reservas' : 'vendas';
+  currentTab = MODO_RESERVA ? 'reservas' : (MODO_CANCEL ? 'cancelBusca' : 'vendas');
   modoNovaVenda = false;
   if(EMBEDDED){
     const permitido = tabsForLevel();
@@ -2486,10 +2487,180 @@ function enterApp(){
 }
 
 /* ============================================================
+   CARD CANCELAMENTO (vendas.html?modo=cancelamento)
+   - Busca a via por cliente (nome, telefone, CPF), código da via ou data da venda — sempre por loja.
+     Gerente/diretoria escolhem a loja (ou todas); os demais ficam na loja ativa.
+   - Venda: cancela aqui mesmo (mesma regra do menu da venda: estoque, crédito, fiado, cashback, senha da gerência).
+   - Pedido: abre o cancelamento no card Pedido (lá ficam as regras de agenda/oficina/estoque do pedido).
+   - Aba Devoluções: vendas e pedidos cancelados no mês, pela data do cancelamento (é quando sai do faturamento e da comissão).
+   ============================================================ */
+let __canc = { busca:'', loja:null, mes:new Date().toISOString().slice(0,7), ordens:null };
+async function ordensParaCancelamento(forcar){
+  if(__canc.ordens && !forcar) return __canc.ordens;
+  try{
+    const { data } = await supabaseClient.from('ordens_servico').select('id,payload').order('created_at', { ascending:true });
+    __canc.ordens = (data||[]).map(r=>r && r.payload).filter(o=>o && o.status!=='rascunho');
+  }catch(e){ console.error('pedidos', e); __canc.ordens = []; }
+  return __canc.ordens;
+}
+function cancEhGestao(){ return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente'); }
+function cancLoja(){
+  if(cancEhGestao()) return __canc.loja===null ? ((window.__lojaAtual && window.__lojaAtual.id) || '') : __canc.loja;
+  return (window.__lojaAtual && window.__lojaAtual.id) || '';
+}
+function cancNorm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim(); }
+function cancDataLocal(ts){ if(!ts) return ''; const d = new Date(typeof ts==='number' ? ts : (isNaN(Number(ts)) ? ts : Number(ts))); if(isNaN(d)) return String(ts).slice(0,10); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function cancNomeLoja(id){ const l = (config.lojas||[]).find(x=>x.id===id); return l ? (l.abreviacao || l.nome) : '—'; }
+/** Todas as vias (vendas + pedidos) da loja escolhida, num formato só. */
+function cancTodas(){
+  const loja = cancLoja();
+  const daLoja = r => !loja || r.lojaId===loja;
+  const vs = (vendas||[]).filter(v=> v && v.tipo!=='recargaCredito' && v.tipo!=='recebimentoFiado' && daLoja(v)).map(v=>({ tipo:'venda', reg:v, via:v.codigoVia||'', data:v.data, cliente:v.cliente||'', vendedora:vendedoraCurta(v), valor:Number(v.valorTotal)||0, cancelada:v.status==='cancelada', lojaId:v.lojaId }));
+  const os = (__canc.ordens||[]).filter(daLoja).map(o=>({ tipo:'pedido', reg:o, via:o.via||'', data:o.data, cliente:o.cliente||'', vendedora:vendedoraCurta(o), valor:Number(o.valorTotal)||0, cancelada:o.status==='cancelado', lojaId:o.lojaId }));
+  return vs.concat(os);
+}
+/** Interpreta a busca: data, código de via ou cliente. */
+function cancInterpretar(q){
+  const t = String(q||'').trim();
+  if(!t) return { modo:'vazio' };
+  let m = t.match(/^(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?$/);
+  if(m){ let a = m[3] ? (m[3].length===2 ? '20'+m[3] : m[3]) : String(new Date().getFullYear()); return { modo:'data', data: a+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0') }; }
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return { modo:'data', data:t };
+  return { modo:'texto', texto:t };
+}
+function cancBuscar(){
+  const q = cancInterpretar(__canc.busca);
+  const todas = cancTodas();
+  if(q.modo==='vazio') return { modo:'vazio', lista:[] };
+  if(q.modo==='data') return { modo:'data', data:q.data, lista: todas.filter(r=>r.data===q.data) };
+  const codigo = q.texto.toUpperCase().replace(/\s+/g,'');
+  const porCodigo = todas.filter(r=> r.via && String(r.via).toUpperCase().replace(/\s+/g,'')===codigo);
+  if(porCodigo.length===1) return { modo:'codigo', lista:porCodigo };
+  if(porCodigo.length>1) return { modo:'lista', lista:porCodigo };
+  const dig = q.texto.replace(/\D/g,'');
+  if(dig.length>=8 && dig.length===q.texto.replace(/[\s().\/-]/g,'').length){
+    return { modo:'cliente', lista: todas.filter(r=> String(r.reg.telefone||'').replace(/\D/g,'').endsWith(dig.slice(-8)) || String(r.reg.cpf||'').replace(/\D/g,'')===dig) };
+  }
+  const palavras = cancNorm(q.texto).split(/\s+/).filter(Boolean);
+  return { modo:'cliente', lista: todas.filter(r=>{ const n = cancNorm(r.cliente); return palavras.every(p=> n.includes(p)); }) };
+}
+function cancSituacao(r){
+  if(r.cancelada) return `<span class="badge selo-danger">Cancelada${r.reg.canceladoEm?' em '+fmtDate(cancDataLocal(r.reg.canceladoEm)):''}</span>`;
+  if(r.tipo==='pedido') return `<span class="badge selo-info">${escapeHtml(({aguardando:'Aguardando',enviado_fabrica:'Na fábrica',pendencia:'Pendência',oficina_pronto:'Fábrica pronto',pronto:'Pronto',entregue:'Entregue'})[r.reg.status]||r.reg.status||'')}</span>`;
+  return `<span class="badge selo-ok">Ativa</span>`;
+}
+function cancLojaSelectHtml(){
+  if(!cancEhGestao()) return `<div class="field" style="max-width:220px;"><label>Loja</label><input value="${escapeHtml((window.__lojaAtual && window.__lojaAtual.nome) || 'Loja ativa')}" readonly></div>`;
+  const atual = cancLoja();
+  return `<div class="field" style="max-width:240px;"><label for="cancLoja">Loja</label><select id="cancLoja"><option value="" ${atual===''?'selected':''}>Todas as lojas</option>${((config&&config.lojas)||[]).filter(l=>!l.interna).map(l=>`<option value="${l.id}" ${atual===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>`;
+}
+function cancLinhaHtml(r){
+  return `<tr class="${r.cancelada?'linha-cancelada':''}">
+    <td>${r.tipo==='venda'?'Venda':'Pedido'}</td>
+    <td style="white-space:nowrap;"><b>${escapeHtml(r.via||'—')}</b></td>
+    <td style="white-space:nowrap;">${fmtDate(r.data)}</td>
+    <td>${escapeHtml(cancNomeLoja(r.lojaId))}</td>
+    <td class="cli-nome">${escapeHtml(r.cliente||'—')}</td>
+    <td>${escapeHtml(r.vendedora)}</td>
+    <td style="text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;">${fmtMoeda(r.valor)}</td>
+    <td>${cancSituacao(r)}</td>
+    <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-cver="${r.tipo}:${r.reg.id}">${ic('olho',14)} Ver</button>${r.cancelada?'':` <button class="btn btn-danger btn-sm" data-ccanc="${r.tipo}:${r.reg.id}">${ic('cancelar',14)} Cancelar</button>`}</td>
+  </tr>`;
+}
+function cancDetalheHtml(r){
+  const reg = r.reg;
+  const itens = (reg.itens||[]).filter(it=> it && (it.produto || it.servico || it.descricao));
+  const pags = (reg.pagamentos||[]).filter(p=>p && Number(p.valor)>0);
+  const nomeF = id => id==='__fiado'?'Fiado':id==='__credito'?'Crédito cliente':id==='__cashback'?'Cashback':(((config.formasPagamento||[]).find(f=>f.id===id)||{}).nome||'—');
+  return `<div class="card" style="margin-top:14px;">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+      <div><div class="section-label" style="margin:0;">${r.tipo==='venda'?'Venda':'Pedido'} ${escapeHtml(r.via||'')}</div>
+        <div style="font-size:16px;font-weight:700;margin-top:2px;">${escapeHtml(r.cliente||'—')}</div>
+        <div class="muted" style="font-size:13px;">${fmtDate(r.data)} · ${escapeHtml(cancNomeLoja(r.lojaId))} · vendedora ${escapeHtml(r.vendedora)}${reg.emissaoNota==='sim'?' · com nota'+(reg.numeroNota?' nº '+escapeHtml(reg.numeroNota):''):''}</div></div>
+      <div>${cancSituacao(r)}</div>
+    </div>
+    <div style="margin-top:12px;font-size:13.5px;">${itens.map(it=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);"><span>${escapeHtml(it.produto||it.servico||it.descricao||'Item')}${Number(it.quantidade)>1?' ×'+it.quantidade:''}</span><span style="font-variant-numeric:tabular-nums;">${it.valorUnitario!=null?fmtMoeda((Number(it.valorUnitario)||0)*(Number(it.quantidade)||1)):''}</span></div>`).join('') || '<div class="muted">Sem itens.</div>'}</div>
+    <div style="display:flex;justify-content:space-between;margin-top:10px;font-weight:700;"><span>Total</span><span>${fmtMoeda(r.valor)}</span></div>
+    ${pags.length?`<div class="muted" style="font-size:13px;margin-top:4px;">Pago: ${pags.map(p=>escapeHtml(nomeF(p.formaId))+' '+fmtMoeda(p.valor)).join(' · ')}</div>`:''}
+    ${r.cancelada?`<div class="muted" style="margin-top:10px;font-size:13px;">Cancelada por ${escapeHtml(reg.canceladoPor||'—')}: ${escapeHtml(reg.motivoCancelamento||'')}</div>`:''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
+      ${r.tipo==='venda'?`<button class="btn btn-ghost" data-cver="venda:${reg.id}">${ic('olho',14)} Ver venda completa</button>`:''}
+      ${r.cancelada?'':`<button class="btn btn-danger" data-ccanc="${r.tipo}:${reg.id}">${ic('cancelar',14)} Cancelar esta via</button>`}
+    </div>
+  </div>`;
+}
+async function renderCancelBusca(main){
+  main.innerHTML = `<div class="page-head"><div><h1 class="page-title">Cancelamento</h1><p class="page-sub">Busque a via pelo <b>cliente</b> (nome, telefone ou CPF), pelo <b>código da via</b> ou pela <b>data</b> (ex.: 15/10/2026). A via cancelada fica no dia em que foi feita e entra como <b>devolução</b> no dia do cancelamento — sai do faturamento e da comissão desse dia.</p></div></div>
+    <div class="card"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+      ${cancLojaSelectHtml()}
+      <div class="field" style="flex:1 1 280px;"><label for="cancBusca">Cliente, código da via ou data</label><input id="cancBusca" value="${escapeHtml(__canc.busca)}" placeholder="Ex.: MARIA SILVA · JN123V · 15/10/2026" autocomplete="off"></div>
+      <button class="btn btn-accent" id="cancBuscar" style="margin-bottom:12px;">${ic('busca',14)} Buscar</button>
+    </div></div>
+    <div id="cancRes"><div class="muted" style="padding:16px 4px;">Carregando pedidos…</div></div>`;
+  const inp = document.getElementById('cancBusca');
+  const ir = ()=>{ __canc.busca = inp.value; desenhar(); };
+  document.getElementById('cancBuscar').addEventListener('click', ir);
+  inp.addEventListener('keydown', e=>{ if(e.key==='Enter') ir(); });
+  const sl = document.getElementById('cancLoja'); if(sl) sl.addEventListener('change', ()=>{ __canc.loja = sl.value; desenhar(); });
+  setTimeout(()=>{ try{ inp.focus(); }catch(e){} }, 50);
+  await ordensParaCancelamento();
+  function desenhar(){
+    const box = document.getElementById('cancRes'); if(!box) return;
+    const r = cancBuscar();
+    if(r.modo==='vazio'){ box.innerHTML = `<div class="muted" style="padding:16px 4px;">Digite o cliente, o código da via ou a data e clique em Buscar.</div>`; return; }
+    if(!r.lista.length){ box.innerHTML = `<div class="card" style="margin-top:14px;"><div class="muted">Nenhuma via encontrada ${cancLoja()?'nesta loja':''}${r.modo==='data'?' em '+fmtDate(r.data):''}.</div></div>`; return; }
+    if(r.modo==='codigo'){ box.innerHTML = cancDetalheHtml(r.lista[0]); ligar(box, r.lista); return; }
+    const lista = r.lista.slice().sort((a,b)=> String(b.data||'').localeCompare(String(a.data||'')));
+    const titulo = r.modo==='data' ? 'Vias de '+fmtDate(r.data) : (r.modo==='cliente' ? 'Vias do cliente' : 'Vias com este código');
+    box.innerHTML = `<div class="card" style="margin-top:14px;"><div class="section-label">${titulo} · ${lista.length}</div><div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Via</th><th>Data</th><th>Loja</th><th>Cliente</th><th>Vendedora</th><th style="text-align:right;">Valor</th><th>Situação</th><th></th></tr></thead><tbody>${lista.map(cancLinhaHtml).join('')}</tbody></table></div></div>`;
+    ligar(box, lista);
+  }
+  function ligar(box, lista){
+    const achar = k=>{ const [t,id]=k.split(':'); return lista.find(x=>x.tipo===t && x.reg.id===id); };
+    box.querySelectorAll('[data-cver]').forEach(b=> b.addEventListener('click', ()=>{
+      const r = achar(b.dataset.cver); if(!r) return;
+      if(r.tipo==='venda') abrirDetalheVenda(r.reg);
+      else { box.innerHTML = cancDetalheHtml(r); ligar(box, [r]); }
+    }));
+    box.querySelectorAll('[data-ccanc]').forEach(b=> b.addEventListener('click', ()=>{
+      const r = achar(b.dataset.ccanc); if(!r) return;
+      if(r.tipo==='venda') abrirCancelarVenda(r.reg);
+      else if(EMBEDDED){ showToast('Abrindo o cancelamento no card Pedido…'); __canc.ordens = null; parent.postMessage({ type:'irParaModulo', alvo:'os', registroId:'cancelar:'+r.reg.id }, '*'); }
+      else showToast('Abra pelo sistema (card Pedido) para cancelar o pedido.');
+    }));
+  }
+  desenhar();
+}
+async function renderDevolucoes(main){
+  main.innerHTML = `<div class="page-head"><div><h1 class="page-title">Devoluções</h1><p class="page-sub">Vendas e pedidos cancelados, pela data do cancelamento. Esse valor sai do faturamento e da comissão da vendedora no mês do cancelamento.</p></div></div>
+    <div class="card"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">${cancLojaSelectHtml()}<div class="field" style="max-width:200px;"><label for="cancMes">Mês</label><input type="month" id="cancMes" value="${__canc.mes}"></div></div></div>
+    <div id="devRes"><div class="muted" style="padding:16px 4px;">Carregando…</div></div>`;
+  const sl = document.getElementById('cancLoja'); if(sl) sl.addEventListener('change', ()=>{ __canc.loja = sl.value; desenhar(); });
+  document.getElementById('cancMes').addEventListener('change', e=>{ __canc.mes = e.target.value || __canc.mes; desenhar(); });
+  await ordensParaCancelamento(true);
+  function desenhar(){
+    const box = document.getElementById('devRes'); if(!box) return;
+    const lista = cancTodas().filter(r=> r.cancelada && cancDataLocal(r.reg.canceladoEm).slice(0,7)===__canc.mes)
+      .sort((a,b)=> Number(b.reg.canceladoEm||0)-Number(a.reg.canceladoEm||0));
+    const tot = lista.reduce((a,r)=>a+r.valor,0);
+    const porVend = {}; lista.forEach(r=>{ porVend[r.vendedora] = (porVend[r.vendedora]||0) + r.valor; });
+    if(!lista.length){ box.innerHTML = `<div class="card" style="margin-top:14px;"><div class="muted">Nenhuma devolução neste mês${cancLoja()?' nesta loja':''}.</div></div>`; return; }
+    box.innerHTML = `<div class="card" style="margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;"><div class="section-label" style="margin:0;">${lista.length} devolução(ões)</div><b>Total ${fmtMoeda(tot)}</b></div>
+      <div class="muted" style="font-size:13px;margin:6px 0 10px;">Por vendedora: ${Object.entries(porVend).sort((a,b)=>b[1]-a[1]).map(([n,v])=>escapeHtml(n)+' '+fmtMoeda(v)).join(' · ')}</div>
+      <div class="table-wrap"><table><thead><tr><th>Cancelada em</th><th>Tipo</th><th>Via</th><th>Feita em</th><th>Loja</th><th>Cliente</th><th>Vendedora</th><th style="text-align:right;">Valor</th><th>Motivo</th><th>Por</th></tr></thead><tbody>
+      ${lista.map(r=>`<tr><td style="white-space:nowrap;">${fmtDate(cancDataLocal(r.reg.canceladoEm))}</td><td>${r.tipo==='venda'?'Venda':'Pedido'}</td><td><b>${escapeHtml(r.via||'—')}</b></td><td style="white-space:nowrap;">${fmtDate(r.data)}</td><td>${escapeHtml(cancNomeLoja(r.lojaId))}</td><td>${escapeHtml(r.cliente||'—')}</td><td>${escapeHtml(r.vendedora)}</td><td style="text-align:right;white-space:nowrap;">${fmtMoeda(r.valor)}</td><td>${escapeHtml(r.reg.motivoCancelamento||'')}</td><td>${escapeHtml(r.reg.canceladoPor||'')}</td></tr>`).join('')}
+      </tbody></table></div></div>`;
+  }
+  desenhar();
+}
+
+/* ============================================================
    NAVEGAÇÃO
    ============================================================ */
 function tabsForLevel(){
   if(MODO_RESERVA) return [{ id:'reservas', label:'Reservas', icon:'🔖' }];
+  if(MODO_CANCEL) return [{ id:'cancelBusca', label:'Cancelar via', icon:'↩️' }, { id:'devolucoes', label:'Devoluções', icon:'📉' }];
   const t = [
     { id:'vendas', label:'Lançadas', icon:'📋' },
   ];
@@ -2538,6 +2709,7 @@ function renderView(){
   if(!modoNovaVenda) __conversaoOrcamento = null;
   if(!modoNovaVenda){ __conversaoReserva = null; __reservaEditando = null; if(window.__excluirOrigemEstoque){ window.__excluirOrigemEstoque = null; invalidarReservadas(); } }
   if(MODO_RESERVA){ if(modoNovaVenda) renderNovaVenda(main); else renderReservas(main); return; }
+  if(MODO_CANCEL){ modoNovaVenda = false; if(currentTab==='devolucoes') renderDevolucoes(main); else renderCancelBusca(main); return; }
   if(modoNovaVenda) renderNovaVenda(main);
   else if(currentTab==='vendas') renderVendas(main);
   else if(currentTab==='semnota') renderSemNota(main);
@@ -3668,7 +3840,7 @@ async function abrirCancelarVenda(venda){
     ${venda.estoqueConsumido && Object.keys(venda.estoqueConsumido).length>0 ? `<div class="aviso aviso-info">${ic('pacote')}<div>Os itens desta venda voltam ao estoque automaticamente.</div></div>` : `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Venda antiga, sem registro de baixa de estoque.</b><small>Se ela baixou estoque, ajuste à mão em Configurações › Cadastro › Produto.</small></div></div>`}
     <div class="field" style="margin-top:14px;display:grid;gap:8px;">
       <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="cancelar" checked> <span><b>Cancelar e manter o registro</b><br><small class="muted">A venda fica na lista como cancelada, para consulta.</small></span></label>
-      <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="excluir"> <span><b>Desfazer tudo — a venda deixa de existir</b><br><small class="muted">Estoque volta, crédito/fiado/cashback do cliente são desfeitos${recebido>0?', o valor recebido ('+fmtMoeda(recebido)+') é devolvido ao cliente':''} e a venda some das listas, do caixa e dos relatórios.</small></span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="excluir"> <span><b>Desfazer tudo — a venda deixa de existir</b><br><small class="muted">${venda.data !== hoje() ? 'Venda de outro dia: ela fica no dia em que foi feita e entra como <b>devolução hoje</b> (desconta no faturamento e na comissão de hoje). ' : ''}Estoque volta, crédito/fiado/cashback do cliente são desfeitos${recebido>0?', o valor recebido ('+fmtMoeda(recebido)+') é devolvido ao cliente':''} e a venda some das listas, do caixa e dos relatórios.</small></span></label>
     </div>
     <div id="cv_avisoExcluir" style="display:none;">${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Devolva ${fmtMoeda(recebido)} ao cliente</b><small>Pela mesma forma em que foi pago: ${escapeHtml((venda.pagamentos||[]).filter(p=>!['__fiado','__credito','__cashback'].includes(p.formaId)).map(p=>(((config.formasPagamento||[]).find(f=>f.id===p.formaId)||{nome:'—'}).nome)+' '+fmtMoeda(p.valor)).join(' · '))}. Cartão: estorne na maquininha.</small></div></div>` : ''}</div>
     <div class="field" style="margin-top:14px;"><label for="cv_motivo">Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="cv_motivo" style="min-height:70px;" placeholder="Ex.: cliente desistiu, erro de lançamento"></textarea></div>
@@ -3686,7 +3858,7 @@ async function abrirCancelarVenda(venda){
   document.getElementById('cv_confirmar').addEventListener('click', async ()=>{
     const motivo = maiusc(document.getElementById('cv_motivo').value);
     if(!motivo){ showToast('Escreva o motivo do cancelamento.'); return; }
-    if((document.querySelector('input[name=cv_modo]:checked')||{}).value === 'excluir'){
+    if((document.querySelector('input[name=cv_modo]:checked')||{}).value === 'excluir' && venda.data === hoje()){
       if(!confirm('Desfazer tudo e excluir esta venda? Ela deixa de aparecer no sistema.')) return;
       const btn = document.getElementById('cv_confirmar'); btn.disabled = true; btn.textContent = 'Desfazendo…';
       try{ await excluirVendaDefinitivo(venda, motivo); closeModal(); }

@@ -1059,12 +1059,12 @@
   function curvaAbcVendedoras(){
     const totais = {};
     vendas.forEach(v=>{
-      if(!v.vendedora) return;
+      if(!v.vendedora || vgEhCanc(v)) return;   // vendida (+) e devolvida (−) no total geral = zero
       const nv = nomeVendedoraNormalizado(v.vendedora);
       totais[nv] = (totais[nv]||0) + (Number(v.valorTotal)||0);
     });
     orders.forEach(o=>{
-      if(!o.vendedora) return;
+      if(!o.vendedora || vgEhCanc(o) || o.status==="rascunho") return;
       const no = nomeVendedoraNormalizado(o.vendedora);
       totais[no] = (totais[no]||0) + (Number(o.valorTotal)||0);
     });
@@ -1137,6 +1137,9 @@
     const lojas = (configCompleto && configCompleto.lojas) || [];
     return lojas.find(l=> l.id === reg.lojaId) || lojas.find(l=> l.nome === reg.loja) || null;
   }
+  /* Cancelamento: a via continua no dia em que foi feita; o valor sai (devolução) no dia do cancelamento. */
+  function vgDataCanc(r){ const t = r && r.canceladoEm; if(!t) return ""; const d = new Date(typeof t === "number" ? t : (isNaN(Number(t)) ? t : Number(t))); return isNaN(d) ? String(t).slice(0,10) : vgDataStr(d); }
+  const vgEhCanc = r=> r && (r.status === "cancelada" || r.status === "cancelado");
   function renderVisaoGeral(){
     const box = document.getElementById("secVisaoGeral");
     if(!box) return;
@@ -1148,10 +1151,14 @@
     const ini = vgDataStr(iniD);
     const noPeriodo = d=> d && d >= ini && d <= fim;
 
-    const vendasP = (vendas||[]).filter(v=> v.status !== "cancelada" && noPeriodo(v.data));
-    const ordensP = ordensVisiveis().filter(o=> o.status !== "cancelado" && noPeriodo(o.data));
-    const totVendas = vendasP.reduce((s,v)=> s + (Number(v.valorTotal)||0), 0);
-    const totOrdens = ordensP.reduce((s,o)=> s + (Number(o.valorTotal)||0), 0);
+    const vendasP = (vendas||[]).filter(v=> noPeriodo(v.data));
+    const ordensP = ordensVisiveis().filter(o=> o.status !== "rascunho" && noPeriodo(o.data));
+    const devV = (vendas||[]).filter(v=> vgEhCanc(v) && noPeriodo(vgDataCanc(v)));
+    const devO = ordensVisiveis().filter(o=> vgEhCanc(o) && noPeriodo(vgDataCanc(o)));
+    const somaVT = l=> l.reduce((s,r)=> s + (Number(r.valorTotal)||0), 0);
+    const totDevolucoes = somaVT(devV) + somaVT(devO);
+    const totVendas = somaVT(vendasP) - somaVT(devV);
+    const totOrdens = somaVT(ordensP) - somaVT(devO);
     const total = totVendas + totOrdens;
     const ticket = vendasP.length ? totVendas / vendasP.length : 0;
     const osAbertas = ordensVisiveis().filter(o=> o.status !== "entregue" && o.status !== "cancelado").length;
@@ -1177,6 +1184,8 @@
     const idx = {}; dias.forEach((d,i)=> idx[d.data] = i);
     vendasP.forEach(v=>{ const k = chaveSerie(v.data); if(idx[k]!==undefined) dias[idx[k]].v += Number(v.valorTotal)||0; });
     ordensP.forEach(o=>{ const k = chaveSerie(o.data); if(idx[k]!==undefined) dias[idx[k]].o += Number(o.valorTotal)||0; });
+    devV.forEach(v=>{ const k = chaveSerie(vgDataCanc(v)); if(idx[k]!==undefined) dias[idx[k]].v -= Number(v.valorTotal)||0; });
+    devO.forEach(o=>{ const k = chaveSerie(vgDataCanc(o)); if(idx[k]!==undefined) dias[idx[k]].o -= Number(o.valorTotal)||0; });
 
     // Por loja
     const porLoja = {};
@@ -1188,6 +1197,8 @@
     };
     vendasP.forEach(v=> somaLoja(v, Number(v.valorTotal)||0));
     ordensP.forEach(o=> somaLoja(o, Number(o.valorTotal)||0));
+    devV.forEach(v=> somaLoja(v, -(Number(v.valorTotal)||0)));
+    devO.forEach(o=> somaLoja(o, -(Number(o.valorTotal)||0)));
     const lojasLista = Object.values(porLoja).filter(x=> x.valor>0).sort((a,b)=> b.valor-a.valor);
 
     // Produtos mais vendidos (valor) no período
@@ -1219,7 +1230,7 @@
         </div>
       </div>
       <div class="vg-kpis">
-        <div class="vg-kpi"><div class="lbl">Movimento no período</div><div class="num" title="${escapeHtml(fmtMoeda(total))}">${fmtMoeda(total)}</div><div class="det">Vendas ${fmtMoeda(totVendas)} · O.S. ${fmtMoeda(totOrdens)}</div></div>
+        <div class="vg-kpi"><div class="lbl">Movimento no período</div><div class="num" title="${escapeHtml(fmtMoeda(total))}">${fmtMoeda(total)}</div><div class="det">Vendas ${fmtMoeda(totVendas)} · O.S. ${fmtMoeda(totOrdens)}${totDevolucoes>0?` · devoluções −${fmtMoeda(totDevolucoes)}`:''}</div></div>
         <div class="vg-kpi"><div class="lbl">Vendas no PDV</div><div class="num">${fmtNum(vendasP.length)}</div><div class="det">Ticket médio ${fmtMoeda(ticket)}</div></div>
         <div class="vg-kpi${osAbertas?" alerta":""}"><div class="lbl">O.S. em aberto${osAbertas?` <span class="badge wait">Acompanhar</span>`:""}</div><div class="num">${fmtNum(osAbertas)}</div><div class="det">Ainda não entregues (todas as datas)</div></div>
         <div class="vg-kpi${aReceber>0?" alerta":""}"><div class="lbl">A receber${aReceber>0?` <span class="badge wait">Em aberto</span>`:""}</div><div class="num" title="${escapeHtml(fmtMoeda(aReceber))}">${fmtMoeda(aReceber)}</div><div class="det">Saldo de O.S. e vendas (todas as datas)</div></div>
@@ -1250,7 +1261,7 @@
         <p class="vg-sub">Os 5 maiores por valor no PDV, no período</p>
         ${barras(prodLista, false)}
       </div>
-      <div class="vg-fonte">Fonte: Vendas (PDV) e Ordens de Serviço. Não entram vendas canceladas nem O.S. canceladas ou em rascunho.</div>
+      <div class="vg-fonte">Fonte: Vendas (PDV) e Ordens de Serviço. Venda ou O.S. cancelada fica no dia em que foi feita e sai (devolução) no dia do cancelamento. Rascunho não entra.</div>
     `;
     const grafBox = document.getElementById("vgGraficoBox");
     grafBox.innerHTML = vgGraficoDiario(dias, grafBox.clientWidth);
@@ -1319,11 +1330,11 @@
 
     const dados = lojas.map(l=>{
       const vLoja = (vendas||[]).filter(v=>
-        v.status !== "cancelada" &&
         (v.lojaId === l.id || v.loja === l.nome) &&
         (v.data||"") >= mesIni && (v.data||"") <= mesFim
       );
-      const fat = vLoja.reduce((s,v)=> s + (Number(v.valorTotal)||0), 0);
+      const devLoja = (vendas||[]).filter(v=> vgEhCanc(v) && (v.lojaId === l.id || v.loja === l.nome) && vgDataCanc(v) >= mesIni && vgDataCanc(v) <= mesFim);
+      const fat = vLoja.reduce((s,v)=> s + (Number(v.valorTotal)||0), 0) - devLoja.reduce((s,v)=> s + (Number(v.valorTotal)||0), 0);
       const qtd = vLoja.length;
       const osAbertas = (orders||[]).filter(o=>
         (o.lojaId === l.id) && o.status !== "entregue" && o.status !== "cancelado"
