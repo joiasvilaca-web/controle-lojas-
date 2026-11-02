@@ -490,7 +490,7 @@
    * que já estava, indexado por nome. */
   function nomeLojaDash(lojaId){
     if(!lojaId) return "";
-    const l=(configCompleto&&configCompleto.lojas||[]).find(x=>x.id===lojaId);
+    const l=(todasLojasDash.length ? todasLojasDash : (configCompleto&&configCompleto.lojas||[])).find(x=>x.id===lojaId);
     return l?l.nome:lojaId;
   }
   function fmtDate(s){ if(!s) return "—"; if(window.Fmt){ const r = Fmt.data(s); if(r) return r; } const p=String(s).split("-"); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
@@ -590,6 +590,7 @@
           configCompleto = unificado;
           ordersConfig = unificado ? { lojas: unificado.lojas||[], serviceTypes: unificado.tiposServico||[], users: unificado.users||[] } : null;
           transfConfig = unificado ? { stores: (unificado.lojas||[]).map(l=>l.abreviacao) } : { stores: [] };
+          aplicarLojasDoUsuarioNoDash();
         }catch(e){ console.error("Erro ao carregar config no dashboard embutido:", e); }
         await loadAllData();
         enterDashboard();
@@ -653,7 +654,35 @@
     const main = document.getElementById("mainContent");
     if(main) main.innerHTML = `<div class="carregando" role="status">Carregando o painel…</div>`;
   }
+  /* Lojas que esta pessoa vê no Painel: diretoria = todas; gerente/vendedora = as lojas do cadastro (DP › Acesso).
+   * Ex.: Larissa = Jardim Norte + Reforma; Camila = JV + Vilaça. Os números e o comparativo só somam essas lojas. */
+  let lojasDashIds = null, lojasDashNomes = null, todasLojasDash = [];
+  function aplicarLojasDoUsuarioNoDash(){
+    todasLojasDash = (configCompleto && configCompleto.lojas) || [];
+    const minhas = (currentUser && currentUser.nivel !== "diretoria" && Array.isArray(currentUser.lojas)) ? currentUser.lojas.filter(id=> todasLojasDash.some(l=>l.id===id)) : [];
+    if(!minhas.length){ lojasDashIds = null; lojasDashNomes = null; return; }
+    lojasDashIds = new Set(minhas);
+    const permitidas = todasLojasDash.filter(l=> lojasDashIds.has(l.id));
+    lojasDashNomes = new Set(permitidas.map(l=> l.nome));
+    configCompleto = Object.assign({}, configCompleto, { lojas: permitidas });
+    if(ordersConfig) ordersConfig = Object.assign({}, ordersConfig, { lojas: permitidas });
+    transfConfig = { stores: permitidas.map(l=> l.abreviacao) };
+  }
+  function regDaMinhaLoja(r){
+    if(!lojasDashIds || !r) return true;
+    const ids = [r.lojaId, r.lojaOrigemId, r.lojaDestinoId].filter(Boolean);
+    const nomes = [r.loja, r.lojaOrigem, r.lojaDestino].filter(Boolean);
+    if(!ids.length && !nomes.length) return true;   // registro antigo sem loja
+    return ids.some(id=> lojasDashIds.has(id)) || nomes.some(n=> lojasDashNomes.has(n));
+  }
   async function loadAllData(){
+    await loadAllDataBruto();
+    if(lojasDashIds){
+      orders = orders.filter(regDaMinhaLoja); vendas = vendas.filter(regDaMinhaLoja); orcamentos = orcamentos.filter(regDaMinhaLoja);
+      gastosDash = gastosDash.filter(regDaMinhaLoja); transferencias = transferencias.filter(regDaMinhaLoja); reposicoes = reposicoes.filter(regDaMinhaLoja);
+    }
+  }
+  async function loadAllDataBruto(){
     falhasCargaDash = [];
     const rOrdens = await gatewayCall({ op:'selectAll', table:'ordens_servico' });
     if(!rOrdens || rOrdens.error) falhasCargaDash.push("ordens de serviço");
