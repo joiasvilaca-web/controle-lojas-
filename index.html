@@ -9,7 +9,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VILAÇA APP</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700;800&display=swap"></noscript></noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 <script src="cliente-lojas.js"></script>
@@ -772,7 +772,7 @@
 
 <div id="loginView">
   <div class="login-card">
-    <img src="logo-app.png?v=4" alt="Vilaça App" style="width:132px; height:132px; display:block; margin:0 auto 20px;">
+    <img src="logo-app.webp?v=5" alt="Vilaça App" style="width:132px; height:132px; display:block; margin:0 auto 20px;">
     <div class="login-title">VILAÇA APP</div>
     <p class="login-sub">Use seu apelido e sua senha.</p>
     <div class="login-error" id="loginError" role="alert">Usuário ou senha incorretos. Confira e tente de novo.</div>
@@ -1927,15 +1927,29 @@ async function verificarAlertaGastos(){
 /* Depois do login, baixa em segundo plano (só o arquivo HTML, sem executar nada) os
  * módulos que a pessoa tem permissão de abrir. Assim, no primeiro clique, o iframe já
  * acha o arquivo no cache do navegador e só precisa buscar os dados. */
+let __prefetchFeito = false;
 function preaquecerModulos(){
   try{
+    if(__prefetchFeito) return;
+    // Celular, "economia de dados" ou rede lenta: não baixa as outras telas por antecipação (gasta dados e disputa banda com a tela aberta).
+    const cx = navigator.connection || {};
+    const lento = cx.saveData || /(^|-)2g$|3g/.test(String(cx.effectiveType||''));
+    const celular = Math.min(window.innerWidth||1024, window.innerHeight||1024) <= 700 || window.matchMedia('(max-width: 820px)').matches;
+    if(lento || celular) return;
+    __prefetchFeito = true;
     const srcs = new Set();
     subCaixaPermitidos().forEach(id=>{ const s = CAIXA_SUBMODULOS[id]; if(s && s.src) srcs.add(s.src); });
     subDashboardPermitidos().forEach(id=>{ const s = DASHBOARD_SUBMODULOS[id]; if(s && s.src) srcs.add(s.src); });
     Object.values(CONFIG_SUBMODULOS).forEach(s=>{ if(s.src && currentPermissoes[s.permModulo] && currentPermissoes[s.permModulo].ativo) srcs.add(s.src); });
     SIDEBAR_MODULES.forEach(m=>{ if(m.src && podeVerModulo(m)) srcs.add(m.src); });
-    const iniciar = ()=>{ srcs.forEach(src=>{ const l = document.createElement('link'); l.rel = 'prefetch'; l.as = 'document'; l.href = src; document.head.appendChild(l); }); };
-    if('requestIdleCallback' in window) requestIdleCallback(iniciar, { timeout: 3000 }); else setTimeout(iniciar, 1500);
+    const lista = Array.from(srcs);
+    // um por vez, espaçado, quando o navegador está ocioso — não competir com o que o usuário está fazendo
+    const proximo = ()=>{
+      const src = lista.shift(); if(!src) return;
+      const l = document.createElement('link'); l.rel = 'prefetch'; l.as = 'document'; l.href = src; document.head.appendChild(l);
+      setTimeout(()=>{ if('requestIdleCallback' in window) requestIdleCallback(proximo, { timeout: 4000 }); else proximo(); }, 400);
+    };
+    if('requestIdleCallback' in window) requestIdleCallback(proximo, { timeout: 5000 }); else setTimeout(proximo, 2500);
   }catch(e){ /* só otimização */ }
 }
 function enterShell(moduloInicial){
