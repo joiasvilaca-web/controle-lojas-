@@ -138,6 +138,17 @@
     details.filtros[open] > summary{border-bottom:1px solid var(--line);}
     details.filtros > .filtros-barra{padding:16px;}
   }
+  .busca-vias{margin:0 0 14px;} .busca-vias input{min-height:46px;font-size:16px;padding:10px 14px;}
+  .sec-tit{font-size:13px;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;}
+  .acoes-via{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;}
+  .acoes-via .btn{min-height:36px;font-weight:700;}
+  .via-modal{position:fixed;inset:0;background:rgba(15,20,25,.55);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px 12px;overflow:auto;}
+  .via-modal-box{background:var(--surface);border-radius:14px;max-width:640px;width:100%;padding:18px;box-shadow:0 20px 60px -20px rgba(0,0,0,.5);}
+  .via-modal-box .ro-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;margin:12px 0;font-size:13px;}
+  .via-modal-box .ro-grid b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);font-weight:600;}
+  @media (max-width:520px){ .via-modal-box .ro-grid{grid-template-columns:1fr;} }
+  .ro-item{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:6px 0;font-size:13px;}
+  .ro-item .det-fotos{margin:6px 0 0;}
 </style>
 </head>
 <body>
@@ -152,20 +163,11 @@
     <button class="btn btn-ghost" id="btnCam" type="button" title="Ler o código pela câmera"><span data-ico="camera"></span><span class="rot">Câmera</span></button>
   </div>
   <div id="camBox"><video id="camVideo" playsinline muted></video><div class="cam-rodape">Aponte a câmera para o código de barras da via. <button class="btn btn-ghost btn-sm" id="btnCamFechar" type="button">Desligar câmera</button></div></div>
-  <details class="card filtros" id="vfFiltros" open><summary><span data-ico="filtro"></span>Filtros da lista</summary><div class="filtros-barra">
-    <div class="field"><label for="vfStatus">Andamento</label><select id="vfStatus"><option value="enviado_fabrica,em_producao,pendencia,oficina_pronto">TODAS NA OFICINA</option><option value="enviado_fabrica">ENVIADO P/ FÁBRICA</option><option value="em_producao">EM PRODUÇÃO</option><option value="pendencia">PENDÊNCIA</option><option value="oficina_pronto">PRODUZIDO</option></select></div>
-    <div class="field"><label for="vfLoja">Loja</label><select id="vfLoja"></select></div>
-    <div class="field"><label for="vfTipo">Tipo de ordem</label><select id="vfTipo"><option value="">Todos</option></select></div>
-    <div class="field"><label for="vfDe">Agenda de</label><input type="date" id="vfDe"></div>
-    <div class="field"><label for="vfAte">Agenda até</label><input type="date" id="vfAte"></div>
-    <div class="field"><label for="vfBusca">Buscar</label><input id="vfBusca" placeholder="Via, cliente ou descrição"></div>
-    <div class="acao"><button class="btn btn-accent" id="btnVias" type="button"><span data-ico="filtro"></span>Filtrar</button></div>
-  </div></details>
-  <div class="vias-wrap">
-    <div class="card flush" id="viasBox"><div class="empty">Carregando…</div></div>
-    <div class="card" id="viaDet"><div class="empty"><span data-ico="leitor" data-tam="28"></span><b>Nenhuma via aberta</b>Leia o código da via ou toque numa linha da lista.</div></div>
-  </div>
+  <div class="field busca-vias"><label for="vBusca">Buscar</label><input id="vBusca" type="search" placeholder="Busque por qualquer dado: via, cliente, telefone, tipo, descrição, loja, vendedora, andamento…" autocomplete="off"></div>
+  <div class="card flush" id="viasBusca" style="display:none;"></div>
+  <div class="card flush" id="viasAcao"><div class="empty">Carregando…</div></div>
 </div>
+<div id="viaModal" class="via-modal" style="display:none;" role="dialog" aria-modal="true" aria-label="Via completa"><div class="via-modal-box" id="viaModalBox"></div></div>
 
 <!-- SALDOS -->
 <div class="tab-content" id="tab-saldos">
@@ -286,7 +288,7 @@ const estadoErro = (msg, comoResolver) => `<div class="empty err">${ico('alerta'
 const estadoCarregando = () => '<div class="empty">Carregando…</div>';
 hidratarIcones();
 /* celular: filtro da lista de vias começa recolhido e o leitor tem dica curta */
-try{ if(window.matchMedia('(max-width:760px)').matches){ const f = document.getElementById('vfFiltros'); if(f) f.removeAttribute('open'); document.getElementById('vLeitor').placeholder = 'Código da via + Enter'; } }catch(e){}
+try{ if(window.matchMedia('(max-width:760px)').matches){ document.getElementById('vLeitor').placeholder = 'Código da via + Enter'; } }catch(e){}
 async function api(op, params){
   const res = await fetch(API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op, params: params||{}, senha: __senha }) });
   let j = null; try{ j = await res.json(); }catch(e){}
@@ -305,7 +307,6 @@ function preencherSelects(){
   const lojaPad = (window.__lojaAtual && window.__lojaAtual.id) || '';
   document.getElementById('lLoja').innerHTML = lojasDonas().map(l=>`<option value="${l.id}" ${l.id===lojaPad?'selected':''}>${escapeHtml(l.nome)}</option>`).join('');
   document.getElementById('mLoja').innerHTML = '<option value="">Todas</option>' + lojasDonas().map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('');
-  document.getElementById('vfLoja').innerHTML = '<option value="">Todas</option>' + lojasDonas().map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('');
 }
 
 /* ---------- Saldos ---------- */
@@ -469,104 +470,129 @@ document.getElementById('btnSalvarIns').addEventListener('click', async ()=>{
 const NOME_STATUS = { aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'PRODUZIDO', pronto:'PRONTO', entregue:'ENTREGUE', cancelado:'CANCELADO', rascunho:'RASCUNHO' };
 let viasCache = [], viaSel = null, tiposVias = [];
 const fmtDia = d => d ? d.split('-').reverse().join('/') : '—';
+const STATUS_ACAO = ['enviado_fabrica','em_producao','pendencia'];
+const semAcento = t => String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
 async function buscarVias(){
-  const box = document.getElementById('viasBox'); box.innerHTML = estadoCarregando();
+  const box = document.getElementById('viasAcao');
+  if(!viasCache.length) box.innerHTML = estadoCarregando();
   try{
-    const r = await api('vias', { status: document.getElementById('vfStatus').value.split(','), lojaId: document.getElementById('vfLoja').value,
-      serviceTypeId: document.getElementById('vfTipo').value, de: document.getElementById('vfDe').value, ate: document.getElementById('vfAte').value, busca: document.getElementById('vfBusca').value });
+    const r = await api('vias', { status: ['enviado_fabrica','em_producao','pendencia','oficina_pronto'] });
     viasCache = r.vias || [];
-    if(!tiposVias.length && r.tipos){ tiposVias = r.tipos; document.getElementById('vfTipo').innerHTML = '<option value="">Todos</option>' + tiposVias.map(t=>`<option value="${escapeHtml(t.id)}">${escapeHtml(t.nome)}</option>`).join(''); }
     desenharVias();
-  }catch(e){ box.innerHTML = estadoErro(e.message, 'Confira a conexão e toque em "Filtrar" de novo.'); }
+  }catch(e){ box.innerHTML = estadoErro(e.message, 'Confira a conexão e tente de novo.'); }
 }
-function desenharVias(){
-  const box = document.getElementById('viasBox');
-  if(!viasCache.length){ box.innerHTML = estadoVazio('ferramenta', 'Nenhuma via com a Oficina neste filtro', 'Mude o andamento, a loja ou o período e toque em "Filtrar".'); return; }
+function botoesVia(v){
+  if(v.status==='enviado_fabrica') return `<button class="btn btn-accent" type="button" data-acao="recebido" data-id="${escapeHtml(v.id)}">RECEBIDO</button>`;
+  if(v.status==='em_producao') return `<button class="btn btn-ghost" type="button" data-acao="pendencia" data-id="${escapeHtml(v.id)}">PENDÊNCIA</button><button class="btn btn-accent" type="button" data-acao="produzido" data-id="${escapeHtml(v.id)}">PRODUZIDO</button>`;
+  if(v.status==='pendencia') return `<button class="btn btn-ghost" type="button" data-acao="recebido" data-id="${escapeHtml(v.id)}">EM PRODUÇÃO</button><button class="btn btn-accent" type="button" data-acao="produzido" data-id="${escapeHtml(v.id)}">PRODUZIDO</button>`;
+  return '';
+}
+function tabelaVias(lista){
   const hoje = new Date().toISOString().slice(0,10);
-  box.innerHTML = `<div class="lista-cont">${viasCache.length} ${viasCache.length===1?'via':'vias'}</div><div class="tbl-wrap"><table class="cartoes"><thead><tr><th>Via</th><th>Loja</th><th>Tipo</th><th>Agenda</th><th>Andamento</th></tr></thead><tbody>${viasCache.map(v=>{ const atras = v.data && v.data<hoje && ['enviado_fabrica','em_producao','pendencia'].includes(v.status); return `
-    <tr class="via-linha ${viaSel&&viaSel.id===v.id?'sel':''}" data-via="${escapeHtml(v.id)}" tabindex="0">
+  return `<div class="tbl-wrap"><table class="cartoes"><thead><tr><th>Via</th><th>Loja</th><th>Tipo</th><th>Agenda</th><th>Andamento</th><th></th></tr></thead><tbody>${lista.map(v=>{ const atras = v.data && v.data<hoje && STATUS_ACAO.includes(v.status); return `
+    <tr class="via-linha" data-via="${escapeHtml(v.id)}" tabindex="0">
       <td><b>${escapeHtml(v.codigoVia||'—')}</b><div class="sub-linha">${escapeHtml(v.cliente||'')}</div></td>
       <td>${dotLoja(v.lojaId)}</td><td class="small">${escapeHtml(v.serviceTypeName||'')}</td>
       <td style="white-space:nowrap;" class="${atras?'atrasada':''}">${fmtDia(v.data)}${atras?' <span class="small">· atrasada</span>':''}</td>
-      <td class="cel-dir"><span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span></td></tr>`; }).join('')}</tbody></table></div>`;
-  box.querySelectorAll('[data-via]').forEach(tr=>{ tr.addEventListener('click', ()=> abrirVia(viasCache.find(x=>x.id===tr.dataset.via)));
-    tr.addEventListener('keydown', e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); abrirVia(viasCache.find(x=>x.id===tr.dataset.via)); } }); });
+      <td><span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span>${v.status==='pendencia' && ultimaObsOficina(v) ? `<div class="sub-linha">${escapeHtml(ultimaObsOficina(v))}</div>`:''}</td>
+      <td><div class="acoes-via">${botoesVia(v)}</div></td></tr>`; }).join('')}</tbody></table></div>`;
 }
-async function abrirViaPorCodigo(cod){
-  cod = String(cod||'').trim(); if(!cod) return;
-  try{ const r = await api('via', { codigo: cod }); abrirVia(r.via); showToast('Via ' + (r.via.codigoVia||'') + ' aberta.'); }
-  catch(e){ showToast(e.message, 3500); }
+function ultimaObsOficina(v){
+  const o = (v.observacoes||[]).filter(x=>x.origem==='oficina').sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0))[0];
+  return o ? String(o.descricao||'').replace(/^\[OFICINA\]\s*/,'').slice(0,90) : '';
 }
-function abrirVia(v){
-  if(!v) return; viaSel = v;
-  const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0) viasCache[i] = v;
-  desenharVias();
-  const det = document.getElementById('viaDet');
-  const aberta = ['aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto'].includes(v.status);
-  const fab = v.finalidade==='fabricacao';
-  const ins = (INIT.insumos||[]).filter(x=>x.ativo!==false);
-  // material padrão: ouro (18k se existir; senão o primeiro ouro cadastrado)
-  const ouro = ins.find(x=>/OURO/i.test(x.nome) && /750|18/.test(x.nome)) || ins.find(x=>/OURO/i.test(x.nome)) || ins[0];
-  det.innerHTML = `
-    <div class="det-cab">
-      <div><div class="det-cod">${escapeHtml(v.codigoVia||'—')} ${dotLoja(v.lojaId)}</div>
-      <div class="det-meta">${escapeHtml(v.cliente||'')} · ${escapeHtml(v.serviceTypeName||'')} · agenda ${fmtDia(v.data)}${v.vendedora?' · '+escapeHtml(v.vendedora):''}</div></div>
-      <span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span>
-    </div>
-    ${v.descricao?`<div class="det-desc">${escapeHtml(v.descricao)}</div>`:''}
-    ${v.itens&&v.itens.length?`<ul class="det-itens">${v.itens.map(i=>`<li>${escapeHtml(i.descricao)} ${i.qtd>1?'×'+i.qtd:''}</li>`).join('')}</ul>`:''}
-    ${v.fotos&&v.fotos.length?`<div class="det-fotos">${v.fotos.map((u,k)=>`<a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="Abrir foto ${k+1}"><img src="${escapeHtml(u)}" alt="Foto ${k+1} da via"></a>`).join('')}</div>`:''}
-    ${aberta ? `<div class="det-form">
-    <div class="field"><label>Andamento na Oficina</label>
-      <div class="escolha" role="radiogroup" aria-label="Andamento na Oficina">
-        <label><input type="radio" name="dStatus" value="em_producao" ${v.status==='em_producao'?'checked':''}> EM PRODUÇÃO <span class="muted small">(recebi a via na fábrica)</span></label>
-        <label><input type="radio" name="dStatus" value="pendencia" ${v.status==='pendencia'?'checked':''}> PENDÊNCIA</label>
-        <label><input type="radio" name="dStatus" value="oficina_pronto" ${v.status==='oficina_pronto'?'checked':''}> PRODUZIDO <span class="muted small">(disponível na fábrica; a caminho da loja)</span></label>
-      </div></div>
-    ${INIT.perm.baixaVia ? `<div class="field"><label for="mvQtd">Material usado (${fab?'fabricação':'serviço'})</label>
-      <div class="linha-mat">
-        <select id="mvIns" aria-label="Insumo usado">${ins.map(x=>`<option value="${x.id}" ${ouro&&x.id===ouro.id?'selected':''}>${escapeHtml(x.nome)} (${escapeHtml(x.unidade)})</option>`).join('')}</select>
-        <input id="mvQtd" inputmode="decimal" placeholder="Quantidade">
-      </div>
-      <div class="dica">Sai do saldo de ${escapeHtml(lojaInfo(v.lojaId).nome)} na Oficina. Deixe em branco se não usou material.</div></div>` : ''}
-    <div class="field"><label for="dObs">Observação para a loja</label><textarea id="dObs" rows="4" maxlength="1000" placeholder="O que a loja precisa saber (obrigatório em caso de pendência)"></textarea></div>
-    <label class="check-linha"><input type="checkbox" id="dAvisar" checked> <span>Avisar a loja — vendedoras e gerente da loja da via recebem o alerta no Pedido</span></label>
-    <button class="btn btn-accent btn-lg" id="dSalvar" type="button" style="width:100%;">Salvar e finalizar</button></div>`
-    : `<div class="aviso">${ico('info')}<span>Esta via já está "${escapeHtml(NOME_STATUS[v.status]||v.status)}" na loja — a Oficina não altera mais.</span></div>`}
-    <div id="dMaterial" style="margin-top:14px;"></div>
-    <div style="margin-top:16px;"><div class="bloco-tit">Observações da via</div>
-      ${(v.observacoes||[]).length ? v.observacoes.slice().sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0)).map(o=>`<div class="obs-o ${o.origem==='oficina'?'of':''}"><div class="obs-cab"><b>${escapeHtml(o.nome||'')}</b> <span class="muted small">${o.criadoEm?fmtData(o.criadoEm):''}</span>${o.avisaLoja?(o.ciente?` <span class="st st-pronto">${ico('check', 12)}Ciente: ${escapeHtml(o.cienteNome||'')}</span>`:' <span class="st st-pendencia">Aguardando ciência</span>'):''}</div>${escapeHtml(o.descricao||'')}</div>`).join('') : '<div class="muted small">Nenhuma observação ainda.</div>'}
-    </div>`;
-  if(INIT.perm.baixaVia) listarMaterialVia(document.getElementById('dMaterial'), v);
-  const btn = document.getElementById('dSalvar'); if(!btn) return;
-  btn.addEventListener('click', async ()=>{
-    const marcado = det.querySelector('input[name="dStatus"]:checked');
-    const status = marcado ? marcado.value : null;
-    const obs = document.getElementById('dObs').value.trim();
-    const qEl = document.getElementById('mvQtd'); const q = qEl ? numBR(qEl.value) : NaN;
-    if(qEl && qEl.value.trim() && !(q>0)){ showToast('Informe a quantidade de material só com números (ex.: 1,25).'); return; }
-    if(!status && !obs && !(q>0)){ showToast('Marque EM PRODUÇÃO, PENDÊNCIA ou PRODUZIDO — ou informe o material usado ou uma observação.'); return; }
-    if(status==='pendencia' && !obs){ showToast('Descreva a pendência na observação.'); document.getElementById('dObs').focus(); return; }
-    btn.disabled = true; btn.textContent = 'Salvando…';
+function ligarLinhas(box){
+  box.querySelectorAll('[data-via]').forEach(tr=>{
+    const abrir = ()=> abrirVia(viasCache.find(x=>x.id===tr.dataset.via));
+    tr.addEventListener('click', abrir);
+    tr.addEventListener('keydown', e=>{ if(e.target===tr && (e.key==='Enter' || e.key===' ')){ e.preventDefault(); abrir(); } });
+  });
+  box.querySelectorAll('[data-acao]').forEach(b=> b.addEventListener('click', e=>{ e.stopPropagation(); acaoVia(b.dataset.acao, b.dataset.id, b); }));
+}
+function desenharVias(){
+  const acao = viasCache.filter(v=>STATUS_ACAO.includes(v.status));
+  const boxA = document.getElementById('viasAcao');
+  boxA.innerHTML = `<div class="sec-tit"><span>Prontas para movimentação da Oficina</span><span class="muted small">${acao.length} ${acao.length===1?'via':'vias'}</span></div>` +
+    (acao.length ? tabelaVias(acao) : estadoVazio('ferramenta', 'Nenhuma via para movimentar agora', 'Quando a loja enviar uma via para a fábrica ela aparece aqui.'));
+  ligarLinhas(boxA);
+  const q = semAcento(document.getElementById('vBusca').value).trim();
+  const boxB = document.getElementById('viasBusca');
+  if(!q){ boxB.style.display = 'none'; boxB.innerHTML = ''; return; }
+  const termos = q.split(/\s+/);
+  const achou = viasCache.filter(v=>{ const t = semAcento((v.busca||'') + ' ' + (NOME_STATUS[v.status]||'') + ' ' + ((INIT&&lojaInfo(v.lojaId).nome)||'')); return termos.every(x=>t.includes(x)); });
+  boxB.style.display = '';
+  boxB.innerHTML = `<div class="sec-tit"><span>Resultado da busca</span><span class="muted small">${achou.length} ${achou.length===1?'via':'vias'}</span></div>` +
+    (achou.length ? tabelaVias(achou) : '<div class="empty"><b>Nada encontrado</b>Tente outro dado (código, cliente, telefone, tipo, descrição…).</div>');
+  ligarLinhas(boxB);
+}
+async function acaoVia(acao, id, btn){
+  const v = viasCache.find(x=>x.id===id); if(!v) return;
+  if(acao==='pendencia'){ abrirPendencia(v); return; }
+  const status = acao==='produzido' ? 'oficina_pronto' : 'em_producao';
+  btn.disabled = true; const txt = btn.textContent; btn.textContent = 'Salvando…';
+  try{
+    const r = await api('viaAtualizar', { id: v.id, status, avisarLoja:false });
+    const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0 && r.via) viasCache[i] = r.via;
+    showToast('Via ' + (v.codigoVia||'') + ' → ' + (NOME_STATUS[status]||status) + '.');
+    desenharVias();
+  }catch(e){ showToast(e.message, 4500); btn.disabled = false; btn.textContent = txt; }
+}
+function abrirPendencia(v){
+  const m = document.getElementById('viaModal'), box = document.getElementById('viaModalBox');
+  box.innerHTML = `<h3 style="margin:0 0 4px;">PENDÊNCIA — ${escapeHtml(v.codigoVia||'')}</h3>
+    <div class="muted small" style="margin-bottom:12px;">${escapeHtml(v.cliente||'')} · ${escapeHtml(v.serviceTypeName||'')}</div>
+    <div class="field"><label for="pdTexto">Qual é a pendência?</label><textarea id="pdTexto" rows="5" maxlength="1000" placeholder="Descreva o que precisa ser resolvido (a loja será avisada)"></textarea></div>
+    <div class="form-acoes"><button class="btn btn-ghost" id="pdCancelar" type="button">Cancelar</button><button class="btn btn-accent" id="pdSalvar" type="button">Salvar pendência</button></div>`;
+  m.style.display = 'flex'; setTimeout(()=>{ try{ document.getElementById('pdTexto').focus(); }catch(e){} }, 50);
+  document.getElementById('pdCancelar').addEventListener('click', fecharModalVia);
+  document.getElementById('pdSalvar').addEventListener('click', async ()=>{
+    const obs = document.getElementById('pdTexto').value.trim();
+    if(!obs){ showToast('Digite qual é a pendência.'); document.getElementById('pdTexto').focus(); return; }
+    const b = document.getElementById('pdSalvar'); b.disabled = true; b.textContent = 'Salvando…';
     try{
-      if(q>0){
-        const itens = [{ insumoId: document.getElementById('mvIns').value, quantidade:q }];
-        try{ await api('consumoVia', { osId: v.id, itens }); }
-        catch(e){
-          if(e.status===409 && e.dados && e.dados.faltas && confirm(e.message + '\n' + e.dados.faltas.join('\n') + '\n\nLançar mesmo assim? O saldo fica negativo até alguém registrar o envio/compra que falta.')) await api('consumoVia', { osId: v.id, itens, forcar:true });
-          else throw e;
-        }
-      }
-      const params = { id: v.id, observacao: obs, avisarLoja: document.getElementById('dAvisar').checked };
-      if(status) params.status = status;
-      const r = await api('viaAtualizar', params);
-      showToast('Via ' + (v.codigoVia||'') + ' salva.');
-      abrirVia(r.via);
-      try{ document.getElementById('vLeitor').focus(); }catch(e){}
-    }catch(e){ showToast(e.message, 4500); btn.disabled = false; btn.textContent = 'Salvar e finalizar'; }
+      const r = await api('viaAtualizar', { id: v.id, status:'pendencia', observacao: obs, avisarLoja:true });
+      const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0 && r.via) viasCache[i] = r.via;
+      fecharModalVia(); showToast('Via ' + (v.codigoVia||'') + ' → PENDÊNCIA. Loja avisada.'); desenharVias();
+    }catch(e){ showToast(e.message, 4500); b.disabled = false; b.textContent = 'Salvar pendência'; }
   });
 }
-async function listarMaterialVia(el, v){
+function fecharModalVia(){ const m = document.getElementById('viaModal'); m.style.display = 'none'; document.getElementById('viaModalBox').innerHTML = ''; viaSel = null; try{ document.getElementById('vLeitor').focus(); }catch(e){} }
+async function abrirViaPorCodigo(cod){
+  cod = String(cod||'').trim(); if(!cod) return;
+  try{ const r = await api('via', { codigo: cod }); abrirVia(r.via); }
+  catch(e){ showToast(e.message, 3500); }
+}
+/* Via completa em popup — SOMENTE LEITURA */
+function abrirVia(v){
+  if(!v) return; viaSel = v;
+  const m = document.getElementById('viaModal'), box = document.getElementById('viaModalBox');
+  const campo = (r, t) => t ? `<div><b>${r}</b>${escapeHtml(t)}</div>` : '';
+  const fotos = (arr) => arr && arr.length ? `<div class="det-fotos">${arr.map((u,k)=>`<a href="${escapeHtml(u)}" target="_blank" rel="noopener" title="Abrir foto ${k+1}"><img src="${escapeHtml(u)}" alt="Foto ${k+1}"></a>`).join('')}</div>` : '';
+  const hist = (v.historicoOficina||[]).slice().reverse();
+  box.innerHTML = `
+    <div class="det-cab">
+      <div><div class="det-cod">${escapeHtml(v.codigoVia||'—')} ${dotLoja(v.lojaId)}</div>
+      <div class="det-meta">${escapeHtml(lojaInfo(v.lojaId).nome)}${v.encaixe?' · ENCAIXE':''}</div></div>
+      <div style="display:flex;gap:8px;align-items:center;"><span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span><button class="btn btn-ghost btn-sm" id="vmFechar" type="button">Fechar</button></div>
+    </div>
+    <div class="ro-grid">
+      ${campo('Cliente', v.cliente)}${campo('Telefone', v.telefone)}${campo('Tipo de ordem', v.serviceTypeName)}${campo('Agenda', v.data?fmtDia(v.data):'')}
+      ${campo('Vendedora', v.vendedora)}${campo('Número', v.numero)}${campo('Onde está', v.localAtual==='fabrica'?'Fábrica':'Loja')}${campo('Criada em', v.criadoEm?fmtData(v.criadoEm):'')}
+    </div>
+    ${v.descricao?`<div class="bloco-tit">Descrição</div><div class="det-desc">${escapeHtml(v.descricao)}</div>`:''}
+    ${v.infoInterna?`<div class="bloco-tit">Informação interna</div><div class="det-desc">${escapeHtml(v.infoInterna)}</div>`:''}
+    ${(v.itens||[]).length?`<div class="bloco-tit">Itens</div>${v.itens.map(i=>`<div class="ro-item"><b>${escapeHtml(i.descricao||'—')}</b> ${i.qtd>1?'× '+escapeHtml(String(i.qtd)):''}${i.metal?` <span class="muted small">· ${escapeHtml(i.metal)}</span>`:''}${i.obs?`<div class="small" style="white-space:pre-wrap;margin-top:4px;">${escapeHtml(i.obs)}</div>`:''}${fotos(i.fotos)}</div>`).join('')}`:''}
+    ${(v.fotos||[]).length?`<div class="bloco-tit">Fotos da via</div>${fotos(v.fotos)}`:''}
+    <div id="dMaterial" style="margin-top:14px;"></div>
+    <div style="margin-top:14px;"><div class="bloco-tit">Observações da via</div>
+      ${(v.observacoes||[]).length ? v.observacoes.slice().sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0)).map(o=>`<div class="obs-o ${o.origem==='oficina'?'of':''}"><div class="obs-cab"><b>${escapeHtml(o.nome||'')}</b> <span class="muted small">${o.criadoEm?fmtData(o.criadoEm):''}</span>${o.avisaLoja?(o.ciente?` <span class="st st-pronto">${ico('check', 12)}Ciente: ${escapeHtml(o.cienteNome||'')}</span>`:' <span class="st st-pendencia">Aguardando ciência</span>'):''}</div>${escapeHtml(o.descricao||'')}</div>`).join('') : '<div class="muted small">Nenhuma observação ainda.</div>'}
+    </div>
+    ${hist.length?`<div style="margin-top:14px;"><div class="bloco-tit">Histórico da Oficina</div>${hist.map(h=>`<div class="small" style="margin:2px 0;">${h.em?fmtData(h.em):''} · ${escapeHtml(h.por||'')} · ${escapeHtml(NOME_STATUS[h.de]||h.de||'')} → <b>${escapeHtml(NOME_STATUS[h.para]||h.para||'')}</b></div>`).join('')}</div>`:''}`;
+  m.style.display = 'flex'; m.scrollTop = 0;
+  document.getElementById('vmFechar').addEventListener('click', fecharModalVia);
+  if(INIT.perm.baixaVia) listarMaterialVia(document.getElementById('dMaterial'), v, true);
+}
+async function listarMaterialVia(el, v, somenteLeitura){
   let movimentos = [];
   try{ movimentos = (await api('movimentos', { osId: v.id })).movimentos; }catch(e){ el.innerHTML = `<div class="aviso">${ico('alerta')}<span>Não foi possível ver o material já lançado: ${escapeHtml(e.message)}</span></div>`; return; }
   const ativos = movimentos.filter(m=>m.tipo==='CONSUMO' && !(m.payload&&m.payload.estornado));
@@ -576,14 +602,16 @@ async function listarMaterialVia(el, v){
     <div class="bloco-tit">Material já lançado nesta via</div>
     ${ativos.map(m=>{ const i = insInfo(m.insumo_id); return `<div class="mat-linha">
       <span><b>${escapeHtml(i.nome)}</b> · ${fmtQ(-m.quantidade, i.unidade)} · ${m.finalidade==='fabricacao'?'fabricação':'serviço'}${m.valor_unit!=null?' · '+fmtR(-m.quantidade*m.valor_unit):''} <span class="muted small">${escapeHtml((m.payload&&m.payload.por&&m.payload.por.nome)||'')}</span></span>
-      <button class="btn btn-ghost btn-sm" data-insest="${m.id}" type="button" title="Estornar este material (pede o motivo)">${ico('devolver', 14)}Estornar</button></div>`; }).join('')}
+      ${somenteLeitura?'':`<button class="btn btn-ghost btn-sm" data-insest="${m.id}" type="button" title="Estornar este material (pede o motivo)">${ico('devolver', 14)}Estornar</button>`}</div>`; }).join('')}
     <div class="small" style="margin-top:8px;text-align:right;">Material total: <b class="num">${fmtR(total)}</b></div></div>`;
   el.querySelectorAll('[data-insest]').forEach(b=> b.addEventListener('click', async ()=>{
     const motivo = prompt('Motivo do estorno (obrigatório):'); if(!motivo || !motivo.trim()) return;
     try{ await api('estornar', { id:Number(b.dataset.insest), motivo }); showToast('Material estornado.'); listarMaterialVia(el, v); }catch(e){ showToast(e.message, 4000); }
   }));
 }
-document.getElementById('btnVias').addEventListener('click', buscarVias);
+document.getElementById('vBusca').addEventListener('input', desenharVias);
+document.getElementById('viaModal').addEventListener('click', e=>{ if(e.target.id==='viaModal') fecharModalVia(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && document.getElementById('viaModal').style.display!=='none') fecharModalVia(); });
 document.getElementById('vLeitor').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); const c = e.target.value; e.target.value=''; abrirViaPorCodigo(c); } });
 // Câmera (BarcodeDetector: Chrome/Android). Leitor USB/Bluetooth funciona como teclado no campo acima.
 let camStream = null, camTimer = null;
@@ -634,6 +662,7 @@ window.addEventListener('message', async ev=>{
     if(INIT.perm.vias){ buscarVias(); setTimeout(()=>{ try{ document.getElementById('vLeitor').focus(); }catch(e){} }, 300); }
   }
   if(d.type==='gotoTab' && d.tabId && INIT) setTab(d.tabId);
+  if(d.type==='abrirViaOficina' && d.codigo && INIT && INIT.perm.vias){ if(!(viaSel && String(viaSel.codigoVia)===String(d.codigo))) abrirViaPorCodigo(d.codigo); }
   if(d.type==='lojaAtual'){ window.__lojaAtual = { id:d.lojaId||null }; if(INIT) preencherSelects(); }
 });
 window.addEventListener('load', ()=>{ parent.postMessage({ type:'ready', modulo:'insumos' }, '*'); });

@@ -1,4 +1,4 @@
-// insumos-api v5 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// insumos-api v6 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
 // v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
 // v5: quebra padrão (insumos._config.quebraPadraoPct, padrão 5%) e contagem real da Oficina (insumos_contagens):
@@ -337,17 +337,27 @@ Deno.serve(async (req: Request) => {
     }
 
     /* ---------- VIAS (O.S.) ---------- */
-    const STATUS_VIA = ["rascunho", "aguardando", "enviado_fabrica", "pendencia", "oficina_pronto", "pronto", "entregue", "cancelado"];
-    const STATUS_OFICINA = ["enviado_fabrica", "pendencia", "oficina_pronto"];
+    const STATUS_VIA = ["rascunho", "aguardando", "enviado_fabrica", "em_producao", "pendencia", "oficina_pronto", "pronto", "entregue", "cancelado"];
+    const STATUS_OFICINA = ["enviado_fabrica", "em_producao", "pendencia", "oficina_pronto"];
     const resumoVia = (r: any) => {
       const o = r.payload || {};
       const obs = Array.isArray(o.observacoes) ? o.observacoes : [];
-      return { id: r.id, codigoVia: o.codigoVia || o.via || "", cliente: o.cliente || "", lojaId: o.lojaId || "", serviceTypeId: o.serviceTypeId || "",
-        serviceTypeName: o.serviceTypeName || "", data: o.data || "", status: o.status || "", descricao: o.descricao || "", localAtual: o.localAtual || "loja",
-        criadoEm: o.criadoEm || null, vendedora: o.vendedora || "", finalidade: finalidadeDoTipo(o.serviceTypeName || ""), itens: (Array.isArray(o.itens) ? o.itens : []).map((i: any) => ({ descricao: i.descricao || i.produtoNome || i.nome || "", qtd: i.qtd || i.quantidade || 1 })),
-        fotos: (Array.isArray(o.fotos) ? o.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8),
+      const itensRaw = Array.isArray(o.itens) ? o.itens : [];
+      const itens = itensRaw.map((i: any) => ({ descricao: String(i.produto || i.descricao || i.produtoNome || i.nome || ""), qtd: i.quantidade || i.qtd || 1,
+        metal: String(i.metal || ""), obs: String(i.observacaoItem || ""),
+        fotos: (Array.isArray(i.fotos) ? i.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8) }));
+      const fotos = (Array.isArray(o.fotos) ? o.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8);
+      const v: any = { id: r.id, codigoVia: o.codigoVia || o.via || "", via: o.via || "", numero: o.numero || "", cliente: o.cliente || "", telefone: o.telefone || "",
+        lojaId: o.lojaId || "", serviceTypeId: o.serviceTypeId || "",
+        serviceTypeName: o.serviceTypeName || "", data: o.data || "", status: o.status || "", descricao: o.descricao || "", infoInterna: o.infoInterna || "", localAtual: o.localAtual || "loja",
+        criadoEm: o.criadoEm || null, vendedora: o.vendedora || "", encaixe: !!o.encaixe, finalidade: finalidadeDoTipo(o.serviceTypeName || ""), itens, fotos,
         observacoes: obs.map((x: any) => ({ id: x.id, nome: x.nome, descricao: x.descricao, criadoEm: x.criadoEm, ciente: !!x.ciente, cienteNome: x.cienteNome || null, avisaLoja: (x.notificarPara || []).length > 0, origem: x.origem || "" })),
-        historicoOficina: Array.isArray(o.historicoOficina) ? o.historicoOficina.slice(-20) : [] };
+        historicoOficina: Array.isArray(o.historicoOficina) ? o.historicoOficina.slice(-20) : [],
+        historicoLocal: Array.isArray(o.historicoLocal) ? o.historicoLocal.slice(-20) : [] };
+      // texto para a busca livre da Oficina (qualquer dado da via, sem valores/CPF/pagamentos)
+      v.busca = [v.codigoVia, v.via, v.numero, v.cliente, v.telefone, v.serviceTypeName, v.data, v.status, v.descricao, v.infoInterna, v.vendedora, v.lojaId,
+        ...itens.map((i: any) => i.descricao + " " + i.metal + " " + i.obs), ...v.observacoes.map((x: any) => x.descricao + " " + x.nome)].join(" ");
+      return v;
     };
     if (op === "vias") {
       precisa("vias");
@@ -362,7 +372,7 @@ Deno.serve(async (req: Request) => {
       if (error) throw error;
       let lista = (data || []).map(resumoVia);
       const busca = texto(p.busca, 60).toUpperCase();
-      if (busca) lista = lista.filter((v: any) => (v.codigoVia + " " + v.cliente + " " + v.descricao).toUpperCase().includes(busca));
+      if (busca) lista = lista.filter((v: any) => String(v.busca || "").toUpperCase().includes(busca));
       lista.sort((a: any, b: any) => String(a.data || "9999").localeCompare(String(b.data || "9999")));
       return json({ ok: true, vias: lista, tipos: (config.tiposServico || []).map((t: any) => ({ id: t.id, nome: t.nome })) });
     }
@@ -392,10 +402,14 @@ Deno.serve(async (req: Request) => {
       if (p.status !== undefined && p.status !== o.status) {
         // a Oficina só marca Oficina pronto ou Pendência (em vias ainda abertas); pronto/entregue/cancelado são da loja
         // aguardando também é aceito: a peça chegou na Oficina sem a loja ter marcado "Enviado p/ fábrica"
-        if (!["pendencia", "oficina_pronto"].includes(p.status) || ![...STATUS_OFICINA, "aguardando"].includes(o.status))
-          return json({ error: "Pela Oficina, a via só pode ir para Fábrica pronto ou Pendência." }, 400);
+        if (!["em_producao", "pendencia", "oficina_pronto"].includes(p.status) || ![...STATUS_OFICINA, "aguardando"].includes(o.status))
+          return json({ error: "Pela Oficina, a via só pode ir para EM PRODUÇÃO, PENDÊNCIA ou PRODUZIDO." }, 400);
         hist.push({ em: agora, por: quem.nome, de: o.status, para: p.status });
         o.status = p.status; mudou.push("status");
+        if ((o.localAtual || "loja") !== "fabrica") {
+          o.localAtual = "fabrica"; o.historicoLocal = Array.isArray(o.historicoLocal) ? o.historicoLocal : [];
+          o.historicoLocal.push({ local: "fabrica", em: agora, por: quem.nome });
+        }
       }
       if (p.localAtual !== undefined && ["loja", "fabrica"].includes(p.localAtual) && p.localAtual !== (o.localAtual || "loja")) {
         o.localAtual = p.localAtual;

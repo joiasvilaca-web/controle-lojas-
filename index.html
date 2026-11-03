@@ -1407,6 +1407,8 @@ function subCaixaPermitidos(){
   if(currentPermissoes['transferencias'] && currentPermissoes['transferencias'].ativo) out.push('inventario');   // Inventário: mesma permissão de Transferências/reposições
   if(anivPermitido()) out.push('aniv');
   if(currentUser && currentUser.nivel==='oficina' && currentPermissoes['os'] && currentPermissoes['os'].ativo) out.push('codigo');
+  // Perfil OFICINA: só Código, Oficina (e o Leitor, barra à parte) — sem Gravações, Consulta de preço, Cancelamento, Pedido etc.
+  if(currentUser && currentUser.nivel==='oficina') return out.filter(x=>x==='insumos' || x==='codigo');
   if(out.length && currentUser && currentUser.nivel!=='oficina' && (config.lojas||[]).filter(l=>!l.interna).length>1) out.push('outraloja');   // cartão de ação: não abre tela
   return out;
 }
@@ -1459,7 +1461,7 @@ function podeVerModulo(m){
   // Ajuda é liberada pra todo mundo, sempre
   if(m.id==='ajuda') return true;
   if(m.id==='caixa') return subCaixaPermitidos().length>0;
-  if(m.id==='dashboard') return true; // PAINEL pra todos; vendedora e gerente veem só as lojas delas (pedido do Felipe, 03/11)
+  if(m.id==='dashboard') return !(currentUser && currentUser.nivel==='vendedora'); // PAINEL (Avisos) pra todos, menos vendedoras (pedido do Felipe, 01/11)
   if(m.id==='config'){
     return (currentPermissoes['config'] && currentPermissoes['config'].ativo) ||
            (currentPermissoes['dp'] && currentPermissoes['dp'].ativo);
@@ -2615,6 +2617,13 @@ async function navegarParaCodigoVia(codigo){
 }
 
 function abrirRegistroEncontrado(tipo, registro){
+  if(currentUser && currentUser.nivel==='oficina'){   // Oficina não tem o Pedido: abre a via (somente leitura) dentro do card Oficina
+    const cod = String(registro.codigoVia || registro.via || registro.id || '');
+    selecionarModulo('caixa', 'insumos');
+    const enviar = ()=>{ const f = iframesCriados['caixa_insumos']; if(f && f.contentWindow) f.contentWindow.postMessage({ type:'abrirViaOficina', codigo:cod }, '*'); };
+    setTimeout(enviar, 500); setTimeout(enviar, 1600);
+    return;
+  }
   let subAlvo = null, permModuloAlvo = 'vendas';
   if(tipo==='venda')         { subAlvo='pdv';   permModuloAlvo='vendas'; }
   else if(tipo==='pedido')   { subAlvo='os';    permModuloAlvo='os'; }
