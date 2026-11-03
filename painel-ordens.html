@@ -169,6 +169,7 @@
   .st-aguardando{background:var(--wait-soft);color:var(--wait);}
   .st-enviado_fabrica{background:var(--st-roxo-soft);color:var(--st-roxo);}
   .st-pendencia{background:var(--st-laranja-soft);color:var(--st-laranja);}
+  .st-em_producao{background:var(--st-roxo-soft);color:var(--st-roxo);}
   .st-oficina_pronto{background:var(--info-soft);color:var(--info);}
   .st-pronto{background:var(--ok-soft);color:var(--ok);}
   .st-entregue{background:var(--st-neutro-soft);color:var(--st-neutro);}
@@ -187,6 +188,7 @@
   html[data-ds] select.status-select option{background:var(--surface);color:var(--ink);}
   html[data-ds] select.status-aguardando{background-color:var(--wait-soft) !important;color:var(--wait) !important;}
   html[data-ds] select.status-enviado_fabrica{background-color:var(--st-roxo-soft) !important;color:var(--st-roxo) !important;}
+  html[data-ds] select.status-em_producao{background-color:var(--st-roxo-soft) !important;color:var(--st-roxo) !important;}
   html[data-ds] select.status-pendencia{background-color:var(--st-laranja-soft) !important;color:var(--st-laranja) !important;}
   html[data-ds] select.status-oficina_pronto{background-color:var(--info-soft) !important;color:var(--info) !important;}
   html[data-ds] select.status-pronto{background-color:var(--ok-soft) !important;color:var(--ok) !important;}
@@ -609,11 +611,37 @@ let currentTab = SO_CODIGO ? 'codigo' : 'painel';
 let modoNovaOrdem = false;
 let agendaYear, agendaMonth;
 
-const STATUS = { AGUARDANDO:'aguardando', ENVIADO_FABRICA:'enviado_fabrica', PENDENCIA:'pendencia', OFICINA_PRONTO:'oficina_pronto', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
+const STATUS = { AGUARDANDO:'aguardando', ENVIADO_FABRICA:'enviado_fabrica', EM_PRODUCAO:'em_producao', PENDENCIA:'pendencia', OFICINA_PRONTO:'oficina_pronto', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
 // enviado_fabrica = a via está na Oficina, em processo (fabricação/serviço).
 // oficina_pronto ("Fábrica pronto") = a Oficina terminou (card OFICINA); a loja ainda confere e marca Pronto.
 /** Status que ainda ocupam vaga da agenda (trabalho por fazer na Oficina). */
-const STATUS_OCUPA_VAGA = ['aguardando','enviado_fabrica','pendencia'];
+const STATUS_OCUPA_VAGA = ['aguardando','enviado_fabrica','em_producao','pendencia'];
+/* Nomes (sempre em MAIÚSCULAS). As chaves gravadas NÃO mudam: aguardando = APROVADO, oficina_pronto = PRODUZIDO. */
+const STATUS_ORDEM = ['rascunho','aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto','pronto','entregue','cancelado'];
+const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'PRODUZIDO', pronto:'PRONTO', entregue:'ENTREGUE', cancelado:'CANCELADO' };
+/* Quem pode colocar cada status: Oficina → EM PRODUÇÃO / PENDÊNCIA / PRODUZIDO; Vendedora → APROVADO / ENVIADO P/ FÁBRICA / PRONTO / ENTREGUE / CANCELADO; Gerente e Diretoria → todos. */
+const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'], vendedora:['rascunho','aguardando','enviado_fabrica','pronto','entregue','cancelado'] };
+function statusPermitidos(){
+  const n = currentUser && currentUser.nivel;
+  if(n==='diretoria' || n==='gerente') return STATUS_ORDEM;
+  return STATUS_POR_NIVEL[n] || [];
+}
+function podeColocarStatus(st){ return statusPermitidos().includes(st); }
+/** <option>s do status: os que o perfil não pode colocar ficam desabilitados (o atual sempre aparece). */
+function statusOptionsHtml(atual, comRascunho){
+  return STATUS_ORDEM.filter(st=> st!=='rascunho' || comRascunho || atual==='rascunho').map(st=>{
+    const bloqueado = st!==atual && !podeColocarStatus(st);
+    return `<option value="${st}" ${st===atual?'selected':''} ${bloqueado?'disabled':''}>${STATUS_NOMES[st]}${bloqueado?' (SEM PERMISSÃO)':''}</option>`;
+  }).join('');
+}
+function podeCancelarPorStatus(){ return !!currentUser && currentUser.nivel!=='oficina'; }
+/** Mantém "Onde está a peça" coerente com o status: na fábrica enquanto enviada/em produção/produzida; volta pra loja em APROVADO ou PRONTO. */
+function sincronizarLocalPorStatus(o){
+  const alvo = ['enviado_fabrica','em_producao','oficina_pronto'].includes(o.status) ? 'fabrica' : (['aguardando','pronto'].includes(o.status) ? 'loja' : null);
+  if(!alvo || (o.localAtual||'loja')===alvo) return;
+  o.localAtual = alvo; o.historicoLocal = o.historicoLocal || [];
+  o.historicoLocal.push({ local:alvo, em: Date.now(), por: (currentUser&&currentUser.nome)||'' });
+}
 // pendencia = a Oficina parou por algum problema (explicado na observação que vai pra loja).
 function lojaNomes(){ return (config.lojas||[]).map(l=>l.nome); }
 function lojaAbreviacao(lojaId){
@@ -774,7 +802,7 @@ function ajudaPonto(texto){
     '</span></span>';
 }
 function maiusc(s){ return (s==null?'':String(s)).trim().toUpperCase(); }
-function statusLabel(s){ return s==='aguardando'?'Aguardando':s==='enviado_fabrica'?'Enviado p/ fábrica':s==='pendencia'?'Pendência':s==='oficina_pronto'?'Fábrica pronto':s==='pronto'?'Pronto':s==='entregue'?'Entregue':s==='rascunho'?'Rascunho':'Cancelado'; }
+function statusLabel(s){ return STATUS_NOMES[s] || 'CANCELADO'; }
 /* ---------- apresentação (ícones, selos, valores) ---------- */
 function ico(nome, tam){ return window.Icone ? Icone(nome, tam ? { tam } : undefined) : ''; }
 function seloStatusHtml(s){ return `<span class="selo st-${escapeHtml(s||'')}">${escapeHtml(statusLabel(s))}</span>`; }
@@ -5180,23 +5208,8 @@ function openEditModalCompleto(order, opts){
       <div class="field"><label for="e_loja">Loja</label><select id="e_loja">${lojaOptionsHtml(order.lojaId)}</select></div>
     <div class="field"><label for="e_status">Status</label>
       <select id="e_status">
-        <option value="rascunho" ${order.status==='rascunho'?'selected':''}>Rascunho</option>
-        <option value="aguardando" ${order.status==='aguardando'?'selected':''}>Aguardando</option>
-        <option value="enviado_fabrica" ${order.status==='enviado_fabrica'?'selected':''}>Enviado p/ fábrica</option>
-        <option value="pendencia" ${order.status==='pendencia'?'selected':''}>Pendência</option>
-        <option value="oficina_pronto" ${order.status==='oficina_pronto'?'selected':''}>Fábrica pronto</option>
-        <option value="pronto" ${order.status==='pronto'?'selected':''}>Pronto</option>
-        <option value="entregue" ${order.status==='entregue'?'selected':''}>Entregue</option>
-        <option value="cancelado" ${order.status==='cancelado'?'selected':''}>Cancelado</option>
-      </select>
-    </div>
-    </div>
-    <div class="field" id="e_recebidoWrap" style="display:none;">
-      <label for="e_recebidoPor">Recebido por</label>
-      <input id="e_recebidoPor" placeholder="Nome de quem retirou a peça" value="${escapeHtml(order.recebidoPor||'')}">
-    </div>
-    <div class="grid-2">
-    <div class="field"><label for="e_servico">Tipo de serviço</label><select id="e_servico">${servicoOptionsHtml(order.serviceTypeId)}</select></div>
+        ${statusOptionsHtml(order.status, true)}
+      </select></div>
     <div class="field"><label for="e_data">Data agendada</label><input type="date" id="e_data" value="${order.data}"></div>
     </div>
     <div id="editSlotBanner"></div>
@@ -5424,10 +5437,11 @@ function openEditModalCompleto(order, opts){
         return;
       }
     }
+    if(status !== order.status && !podeColocarStatus(status)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(status) + '.'); return; }
     // Cancelamento pedido pelo dropdown de status desta tela (via alternativa ao
     // botão "Cancelar O.S." da lista): exige motivo e reverte fiado/crédito igual.
     if(status === 'cancelado' && order.status !== 'cancelado'){
-      if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); return; }
+      if(!podeCancelarPorStatus()){ showToast('Seu perfil não pode cancelar uma O.S.'); return; }
       const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
       if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); return; }
       if(await aplicarCancelamentoOrdem(order, motivo) === false){ closeModal(); renderView(); return; }
@@ -5549,7 +5563,7 @@ function renderPainel(main){
         <h1 class="page-title">Pedidos lançados</h1>
         <p class="page-sub">Acompanhe e atualize cada pedido. Os entregues ficam ocultos — escolha “Entregue” no filtro de status para vê-los.</p>
       </div>
-      ${currentUser.nivel!=='oficina' ? `<button class="btn btn-accent" id="btnNovoPedidoPainel">${ico('mais')} Novo pedido</button>` : ''}
+      ${currentUser.nivel!=='oficina' ? `<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" id="btnEnviarFabrica">${ico('ferramenta')} ENVIAR PARA FÁBRICA</button><button class="btn btn-accent" id="btnNovoPedidoPainel">${ico('mais')} Novo pedido</button></div>` : ''}
     </div>
     <div id="prontosCard"></div>
     <div class="filtros-os" role="search">
@@ -5558,14 +5572,15 @@ function renderPainel(main){
       <select id="filtroStatus" aria-label="Status">
         <option value="">Status: em andamento</option>
         <option value="todos">Todos os status (por data de criação)</option>
-        <option value="rascunho">Rascunho</option>
-        <option value="aguardando">Aguardando</option>
-        <option value="enviado_fabrica">Enviado p/ fábrica</option>
-        <option value="pendencia">Pendência</option>
-        <option value="oficina_pronto">Fábrica pronto</option>
-        <option value="pronto">Pronto</option>
-        <option value="entregue">Entregue</option>
-        <option value="cancelado">Cancelado</option>
+        <option value="rascunho">RASCUNHO</option>
+        <option value="aguardando">APROVADO</option>
+        <option value="enviado_fabrica">ENVIADO P/ FÁBRICA</option>
+        <option value="em_producao">EM PRODUÇÃO</option>
+        <option value="pendencia">PENDÊNCIA</option>
+        <option value="oficina_pronto">PRODUZIDO</option>
+        <option value="pronto">PRONTO</option>
+        <option value="entregue">ENTREGUE</option>
+        <option value="cancelado">CANCELADO</option>
       </select>
       <select id="filtroLoja" aria-label="Loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
       <select id="filtroServico" aria-label="Tipo de serviço"><option value="">Todos os serviços</option>${st.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}</select>
@@ -5692,6 +5707,7 @@ function renderPainel(main){
       sel.addEventListener('change', async ()=>{
         const ord = orders.find(o=>o.id===sel.dataset.id);
         const previous = ord.status;
+        if(sel.value!==previous && !podeColocarStatus(sel.value)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(sel.value) + '.'); sel.value = previous; applyStatusClass(sel); return; }
         if(sel.value === 'entregue'){
           if(bloqueioSaldoEntrega(ord)){ sel.value = previous; applyStatusClass(sel); return; }
           promptRecebidoPor(async (nome)=>{
@@ -5706,7 +5722,7 @@ function renderPainel(main){
           return;
         }
         if(sel.value === 'cancelado' && previous !== 'cancelado'){
-          if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem cancelar uma O.S.'); sel.value = previous; applyStatusClass(sel); return; }
+          if(!podeCancelarPorStatus()){ showToast('Seu perfil não pode cancelar uma O.S.'); sel.value = previous; applyStatusClass(sel); return; }
           const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
           if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); sel.value = previous; applyStatusClass(sel); return; }
           if(await aplicarCancelamentoOrdem(ord, motivo) === false){ sel.value = previous; applyStatusClass(sel); closeModal(); return; }
@@ -5716,10 +5732,7 @@ function renderPainel(main){
           return;
         }
         ord.status = sel.value;
-        if(sel.value==='enviado_fabrica' && ord.localAtual!=='fabrica'){
-          ord.localAtual = 'fabrica'; ord.historicoLocal = ord.historicoLocal || [];
-          ord.historicoLocal.push({ local:'fabrica', em: Date.now(), por: currentUser.nome });
-        }
+        sincronizarLocalPorStatus(ord);
         await saveOrders();
         // Pedido reativado (saiu de cancelado/rascunho): volta a reservar as peças
         if((previous === 'cancelado' || previous === 'rascunho') && !ord.estoqueBaixadoEm){
@@ -5805,13 +5818,7 @@ function renderPainel(main){
             : oficina
               ? seloStatusHtml(o.status)
               : `<select class="status-select" data-id="${o.id}" aria-label="Status do pedido ${escapeHtml(o.via||'')}">
-                  <option value="aguardando" ${o.status==='aguardando'?'selected':''}>Aguardando</option>
-                  <option value="enviado_fabrica" ${o.status==='enviado_fabrica'?'selected':''}>Enviado p/ fábrica</option>
-                  <option value="pendencia" ${o.status==='pendencia'?'selected':''}>Pendência</option>
-                  <option value="oficina_pronto" ${o.status==='oficina_pronto'?'selected':''}>Fábrica pronto</option>
-                  <option value="pronto" ${o.status==='pronto'?'selected':''}>Pronto</option>
-                  <option value="entregue" ${o.status==='entregue'?'selected':''}>Entregue</option>
-                  <option value="cancelado" ${o.status==='cancelado'?'selected':''}>Cancelado</option>
+                  ${statusOptionsHtml(o.status, false)}
                 </select>`
           }
         </td>
@@ -5845,6 +5852,8 @@ function renderPainel(main){
     renderTable();
   });
 
+  const btnEnvFab = document.getElementById('btnEnviarFabrica');
+  if(btnEnvFab) btnEnvFab.addEventListener('click', ()=> abrirEnviarParaFabrica(()=>renderTable()));
   const btnNovoPedido = document.getElementById('btnNovoPedidoPainel');
   if(btnNovoPedido) btnNovoPedido.addEventListener('click', ()=>{ modoNovaOrdem = true; renderView(); });
 
@@ -5856,11 +5865,49 @@ function renderPainel(main){
   }
   renderTable();
 }
+/** Lote: pedidos APROVADOS da loja → ENVIADO P/ FÁBRICA (só número da via e nome). */
+function abrirEnviarParaFabrica(aoConcluir){
+  const filtroLoja = (document.getElementById('filtroLoja')||{}).value || (window.__lojaAtual && window.__lojaAtual.id) || '';
+  const lista = orders.filter(o=>o.status==='aguardando' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(a.via||'').localeCompare(String(b.via||''), 'pt-BR', {numeric:true}));
+  const nomeLoja = filtroLoja ? String(((config.lojas||[]).find(l=>l.id===filtroLoja)||{}).nome||'').toUpperCase() : 'TODAS AS LOJAS';
+  if(!lista.length){
+    openModal(`<h3>ENVIAR PARA FÁBRICA</h3><p class="muted">Nenhum pedido com status APROVADO${nomeLoja?' em '+escapeHtml(nomeLoja):''} para enviar.</p><div class="modal-actions"><button class="btn btn-accent" id="efFechar">Fechar</button></div>`);
+    document.getElementById('efFechar').addEventListener('click', closeModal);
+    return;
+  }
+  openModal(`
+    <h3>ENVIAR PARA FÁBRICA</h3>
+    <p class="muted">Pedidos APROVADOS${nomeLoja?' — '+escapeHtml(nomeLoja):''}. Ao enviar, todos os marcados passam para ENVIADO P/ FÁBRICA.</p>
+    <label class="chk" style="margin:6px 0;"><input type="checkbox" id="efTodos" checked> Marcar todos (<span id="efQtd">${lista.length}</span>)</label>
+    <div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:10px;">
+      ${lista.map(o=>`<label class="chk" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);"><input type="checkbox" class="efItem" data-id="${o.id}" checked><span style="font-family:var(--mono);font-weight:700;">${escapeHtml(o.via||'—')}</span><b>${escapeHtml(o.cliente||'')}</b></label>`).join('')}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="efCancel">Cancelar</button>
+      <button class="btn btn-accent" id="efEnviar">${ico('ferramenta')} ENVIAR</button>
+    </div>`);
+  const itens = ()=>[...document.querySelectorAll('.efItem')];
+  const atualiza = ()=>{ const n = itens().filter(i=>i.checked).length; document.getElementById('efQtd').textContent = n; document.getElementById('efEnviar').disabled = n===0; };
+  document.getElementById('efTodos').addEventListener('change', e=>{ itens().forEach(i=>i.checked = e.target.checked); atualiza(); });
+  itens().forEach(i=>i.addEventListener('change', atualiza));
+  document.getElementById('efCancel').addEventListener('click', closeModal);
+  document.getElementById('efEnviar').addEventListener('click', async ()=>{
+    const ids = itens().filter(i=>i.checked).map(i=>i.dataset.id);
+    if(!ids.length) return;
+    const btn = document.getElementById('efEnviar'); btn.disabled = true;
+    let n = 0;
+    ids.forEach(id=>{ const o = orders.find(x=>x.id===id); if(o && o.status==='aguardando'){ o.status = 'enviado_fabrica'; sincronizarLocalPorStatus(o); n++; } });
+    try{ await saveOrders(); }catch(e){ console.error(e); showToast('Não foi possível salvar. Tente de novo.'); btn.disabled = false; return; }
+    closeModal();
+    showToast(n + (n===1 ? ' pedido enviado' : ' pedidos enviados') + ' para a fábrica.');
+    if(aoConcluir) aoConcluir();
+  });
+}
 function applyStatusClass(sel){
   sel.className = 'status-select status-' + sel.value;
 }
-function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : s==='enviado_fabrica' ? 'var(--st-roxo-soft)' : s==='pendencia' ? 'var(--st-laranja-soft)' : s==='oficina_pronto' ? 'var(--info-soft)' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--st-neutro-soft)' : 'var(--danger-soft)'; }
-function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : s==='enviado_fabrica' ? 'var(--st-roxo)' : s==='pendencia' ? 'var(--st-laranja)' : s==='oficina_pronto' ? 'var(--info)' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--st-neutro)' : 'var(--danger)'; }
+function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo-soft)' : s==='pendencia' ? 'var(--st-laranja-soft)' : s==='oficina_pronto' ? 'var(--info-soft)' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--st-neutro-soft)' : 'var(--danger-soft)'; }
+function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo)' : s==='pendencia' ? 'var(--st-laranja)' : s==='oficina_pronto' ? 'var(--info)' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--st-neutro)' : 'var(--danger)'; }
 
 /* ============================================================
    AGENDA
