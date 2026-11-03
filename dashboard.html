@@ -660,7 +660,11 @@
   function aplicarLojasDoUsuarioNoDash(){
     todasLojasDash = (configCompleto && configCompleto.lojas) || [];
     const minhas = (currentUser && currentUser.nivel !== "diretoria" && Array.isArray(currentUser.lojas)) ? currentUser.lojas.filter(id=> todasLojasDash.some(l=>l.id===id)) : [];
-    if(!minhas.length){ lojasDashIds = null; lojasDashNomes = null; return; }
+    if(!minhas.length){
+      // sem loja no cadastro: diretoria vê tudo; os demais não veem dado de loja nenhuma
+      if(currentUser && currentUser.nivel !== "diretoria"){ lojasDashIds = new Set(["__nenhuma__"]); lojasDashNomes = new Set(); configCompleto = Object.assign({}, configCompleto, { lojas: [] }); if(ordersConfig) ordersConfig = Object.assign({}, ordersConfig, { lojas: [] }); transfConfig = { stores: [] }; return; }
+      lojasDashIds = null; lojasDashNomes = null; return;
+    }
     lojasDashIds = new Set(minhas);
     const permitidas = todasLojasDash.filter(l=> lojasDashIds.has(l.id));
     lojasDashNomes = new Set(permitidas.map(l=> l.nome));
@@ -963,12 +967,13 @@
 
   function renderDashboard(){
     const main = document.getElementById("mainContent");
-    const mostraFinanceiro = currentUser.nivel === "diretoria" || currentUser.nivel === "gerente";
+    const mostraFinanceiro = currentUser.nivel === "diretoria" || currentUser.nivel === "gerente" || currentUser.nivel === "vendedora";   // vendedora vê tudo, só das lojas dela (pedido do Felipe, 03/11)
+    const ehGestaoDash = currentUser.nivel === "diretoria" || currentUser.nivel === "gerente";
     const mostraTransf = currentUser.nivel !== "oficina";
     ultimaAtualizacaoDash = new Date();
 
     const abas = [];
-    if(mostraFinanceiro) abas.push(["geral","Visão geral"], ["analises","Análises"], ["recebimentos","Recebimentos"]);
+    if(mostraFinanceiro) abas.push(["geral","Visão geral"], ["analises","Análises"], ["recebimentos","Recebimentos"], ["formas","Formas de pagamento"]);
     abas.push(["ordens","Ordens de serviço"]);
     if(mostraTransf) abas.push(["vendas","Vendas"], ["transf","Transferências"]);
 
@@ -976,14 +981,13 @@
       <div class="dash-head">
         <div>
           <h1 class="dash-titulo">Dashboard</h1>
-          <p class="dash-sub">Todas as lojas · dados de ${window.Fmt ? Fmt.dataHora(ultimaAtualizacaoDash) : ultimaAtualizacaoDash.toLocaleString("pt-BR")}</p>
+          <p class="dash-sub">${lojasDashNomes ? escapeHtml([...lojasDashNomes].join(", ")) : "Todas as lojas"} · dados de ${window.Fmt ? Fmt.dataHora(ultimaAtualizacaoDash) : ultimaAtualizacaoDash.toLocaleString("pt-BR")}</p>
         </div>
         <button type="button" class="btn btn-ghost btn-sm" id="btnAtualizarDash" title="Buscar os dados de novo">${ico("atualizar")}<span> Atualizar dados</span></button>
       </div>
       ${falhasCargaDash.length ? `<div class="faixa erro" role="alert">${ico("alerta")}<div><b>Não foi possível carregar: ${escapeHtml(falhasCargaDash.join(", "))}.</b>Confira a internet e clique em Atualizar dados. Se continuar, avise a diretoria.</div></div>` : ""}
       ${mostraFinanceiro ? `<div id="secContasHoje"></div>` : ""}
       ${currentUser.nivel==="oficina" ? `<div class="locked-note">${ico("cadeado")} Seu acesso mostra só as ordens de serviço, sem valores e sem vendas ou transferências.</div>` : ""}
-      ${currentUser.nivel==="vendedora" ? `<div class="locked-note">${ico("cadeado")} Seu acesso não mostra o faturamento nem os valores financeiros.</div>` : ""}
 
       ${abas.length > 1 ? `<nav class="abas-std" id="dashAbas" role="tablist" aria-label="Seções do Dashboard">
         ${abas.map(([id,rot])=>`<button type="button" role="tab" data-aba="${id}" aria-controls="painel-${id}">${rot}</button>`).join("")}
@@ -995,7 +999,8 @@
         <div class="section" id="secComparativoLojas"></div>
       </div>
       <div class="dash-painel" data-painel="analises" id="painel-analises" role="tabpanel"><div class="section" id="secInteligencia"></div></div>
-      <div class="dash-painel" data-painel="recebimentos" id="painel-recebimentos" role="tabpanel"><div class="section" id="secPagamentos"></div></div>` : ""}
+      <div class="dash-painel" data-painel="recebimentos" id="painel-recebimentos" role="tabpanel"><div class="section" id="secPagamentos"></div></div>
+      <div class="dash-painel" data-painel="formas" id="painel-formas" role="tabpanel"><div class="section" id="secFormasPag"></div></div>` : ""}
       <div class="dash-painel" data-painel="ordens" id="painel-ordens" role="tabpanel"><div class="section" id="secOrdens"></div></div>
       ${mostraTransf ? `<div class="dash-painel" data-painel="vendas" id="painel-vendas" role="tabpanel"><div class="section" id="secVendas"></div></div>` : ""}
       ${mostraTransf ? `<div class="dash-painel" data-painel="transf" id="painel-transf" role="tabpanel"><div class="section" id="secTransf"></div></div>` : ""}
@@ -1015,10 +1020,11 @@
     }
 
     if(mostraFinanceiro) renderContasHoje();
-    if(mostraFinanceiro) renderAlertasRH();
+    if(ehGestaoDash) renderAlertasRH();
     if(mostraFinanceiro) renderComparativoLojas();
     if(mostraFinanceiro) renderSecaoInteligencia();
     if(mostraFinanceiro) renderSecaoPagamentos();
+    if(mostraFinanceiro) renderSecaoFormasPag();
     renderSecaoOrdens(mostraFinanceiro);
     if(mostraTransf) renderSecaoVendas(mostraFinanceiro);
     if(mostraTransf) renderSecaoTransf();
@@ -1468,7 +1474,7 @@
         <div class="card pad">
           <div class="card-head">
             <div><span class="card-title">Metas do mês</span><span class="card-sub">Recebido no mês (vendas + O.S.) contra a meta de cada loja</span></div>
-            <button class="btn btn-ghost btn-sm" id="btnEditarMetas">${ico("lapis")} Editar metas</button>
+            ${(currentUser.nivel==="diretoria"||currentUser.nivel==="gerente") ? `<button class="btn btn-ghost btn-sm" id="btnEditarMetas">${ico("lapis")} Editar metas</button>` : ""}
           </div>
           <div id="metasLista"></div>
         </div>
@@ -1689,7 +1695,8 @@
     }
     renderMetasLista();
 
-    document.getElementById("btnEditarMetas").addEventListener("click", ()=>{
+    const btnEdMetas = document.getElementById("btnEditarMetas");
+    if(btnEdMetas) btnEdMetas.addEventListener("click", ()=>{
       const lojas = (ordersConfig && ordersConfig.lojas) || [];
       if(lojas.length===0){ alert("Cadastre as lojas primeiro em Configurações › Cadastro."); return; }
       // "1.234,56", "1234,56" ou "1234.56" → número (vazio = sem meta)
@@ -1715,7 +1722,7 @@
       const primeiro = document.getElementById("metaLoja0"); if(primeiro) primeiro.focus();
       document.getElementById("btnCancelarMetas").addEventListener("click", closeModal);
       document.getElementById("btnSalvarMetas").addEventListener("click", async ()=>{
-        const novasMetas = {};
+        const novasMetas = Object.assign({}, metas);   // mantém a meta das lojas que esta pessoa não vê
         document.querySelectorAll("#modalBox [data-loja]").forEach(inp=>{ novasMetas[inp.getAttribute("data-loja")] = lerValor(inp.value); });
         const btn = document.getElementById("btnSalvarMetas");
         btn.disabled = true; btn.textContent = "Salvando…";
@@ -1753,7 +1760,7 @@
       const resumoDados = {
         curvaAbcTop10: abc.slice(0,10).map(x=>({produto:x.produto, faturamento:x.total, classe:x.classe})),
         avisosDadosIncompletos: avisos.length,
-        metasDoMes: Object.keys(metas).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
+        metasDoMes: Object.keys(metas).filter(l=> !lojasDashNomes || lojasDashNomes.has(l)).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
         totalDeVendasRegistradas: vendas.length,
         totalDeOrdensRegistradas: orders.length,
       };
@@ -1877,7 +1884,7 @@
       curvaAbcProdutosTop10: abc.slice(0,10).map(x=>({produto:x.produto, faturamento:x.total, classe:x.classe})),
       curvaAbcVendedoras: abcVend.map(x=>({vendedora:x.vendedora, faturamento:x.total, classe:x.classe})),
       avisosDadosIncompletos: { total: avisos.length, exemplos: avisos.slice(0,5) },
-      metasDoMes: Object.keys(metas).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
+      metasDoMes: Object.keys(metas).filter(l=> !lojasDashNomes || lojasDashNomes.has(l)).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
       orcamentosPorVendedora: Object.keys(metOrc).map(nome=>({ vendedora:nome, ...metOrc[nome] })),
       totalDeVendasRegistradas: vendas.length,
       totalDeOrdensRegistradas: orders.length,
@@ -2030,6 +2037,78 @@
     });
 
     atualizar();
+  }
+
+  /* ================= FORMAS DE PAGAMENTO (03/11) =================
+     Tudo o que entrou, por forma de pagamento, no Dia / Semana / Mês / Ano da data escolhida.
+     Mesma regra do resumo do Caixa: vendas ativas e pedidos (sem rascunho/cancelado), pagamento na
+     data do próprio pagamento (ou da via). Fiado, crédito do cliente e cashback não são dinheiro recebido. */
+  let fpPeriodo = "dia", fpRef = "", fpLoja = "";
+  const FP_PERIODOS = [["dia","Dia"],["semana","Semana"],["mes","Mês"],["ano","Ano"]];
+  function fpNomeForma(p){
+    if(!p || !p.formaId || String(p.formaId).startsWith("__")) return "";
+    const f = ((configCompleto && configCompleto.formasPagamento) || []).find(x=> x.id === p.formaId);
+    return String((f && f.nome) || p.tipoNome || p.tipo || "").toUpperCase();
+  }
+  function fpIntervalo(){
+    const [a,m,d] = (fpRef || vgDataStr(new Date())).split("-").map(Number);
+    const ref = new Date(a, m-1, d);
+    if(fpPeriodo === "semana"){ const dow = (ref.getDay()+6)%7; const ini = new Date(a, m-1, d-dow); const fim = new Date(a, m-1, d-dow+6); return [vgDataStr(ini), vgDataStr(fim)]; }
+    if(fpPeriodo === "mes") return [vgDataStr(new Date(a, m-1, 1)), vgDataStr(new Date(a, m, 0))];
+    if(fpPeriodo === "ano") return [a+"-01-01", a+"-12-31"];
+    return [vgDataStr(ref), vgDataStr(ref)];
+  }
+  function fpDaLoja(r){
+    if(!fpLoja) return true;
+    const l = vgLojaDe(r);
+    return !!l && l.id === fpLoja;
+  }
+  function renderSecaoFormasPag(){
+    const el = document.getElementById("secFormasPag");
+    if(!el) return;
+    if(!fpRef) fpRef = vgDataStr(new Date());
+    const lojas = (configCompleto && configCompleto.lojas) || [];
+    el.innerHTML = `
+      <div class="sec-head">
+        <div>
+          <h2 class="section-title">Formas de pagamento</h2>
+          <p class="section-sub">Tudo o que foi recebido (vendas + pedidos), separado pela forma de pagamento.</p>
+        </div>
+        <div class="vg-periodo" role="group" aria-label="Período">
+          ${FP_PERIODOS.map(([id,rot])=>`<button type="button" data-fpper="${id}" class="${fpPeriodo===id?"active":""}" aria-pressed="${fpPeriodo===id}">${rot}</button>`).join("")}
+        </div>
+      </div>
+      <div class="filters" role="search" aria-label="Filtros de formas de pagamento">
+        <label class="f"><span>Data de referência</span><input type="date" id="fpRef" value="${escapeHtml(fpRef)}"></label>
+        ${lojas.length > 1 ? `<label class="f"><span>Loja</span><select id="fpLoja"><option value="">Todas as lojas</option>${lojas.map(l=>`<option value="${escapeHtml(l.id)}" ${fpLoja===l.id?"selected":""}>${escapeHtml(l.nome)}</option>`).join("")}</select></label>` : ""}
+      </div>
+      <div class="kpis" id="kpisFormasPag"></div>
+      <div class="card pad"><div id="listaFormasPag"></div></div>
+    `;
+    const [ini, fim] = fpIntervalo();
+    const dentro = d=> !!d && d >= ini && d <= fim;
+    const formas = {}; let total = 0, qtd = 0;
+    const soma = (p, dataVia)=>{
+      const nome = fpNomeForma(p); const v = Number(p.valor)||0;
+      if(!nome || !v || !dentro(p.data || dataVia)) return;
+      const f = formas[nome] || (formas[nome] = { valor:0, qtd:0 });
+      f.valor += v; f.qtd++; total += v; qtd++;
+    };
+    vendas.filter(v=> !vgEhCanc(v) && fpDaLoja(v)).forEach(v=> (v.pagamentos||[]).forEach(p=> soma(p, v.data)));
+    orders.filter(o=> !vgEhCanc(o) && o.status !== "rascunho" && fpDaLoja(o)).forEach(o=> (o.pagamentos||[]).forEach(p=> soma(p, o.data)));
+    const lista = Object.entries(formas).map(([nome,x])=>({ nome, valor:x.valor, qtd:x.qtd })).sort((a,b)=> b.valor - a.valor);
+    const periodoTxt = ini === fim ? fmtDate(ini) : `${fmtDate(ini)} a ${fmtDate(fim)}`;
+    document.getElementById("kpisFormasPag").innerHTML = `
+      ${kpiHtml("Recebido", fmtMoeda(total), "ok", escapeHtml(periodoTxt))}
+      ${kpiHtml("Pagamentos", fmtNum(qtd))}
+      ${kpiHtml("Formas usadas", fmtNum(lista.length))}
+    `;
+    document.getElementById("listaFormasPag").innerHTML = lista.length ? `
+      ${barrasHtml(lista.map(x=>({ nome: `${x.nome} · ${x.qtd} ${x.qtd===1?"pagamento":"pagamentos"} · ${total ? Math.round(x.valor/total*100) : 0}%`, valor: x.valor })), fmtMoeda)}
+    ` : vazioHtml("Nenhum pagamento recebido neste período.", "Troque o período ou a data de referência.");
+    el.querySelectorAll("[data-fpper]").forEach(b=> b.addEventListener("click", ()=>{ fpPeriodo = b.dataset.fpper; renderSecaoFormasPag(); }));
+    document.getElementById("fpRef").addEventListener("change", e=>{ fpRef = e.target.value || vgDataStr(new Date()); renderSecaoFormasPag(); });
+    const sl = document.getElementById("fpLoja"); if(sl) sl.addEventListener("change", e=>{ fpLoja = e.target.value; renderSecaoFormasPag(); });
   }
 
   function renderSecaoOrdens(mostraFinanceiro){
