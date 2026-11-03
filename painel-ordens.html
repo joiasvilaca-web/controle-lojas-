@@ -220,6 +220,8 @@
   .tabela-os .via{font-family:var(--mono);font-weight:700;font-size:13px;letter-spacing:.02em;color:var(--ink);white-space:nowrap;}
   .tabela-os .cli-nome{font-weight:700;color:var(--ink);font-size:13.5px;line-height:1.35;}
   .tabela-os .sub{color:var(--ink-faint);font-size:12.5px;margin-top:2px;line-height:1.4;}
+  .status-com-local{display:flex;align-items:center;gap:6px;}
+  .bolinha-local{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--local-cor);color:#fff;font-size:10px;font-weight:700;letter-spacing:.3px;}
   .tabela-os .marcas{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
   .tabela-os .valor-receber{color:var(--danger);font-weight:700;}
   .tabela-os .valor-ok{color:var(--ok);}
@@ -635,10 +637,17 @@ function statusOptionsHtml(atual, comRascunho){
   }).join('');
 }
 function podeCancelarPorStatus(){ return !!currentUser && currentUser.nivel!=='oficina'; }
-/** Mantém "Onde está a peça" coerente com o status: na fábrica enquanto enviada/em produção/produzida; volta pra loja em APROVADO ou PRONTO. */
+/** Onde está a via, definido só pelo status: LJ loja, FB fábrica, CL cliente, CL cancelado. */
+const LOCAL_POR_STATUS = { rascunho:'loja', aguardando:'loja', enviado_fabrica:'loja', em_producao:'fabrica', pendencia:'fabrica', oficina_pronto:'fabrica', pronto:'loja', entregue:'cliente', cancelado:'cancelado' };
+const LOCAL_INFO = { loja:{sigla:'LJ', nome:'Loja', cor:'#2E7D53'}, fabrica:{sigla:'FB', nome:'Fábrica', cor:'#6E45A8'}, cliente:{sigla:'CL', nome:'Cliente', cor:'#3D7DD8'}, cancelado:{sigla:'CL', nome:'Cancelado', cor:'#8A8F98'} };
+function localDaOrdem(o){ return LOCAL_POR_STATUS[o && o.status] || 'loja'; }
+function bolinhaLocalHtml(o){
+  const l = LOCAL_INFO[localDaOrdem(o)];
+  return `<span class="bolinha-local" style="--local-cor:${l.cor}" title="Via: ${l.nome}" aria-label="Via: ${l.nome}">${l.sigla}</span>`;
+}
 function sincronizarLocalPorStatus(o){
-  const alvo = ['enviado_fabrica','em_producao','oficina_pronto'].includes(o.status) ? 'fabrica' : (['aguardando','pronto'].includes(o.status) ? 'loja' : null);
-  if(!alvo || (o.localAtual||'loja')===alvo) return;
+  const alvo = localDaOrdem(o);
+  if((o.localAtual||'loja')===alvo) return;
   o.localAtual = alvo; o.historicoLocal = o.historicoLocal || [];
   o.historicoLocal.push({ local:alvo, em: Date.now(), por: (currentUser&&currentUser.nome)||'' });
 }
@@ -5104,47 +5113,6 @@ async function openEditModal(orderId, somenteLeitura){
   }
 }
 
-/**
- * Rastreamento simples de onde a peça está fisicamente: na loja ou enviada para a fábrica
- * (fabricação/laser/conserto externo). Qualquer nível com acesso à ordem pode alternar
- * (inclusive a oficina, que normalmente só vê observações — essa é a exceção proposital,
- * já que é quem mais lida com o envio/retorno da fábrica no dia a dia).
- * A troca já salva na hora (não depende do botão "Salvar alterações" do resto do formulário).
- */
-function mountLocalizacao(container, order, somenteLeitura){
-  function draw(){
-    const naFabrica = order.localAtual === 'fabrica';
-    const hist = (order.historicoLocal||[]).slice(-5).reverse();
-    container.innerHTML = `
-      <div class="section-label">Onde está a peça</div>
-      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-        <span class="badge ${naFabrica?'st-enviado_fabrica':'badge-ok'}">
-          ${naFabrica ? ico('ferramenta',13)+' Na fábrica' : ico('loja',13)+' Na loja'}
-        </span>
-        ${somenteLeitura ? '' : `<button type="button" class="btn btn-ghost btn-sm" id="btnToggleLocal">${naFabrica ? 'Registrar retorno para a loja' : 'Enviar para a fábrica'}</button>`}
-      </div>
-      ${hist.length ? `
-        <div class="muted" style="margin-top:8px; font-size:12px;">
-          ${hist.map(h=>`${h.local==='fabrica'?'Enviado para a fábrica':'Voltou para a loja'} — ${Fmt.data(h.em)} por ${escapeHtml(h.por||'—')}`).join('<br>')}
-        </div>
-      ` : ''}
-    `;
-    if(!somenteLeitura){
-      const btn = container.querySelector('#btnToggleLocal');
-      btn.addEventListener('click', async ()=>{
-        order.localAtual = naFabrica ? 'loja' : 'fabrica';
-        if(!order.historicoLocal) order.historicoLocal = [];
-        order.historicoLocal.push({ local: order.localAtual, em: Date.now(), por: currentUser.nome });
-        if(order.localAtual==='fabrica' && order.status==='aguardando') order.status = 'enviado_fabrica';
-        else if(order.localAtual==='loja' && order.status==='enviado_fabrica') order.status = 'aguardando';
-        await saveOrders();
-        showToast(order.localAtual==='fabrica' ? 'Marcado como enviado para a fábrica.' : 'Marcado como retornado para a loja.');
-        draw();
-      });
-    }
-  }
-  draw();
-}
 
 function openEditModalOficina(order){
   openModal(`
@@ -5152,7 +5120,6 @@ function openEditModalOficina(order){
     <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <span>${escapeHtml(order.serviceTypeName||'')}</span> <span>Agendado para ${fmtDate(order.data)}</span></div>
     <div class="locked-note">${ico('cadeado')}<span>Aqui você pode incluir observações, dar ciência e atualizar onde está a peça. Para mudar outros dados, fale com a vendedora ou a diretoria.</span></div>
     ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
-    <div class="modal-secao" id="localContainerOficina"></div>
     <div class="modal-secao" id="fotoContainerEditOficina"></div>
     <div class="modal-secao" id="obsContainerEdit"></div>
     <div class="modal-actions">
@@ -5161,7 +5128,6 @@ function openEditModalOficina(order){
       <button class="btn btn-accent" id="editCancel">Fechar</button>
     </div>
   `);
-  mountLocalizacao(document.getElementById('localContainerOficina'), order, false);
   mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
   document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
@@ -5241,7 +5207,6 @@ function openEditModalCompleto(order, opts){
     <div id="itensContainerEdit">${somenteLeitura ? itensSomenteLeituraHtml(order) : ''}</div>
     </div>
     <div class="modal-secao" id="pagamentoContainerEdit"></div>
-    <div class="modal-secao" id="localContainerEdit"></div>
     <div class="modal-secao">
     <div class="field" style="margin-bottom:0;">
       <label for="e_descricao">Descrição do serviço <span class="muted">— o cliente vê na página de acompanhamento</span></label>
@@ -5278,7 +5243,6 @@ function openEditModalCompleto(order, opts){
     descTotalPerc: order.descTotalPerc!==undefined?order.descTotalPerc:'', descTotalR: order.descTotalR!==undefined?order.descTotalR:'',
   };
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), editPagHolder, ()=>order.lojaId||'');
-  mountLocalizacao(document.getElementById('localContainerEdit'), order, somenteLeitura);
   wireClienteFields('e', { buscarClientePorCpf: true });
   const btnEditarCadCliEdit = document.getElementById('btnEditarCadastroClienteEdit');
   if(btnEditarCadCliEdit){
@@ -5600,9 +5564,10 @@ function renderPainel(main){
       <select id="filtroLoja" aria-label="Loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
       <select id="filtroServico" aria-label="Tipo de serviço"><option value="">Todos os serviços</option>${st.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}</select>
       <select id="filtroLocal" aria-label="Onde está a peça">
-        <option value="">Peça: qualquer lugar</option>
-        <option value="loja">Na loja</option>
-        <option value="fabrica">Na fábrica</option>
+        <option value="">Via: qualquer lugar</option>
+        <option value="loja">LJ — Loja</option>
+        <option value="fabrica">FB — Fábrica</option>
+        <option value="cliente">CL — Cliente</option>
       </select>
       <input type="date" id="filtroData" aria-label="Data agendada" title="Data agendada">
       <label class="chk"><input type="checkbox" id="filtroSemPagamento"> Só sem pagamento</label>
@@ -5675,7 +5640,7 @@ function renderPainel(main){
     if(fHoje.checked){ const h = hojeStr(); list = list.filter(o=>o.criadoEm && dataLocalDeMs(o.criadoEm)===h); }
     if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
     if(fLoja.value) list = list.filter(o=>o.lojaId===fLoja.value);
-    if(fLocal.value) list = list.filter(o=>(o.localAtual||'loja')===fLocal.value);
+    if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()) {
       const q = fBusca.value.trim().toLowerCase();
@@ -5823,11 +5788,11 @@ function renderPainel(main){
           ${marcas ? `<div class="marcas">${marcas}</div>` : ''}
         </td>
         <td class="c-servico">${escapeHtml(o.serviceTypeName||'—')}<div class="sub">${o.vendedora ? 'Vendedora: '+escapeHtml(o.vendedora) : ''}</div></td>
-        <td class="c-loja">${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}${o.localAtual==='fabrica' ? `<div class="marcas"><span class="badge st-enviado_fabrica">${ico('ferramenta',12)} Na fábrica</span></div>` : ''}</td>
+        <td class="c-loja">${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</td>
         <td class="c-data" style="white-space:nowrap;">${fmtDate(o.data)}${atrasada ? `<span class="data-atraso">Atrasado</span>` : ''}</td>
         <td class="num c-rec valor-ok" data-rotulo="Recebido">${fmtMoeda(recebido)}</td>
         <td class="num c-areceber ${aReceber>0?'valor-receber':''}" data-rotulo="A receber">${fmtMoeda(aReceber)}</td>
-        <td class="c-status">
+        <td class="c-status"><div class="status-com-local">${bolinhaLocalHtml(o)}
           ${isRascunho
             ? `<span class="selo st-rascunho">Rascunho</span>`
             : oficina
@@ -5835,12 +5800,12 @@ function renderPainel(main){
               : `<select class="status-select" data-id="${o.id}" aria-label="Status do pedido ${escapeHtml(o.via||'')}">
                   ${statusOptionsHtml(o.status, false)}
                 </select>`
-          }
+          }</div>
         </td>
         <td class="acoes">
           <div class="acoes-linha">
           ${oficina ? `<button class="btn-icone" data-view="${o.id}" title="Ver detalhes" aria-label="Ver detalhes">${ico('olho')}</button>` : ''}
-          <button class="btn-icone" data-edit="${o.id}" title="${oficina?'Observações e localização':'Editar pedido'}" aria-label="${oficina?'Observações e localização':'Editar pedido'}">${ico('lapis')}</button>
+          <button class="btn-icone" data-edit="${o.id}" title="${oficina?'Observações':'Editar pedido'}" aria-label="${oficina?'Observações':'Editar pedido'}">${ico('lapis')}</button>
           <button class="btn-icone" data-print="${o.id}" title="Imprimir via" aria-label="Imprimir via">${ico('impressora')}</button>
           ${!oficina ? `
           <button class="btn-icone wa" data-wa="${o.id}" title="Enviar WhatsApp ao cliente" aria-label="Enviar WhatsApp ao cliente">${waIconSvg(17)}</button>
