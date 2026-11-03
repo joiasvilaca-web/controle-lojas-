@@ -1075,7 +1075,7 @@ async function loadAll(){
     carregarOrdensDoBanco(), storageGet('codes', true), orcamentosGet(), vendasParaHistoricoGet(),
     gatewayCall({ op:'selectAll', table:'produtos_estoque' }).then(r=>(r&&Array.isArray(r.data))?r.data.map(row=>row.payload):[])
   ]);
-  orders = ordersR; codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
+  orders = ordersR; orders.forEach(snapOrdem); codes = codesR || []; orcamentos = orcamentosR; vendasParaHistorico = vendasHistR;
   produtosEstoque = aplicarPrecoPedras(produtosR || []);
   setTimeout(sincronizarAutorizacoesPendentes, 1500); setInterval(sincronizarAutorizacoesPendentes, 20000);
   if(!clientes) clientes = [];
@@ -1257,11 +1257,17 @@ function travarCliqueDuplo(fn){
     finally{ if(btn){ delete btn.dataset.salvando; btn.disabled = false; } }
   };
 }
+/* Só grava as O.S. que MUDARAM desde o último carregamento/gravação (antes gravava todas, uma por uma — travava ao salvar).
+   Grava em paralelo (lotes de 6). */
+const __ordemSnap = new Map();
+function snapOrdem(o){ if(o && o.id) try{ __ordemSnap.set(o.id, JSON.stringify(o)); }catch(e){} }
 async function saveOrders(){
-  for(const order of orders){
-    if(!order || !order.id) continue;
-    const r = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id: order.id, payload: order, updated_at: new Date().toISOString() } } });
-    if(r && r.error) console.error('erro ao salvar O.S.', order.id, r.error);
+  const mudadas = orders.filter(o=> o && o.id && __ordemSnap.get(o.id) !== JSON.stringify(o));
+  for(let i=0; i<mudadas.length; i+=6){
+    await Promise.all(mudadas.slice(i, i+6).map(async order=>{
+      const r = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id: order.id, payload: order, updated_at: new Date().toISOString() } } });
+      if(r && r.error) console.error('erro ao salvar O.S.', order.id, r.error); else snapOrdem(order);
+    }));
   }
 }
 
@@ -5086,6 +5092,7 @@ async function openEditModal(orderId, somenteLeitura){
     if(r && r.data && r.data.payload){
       const idx = orders.findIndex(o=>o.id===orderId);
       if(idx>=0) orders[idx] = r.data.payload; else orders.push(r.data.payload);
+      snapOrdem(r.data.payload);
     }
   }catch(e){ console.error('Não foi possível atualizar a ordem antes de abrir:', e); }
   const order = orders.find(o=>o.id===orderId);
