@@ -138,6 +138,8 @@
     details.filtros[open] > summary{border-bottom:1px solid var(--line);}
     details.filtros > .filtros-barra{padding:16px;}
   }
+  .barra-vias{display:flex;gap:10px;align-items:flex-end;margin:0 0 14px;flex-wrap:wrap;} .barra-vias .busca-vias{flex:1;min-width:220px;margin:0;} .barra-vias .btn{min-height:46px;font-weight:700;}
+  .mat-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;gap:8px;margin:6px 0;align-items:center;}
   .busca-vias{margin:0 0 14px;} .busca-vias input{min-height:46px;font-size:16px;padding:10px 14px;}
   .sec-tit{font-size:13px;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;}
   .acoes-via{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;}
@@ -163,10 +165,11 @@
     <button class="btn btn-ghost" id="btnCam" type="button" title="Ler o código pela câmera"><span data-ico="camera"></span><span class="rot">Câmera</span></button>
   </div>
   <div id="camBox"><video id="camVideo" playsinline muted></video><div class="cam-rodape">Aponte a câmera para o código de barras da via. <button class="btn btn-ghost btn-sm" id="btnCamFechar" type="button">Desligar câmera</button></div></div>
-  <div class="field busca-vias"><label for="vBusca">Buscar</label><input id="vBusca" type="search" placeholder="Busque por qualquer dado: via, cliente, telefone, tipo, descrição, loja, vendedora, andamento…" autocomplete="off"></div>
+  <div class="barra-vias"><div class="field busca-vias"><label for="vBusca">Buscar</label><input id="vBusca" type="search" placeholder="Busque por qualquer dado: via, cliente, telefone, tipo, descrição, loja, vendedora, andamento…" autocomplete="off"></div><button class="btn btn-accent" id="btnGastoMetal" type="button">GASTO METAL</button></div>
   <div class="card flush" id="viasBusca" style="display:none;"></div>
   <div class="card flush" id="viasAcao"><div class="empty">Carregando…</div></div>
 </div>
+<div id="viaModal2" class="via-modal" style="display:none;z-index:1100;" role="dialog" aria-modal="true"><div class="via-modal-box" id="viaModal2Box"></div></div>
 <div id="viaModal" class="via-modal" style="display:none;" role="dialog" aria-modal="true" aria-label="Via completa"><div class="via-modal-box" id="viaModalBox"></div></div>
 
 <!-- SALDOS -->
@@ -525,36 +528,104 @@ function desenharVias(){
     (achou.length ? tabelaVias(achou) : '<div class="empty"><b>Nada encontrado</b>Tente outro dado (código, cliente, telefone, tipo, descrição…).</div>');
   ligarLinhas(boxB);
 }
+function modal2(html){ const m = document.getElementById('viaModal2'); document.getElementById('viaModal2Box').innerHTML = html; m.style.display = 'flex'; m.scrollTop = 0; }
+function fecharModal2(){ const m = document.getElementById('viaModal2'); m.style.display = 'none'; document.getElementById('viaModal2Box').innerHTML = ''; }
+/* depois de mudar o status: atualiza a lista e, se o popup da via estava aberto, redesenha ele com o novo status */
+function aposMovimento(v, novo){
+  const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0 && novo) viasCache[i] = novo;
+  const popupAberto = document.getElementById('viaModal').style.display !== 'none' && viaSel && viaSel.id===v.id;
+  fecharModal2(); desenharVias();
+  if(popupAberto && novo) abrirVia(novo);
+}
 async function acaoVia(acao, id, btn){
-  const v = viasCache.find(x=>x.id===id); if(!v) return;
+  const v = viasCache.find(x=>x.id===id) || (viaSel && viaSel.id===id ? viaSel : null); if(!v) return;
   if(acao==='pendencia'){ abrirPendencia(v); return; }
-  const status = acao==='produzido' ? 'oficina_pronto' : 'em_producao';
+  if(acao==='produzido'){ abrirProduzido(v); return; }
   btn.disabled = true; const txt = btn.textContent; btn.textContent = 'Salvando…';
   try{
-    const r = await api('viaAtualizar', { id: v.id, status, avisarLoja:false });
-    const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0 && r.via) viasCache[i] = r.via;
-    showToast('Via ' + (v.codigoVia||'') + ' → ' + (NOME_STATUS[status]||status) + '.');
-    desenharVias();
+    const r = await api('viaAtualizar', { id: v.id, status:'em_producao', avisarLoja:false });
+    showToast('Via ' + (v.codigoVia||'') + ' → EM PRODUÇÃO.');
+    aposMovimento(v, r.via);
   }catch(e){ showToast(e.message, 4500); btn.disabled = false; btn.textContent = txt; }
 }
 function abrirPendencia(v){
-  const m = document.getElementById('viaModal'), box = document.getElementById('viaModalBox');
-  box.innerHTML = `<h3 style="margin:0 0 4px;">PENDÊNCIA — ${escapeHtml(v.codigoVia||'')}</h3>
+  modal2(`<h3 style="margin:0 0 4px;">PENDÊNCIA — ${escapeHtml(v.codigoVia||'')}</h3>
     <div class="muted small" style="margin-bottom:12px;">${escapeHtml(v.cliente||'')} · ${escapeHtml(v.serviceTypeName||'')}</div>
     <div class="field"><label for="pdTexto">Qual é a pendência?</label><textarea id="pdTexto" rows="5" maxlength="1000" placeholder="Descreva o que precisa ser resolvido (a loja será avisada)"></textarea></div>
-    <div class="form-acoes"><button class="btn btn-ghost" id="pdCancelar" type="button">Cancelar</button><button class="btn btn-accent" id="pdSalvar" type="button">Salvar pendência</button></div>`;
-  m.style.display = 'flex'; setTimeout(()=>{ try{ document.getElementById('pdTexto').focus(); }catch(e){} }, 50);
-  document.getElementById('pdCancelar').addEventListener('click', fecharModalVia);
+    <div class="form-acoes"><button class="btn btn-ghost" id="pdCancelar" type="button">Cancelar</button><button class="btn btn-accent" id="pdSalvar" type="button">Salvar pendência</button></div>`);
+  setTimeout(()=>{ try{ document.getElementById('pdTexto').focus(); }catch(e){} }, 50);
+  document.getElementById('pdCancelar').addEventListener('click', fecharModal2);
   document.getElementById('pdSalvar').addEventListener('click', async ()=>{
     const obs = document.getElementById('pdTexto').value.trim();
     if(!obs){ showToast('Digite qual é a pendência.'); document.getElementById('pdTexto').focus(); return; }
     const b = document.getElementById('pdSalvar'); b.disabled = true; b.textContent = 'Salvando…';
     try{
       const r = await api('viaAtualizar', { id: v.id, status:'pendencia', observacao: obs, avisarLoja:true });
-      const i = viasCache.findIndex(x=>x.id===v.id); if(i>=0 && r.via) viasCache[i] = r.via;
-      fecharModalVia(); showToast('Via ' + (v.codigoVia||'') + ' → PENDÊNCIA. Loja avisada.'); desenharVias();
+      showToast('Via ' + (v.codigoVia||'') + ' → PENDÊNCIA. Loja avisada.'); aposMovimento(v, r.via);
     }catch(e){ showToast(e.message, 4500); b.disabled = false; b.textContent = 'Salvar pendência'; }
   });
+}
+/* PRODUZIDO: abre o lançamento do gasto de material; ao SALVAR lança o material e muda o status */
+function abrirProduzido(v){
+  const ins = (INIT.insumos||[]).filter(x=>x.ativo!==false);
+  const podeMat = !!INIT.perm.baixaVia && ins.length>0;
+  const ouro = ins.find(x=>/OURO/i.test(x.nome) && /750|18/.test(x.nome)) || ins.find(x=>/OURO/i.test(x.nome)) || ins[0];
+  const linha = (sel)=> `<div class="mat-row"><select class="mpIns" aria-label="Material">${ins.map(x=>`<option value="${x.id}" ${sel&&x.id===sel.id?'selected':''}>${escapeHtml(x.nome)} (${escapeHtml(x.unidade)})</option>`).join('')}</select><input class="mpQtd" inputmode="decimal" placeholder="Quantidade" aria-label="Quantidade"><button type="button" class="btn btn-ghost btn-sm mpDel" title="Tirar esta linha">✕</button></div>`;
+  modal2(`<h3 style="margin:0 0 4px;">PRODUZIDO — ${escapeHtml(v.codigoVia||'')}</h3>
+    <div class="muted small" style="margin-bottom:12px;">${escapeHtml(v.cliente||'')} · ${escapeHtml(v.serviceTypeName||'')} · sai do saldo de ${escapeHtml(lojaInfo(v.lojaId).nome)} na Oficina</div>
+    ${podeMat ? `<div class="field"><label>Gasto de material</label><div id="mpLinhas">${linha(ouro)}</div>
+      <div><button type="button" class="btn btn-ghost btn-sm" id="mpAdd">+ outro material</button></div>
+      <div class="dica">Deixe a quantidade em branco se não usou material.</div></div>` : '<div class="aviso">Seu acesso não lança material. Salve para marcar PRODUZIDO.</div>'}
+    <div class="form-acoes"><button class="btn btn-ghost" id="mpCancelar" type="button">Cancelar</button><button class="btn btn-accent" id="mpSalvar" type="button">Salvar</button></div>`);
+  const ligarDel = ()=> document.querySelectorAll('#mpLinhas .mpDel').forEach(b=> b.onclick = ()=>{ if(document.querySelectorAll('#mpLinhas .mat-row').length>1) b.closest('.mat-row').remove(); else b.closest('.mat-row').querySelector('.mpQtd').value=''; });
+  if(podeMat){
+    ligarDel();
+    document.getElementById('mpAdd').addEventListener('click', ()=>{ document.getElementById('mpLinhas').insertAdjacentHTML('beforeend', linha(null)); ligarDel(); });
+    setTimeout(()=>{ try{ document.querySelector('#mpLinhas .mpQtd').focus(); }catch(e){} }, 50);
+  }
+  document.getElementById('mpCancelar').addEventListener('click', fecharModal2);
+  document.getElementById('mpSalvar').addEventListener('click', async ()=>{
+    const itens = [];
+    if(podeMat){
+      for(const r of document.querySelectorAll('#mpLinhas .mat-row')){
+        const t = r.querySelector('.mpQtd').value.trim(); if(!t) continue;
+        const q = numBR(t); if(!(q>0)){ showToast('Informe a quantidade só com números (ex.: 1,25).'); r.querySelector('.mpQtd').focus(); return; }
+        itens.push({ insumoId: r.querySelector('.mpIns').value, quantidade:q });
+      }
+    }
+    const b = document.getElementById('mpSalvar'); b.disabled = true; b.textContent = 'Salvando…';
+    try{
+      if(itens.length){
+        try{ await api('consumoVia', { osId: v.id, itens }); }
+        catch(e){
+          if(e.status===409 && e.dados && e.dados.faltas && confirm(e.message + '\n' + e.dados.faltas.join('\n') + '\n\nLançar mesmo assim? O saldo fica negativo até alguém registrar o envio/compra que falta.')) await api('consumoVia', { osId: v.id, itens, forcar:true });
+          else throw e;
+        }
+      }
+      const r = await api('viaAtualizar', { id: v.id, status:'oficina_pronto', avisarLoja:false });
+      showToast('Via ' + (v.codigoVia||'') + ' → PRODUZIDO' + (itens.length?' · material lançado.':'.')); aposMovimento(v, r.via);
+    }catch(e){ showToast(e.message, 5000); b.disabled = false; b.textContent = 'Salvar'; }
+  });
+}
+/* GASTO METAL: todas as vias que tiveram baixa de metal */
+async function abrirGastoMetal(){
+  modal2('<h3 style="margin:0 0 10px;">GASTO METAL</h3><div class="muted">Carregando…</div>');
+  try{
+    const r = await api('movimentos', { tipo:'CONSUMO', limite:1000 });
+    const metais = new Set((INIT.insumos||[]).filter(i=>i.categoria==='metal').map(i=>i.id));
+    const ms = (r.movimentos||[]).filter(m=>metais.has(m.insumo_id) && !(m.payload&&m.payload.estornado));
+    const porVia = {};
+    ms.forEach(m=>{ const k = m.os_id || m.codigo_via; (porVia[k] ||= { cod:m.codigo_via, osId:m.os_id, loja:m.loja_id, tipo:(m.payload&&m.payload.tipoOrdem)||'', itens:[], data:m.created_at }).itens.push(m); });
+    const vias = Object.values(porVia).sort((a,b)=> String(b.data||'').localeCompare(String(a.data||'')));
+    const tot = {}; ms.forEach(m=>{ tot[m.insumo_id] = (tot[m.insumo_id]||0) + (-Number(m.quantidade)); });
+    modal2(`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;"><h3 style="margin:0;">GASTO METAL</h3><button class="btn btn-ghost btn-sm" id="gmFechar" type="button">Fechar</button></div>
+      <div class="muted small" style="margin:4px 0 10px;">${vias.length} ${vias.length===1?'via teve':'vias tiveram'} gasto de metal.</div>
+      ${Object.keys(tot).length?`<div class="ro-grid">${Object.entries(tot).map(([id,q])=>{ const i = insInfo(id); return `<div><b>Total ${escapeHtml(i.nome)}</b>${fmtQ(q, i.unidade)}</div>`; }).join('')}</div>`:''}
+      ${vias.length ? vias.map(g=>`<div class="ro-item via-linha" data-gmvia="${escapeHtml(g.cod||'')}" tabindex="0" style="cursor:pointer;"><b>${escapeHtml(g.cod||'—')}</b> ${dotLoja(g.loja)} <span class="muted small">${escapeHtml(g.tipo)}${g.data?' · '+fmtData(g.data):''}</span>
+        ${g.itens.map(m=>{ const i = insInfo(m.insumo_id); return `<div class="small">${escapeHtml(i.nome)} · <b>${fmtQ(-m.quantidade, i.unidade)}</b></div>`; }).join('')}</div>`).join('') : '<div class="empty"><b>Nenhum gasto de metal lançado ainda</b>Ao marcar PRODUZIDO e lançar o material, a via aparece aqui.</div>'}`);
+    document.getElementById('gmFechar').addEventListener('click', fecharModal2);
+    document.querySelectorAll('[data-gmvia]').forEach(el=> el.addEventListener('click', ()=>{ fecharModal2(); abrirViaPorCodigo(el.dataset.gmvia); }));
+  }catch(e){ modal2(`<h3>GASTO METAL</h3>${estadoErro(e.message)}<div class="form-acoes"><button class="btn btn-ghost" id="gmFechar" type="button">Fechar</button></div>`); document.getElementById('gmFechar').addEventListener('click', fecharModal2); }
 }
 function fecharModalVia(){ const m = document.getElementById('viaModal'); m.style.display = 'none'; document.getElementById('viaModalBox').innerHTML = ''; viaSel = null; try{ document.getElementById('vLeitor').focus(); }catch(e){} }
 async function abrirViaPorCodigo(cod){
@@ -575,6 +646,7 @@ function abrirVia(v){
       <div class="det-meta">${escapeHtml(lojaInfo(v.lojaId).nome)}${v.encaixe?' · ENCAIXE':''}</div></div>
       <div style="display:flex;gap:8px;align-items:center;"><span class="st st-${escapeHtml(v.status)}">${NOME_STATUS[v.status]||escapeHtml(v.status)}</span><button class="btn btn-ghost btn-sm" id="vmFechar" type="button">Fechar</button></div>
     </div>
+    ${botoesVia(v)?`<div class="acoes-via" id="vmAcoes" style="margin-top:12px;justify-content:flex-start;">${botoesVia(v)}</div>`:''}
     <div class="ro-grid">
       ${campo('Cliente', v.cliente)}${campo('Telefone', v.telefone)}${campo('Tipo de ordem', v.serviceTypeName)}${campo('Agenda', v.data?fmtDia(v.data):'')}
       ${campo('Vendedora', v.vendedora)}${campo('Número', v.numero)}${campo('Onde está', v.localAtual==='fabrica'?'Fábrica':'Loja')}${campo('Criada em', v.criadoEm?fmtData(v.criadoEm):'')}
@@ -590,6 +662,7 @@ function abrirVia(v){
     ${hist.length?`<div style="margin-top:14px;"><div class="bloco-tit">Histórico da Oficina</div>${hist.map(h=>`<div class="small" style="margin:2px 0;">${h.em?fmtData(h.em):''} · ${escapeHtml(h.por||'')} · ${escapeHtml(NOME_STATUS[h.de]||h.de||'')} → <b>${escapeHtml(NOME_STATUS[h.para]||h.para||'')}</b></div>`).join('')}</div>`:''}`;
   m.style.display = 'flex'; m.scrollTop = 0;
   document.getElementById('vmFechar').addEventListener('click', fecharModalVia);
+  box.querySelectorAll('#vmAcoes [data-acao]').forEach(b=> b.addEventListener('click', ()=> acaoVia(b.dataset.acao, b.dataset.id, b)));
   if(INIT.perm.baixaVia) listarMaterialVia(document.getElementById('dMaterial'), v, true);
 }
 async function listarMaterialVia(el, v, somenteLeitura){
@@ -610,8 +683,10 @@ async function listarMaterialVia(el, v, somenteLeitura){
   }));
 }
 document.getElementById('vBusca').addEventListener('input', desenharVias);
+document.getElementById('btnGastoMetal').addEventListener('click', abrirGastoMetal);
+document.getElementById('viaModal2').addEventListener('click', e=>{ if(e.target.id==='viaModal2') fecharModal2(); });
 document.getElementById('viaModal').addEventListener('click', e=>{ if(e.target.id==='viaModal') fecharModalVia(); });
-document.addEventListener('keydown', e=>{ if(e.key==='Escape' && document.getElementById('viaModal').style.display!=='none') fecharModalVia(); });
+document.addEventListener('keydown', e=>{ if(e.key!=='Escape') return; if(document.getElementById('viaModal2').style.display!=='none') fecharModal2(); else if(document.getElementById('viaModal').style.display!=='none') fecharModalVia(); });
 document.getElementById('vLeitor').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); const c = e.target.value; e.target.value=''; abrirViaPorCodigo(c); } });
 // Câmera (BarcodeDetector: Chrome/Android). Leitor USB/Bluetooth funciona como teclado no campo acima.
 let camStream = null, camTimer = null;

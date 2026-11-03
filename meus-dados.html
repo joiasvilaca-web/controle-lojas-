@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-ds>
+<head>
+<script src="tema.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meus dados — Gestão e Controle</title>
+<link rel="stylesheet" href="tema.css">
+<style>
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:var(--font);background:var(--bg);color:var(--ink);font-size:14px;line-height:1.4;padding:16px;}
+  .wrap{max-width:760px;margin:0 auto;}
+  h1{font-size:20px;margin:0 0 4px;} .sub{color:var(--ink-faint);font-size:13px;margin:0 0 14px;}
+  .barra{display:flex;gap:8px;margin:0 0 14px;flex-wrap:wrap;}
+  .barra .btn{min-height:42px;font-weight:700;min-width:110px;}
+  .btn.on{outline:2px solid var(--accent);}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin:0 0 10px;}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;}
+  @media (max-width:560px){ .grid{grid-template-columns:1fr;} }
+  .f label{display:block;font-size:11.5px;font-weight:600;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.03em;margin-bottom:3px;}
+  .f .v{font-size:14px;min-height:20px;word-break:break-word;}
+  .f input,.f select{width:100%;padding:9px 10px;border:1px solid var(--line-strong,var(--line));border-radius:8px;font-size:14px;background:var(--surface);color:var(--ink);}
+  .f.fixo .v{color:var(--ink-faint);}
+  .acoes{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;}
+  .msg{padding:24px;text-align:center;color:var(--ink-faint);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Meus dados</h1>
+  <p class="sub">Seus dados pessoais da ficha de RH. Use <b>Ver</b> para consultar (não altera nada) ou <b>Editar</b> para atualizar contato, endereço e dados bancários.</p>
+  <div class="barra"><button class="btn btn-ghost on" id="bVer" type="button">Ver</button><button class="btn btn-ghost" id="bEditar" type="button">Editar</button></div>
+  <div id="conteudo"><div class="msg">Carregando…</div></div>
+</div>
+<script>
+const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+const API_URL = SUPABASE_URL + "/functions/v1/meus-dados";
+let __senha = null, DADOS = null, modo = 'ver';
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(op, extra){
+  const res = await fetch(API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ op, senha:__senha }, extra||{})) });
+  let j = null; try{ j = await res.json(); }catch(e){}
+  if(!res.ok || !j || j.error) throw new Error((j&&j.error) || 'Sem conexão.');
+  return j;
+}
+const GRUPOS = [
+  ['Identificação', [['nome','Nome',0],['apelido','Apelido',0],['cargo','Função',0],['loja','Loja',0],['dataAdmissao','Admissão',0,'data'],['tipoContrato','Contrato',0],['cpf','CPF',0],['rg','RG',0],['dataNascimento','Nascimento',0,'data'],['escolaridade','Escolaridade',0],['pis','PIS',0],['ctpsNumero','CTPS nº',0],['ctpsSerie','CTPS série',0]]],
+  ['Contato', [['celularParticular','Celular particular',1],['telefoneFixo','Telefone fixo',1],['celularLoja','Celular da loja',1],['estadoCivil','Estado civil',1,'civil'],['contatoEmergenciaNome','Contato de emergência',1],['contatoEmergenciaTelefone','Telefone de emergência',1]]],
+  ['Endereço', [['cep','CEP',1],['endereco','Endereço',1],['numero','Número',1],['complemento','Complemento',1],['bairro','Bairro',1],['cidade','Cidade',1],['estado','UF',1]]],
+  ['Dados bancários', [['banco','Banco',1],['tipoConta','Tipo de conta',1],['agencia','Agência',1],['conta','Conta',1],['tipoPix','Tipo de chave Pix',1],['chavePix','Chave Pix',1]]],
+];
+const fmtData = d => d && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10).split('-').reverse().join('/') : (d||'');
+function desenhar(){
+  document.getElementById('bVer').classList.toggle('on', modo==='ver');
+  document.getElementById('bEditar').classList.toggle('on', modo==='editar');
+  const box = document.getElementById('conteudo');
+  if(!DADOS){ return; }
+  if(!DADOS.ficha){
+    const b = DADOS.base||{};
+    box.innerHTML = `<div class="card"><h2>Identificação</h2><div class="grid"><div class="f"><label>Nome</label><div class="v">${esc(b.nome)}</div></div><div class="f"><label>Apelido</label><div class="v">${esc(b.apelido)}</div></div></div></div><div class="card msg">Sua ficha de RH ainda não foi criada. Peça à gerência ou à diretoria para cadastrar.</div>`;
+    return;
+  }
+  const fi = DADOS.ficha;
+  const html = GRUPOS.map(([tit, campos])=>{
+    const cs = campos.filter(([k])=> fi[k]!==undefined || modo==='editar' && campos.some(c=>c[2]));
+    return `<div class="card"><h2>${tit}</h2><div class="grid">${campos.map(([k,rot,ed,tipo])=>{
+      const val = fi[k]==null ? '' : fi[k];
+      if(modo==='editar' && ed){
+        if(tipo==='civil') return `<div class="f"><label for="c_${k}">${rot}</label><select id="c_${k}" data-k="${k}">${['','Solteiro(a)','Casado(a)','União estável','Divorciado(a)','Viúvo(a)'].map(o=>`<option ${o===val?'selected':''}>${o}</option>`).join('')}</select></div>`;
+        return `<div class="f"><label for="c_${k}">${rot}</label><input id="c_${k}" data-k="${k}" value="${esc(val)}" maxlength="120"></div>`;
+      }
+      return `<div class="f ${ed?'':'fixo'}"><label>${rot}${!ed?' · só o DP altera':''}</label><div class="v">${esc(tipo==='data'?fmtData(val):val)||'—'}</div></div>`;
+    }).join('')}</div></div>`;
+  }).join('');
+  box.innerHTML = html + (modo==='editar' ? `<div class="acoes"><button class="btn btn-ghost" id="bCancel" type="button">Cancelar</button><button class="btn btn-accent" id="bSalvar" type="button">Salvar</button></div>` : '');
+  if(modo==='editar'){
+    document.getElementById('bCancel').addEventListener('click', ()=>{ modo='ver'; desenhar(); });
+    document.getElementById('bSalvar').addEventListener('click', salvar);
+  }
+}
+async function salvar(){
+  const dados = {}; document.querySelectorAll('[data-k]').forEach(el=>{ dados[el.dataset.k] = el.value; });
+  const b = document.getElementById('bSalvar'); b.disabled = true; b.textContent = 'Salvando…';
+  try{ const r = await api('salvar', { dados }); DADOS.ficha = r.ficha; modo = 'ver'; desenhar(); avisar('Dados salvos.'); }
+  catch(e){ b.disabled = false; b.textContent = 'Salvar'; avisar(e.message); }
+}
+function avisar(m){ const d = document.createElement('div'); d.textContent = m; d.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:10px;z-index:9;font-size:13px;'; document.body.appendChild(d); setTimeout(()=>d.remove(), 3500); }
+document.getElementById('bVer').addEventListener('click', ()=>{ modo='ver'; desenhar(); });
+document.getElementById('bEditar').addEventListener('click', ()=>{ modo='editar'; desenhar(); });
+window.addEventListener('message', async ev=>{
+  const d = ev.data; if(!d || d.type!=='auth') return;
+  __senha = d.user && d.user.senha;
+  try{ DADOS = await api('ver'); desenhar(); }
+  catch(e){ document.getElementById('conteudo').innerHTML = '<div class="msg">Não foi possível carregar: '+esc(e.message)+'</div>'; }
+});
+window.addEventListener('load', ()=>{ parent.postMessage({ type:'ready', modulo:'meusdados' }, '*'); });
+</script>
+</body>
+</html>
