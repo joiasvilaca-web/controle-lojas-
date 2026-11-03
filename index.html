@@ -1486,7 +1486,24 @@ function modoPrimeiroAcesso(on, usuario){
     if(sub) sub.textContent = 'Use seu apelido e sua senha.';
   }
 }
-document.getElementById('paLink').addEventListener('click', e=>{ e.preventDefault(); modoPrimeiroAcesso(true, document.getElementById('loginUser').value.trim()); if(!document.getElementById('loginUser').value.trim()) document.getElementById('loginUser').focus(); });
+async function iniciarPrimeiroAcesso(usuario){
+  const err = document.getElementById('loginError');
+  err.classList.remove('show');
+  // 1º o Termo de Uso (obrigatório) — 2º a troca da senha
+  const ok = await exigirTermos('123456', { usuario });
+  if(!ok){
+    err.textContent = window.__termosMsg || 'Para usar o VILAÇA APP é preciso aceitar o Termo de Uso.'; err.classList.add('show');
+    document.getElementById('loginPass').value = '';
+    return;
+  }
+  modoPrimeiroAcesso(true, usuario);
+}
+document.getElementById('paLink').addEventListener('click', async e=>{
+  e.preventDefault();
+  const u = document.getElementById('loginUser').value.trim(), err = document.getElementById('loginError');
+  if(!u){ err.textContent = 'Digite seu usuário (apelido) acima e toque em "Primeiro acesso" de novo.'; err.classList.add('show'); document.getElementById('loginUser').focus(); return; }
+  await iniciarPrimeiroAcesso(u);
+});
 document.getElementById('btnLogin').addEventListener('click', ()=> __modoPrimeiro ? doPrimeiroAcesso() : doLogin());
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') (__modoPrimeiro?doPrimeiroAcesso():doLogin()); });
 document.getElementById('paConf').addEventListener('keydown', e=>{ if(e.key==='Enter') doPrimeiroAcesso(); });
@@ -1504,7 +1521,7 @@ async function doLogin(){
   btn.disabled = true; btn.textContent = 'Entrando...';
   const r = await gatewayLogin(usuario, pass);
   btn.disabled = false; btn.textContent = 'Entrar';
-  if(r && r.primeiroAcesso){ modoPrimeiroAcesso(true, r.usuario || usuario); return; }
+  if(r && r.primeiroAcesso){ await iniciarPrimeiroAcesso(r.usuario || usuario); return; }
   if(!r || !r.ok){
     if(r && r.bloqueado){
       err.textContent = 'Acesso bloqueado após 6 tentativas erradas. Peça à diretoria pra desbloquear no Departamento Pessoal.';
@@ -1542,7 +1559,7 @@ async function finalizarLogin(r){
   if(!(await exigirTermos(r.token))){
     await sairPorRecusaTermos(r.token);
     document.getElementById('loginPass').value = '';
-    err.textContent = 'Para usar o VILAÇA APP é preciso aceitar o Termo de Uso.'; err.classList.add('show');
+    err.textContent = window.__termosMsg || 'Para usar o VILAÇA APP é preciso aceitar o Termo de Uso.'; err.classList.add('show');
     return;
   }
   __gatewaySenha = r.token;
@@ -1712,9 +1729,13 @@ function termosTextoHtml(txt){
   return out.join('');
 }
 /* Devolve true se o usuário pode entrar (já tinha aceito ou aceitou agora); false se recusou. Falha de rede não trava a loja: deixa entrar e pergunta de novo no próximo acesso. */
-async function exigirTermos(senha){
-  const r = await termosCall({ op:'status' }, senha);
-  if(!r || r.error || r.semTermo || r.aceito) return true;
+async function exigirTermos(senha, extra){
+  extra = extra || {};
+  window.__termosMsg = '';
+  let r = await termosCall({ op:'status', ...extra }, senha);
+  if(r && r.error && !/inválida|disponível|Sem permiss/i.test(String(r.error))) r = await termosCall({ op:'status', ...extra }, senha);   // 1 nova tentativa se foi falha de rede
+  if(!r || r.error){ window.__termosMsg = 'Não foi possível verificar o Termo de Uso. Confira a internet e tente de novo.'; return false; }
+  if(r.semTermo || r.aceito) return true;
   return new Promise(resolve=>{
     const ov = document.getElementById('termosOverlay'), box = document.getElementById('termosTexto');
     const chk = document.getElementById('termosCheck'), bt = document.getElementById('termosAceitar'), rec = document.getElementById('termosRecusar');
@@ -1730,7 +1751,7 @@ async function exigirTermos(senha){
     rec.onclick = ()=> fechar(false);
     bt.onclick = async ()=>{
       bt.disabled = true; bt.textContent = 'Salvando…'; erro.style.display = 'none';
-      const a = await termosCall({ op:'aceitar', versao: r.versao }, senha);
+      const a = await termosCall({ op:'aceitar', versao: r.versao, ...extra }, senha);
       bt.textContent = 'Aceitar e continuar';
       if(a && a.ok) return fechar(true);
       erro.textContent = (a && a.error) || 'Não foi possível salvar o aceite. Tente de novo.'; erro.style.display = ''; bt.disabled = !chk.checked;
