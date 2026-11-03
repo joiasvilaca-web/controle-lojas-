@@ -6176,7 +6176,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       // pra manter o histórico. Aqui só preserva o que já estava, como placeholder.
       estoquePorLoja: editando ? {...(produto.estoquePorLoja||{})} : {},
       custo: d.custo===null || d.custo==='' ? null : parseFloat(d.custo),
-      precoVenda: d.precoVenda===null || d.precoVenda==='' || isNaN(parseFloat(String(d.precoVenda).replace(',','.'))) ? null : Math.ceil(Math.round(parseFloat(String(d.precoVenda).replace(',','.'))*100)/100 - 0.000001),   // preço inteiro: centavos arredondam pra cima
+      precoVenda: (()=>{ const regra = precoPorRegraTipo({ tipoVenda:d.tipoVenda, fator:d.fator }); if(regra!=null) return regra; return d.precoVenda===null || d.precoVenda==='' || isNaN(parseFloat(String(d.precoVenda).replace(',','.'))) ? null : Math.ceil(Math.round(parseFloat(String(d.precoVenda).replace(',','.'))*100)/100 - 0.000001); })(),   // preço inteiro: centavos arredondam pra cima
       composicao: composicaoValida,
       fotos: fotosHolder.fotos,
       pedraCalc: ehCategoriaPedra(d.categoriaId) ? { custoUSD: pedraNum(d.pedraCalc.custoUSD), mult: pedraNum(d.pedraCalc.mult)||2.2, cravacao: !!d.pedraCalc.cravacao && pedraNum(d.pedraCalc.custoUSD)>0 } : undefined,
@@ -6640,8 +6640,42 @@ async function renderFatorTab(main){
       config.fator.venda[c.id+'Desconto'] = d===''?null:parseFloat(d);
     });
     const ok = await configSave();
-    if(ok){ showToast('Valores de venda salvos.'); document.getElementById('vn_novoTipo').value=''; }
+    if(ok){ showToast('Valores de venda salvos.'); document.getElementById('vn_novoTipo').value=''; await recalcularPrecosTodosProdutos(); }
   });
+}
+
+/** Preço do produto pela regra de Fator → Venda: Fator do produto × Valor (R$/g) do tipo, em reais inteiros
+ * (centavos sobem). null = sem regra (relógio/tipo sem valor/sem fator) → mantém o que está. */
+function precoPorRegraTipo(p){
+  const tv = p && p.tipoVenda; if(!tv || tv==='relogio') return null;
+  garantirConfigFator();
+  const t = (config.fator.tiposVenda||[]).find(x=>x.id===tv);
+  if(t && t.semValor) return null;
+  const val = Number(config.fator.venda[tv]);
+  const fat = parseFloat(String(p.fator==null?'':p.fator).replace(',','.'));
+  if(!(val>0) || isNaN(fat)) return null;
+  return Math.ceil(Math.round(fat*val*100)/100 - 0.000001);
+}
+/** Mudou o valor de venda de algum tipo → recalcula o preço de TODOS os produtos (grava só os que mudaram). */
+async function recalcularPrecosTodosProdutos(){
+  showToast('Atualizando o preço dos produtos…');
+  const r = await gatewayCall({ op:'selectAll', table:'produtos_estoque' });
+  const rows = (r && Array.isArray(r.data)) ? r.data : [];
+  const mudar = [];
+  rows.forEach(row=>{
+    const p = row.payload; if(!p) return;
+    const novo = precoPorRegraTipo(p); if(novo==null) return;
+    if(Number(p.precoVenda) === novo) return;
+    p.precoVenda = novo; mudar.push(row);
+  });
+  let falhas = 0;
+  for(let i=0; i<mudar.length; i+=8){
+    await Promise.all(mudar.slice(i,i+8).map(async row=>{
+      const x = await gatewayCall({ op:'upsert', table:'produtos_estoque', params:{ row:{ id: row.id, payload: row.payload } } });
+      if(!x || x.error) falhas++;
+    }));
+  }
+  showToast(falhas ? `${mudar.length-falhas} produtos atualizados, ${falhas} falharam. Salve de novo.` : (mudar.length ? `Preço de ${mudar.length} produtos atualizado.` : 'Nenhum produto precisou mudar de preço.'));
 }
 
 /* ============================================================
