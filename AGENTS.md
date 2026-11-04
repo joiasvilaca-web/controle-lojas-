@@ -409,7 +409,8 @@ Manutenção:
 
 ## 18. Versão nova em TESTE (branch `teste`, 4/nov/2026)
 
-Fluxo: mudança grande vai primeiro para o branch `teste` → `teste.vilaca.app` (domínio da Vercel preso ao branch `teste`; banco de TESTE). `treino.vilaca.app` segue o `main` (mesmo banco de teste). Só depois do OK do Felipe: passos do REAL abaixo + merge no `main`.
+Fluxo: mudança grande vai primeiro para o branch `teste` → `teste.vilaca.app` (banco de TESTE). `treino.vilaca.app` segue o `main` (mesmo banco de teste). Só depois do OK do Felipe: passos do REAL abaixo + merge no `main`.
+- `teste.vilaca.app` está no projeto como domínio de produção (sem branch), então é apontado por ALIAS para o último deploy do branch `teste` (`assign_alias` do conector Vercel). A cada envio ao branch `teste`: esperar o deploy ficar READY e refazer o alias. Todo deploy do `main` devolve o domínio ao `main`. Para prender de vez ao branch é no painel da Vercel (Settings › Domains › teste.vilaca.app › Git Branch = `teste`), que precisa do login do Felipe.
 
 O que entrou (pedido do Felipe, 04/11):
 - LINK ECO: forma de pagamento que funciona como cartão (+20%, até 12x; `cartao:true`) e exige NF no fechamento do caixa (`exigeNota:true`), com a nota pela VILAÇA ECOMMERCE (`lojaNotaId`). Config › Pagamento tem o botão "Adicionar LINK ECO" e essas opções por forma.
