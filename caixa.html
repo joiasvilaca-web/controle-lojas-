@@ -452,11 +452,25 @@ function mensagemConfiavel(ev){
   /* ================= NOTAS FISCAIS (Sem nota / Com nota) E FECHAR CAIXA ================= */
   function nomeForma(p){ if(!p || !p.formaId) return ''; if(String(p.formaId).startsWith('__')) return ''; const f=(config.formasPagamento||[]).find(x=>x.id===p.formaId); return (f&&f.nome) || p.tipoNome || p.tipo || ''; }
   // Pix de pessoa física (PF) não obriga nota fiscal; Pix PJ (ou sem PF/PJ marcado) e cartão obrigam.
-  function pagouPixOuCartao(r){ return (r.pagamentos||[]).some(p=>{ if((Number(p.valor)||0)<=0) return false; const n=nomeForma(p); if(/pix/i.test(n)) return p.pessoa!=='PF'; return /cart|d[eé]bito|cr[eé]dito|maquin/i.test(n); }); }
+  function formaDoPag(p){ return (p && p.formaId && (config.formasPagamento||[]).find(x=>x.id===p.formaId)) || null; }
+  /* LINK ECO (ou qualquer forma marcada "exige nota" em Configurações › Pagamento): nota fiscal obrigatória no fechamento. */
+  function formaExigeNota(p){ const f=formaDoPag(p); return !!(f && (f.exigeNota===true || /link\s*eco/i.test(f.nome||''))); }
+  function pagouPixOuCartao(r){ return (r.pagamentos||[]).some(p=>{ if((Number(p.valor)||0)<=0) return false; if(formaExigeNota(p)) return true; const n=nomeForma(p); if(/pix/i.test(n)) return p.pessoa!=='PF'; return /cart|d[eé]bito|cr[eé]dito|maquin/i.test(n); }); }
+  /* Empresa que emite a nota quando a forma pede (LINK ECO → VILAÇA ECOMMERCE). */
+  function lojaNotaDaForma(r){
+    for(const p of (r.pagamentos||[])){
+      if((Number(p.valor)||0)<=0) continue;
+      const f = formaDoPag(p); if(!f) continue;
+      if(f.lojaNotaId) return f.lojaNotaId;
+      if(/link\s*eco/i.test(f.nome||'')){ const ec=(config.lojas||[]).find(l=> String(l.abreviacao||'').toUpperCase()==='EC' || /e-?commerce/i.test(l.nome||'')); if(ec) return ec.id; }
+    }
+    return '';
+  }
   function registrosFiscais(de, ate, lojaId){
     const dentro = s=> !!s && s>=de && s<=ate;
-    const v = vendas.filter(x=> x.status!=='cancelada' && dentro(x.data) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Venda', tabela:'vendas_pdv', reg:x }));
-    const o = caixaOrdens.filter(x=> x.status!=='cancelado' && x.status!=='rascunho' && dentro(x.data) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Pedido', tabela:'ordens_servico', reg:x }));
+    const noPeriodo = x=> dentro(x.data) || (x.pagamentos||[]).some(p=> p && dentro(p.data));   // pagamento incluído depois (pagar depois) entra no dia em que foi recebido
+    const v = vendas.filter(x=> x.status!=='cancelada' && noPeriodo(x) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Venda', tabela:'vendas_pdv', reg:x }));
+    const o = caixaOrdens.filter(x=> x.status!=='cancelado' && x.status!=='rascunho' && noPeriodo(x) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Pedido', tabela:'ordens_servico', reg:x }));
     return v.concat(o).sort((a,b)=> (b.reg.data||'').localeCompare(a.reg.data||''));
   }
   const viaDe = r => r.codigoVia || r.via || '—';
@@ -485,7 +499,7 @@ function mensagemConfiavel(ev){
     openModal(`<h3>Nota fiscal · ${escapeHtml(x.origem)} ${escapeHtml(viaDe(r))}</h3>
       <p class="muted">${fmtDate(r.data)} · ${fmtMoeda(r.valorTotal)} · ${escapeHtml(r.cliente||'')}</p>
       <div class="field" style="margin-top:12px;"><label for="nf_numero">Número da nota fiscal</label><input id="nf_numero" autocomplete="off" placeholder="Ex.: 12345" value="${escapeHtml(r.numeroNota||'')}"></div>
-      <div class="field"><label for="nf_loja">Empresa que emitiu</label><select id="nf_loja">${(config.lojas||[]).filter(l=>!l.interna).map(l=>`<option value="${l.id}" ${(r.lojaNotaId||r.lojaId)===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
+      <div class="field"><label for="nf_loja">Empresa que emitiu</label><select id="nf_loja">${(config.lojas||[]).filter(l=>!l.interna).map(l=>`<option value="${l.id}" ${(r.lojaNotaId||lojaNotaDaForma(r)||r.lojaId)===l.id?'selected':''}>${escapeHtml(l.nome)}</option>`).join('')}</select></div>
       <div class="modal-actions"><button class="btn btn-ghost" id="nf_cancel" type="button">Cancelar</button><button class="btn btn-accent" id="nf_ok" type="button">Registrar nota</button></div>`);
     document.getElementById('nf_cancel').addEventListener('click', closeModal);
     document.getElementById('nf_ok').addEventListener('click', async ()=>{
@@ -508,7 +522,7 @@ function mensagemConfiavel(ev){
     return gatewayCall({ op:'kvSet', table:'painel_ordens_kv', params:{ key: chaveFech(loja, dia), value: valor } });
   }
   async function abrirFecharCaixa(de, ate, lojaId){
-    const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+    const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (currentUser.nivel==='vendedora' && (currentUser.lojas||[]).includes(lojaId)));
     const umDia = de && de===ate && !!lojaId;
     const fech = umDia ? await lerFechamento(lojaId, de) : null;
     const fechado = !!(fech && fech.fechado);
@@ -531,7 +545,7 @@ function mensagemConfiavel(ev){
     else acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>`;
     openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):''}</h3>
       ${acao}
-      ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão sem nota</div>${emitir.map((x,i)=>linha(x,'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
+      ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão/LINK ECO sem nota</div>${emitir.map((x,i)=>linha(x,(x.reg.pagamentos||[]).some(formaExigeNota) ? 'LINK ECO: nota pela '+escapeHtml(nomeLojaCaixa(lojaNotaDaForma(x.reg))||'Ecommerce') : 'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="fc_fechar" type="button" data-fechar>Voltar</button>
@@ -612,8 +626,12 @@ function mensagemConfiavel(ev){
     const lojaNomeFiltro = lojaId ? nomeLojaCaixa(lojaId) : '';
 
     let contasPagasBase = caixaGastos.filter(g=> g.pago && dentroPeriodo(g.dataPagamento));
-    let vendasRecBase = vendas.filter(v=> dentroPeriodo(v.data) && valorRecebidoDe(v) > 0);
-    let osRecBase = caixaOrdens.filter(o=> dentroPeriodo(o.data) && valorRecebidoDe(o) > 0);
+    /* Caixa do dia = dinheiro que ENTROU no dia: cada pagamento conta na data em que foi recebido
+       (pagamento incluído depois numa via "pagar depois" entra no caixa do dia em que foi lançado). */
+    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (dentroPeriodo(p.data || v.data) ? (Number(p.valor)||0) : 0)), 0);
+    const pagoDepois = v=> (v.pagamentos||[]).some(p=> p && p.data && p.data!==v.data && dentroPeriodo(p.data));
+    let vendasRecBase = vendas.filter(v=> recebidoNoPeriodo(v) > 0);
+    let osRecBase = caixaOrdens.filter(o=> recebidoNoPeriodo(o) > 0);
     let aReceberVendasBase = vendas.filter(v=> v.status==='ativa' && dentroPeriodo(v.data) && valorAReceberDe(v) > 0);
     let aReceberOSBase = caixaOrdens.filter(o=> o.status!=='cancelado' && o.status!=='entregue' && o.status!=='rascunho' && dentroPeriodo(o.data) && valorAReceberDe(o) > 0);
     let canceladasVendasBase = vendas.filter(v=> v.status==='cancelada' && dentroPeriodo(dataDeTimestamp(v.canceladoEm)));
@@ -643,8 +661,8 @@ function mensagemConfiavel(ev){
 
     function metricasGrupo(g){
       const contasPagas = g.gastos.reduce((a,x)=>a+(Number(x.valor)||0),0);
-      const recVendas = g.vendasRec.reduce((a,x)=>a+valorRecebidoDe(x),0);
-      const recOS = g.osRec.reduce((a,x)=>a+valorRecebidoDe(x),0);
+      const recVendas = g.vendasRec.reduce((a,x)=>a+recebidoNoPeriodo(x),0);
+      const recOS = g.osRec.reduce((a,x)=>a+recebidoNoPeriodo(x),0);
       const saidaCanceladas = g.canceladasV.reduce((a,x)=>a+(Number(x.caixaSaidaCancelamento)||0),0) + g.canceladasO.reduce((a,x)=>a+(Number(x.caixaSaidaCancelamento)||0),0);
       const trocasDif = g.trocas.reduce((a,t)=>a+(Number(t.diferenca)||0),0);
       const saldo = recVendas + recOS + trocasDif - contasPagas - saidaCanceladas;
@@ -723,13 +741,13 @@ function mensagemConfiavel(ev){
     const selo = (txt, tipo)=> `<span class="selo selo-${tipo||'neutro'}">${escapeHtml(txt)}</span>`;
     if(tipos.includes('vendasRecebidas')){
       html += detalheSecao('Vendas recebidas', vendasRecBase, v=>`
-        <tr${v.status==='cancelada'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(v.data))}${celula('Loja', escapeHtml(v.loja))}${celula('Recebido', vEntrada(valorRecebidoDe(v)), 'r')}</tr>
-      `, ['Cliente','Data','Loja','Recebido'], { icone:'carrinho', total: vEntrada(soma(vendasRecBase, valorRecebidoDe)) });
+        <tr${v.status==='cancelada'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(v.data)+(pagoDepois(v)?' '+selo('Pago depois','info'):''))}${celula('Loja', escapeHtml(v.loja))}${celula('Recebido', vEntrada(recebidoNoPeriodo(v)), 'r')}</tr>
+      `, ['Cliente','Data','Loja','Recebido'], { icone:'carrinho', total: vEntrada(soma(vendasRecBase, recebidoNoPeriodo)) });
     }
     if(tipos.includes('osRecebidas')){
       html += detalheSecao('O.S. recebidas', osRecBase, o=>`
-        <tr${o.status==='cancelado'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(o.data))}${celula('Loja', escapeHtml(nomeLojaCaixa(o.lojaId)))}${celula('Recebido', vEntrada(valorRecebidoDe(o)), 'r')}</tr>
-      `, ['Cliente','Data','Loja','Recebido'], { icone:'recibo', total: vEntrada(soma(osRecBase, valorRecebidoDe)) });
+        <tr${o.status==='cancelado'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(o.data)+(pagoDepois(o)?' '+selo('Pago depois','info'):''))}${celula('Loja', escapeHtml(nomeLojaCaixa(o.lojaId)))}${celula('Recebido', vEntrada(recebidoNoPeriodo(o)), 'r')}</tr>
+      `, ['Cliente','Data','Loja','Recebido'], { icone:'recibo', total: vEntrada(soma(osRecBase, recebidoNoPeriodo)) });
     }
     if(tipos.includes('contasPagas')){
       html += detalheSecao('Contas pagas', contasPagasBase, g=>`

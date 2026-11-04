@@ -32,7 +32,7 @@
   function ehCartao(formaId, config){
     if(!formaId || String(formaId).indexOf('__')===0) return false;
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
-    return !!(f && /cart[aã]o|cr[eé]dito|d[eé]bito/i.test(f.nome||''));
+    return !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));   // LINK ECO = cartão (04/11)
   }
   /* Formas "a prazo": cartão e, quando o módulo liga CondPag.fiadoPrazo, o Fiado (Felipe, 02/nov). */
   function ehPrazo(formaId, config){
@@ -435,6 +435,11 @@ tr.linha-cancelada .cli-nome{text-decoration:line-through;color:var(--ink-faint)
 .modal .section-label{margin-top:18px;}
 .modal-actions{display:flex;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line);flex-wrap:wrap;justify-content:flex-end;}
 .modal-largo{max-width:900px;}
+/* 04/11 (Felipe): editar a venda abre a VIA DE VERDADE em tela cheia (não um popup); os botões ficam presos embaixo */
+#modalOverlay.tela-cheia{padding:0;align-items:stretch;background:var(--page,#f4f6f8) !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;overflow-y:auto;}
+#modalOverlay.tela-cheia #modalBox{max-width:1100px;width:100%;max-height:none;min-height:100%;border:none;border-radius:0;margin:0 auto;padding:22px 28px 0;box-shadow:none;overflow:visible;animation:none;}
+#modalOverlay.tela-cheia #modalBox > .modal-actions:last-child{position:sticky;bottom:0;background:var(--surface);margin:24px -28px 0;padding:14px 28px;box-shadow:0 -8px 18px -14px rgba(0,0,0,.35);z-index:4;}
+@media (max-width:640px){ #modalOverlay.tela-cheia #modalBox{padding:16px 14px 0;} #modalOverlay.tela-cheia #modalBox > .modal-actions:last-child{margin:20px -14px 0;padding:12px 14px;} }
 .orc-aberto{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:8px;}
 .orc-aberto-topo{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;}
 .orc-aberto-acoes{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;}
@@ -761,11 +766,13 @@ function showToast(msg){
 }
 function closeModal(){
   if(window.__itensHolderPrev){ window.__itensHolder = window.__itensHolderPrev; window.__itensHolderPrev = null; }
-  document.getElementById('modalOverlay').classList.remove('show');
+  document.getElementById('modalOverlay').classList.remove('show','tela-cheia');
   document.getElementById('modalBox').innerHTML='';
   if(history.state && history.state.modalAberto) history.back();
 }
+function telaCheiaModal(){ const ov = document.getElementById('modalOverlay'); ov.classList.add('tela-cheia'); ov.scrollTop = 0; }   // 04/11: edição da via em tela cheia
 function openModal(html){
+  document.getElementById('modalOverlay').classList.remove('tela-cheia');
   document.getElementById('modalBox').classList.remove('modal-largo');
   document.getElementById('modalBox').innerHTML = html;
   document.getElementById('modalOverlay').classList.add('show');
@@ -1860,6 +1867,12 @@ function perguntarPixTipo(){
 }
 
 
+/* 04/11 (Felipe): reserva aceita joia com código iniciado em 9 e também RELÓGIO (nome "RELÓGIO…" ou tipo de venda relógio). */
+function produtoReservavel(p){
+  if(!p) return false;
+  const nome = String(p.nome||'').trim();
+  return nome.startsWith('9') || /REL[OÓ]GIO/i.test(nome) || p.tipoVenda==='relogio';
+}
 function mountPagamentos(container, holder, getLojaVendaId){
   CondPag.fiadoPrazo = true;   // Fiado segue o preço do cartão (Felipe, 02/nov)
   const _onCred = ()=>{ holder.__abatPerguntado = false; if(container.isConnected && container.querySelector('#pagRows')) drawRows(); else document.removeEventListener('credito-cliente', _onCred); };
@@ -2253,7 +2266,7 @@ function recalcularValorAjustado(it){
   }
   function drawRows(){
     const wrap = container.querySelector('#itensRows');
-    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false).filter(p=> !MODO_RESERVA || String(p.nome||'').trim().startsWith('9'));
+    const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false).filter(p=> !MODO_RESERVA || produtoReservavel(p));
     const lojaAtual = getLojaId();
     if(vendaveis.length===0){
       wrap.innerHTML = `<div class="estado-vazio">${ic('pacote',32)}<b>Nenhum produto cadastrado</b>Cadastre os produtos em Configurações › Cadastro › Produto antes de lançar uma venda.</div>`;
@@ -2861,8 +2874,8 @@ function tabsForLevel(){
   const t = [
     { id:'vendas', label:'Lançadas', icon:'📋' },
   ];
-  // Relatório fiscal: só diretoria e gerente
-  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')){
+  // Relatório fiscal: diretoria, gerente e vendedora (04/11: vendedora = gerente; o servidor só manda as lojas dela)
+  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || currentUser.nivel==='vendedora')){
     t.push({ id:'semnota', label:'Sem nota', icon:'⚠️' });
     t.push({ id:'comnota', label:'Com nota', icon:'🧾' });
     t.push({ id:'interloja', label:'Entre lojas', icon:'🔄' });
@@ -3440,7 +3453,7 @@ function balaoCancelarPreenchimento(main, aoCancelar){
 
 /* ============================================================
    RESERVAR (card próprio: vendas.html?modo=reserva)
-   Lançada como venda, sem caixa e sem pagamento: só reserva a joia (nome iniciado em 9)
+   Lançada como venda, sem caixa e sem pagamento: só reserva a joia (nome iniciado em 9) ou o RELÓGIO (04/11)
    no estoque até o prazo (Configurações › Cadastro › Reserva). Dentro do prazo vira venda
    pelo card Vendas (aproveita cliente e itens). Vencida: só consulta.
    ============================================================ */
@@ -3530,11 +3543,11 @@ async function salvarReservaDoForm(tempItensHolder){
   const itensValidos = tempItensHolder.itens.filter(it=>it.produto);
   if(!vendedora){ showToast('Escolha a vendedora.'); return; }
   if(!cliente){ showToast('Escolha o cliente da reserva.'); return; }
-  if(itensValidos.length===0){ showToast('Adicione pelo menos uma joia (código 9).'); return; }
+  if(itensValidos.length===0){ showToast('Adicione pelo menos uma joia (código 9) ou um relógio.'); return; }
   const semEstoque = itensValidos.filter(it=>!it.produtoEstoqueId);
-  if(semEstoque.length){ showToast('Reserva só aceita joias do estoque (nome iniciado em 9). Remova: ' + semEstoque.map(i=>i.produto).join(', ')); return; }
-  const fora = itensValidos.filter(it=>!String(it.produto||'').trim().startsWith('9'));
-  if(fora.length){ showToast('Só joias com código iniciado em 9 podem ser reservadas: ' + fora.map(i=>i.produto).join(', ')); return; }
+  if(semEstoque.length){ showToast('Reserva só aceita peças do estoque (joias código 9 e relógios). Remova: ' + semEstoque.map(i=>i.produto).join(', ')); return; }
+  const fora = itensValidos.filter(it=>{ const p=(produtosEstoque||[]).find(x=>x.id===it.produtoEstoqueId); return !produtoReservavel(p || { nome: it.produto }); });
+  if(fora.length){ showToast('Só joias com código iniciado em 9 ou relógios podem ser reservados: ' + fora.map(i=>i.produto).join(', ')); return; }
   const itens = itensValidos.map(it=>{ const c={...it}; delete c._modo; return c; });
   const subtotal = itens.reduce((a,it)=>a+(Number(it.quantidade)||1)*(Number(it.valorUnitario)||0),0);
   const loja = (config.lojas||[]).find(l=>l.id===lojaId);
@@ -3600,7 +3613,7 @@ function renderReservas(main){
     <div class="page-head">
       <div>
         <h1 class="page-title">Reservas</h1>
-        <p class="page-sub">Joias reservadas (código 9). Não movimenta caixa: só segura a peça no estoque por ${__reservaPrazoDias} dia(s).</p>
+        <p class="page-sub">Joias (código 9) e relógios reservados. Não movimenta caixa: só segura a peça no estoque por ${__reservaPrazoDias} dia(s).</p>
       </div>
       <div class="page-acoes"><button class="btn btn-accent btn-lg" id="btnNovaReserva">${ic('mais',18)} Nova reserva</button></div>
     </div>
@@ -3678,7 +3691,7 @@ function renderNovaVenda(main){
       <div>
         <a href="#" id="linkVoltarVendas" class="link-voltar">${ic('voltar',14)} ${MODO_RESERVA?'Voltar para as reservas':'Voltar para a lista de vendas'}</a>
         <h1 class="page-title">${MODO_RESERVA ? (__reservaEditando ? 'Editar reserva '+escapeHtml(__reservaEditando.codigoVia||'') : 'Nova reserva') : 'Nova venda'}</h1>
-        <p class="page-sub">${MODO_RESERVA ? 'Escolha o cliente e as joias (código 9). Não tem pagamento nem caixa: a peça fica reservada por '+__reservaPrazoDias+' dia(s).' : 'Escolha o cliente, passe os itens e lance o pagamento.'}</p>
+        <p class="page-sub">${MODO_RESERVA ? 'Escolha o cliente e as joias (código 9) ou relógios. Não tem pagamento nem caixa: a peça fica reservada por '+__reservaPrazoDias+' dia(s).' : 'Escolha o cliente, passe os itens e lance o pagamento.'}</p>
       </div>
       ${MODO_RESERVA?'':'<div class="atalhos" aria-hidden="true"><kbd>F4</kbd> cliente <kbd>Enter</kbd> adiciona item <kbd>F8</kbd> pagamento</div>'}
     </div>
@@ -4010,9 +4023,16 @@ function renderNovaVenda(main){
 function ehGestaoLoja(){
   return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
 }
+/** 04/11 (Felipe): vendedora = gerente, mas só nas lojas dela (as do cadastro + a loja extra liberada na sessão). */
+function ehVendedoraDaLoja(lojaId){
+  if(!currentUser || currentUser.nivel!=='vendedora' || !lojaId) return false;
+  const minhas = (currentUser.lojas||[]).slice(); if(currentUser.lojaExtra && currentUser.lojaExtra.id) minhas.push(currentUser.lojaExtra.id);
+  return minhas.includes(lojaId);
+}
 function podeEditarRegistro(reg){
   if(!currentUser || !reg) return false;
   if(ehGestaoLoja()) return true;
+  if(ehVendedoraDaLoja(reg.lojaId || reg.lojaOrigemId)) return true;
   const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
   if(!lojaAtiva) return false;
   const lojaDoReg = reg.lojaId || reg.lojaOrigemId || null;
@@ -4027,12 +4047,12 @@ function motivoSemEdicao(reg){
   return 'Este registro é da loja ' + (l ? l.nome : 'outra') + ' — você pode visualizar e imprimir, mas não editar.';
 }
 
-function podeCancelarVenda(){
-  return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+function podeCancelarVenda(venda){
+  return !!(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (venda ? ehVendedoraDaLoja(venda.lojaId) : (currentUser.nivel==='vendedora' && ehVendedoraDaLoja(window.__lojaAtual && window.__lojaAtual.id)))));
 }
 async function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
-  if((!podeCancelarVenda() || !podeEditarRegistro(venda)) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id); if(!a) return; __vendasLiberadas.add(venda.id); }
+  if((!podeCancelarVenda(venda) || !podeEditarRegistro(venda)) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id, venda.lojaId); if(!a) return; __vendasLiberadas.add(venda.id); }
   if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
   if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
   const recebido = valorRecebidoDe(venda);
@@ -4211,8 +4231,8 @@ async function caixaFechadoEm(lojaId, data){
 }
 /* Senha de gerente/diretoria libera a ação (fica no LOG). Quem já é gerente/diretoria passa direto (o servidor registra o que for gravado). */
 const __vendasLiberadas = new Set();
-async function autorizarGerencia(acao, resumo, registroId){
-  if(ehGestaoLoja()) return { nome: currentUser.nome, proprio: true };
+async function autorizarGerencia(acao, resumo, registroId, lojaId){
+  if(ehGestaoLoja() || ehVendedoraDaLoja(lojaId)) return { nome: currentUser.nome, proprio: true };
   if(!window.Autorizacao){ showToast('Recarregue a página (Ctrl+F5) para pedir a autorização.'); return null; }
   return Autorizacao.pedir({ sessao: __gatewaySenha, acao, modulo: 'Vendas', registroId, resumo, texto: resumo + '. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
 }
@@ -4220,8 +4240,8 @@ async function bloqueadoPorCaixaFechado(lojaId){
   const f = await caixaFechadoEm(lojaId, hoje());
   if(!f) return false;
   const msg = 'O caixa de hoje desta loja foi fechado por '+(f.por||'—');
-  if(ehGestaoLoja()) return !confirm(msg + '. Fazer esta alteração mesmo assim?');
-  const a = await autorizarGerencia('caixa_fechado', msg + ' — liberar esta alteração', lojaId);
+  if(ehGestaoLoja() || ehVendedoraDaLoja(lojaId)) return !confirm(msg + '. Fazer esta alteração mesmo assim?');
+  const a = await autorizarGerencia('caixa_fechado', msg + ' — liberar esta alteração', lojaId, lojaId);
   return !a;
 }
 function hoje(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -4283,7 +4303,7 @@ async function devolverEstoqueDoItem(venda, item, lojaEstoque){
 }
 function abrirDevolucaoItem(venda){
   if(!venda || venda.status==='cancelada') return;
-  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem registrar uma devolução.'); return; }
+  if(!podeCancelarVenda(venda)){ showToast('Só gerente ou diretoria podem registrar uma devolução (vendedora: só nas lojas dela).'); return; }
   const disponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado && !x.it.devolvido);
   if(disponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra devolução.'); return; }
   const lojaEstoqueDev = venda.estoqueLojaId || venda.lojaId;
@@ -4354,7 +4374,7 @@ function abrirDevolucaoItem(venda){
 
 function abrirTrocaVenda(venda){
   if(!venda || venda.status==='cancelada') return;
-  if(!podeCancelarVenda()){ showToast('Só gerente ou diretoria podem registrar uma troca.'); return; }
+  if(!podeCancelarVenda(venda)){ showToast('Só gerente ou diretoria podem registrar uma troca (vendedora: só nas lojas dela).'); return; }
   const itensDisponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado);
   if(itensDisponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra troca (todos já foram trocados).'); return; }
   const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
@@ -4838,7 +4858,7 @@ function abrirNotaVenda(v){
    ============================================================ */
 async function abrirEditarVenda(v){
   if(!v || v.status==='cancelada') return;
-  if(!podeCancelarVenda() && !__vendasLiberadas.has(v.id)){ const a = await autorizarGerencia('editar_venda', 'Editar a venda '+(v.codigoVia||'')+' de '+(v.cliente||''), v.id); if(!a) return; __vendasLiberadas.add(v.id); }
+  if(!podeCancelarVenda(v) && !__vendasLiberadas.has(v.id)){ const a = await autorizarGerencia('editar_venda', 'Editar a venda '+(v.codigoVia||'')+' de '+(v.cliente||''), v.id, v.lojaId); if(!a) return; __vendasLiberadas.add(v.id); }
   openModal(`
     <h3>Editar venda</h3>
     <p class="muted">${escapeHtml(v.cliente||'cliente não identificado')} · ${fmtDate(v.data)}</p>
@@ -4863,7 +4883,7 @@ async function abrirEditarVenda(v){
     `);
     document.getElementById('ev_fechar').addEventListener('click', closeModal);
     document.getElementById('ev_editarMesmo').addEventListener('click', async ()=>{
-      const a = await autorizarGerencia('editar_venda_com_nota', 'Editar a venda '+(v.codigoVia||'')+' com nota já emitida', v.id);
+      const a = await autorizarGerencia('editar_venda_com_nota', 'Editar a venda '+(v.codigoVia||'')+' com nota já emitida', v.id, v.lojaId);
       if(!a) return;
       __vendasLiberadas.add(v.id); closeModal(); abrirFormularioEdicaoVenda(v, true);
     });
@@ -4901,9 +4921,10 @@ function abrirFormularioEdicaoRestrita(v, avisoExtra){
       <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
     </div>
   `);
+  telaCheiaModal();
   wireTelefoneMask('ed');
   { const bl = document.getElementById('ed_liberarTudo'); if(bl) bl.addEventListener('click', async ()=>{
-    const a = await autorizarGerencia('editar_venda_outro_dia', 'Editar itens e pagamento da venda '+(v.codigoVia||'')+' de '+fmtDate(v.data), v.id);
+    const a = await autorizarGerencia('editar_venda_outro_dia', 'Editar itens e pagamento da venda '+(v.codigoVia||'')+' de '+fmtDate(v.data), v.id, v.lojaId);
     if(!a) return; closeModal(); abrirFormularioEdicaoCompleta(v);
   }); }
   document.getElementById('ed_fechar').addEventListener('click', closeModal);
@@ -4960,6 +4981,7 @@ function abrirFormularioEdicaoCompleta(v){
       <button class="btn btn-accent" id="ed_salvar">Salvar alterações</button>
     </div>
   `);
+  telaCheiaModal();
   document.getElementById('modalBox').classList.add('modal-largo');
   const itensHolder = { itens: (v.itens||[]).map(it=>({ ...it, _modo:'ok', id:it.id||uid('it'), produto:it.produto, metal:it.metal, quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'' })) };
   const itensApiEd = mountItens(document.getElementById('ed_itensContainer'), itensHolder, ()=> document.getElementById('ed_loja').value);

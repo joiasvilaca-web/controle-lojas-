@@ -2,6 +2,7 @@
  * Regra (Felipe, 01/nov):
  *  - À vista (Dinheiro, PIX, Ouro, Fiado, Crédito, Cashback): 1x, valor após o desconto.
  *  - Cartão: sempre 20% acima do à vista (mesmo em 1x), em até 12x sem acréscimo.
+ *    LINK ECO (link de pagamento do e-commerce, 04/nov) conta como cartão; a nota sai pela Ecommerce.
  *  - No pagamento com cartão, `valor` é o que passa na maquininha (com os 20%);
  *    `valorBase` é a parte do à vista que ele quita (valor / 1,2). O valorTotal da via
  *    continua sendo o à vista — saldo/"a receber" é conferido pela base.
@@ -15,7 +16,8 @@
   function ehCartao(formaId, config){
     if(!formaId || String(formaId).indexOf('__')===0) return false;
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
-    return !!(f && /cart[aã]o|cr[eé]dito|d[eé]bito/i.test(f.nome||''));
+    /* "Funciona como cartão" marcado na forma (ex.: LINK ECO: +20%, até 12x) ou nome de cartão */
+    return !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));
   }
   /* Quanto do valor à vista este pagamento quita. */
   function base(p, config){

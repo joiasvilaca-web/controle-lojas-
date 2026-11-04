@@ -400,9 +400,35 @@ Banco de teste:
 - Mesmas tabelas, funções e gatilhos do real + 15 edge functions: `db-gateway`, `trocar-usuario`, `autorizar-gestor`, `entrar-como`, `meus-dados`, `termos-uso`, `funcionario-acesso` (link de convite aponta para o treino), `estoque-api`, `caixa-resumo` (sem WhatsApp: devolve `desligado`), `retirada-terceiro`, `reservas-api`, `agenda-tarefas`, `lancamentos-api`, `inventario-api`, `insumos-api`.
 - NÃO publicadas no teste de propósito (falam com o exterior ou são de outros apps): `send-email-gmail`, `upload-foto-drive`, `backup-*`, `atendimento-*`, `ia-chat`, `gemini-agente`, `reforma-api`, `site-*`, `crm-api`, `cotacoes-mercado`, `bi4cia-*`, `confirmar-leitura-*`. Chamar uma delas no teste dá 404 (inofensivo).
 - Dados: cópia ANONIMIZADA (clientes com nome, telefone e CPF inventados; produtos e estoque reais; configuração com as lojas + a loja `loja_tr` TREINAMENTO). A função `treino-export` no REAL só entrega dado já anonimizado, protegida por chave (no real fica só o hash); o teste puxa por pg_net.
-- Logins de treino: `TREINO GERENTE`, `TREINO VENDEDORA 1`, `TREINO VENDEDORA 2` (loja TREINAMENTO) e `TREINO OFICINA` (loja OFICINA). A senha combinada com o Felipe não fica neste arquivo (repo público). `FELIPE` e `PHA` estão em primeiro acesso no teste (cada um escolhe a sua senha lá).
+- Logins de treino: `TREINO GERENTE`, `TREINO VENDEDORA 1`, `TREINO VENDEDORA 2` (loja TREINAMENTO) e `TREINO OFICINA` (loja OFICINA). A senha combinada com o Felipe não fica neste arquivo (repo público). O primeiro acesso com senha padrão foi desligado (seção 18): quem estiver sem senha no teste recebe a senha inicial da diretoria no DP.
 - Mudou função ou tabela no REAL? Repetir no TESTE (mesmo código; a única diferença é o `APP_BASE_URL` da `funcionario-acesso`).
 
 Manutenção:
 - Projeto grátis pausa após ~7 dias sem uso. O pg_cron do REAL tem o job `treino-mantem-acordado` (todo dia 09:23 UTC) que dá um toque no `db-gateway` do teste. Se pausar mesmo assim: `restore_project` pelo conector "Supabase Teste".
 - O conector MCP "Supabase Teste" é separado do "Supabase" (real): uma organização por conector.
+
+## 18. Versão nova em TESTE (branch `teste`, 4/nov/2026)
+
+Fluxo: mudança grande vai primeiro para o branch `teste` → `teste.vilaca.app` (banco de TESTE). `treino.vilaca.app` segue o `main` (mesmo banco de teste). Só depois do OK do Felipe: passos do REAL abaixo + merge no `main`.
+- `teste.vilaca.app` está no projeto como domínio de produção (sem branch), então é apontado por ALIAS para o último deploy do branch `teste` (`assign_alias` do conector Vercel). A cada envio ao branch `teste`: esperar o deploy ficar READY e refazer o alias. Todo deploy do `main` devolve o domínio ao `main`. Para prender de vez ao branch é no painel da Vercel (Settings › Domains › teste.vilaca.app › Git Branch = `teste`), que precisa do login do Felipe.
+
+O que entrou (pedido do Felipe, 04/11):
+- LINK ECO: forma de pagamento que funciona como cartão (+20%, até 12x; `cartao:true`) e exige NF no fechamento do caixa (`exigeNota:true`), com a nota pela VILAÇA ECOMMERCE (`lojaNotaId`). Config › Pagamento tem o botão "Adicionar LINK ECO" e essas opções por forma.
+- Vendedora = gerente, só nas lojas dela (no DP continua vendo só o dela: `soProprioDP`). O padrão está em `permissoesPadrao` (index.html e dp.html — manter as duas cópias iguais). Quem tem `permissoes` gravadas segue o gravado: nos dados, a função Vendedora precisa ficar igual à Gerente (DP › Funções).
+- Editar venda/pedido abre a via em tela cheia (`#modalOverlay.tela-cheia`), sem popup; salva no fim.
+- Reserva aceita relógio (`produtoReservavel` no vendas.html; `reservas-api`).
+- Oficina lê com o leitor as vias de JV/Vilaça: o shell manda a oficina direto para o Pedido; `buscarPorCodigoVia` não filtra loja para a oficina; botão RECEBIDO também em 'aguardando' (Insumos).
+- Senha: acabou o "primeiro acesso 123456". A diretoria cria a senha inicial ao criar o acesso (DP); quem não tem senha recebe `semSenha` no login. O Termo de Uso segue obrigatório em todo login até ser aceito (`exigirTermos`).
+- Vendedora e gerente mudam qualquer status e editam (painel-ordens `statusPermitidos`).
+- Via "pagar depois": dá para incluir pagamento na edição; ele entra no caixa do dia em que foi feito (o caixa conta recebimento pela data do pagamento: `recebidoNoPeriodo`).
+- Ideias aprovadas: Kanban de pedidos (Lista/Quadro; arrastar muda o status), busca geral no topo (botão ou tecla "/", op `buscaGeral`), Dashboard › "Custo e margem" (só diretoria), login e sessões gravados de forma atômica.
+
+Servidor (banco de TESTE):
+- Funções SQL `cfg_sessao_abrir`, `cfg_login_falhou`, `cfg_sessao_fechar`, `cfg_sessao_loja_extra`, `cfg_usuario_patch`, `cfg_salvar`, `cfg_set_chave` (+ `_agora_ms`, `_cfg_user_idx`, `_sessoes_vivas`): SECURITY DEFINER, execução só para service_role. Gravam só o pedaço que mudou do `gestao_config`, com trava de linha — login, logout e salvar configuração não apagam mais a sessão de outra pessoa. Foram criadas por SQL direto (não estão em migration): para levar ao real, copiar com `pg_get_functiondef`.
+- `db-gateway` v64 usa as `cfg_*`, tem `buscaGeral`, devolve `semSenha`, aceita `senhaInicial` em usuário novo e desliga `primeiroAcesso`. `termos-uso` e `entrar-como` gravam via `cfg_usuario_patch`. `agenda-tarefas`, `insumos-api`, `lancamentos-api`, `inventario-api`: vendedora = gerente nas lojas dela. `funcionario-acesso`: senha definida pela diretoria encerra o primeiro acesso antigo (ainda grava a configuração inteira; trocar por `cfg_usuario_patch` numa próxima).
+
+Para promover ao REAL (nesta ordem — servidor antes da tela):
+1. Criar as funções `cfg_*` no real (mesmo SQL do teste).
+2. Publicar no real as edge functions acima, mesmo código (a `funcionario-acesso` do real mantém `APP_BASE_URL = https://vilaca.app`).
+3. Merge `teste` → `main`.
+4. Dados do real: forma LINK ECO (botão em Config › Pagamento), função Vendedora = Gerente, senha inicial para quem ainda estava no primeiro acesso antigo (DP › Acesso).

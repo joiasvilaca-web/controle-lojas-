@@ -282,6 +282,32 @@
   .modal .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap;align-items:center;}
   .modal > .modal-actions:last-child{position:sticky;bottom:-24px;margin:20px -24px -24px;padding:14px 24px;background:var(--surface);border-top:1px solid var(--line);border-radius:0 0 16px 16px;z-index:4;}
   .modal-actions .espaco{flex:1;}
+  /* 04/11: QUADRO (kanban) dos pedidos — uma coluna por status; arrastar o cartão muda o status */
+  .modo-os{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--surface);}
+  .modo-os button{border:none;background:transparent;color:var(--ink-soft);font:600 13px/1 inherit;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  .modo-os button.ativo{background:var(--primary-soft,#e8f0f6);color:var(--primary,#1f5f7a);}
+  .quadro-os{display:flex;gap:12px;overflow-x:auto;padding:4px 2px 14px;align-items:flex-start;scroll-snap-type:x proximity;}
+  .quadro-col{flex:0 0 260px;background:var(--surface-2,#f3f5f7);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;max-height:calc(100vh - 230px);scroll-snap-align:start;}
+  .quadro-col.alvo{outline:2px dashed var(--primary,#1f5f7a);outline-offset:-4px;background:var(--primary-soft,#e8f0f6);}
+  .quadro-col-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;font-weight:700;font-size:12.5px;letter-spacing:.04em;border-bottom:1px solid var(--line);}
+  .quadro-col-head .qtd{font-weight:700;font-size:12px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:2px 8px;}
+  .quadro-col-body{padding:8px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;min-height:60px;}
+  .quadro-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font-size:13px;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .quadro-card:hover{border-color:var(--line-strong,#c6ced6);}
+  .quadro-card.arrastando{opacity:.45;}
+  .quadro-card.travado{cursor:pointer;}
+  .quadro-card .qc-top{display:flex;justify-content:space-between;gap:6px;align-items:center;margin-bottom:3px;}
+  .quadro-card .qc-via{font-family:var(--mono,monospace);font-weight:700;font-size:12.5px;}
+  .quadro-card .qc-cli{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .quadro-card .qc-sub{color:var(--muted);font-size:12px;margin-top:2px;}
+  .quadro-card .qc-atraso{color:var(--danger);font-weight:700;}
+  .quadro-card select{width:100%;margin-top:7px;min-height:30px;font-size:12px;}
+  .quadro-vazio{color:var(--muted);font-size:12px;text-align:center;padding:10px 4px;}
+  /* 04/11 (Felipe): editar a via abre a VIA DE VERDADE em tela cheia (não um popup); os botões ficam presos embaixo */
+  #modalOverlay.tela-cheia{padding:0;align-items:stretch;background:var(--page,#f4f6f8) !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}
+  #modalOverlay.tela-cheia #modalBox{max-width:1100px;width:100%;max-height:none;min-height:100%;border:none;border-radius:0;margin:0 auto;padding:22px 28px 0;box-shadow:none;overflow:visible;animation:none;}
+  #modalOverlay.tela-cheia #modalBox > .modal-actions:last-child{position:sticky;bottom:0;margin:24px -28px 0;padding:14px 28px;border-radius:0;box-shadow:0 -8px 18px -14px rgba(0,0,0,.35);}
+  @media (max-width:640px){ #modalOverlay.tela-cheia #modalBox{padding:16px 14px 0;} #modalOverlay.tela-cheia #modalBox > .modal-actions:last-child{margin:20px -14px 0;padding:12px 14px;} }
   .modal-secao{border-top:1px solid var(--line);margin-top:20px;padding-top:18px;}
   .resumo-ordem{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:13px;color:var(--ink-soft);margin:-6px 0 14px;}
   .modal-acoes-topo{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
@@ -622,14 +648,24 @@ const STATUS_OCUPA_VAGA = ['aguardando','enviado_fabrica','em_producao','pendenc
 /* Nomes (sempre em MAIÚSCULAS). As chaves gravadas NÃO mudam: aguardando = APROVADO, oficina_pronto = PRODUZIDO. */
 const STATUS_ORDEM = ['rascunho','aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto','pronto','entregue','cancelado'];
 const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'PRODUZIDO', pronto:'PRONTO', entregue:'ENTREGUE', cancelado:'CANCELADO' };
-/* Quem pode colocar cada status: Oficina → EM PRODUÇÃO / PENDÊNCIA / PRODUZIDO; Vendedora → APROVADO / ENVIADO P/ FÁBRICA / PRONTO / ENTREGUE / CANCELADO; Gerente e Diretoria → todos. */
-const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'], vendedora:['rascunho','aguardando','enviado_fabrica','pronto','entregue','cancelado'] };
+/* Quem pode colocar cada status: Oficina → EM PRODUÇÃO / PENDÊNCIA / PRODUZIDO; Vendedora, Gerente e Diretoria → todos
+   (04/11, Felipe: vendedora = gerente — muda todos os status e edita as vias das lojas dela). */
+const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'] };
 function statusPermitidos(){
   const n = currentUser && currentUser.nivel;
-  if(n==='diretoria' || n==='gerente') return STATUS_ORDEM;
+  if(n==='diretoria' || n==='gerente' || n==='vendedora') return STATUS_ORDEM;
   return STATUS_POR_NIVEL[n] || [];
 }
 function podeColocarStatus(st){ return statusPermitidos().includes(st); }
+/** 04/11: Lista ou Quadro (kanban) — lembrado neste aparelho. */
+function modoListaOS(){ try{ return localStorage.getItem('vilaca_modo_os')==='quadro' ? 'quadro' : 'lista'; }catch(e){ return 'lista'; } }
+function definirModoListaOS(m){ try{ localStorage.setItem('vilaca_modo_os', m==='quadro'?'quadro':'lista'); }catch(e){} }
+document.addEventListener('click', e=>{
+  const b = e.target.closest && e.target.closest('[data-modo-os]'); if(!b) return;
+  definirModoListaOS(b.dataset.modoOs);
+  document.querySelectorAll('[data-modo-os]').forEach(x=> x.classList.toggle('ativo', x===b));
+  if(typeof renderView==='function') renderView();
+});
 /** A Oficina só mexe na via depois que a loja enviou para a fábrica e enquanto ela está lá. */
 const STATUS_FABRICA_OFICINA = ['enviado_fabrica','em_producao','pendencia','oficina_pronto'];
 /** <option>s do status: os que o perfil não pode colocar ficam desabilitados (o atual sempre aparece). */
@@ -851,13 +887,14 @@ function serviceColor(id){
 }
 let modalOnClose = null;
 function closeModal(){
-  document.getElementById('modalOverlay').classList.remove('show');
+  document.getElementById('modalOverlay').classList.remove('show','tela-cheia');
   document.getElementById('modalBox').innerHTML='';
   if(history.state && history.state.modalAberto) history.back();
   if(modalOnClose){ const cb = modalOnClose; modalOnClose = null; cb(); }
 }
 function openModal(html){
   document.getElementById('modalBox').innerHTML = html;
+  document.getElementById('modalOverlay').classList.remove('tela-cheia');   // só a edição da via liga a tela cheia (depois de abrir)
   document.getElementById('modalOverlay').classList.add('show');
   history.pushState({ modalAberto:true }, '');
 }
@@ -1289,8 +1326,14 @@ async function saveOrders(){
      tinha sido recebido). Estoque: libera a reserva das peças do catálogo e, se o
      pedido já tinha baixado, pergunta se devolve (estoqueAoCancelarOuExcluir).
    ============================================================ */
-function podeCancelarOrdem(){
-  return currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+/** 04/11: vendedora tem os poderes da gerente, mas só nas lojas dela (as do cadastro + a loja extra liberada na sessão). */
+function ehVendedoraDaLoja(lojaId){
+  if(!currentUser || currentUser.nivel!=='vendedora' || !lojaId) return false;
+  const minhas = (currentUser.lojas||[]).slice(); if(currentUser.lojaExtra && currentUser.lojaExtra.id) minhas.push(currentUser.lojaExtra.id);
+  return minhas.includes(lojaId);
+}
+function podeCancelarOrdem(order){
+  return !!(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (order && ehVendedoraDaLoja(order.lojaId))));
 }
 async function reverterFiadoECreditoOrdem(order, rotulo){
   rotulo = rotulo || 'Cancelamento';
@@ -1359,8 +1402,8 @@ async function caixaFechadoEm(lojaId, data){
 }
 /* Senha de gerente/diretoria libera a ação (fica no LOG). Quem já é gerente/diretoria passa direto. */
 const __pedidosLiberados = new Set();
-async function autorizarGerencia(acao, resumo, registroId){
-  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')) return { nome: currentUser.nome, proprio: true };
+async function autorizarGerencia(acao, resumo, registroId, lojaId){
+  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || ehVendedoraDaLoja(lojaId))) return { nome: currentUser.nome, proprio: true };
   if(!window.Autorizacao){ showToast('Recarregue a página (Ctrl+F5) para pedir a autorização.'); return null; }
   return Autorizacao.pedir({ sessao: __gatewaySenha, acao, modulo: 'Pedidos', registroId, resumo, texto: resumo + '. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
 }
@@ -1368,8 +1411,8 @@ async function bloqueadoPorCaixaFechado(lojaId){
   const f = await caixaFechadoEm(lojaId, hojeStr());
   if(!f) return false;
   const msg = 'O caixa de hoje desta loja foi fechado por '+(f.por||'—');
-  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente')) return !confirm(msg + '. Fazer esta alteração mesmo assim?');
-  const a = await autorizarGerencia('caixa_fechado', msg + ' — liberar esta alteração', lojaId);
+  if(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || ehVendedoraDaLoja(lojaId))) return !confirm(msg + '. Fazer esta alteração mesmo assim?');
+  const a = await autorizarGerencia('caixa_fechado', msg + ' — liberar esta alteração', lojaId, lojaId);
   return !a;
 }
 function hojeStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -1448,7 +1491,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
 /** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
 async function abrirCancelarOrdem(order){
   if(!order || order.status==='cancelado') return;
-  if(!podeCancelarOrdem()){ const a = await autorizarGerencia('cancelar_pedido', 'Cancelar o pedido '+(order.via||'')+' de '+(order.cliente||''), order.id); if(!a) return; }
+  if(!podeCancelarOrdem(order)){ const a = await autorizarGerencia('cancelar_pedido', 'Cancelar o pedido '+(order.via||'')+' de '+(order.cliente||''), order.id, order.lojaId); if(!a) return; }
   if(await bloqueadoPorCaixaFechado(order.lojaId)) return;
   const recebido = valorRecebidoDe(order);
   openModal(`
@@ -1504,7 +1547,7 @@ async function excluirOrdemDefinitivo(order, motivo){
 }
 function abrirExcluirOrdem(order){
   if(!order) return;
-  if(!podeCancelarOrdem()){ showToast('Só gerente ou diretoria podem excluir uma O.S.'); return; }
+  if(!podeCancelarOrdem(order)){ showToast('Só gerente ou diretoria podem excluir uma O.S. (vendedora: só das lojas dela).'); return; }
   const recebido = valorRecebidoDe(order);
   const temCredito = order.status!=='cancelado' && Number(order.creditoUsado)>0;
   const temFiado = order.status!=='cancelado' && !!order.fiadoDebitoId;
@@ -2409,7 +2452,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   function draw(){
-    const agora = holder.momentoPagamento==='na_encomenda';
+    // 04/11 (Felipe): via "Pagar depois" pode receber pagamento na edição — entra no caixa do dia em que for lançado
+    const depoisComPag = holder.permitirPagarDepois===true && holder.momentoPagamento==='na_volta';
+    const agora = holder.momentoPagamento==='na_encomenda' || depoisComPag;
     const subtotal = calcTotalItens();
     const totalFinal = calcTotalFinal(subtotal);
     container.innerHTML = `
@@ -2457,6 +2502,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
         <!-- Nota fiscal -->
         
       </div>
+      ${depoisComPag ? `<div class="muted" style="margin:8px 0 4px;font-size:12.5px;">${ico('relogio',14)} <b>Pagar depois:</b> inclua abaixo o que o cliente pagar (tudo ou uma parte). Cada pagamento entra no caixa do dia em que for lançado.</div>` : ''}
       ${agora ? `
 
       <div id="pagRows"></div>
@@ -5147,6 +5193,7 @@ function ehGestaoLoja(){
 function podeEditarRegistro(reg){
   if(!currentUser || !reg) return false;
   if(ehGestaoLoja()) return true;
+  if(ehVendedoraDaLoja(reg.lojaId)) return true;   // 04/11: vendedora = gerente nas lojas dela
   const lojaAtiva = window.__lojaAtual ? window.__lojaAtual.id : null;
   if(!lojaAtiva) return false;
   return (reg.lojaId||null) === lojaAtiva;
@@ -5225,6 +5272,7 @@ function openEditModalCompleto(order, opts){
       ${somenteLeitura ? '' : '<button class="btn btn-accent" id="editSave">Salvar alterações</button>'}
     </div>
   `);
+  { const ovTc = document.getElementById('modalOverlay'); ovTc.classList.add('tela-cheia'); ovTc.scrollTop = 0; }   // 04/11: a via de verdade, em tela cheia
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
@@ -5240,6 +5288,7 @@ function openEditModalCompleto(order, opts){
     // pagamento antigo sem data fica com a data de criação da ordem (não vira "hoje" só porque a ordem foi editada)
     valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p, data: p.data || dataLocalDeMs(order.criadoEm)})),
     momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'', numeroNota: order.numeroNota||'',
+    permitirPagarDepois: true,   // 04/11: incluir pagamento numa via "Pagar depois"
     lojaSaidaId: order.lojaSaidaId||'', lojaPagamentoId: order.lojaPagamentoId||'',
     lojaNotaId: order.lojaNotaId||'', lojaBaixaEstoqueId: order.lojaBaixaEstoqueId||'',
     descTotalTipo: order.descTotalTipo||'nenhum', descTotalModo: order.descTotalModo||'percentual',
@@ -5544,6 +5593,10 @@ function renderPainel(main){
       <div>
         <h1 class="page-title">Pedidos lançados</h1>
         <p class="page-sub">Acompanhe e atualize cada pedido. Os entregues ficam ocultos — escolha “Entregue” no filtro de status para vê-los.</p>
+        <div class="modo-os" role="group" aria-label="Como mostrar os pedidos" style="margin-top:10px;">
+          <button type="button" data-modo-os="lista" class="${modoListaOS()==='lista'?'ativo':''}">${ico('lista',15)} Lista</button>
+          <button type="button" data-modo-os="quadro" class="${modoListaOS()==='quadro'?'ativo':''}">${ico('grade',15)} Quadro</button>
+        </div>
       </div>
       ${currentUser.nivel!=='oficina' ? `<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" id="btnEnviarFabrica">${ico('ferramenta')} ENVIAR PARA FÁBRICA</button>${podeColocarStatus('pronto') ? `<button class="btn btn-ghost" id="btnReceberFabrica">${ico('pacote')} RECEBER DA FÁBRICA</button>` : ''}<button class="btn btn-accent" id="btnNovoPedidoPainel">${ico('mais')} Novo pedido</button></div>` : ''}
     </div>
@@ -5626,7 +5679,120 @@ function renderPainel(main){
   const fSemPagamento = document.getElementById('filtroSemPagamento');
   const fHoje = document.getElementById('filtroHoje');
 
+  /* 04/11: troca de status usada pela lista (select) e pelo QUADRO (arrastar). desfazer() volta a tela se não deu certo. */
+  async function trocarStatusOrdem(ord, novo, desfazer){
+    desfazer = desfazer || (()=>renderTable());
+    const previous = ord.status;
+    if(novo===previous) return;
+    if(!podeColocarStatus(novo)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(novo) + '.'); desfazer(); return; }
+    if(novo === 'entregue'){
+      if(bloqueioSaldoEntrega(ord)){ desfazer(); return; }
+      promptRecebidoPor(async (nome)=>{
+        ord.status = 'entregue';
+        ord.recebidoPor = nome;
+        ord.recebidoEm = Date.now();
+        await estoqueAoEntregar(ord);
+        await saveOrders();
+        showToast('Ordem marcada como entregue para ' + nome + '.');
+        renderTable();
+      }, ()=>{ desfazer(); });
+      return;
+    }
+    if(novo === 'cancelado' && previous !== 'cancelado'){
+      if(!podeCancelarPorStatus()){ showToast('Seu perfil não pode cancelar uma O.S.'); desfazer(); return; }
+      const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
+      if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); desfazer(); return; }
+      if(await aplicarCancelamentoOrdem(ord, motivo) === false){ desfazer(); closeModal(); return; }
+      await saveOrders();
+      showToast('O.S. cancelada.');
+      renderTable();
+      return;
+    }
+    ord.status = novo;
+    sincronizarLocalPorStatus(ord);
+    await saveOrders();
+    // Pedido reativado (saiu de cancelado/rascunho): volta a reservar as peças
+    if((previous === 'cancelado' || previous === 'rascunho') && !ord.estoqueBaixadoEm){
+      const planoReativ = planoConsumoDaOrdem(ord);
+      if(planoReativ.itens.length){ ord.reservaLojaId = planoReativ.lojaId; await saveOrders(); await sincronizarReservasOrdem(ord, planoReativ); }
+    }
+    showToast('Status atualizado para "' + statusLabel(novo) + '". ' + (!STATUS_OCUPA_VAGA.includes(novo) ? 'Vaga liberada.' : ''));
+    renderTable();
+  }
+
+  /* 04/11: QUADRO — mesmos filtros de loja/serviço/local/data/busca; mostra tudo em andamento (ignora "Só gerados hoje"
+     e o filtro de status) e os entregues/cancelados dos últimos 3 dias. Arrastar o cartão para outra coluna muda o status. */
+  function renderQuadro(){
+    const wrap = document.getElementById('tabelaWrap');
+    const limite = Date.now() - 3*86400000;
+    let list = orders.filter(o=> o && (currentUser.nivel!=='oficina' || o.status!=='rascunho'));
+    if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
+    if(fLoja.value) list = list.filter(o=>o.lojaId===fLoja.value);
+    if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
+    if(fData.value) list = list.filter(o=>o.data===fData.value);
+    if(fBusca.value.trim()){
+      const q = fBusca.value.trim().toLowerCase(), qDig = onlyDigits(q);
+      list = list.filter(o=> (o.cliente||'').toLowerCase().includes(q) || String(o.via||'').toLowerCase().includes(q) || String(o.codigoVia||'').toLowerCase().includes(q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
+    }
+    if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
+    const fimRecente = o=> { const t = Number(o.recebidoEm || o.canceladoEm || o.atualizadoEm || o.criadoEm || 0); return t >= limite; };
+    const colunas = STATUS_ORDEM.filter(st=> st!=='rascunho' || list.some(o=>o.status==='rascunho'));
+    const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
+    const totalAReceber = list.filter(o=>o.status!=='cancelado').reduce((acc,o)=> acc + valorAReceberDe(o), 0);
+    document.getElementById('resumoValores').innerHTML = `<span><b>${list.filter(o=>!['entregue','cancelado'].includes(o.status)).length}</b> em andamento</span><span class="sep"></span><span class="ok">Recebido <b>${fmtMoeda(totalRecebido)}</b></span><span class="perigo">A receber <b>${fmtMoeda(totalAReceber)}</b></span>`;
+    const cartao = o=>{
+      const pode = podeEditarRegistro(o) || __pedidosLiberados.has(o.id);
+      const falta = valorAReceberDe(o);
+      const atraso = estaAtrasada(o);
+      return `<div class="quadro-card${pode?'':' travado'}" data-qid="${escapeHtml(o.id)}" ${pode?'draggable="true"':''} title="${pode?'Arraste para mudar o status · toque para abrir':'Toque para ver'}">
+        <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||o.via||'—')}</span>${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
+        <div class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}</div>
+        <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(o.data)}${atraso?' (atrasado)':''}</span>`:''}</div>
+        ${falta>0.009 && o.status!=='cancelado' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
+        ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho')}</select>` : ''}
+      </div>`;
+    };
+    wrap.innerHTML = `<div class="quadro-os" id="quadroOS">${colunas.map(st=>{
+      let doStatus = list.filter(o=>o.status===st);
+      if(st==='entregue' || st==='cancelado') doStatus = doStatus.filter(fimRecente);
+      doStatus.sort((a,b)=> String(a.data||'').localeCompare(String(b.data||'')) || (b.criadoEm||0)-(a.criadoEm||0));
+      return `<section class="quadro-col" data-qcol="${st}" aria-label="${escapeHtml(statusLabel(st))}">
+        <div class="quadro-col-head">${seloStatusHtml(st)}<span class="qtd">${doStatus.length}</span></div>
+        <div class="quadro-col-body">${doStatus.length ? doStatus.map(cartao).join('') : `<div class="quadro-vazio">${st==='entregue'||st==='cancelado'?'Últimos 3 dias':'Solte aqui'}</div>`}</div>
+      </section>`;
+    }).join('')}</div>`;
+    const quadro = document.getElementById('quadroOS');
+    let arrastandoId = null;
+    quadro.querySelectorAll('.quadro-card').forEach(c=>{
+      c.addEventListener('click', e=>{ if(e.target.closest('select')) return; const pode = !c.classList.contains('travado'); openEditModal(c.dataset.qid, !pode); });
+      c.addEventListener('dragstart', e=>{ arrastandoId = c.dataset.qid; c.classList.add('arrastando'); try{ e.dataTransfer.setData('text/plain', arrastandoId); e.dataTransfer.effectAllowed = 'move'; }catch(_){} });
+      c.addEventListener('dragend', ()=>{ c.classList.remove('arrastando'); quadro.querySelectorAll('.quadro-col.alvo').forEach(x=>x.classList.remove('alvo')); });
+    });
+    quadro.querySelectorAll('.quadro-col').forEach(col=>{
+      col.addEventListener('dragover', e=>{ if(!arrastandoId) return; e.preventDefault(); col.classList.add('alvo'); });
+      col.addEventListener('dragleave', e=>{ if(!col.contains(e.relatedTarget)) col.classList.remove('alvo'); });
+      col.addEventListener('drop', async e=>{
+        e.preventDefault(); col.classList.remove('alvo');
+        const id = arrastandoId || (e.dataTransfer && e.dataTransfer.getData('text/plain')); arrastandoId = null;
+        const ord = orders.find(o=>o.id===id); if(!ord) return;
+        await trocarStatusOrdem(ord, col.dataset.qcol, ()=> renderTable());
+      });
+    });
+    quadro.querySelectorAll('select[data-qstatus]').forEach(sel=>{
+      applyStatusClass(sel);
+      sel.addEventListener('click', e=> e.stopPropagation());
+      sel.addEventListener('change', async ()=>{
+        const ord = orders.find(o=>o.id===sel.dataset.qstatus); if(!ord) return;
+        const anterior = ord.status;
+        await trocarStatusOrdem(ord, sel.value, ()=>{ sel.value = anterior; applyStatusClass(sel); });
+      });
+    });
+  }
+
   function renderTable(){
+    // no Quadro, "status" e "só gerados hoje" não se aplicam (as colunas já são os status)
+    { const q = modoListaOS()==='quadro'; fStatus.style.display = q ? 'none' : ''; const lh = fHoje.closest('label'); if(lh) lh.style.display = q ? 'none' : ''; }
+    if(modoListaOS()==='quadro'){ renderProntosCard(); renderQuadro(); return; }
     renderProntosCard();
     let list = [...orders];
     if(currentUser.nivel==='oficina'){
@@ -5690,41 +5856,7 @@ function renderPainel(main){
       sel.addEventListener('change', async ()=>{
         const ord = orders.find(o=>o.id===sel.dataset.id);
         const previous = ord.status;
-        if(sel.value!==previous && !podeColocarStatus(sel.value)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(sel.value) + '.'); sel.value = previous; applyStatusClass(sel); return; }
-        if(sel.value === 'entregue'){
-          if(bloqueioSaldoEntrega(ord)){ sel.value = previous; applyStatusClass(sel); return; }
-          promptRecebidoPor(async (nome)=>{
-            ord.status = 'entregue';
-            ord.recebidoPor = nome;
-            ord.recebidoEm = Date.now();
-            await estoqueAoEntregar(ord);
-            await saveOrders();
-            showToast('Ordem marcada como entregue para ' + nome + '.');
-            renderTable();
-          }, ()=>{ sel.value = previous; applyStatusClass(sel); });
-          return;
-        }
-        if(sel.value === 'cancelado' && previous !== 'cancelado'){
-          if(!podeCancelarPorStatus()){ showToast('Seu perfil não pode cancelar uma O.S.'); sel.value = previous; applyStatusClass(sel); return; }
-          const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
-          if(!motivo){ showToast('Cancelamento não confirmado: motivo não informado.'); sel.value = previous; applyStatusClass(sel); return; }
-          if(await aplicarCancelamentoOrdem(ord, motivo) === false){ sel.value = previous; applyStatusClass(sel); closeModal(); return; }
-          await saveOrders();
-          showToast('O.S. cancelada.');
-          renderTable();
-          return;
-        }
-        ord.status = sel.value;
-        sincronizarLocalPorStatus(ord);
-        await saveOrders();
-        // Pedido reativado (saiu de cancelado/rascunho): volta a reservar as peças
-        if((previous === 'cancelado' || previous === 'rascunho') && !ord.estoqueBaixadoEm){
-          const planoReativ = planoConsumoDaOrdem(ord);
-          if(planoReativ.itens.length){ ord.reservaLojaId = planoReativ.lojaId; await saveOrders(); await sincronizarReservasOrdem(ord, planoReativ); }
-        }
-        applyStatusClass(sel);
-        showToast('Status atualizado para "' + statusLabel(sel.value) + '". ' + (!STATUS_OCUPA_VAGA.includes(sel.value) ? 'Vaga liberada.' : ''));
-        renderTable();
+        await trocarStatusOrdem(ord, sel.value, ()=>{ sel.value = previous; applyStatusClass(sel); });
       });
     });
     wrap.querySelectorAll('[data-wa]').forEach(b=>{
@@ -5818,10 +5950,10 @@ function renderPainel(main){
               <button type="button" role="menuitem" data-view="${o.id}">${ico('olho')} Ver detalhes</button>
               <button type="button" role="menuitem" data-mail="${o.id}">${ico('email')} Enviar e-mail ao cliente</button>
               <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada por terceiros</button>
-              ${podeCancelarOrdem() ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
+              ${podeCancelarOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
             </div>
           </div>
-          ` : (podeCancelarOrdem() ? `<button class="btn-icone perigo" data-del="${o.id}" title="Excluir pedido" aria-label="Excluir pedido">${ico('lixeira')}</button>` : '')}
+          ` : (podeCancelarOrdem(o) ? `<button class="btn-icone perigo" data-del="${o.id}" title="Excluir pedido" aria-label="Excluir pedido">${ico('lixeira')}</button>` : '')}
           </div>
         </td>
       </tr>
