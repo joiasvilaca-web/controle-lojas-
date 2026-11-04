@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="pt-BR" data-ds>
 <head>
+<script src="supabase-config.js"></script>
 <script src="tema.js"></script>
 <script src="usuario-confirma.js"></script>
 <script src="icones.js"></script>
@@ -873,8 +874,8 @@ document.addEventListener('keydown', (e)=>{
   }
 });
 
-const SUPABASE_URL = "https://wxiokmqnjtgbejgoepch.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc";
+const SUPABASE_URL = window.SUPABASE_URL;        // vem de supabase-config.js
+const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;  // vem de supabase-config.js
 const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 // Cliente real do Supabase, mantido só pra chamar as OUTRAS Edge Functions já existentes
 // (upload de foto pro Drive, envio de e-mail) — essas não mexem em tabela nenhuma direto.
@@ -5544,7 +5545,7 @@ function renderPainel(main){
         <h1 class="page-title">Pedidos lançados</h1>
         <p class="page-sub">Acompanhe e atualize cada pedido. Os entregues ficam ocultos — escolha “Entregue” no filtro de status para vê-los.</p>
       </div>
-      ${currentUser.nivel!=='oficina' ? `<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" id="btnEnviarFabrica">${ico('ferramenta')} ENVIAR PARA FÁBRICA</button><button class="btn btn-accent" id="btnNovoPedidoPainel">${ico('mais')} Novo pedido</button></div>` : ''}
+      ${currentUser.nivel!=='oficina' ? `<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-ghost" id="btnEnviarFabrica">${ico('ferramenta')} ENVIAR PARA FÁBRICA</button>${podeColocarStatus('pronto') ? `<button class="btn btn-ghost" id="btnReceberFabrica">${ico('pacote')} RECEBER DA FÁBRICA</button>` : ''}<button class="btn btn-accent" id="btnNovoPedidoPainel">${ico('mais')} Novo pedido</button></div>` : ''}
     </div>
     <div id="prontosCard"></div>
     <div class="filtros-os" role="search">
@@ -5836,6 +5837,8 @@ function renderPainel(main){
 
   const btnEnvFab = document.getElementById('btnEnviarFabrica');
   if(btnEnvFab) btnEnvFab.addEventListener('click', ()=> abrirEnviarParaFabrica(()=>renderTable()));
+  const btnRecFab = document.getElementById('btnReceberFabrica');
+  if(btnRecFab) btnRecFab.addEventListener('click', ()=> abrirReceberDaFabrica(()=>renderTable()));
   const btnNovoPedido = document.getElementById('btnNovoPedidoPainel');
   if(btnNovoPedido) btnNovoPedido.addEventListener('click', ()=>{ modoNovaOrdem = true; renderView(); });
 
@@ -5882,6 +5885,68 @@ function abrirEnviarParaFabrica(aoConcluir){
     try{ await saveOrders(); }catch(e){ console.error(e); showToast('Não foi possível salvar. Tente de novo.'); btn.disabled = false; return; }
     closeModal();
     showToast(n + (n===1 ? ' pedido enviado' : ' pedidos enviados') + ' para a fábrica.');
+    if(aoConcluir) aoConcluir();
+  });
+}
+/** Lote: vias PRODUZIDAS que voltaram da fábrica → PRONTO na loja.
+ *  O leitor de código marca via por via, conferindo o que realmente veio na caixa. */
+function abrirReceberDaFabrica(aoConcluir){
+  const filtroLoja = (document.getElementById('filtroLoja')||{}).value || (window.__lojaAtual && window.__lojaAtual.id) || '';
+  const lista = orders.filter(o=>o.status==='oficina_pronto' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(a.via||'').localeCompare(String(b.via||''), 'pt-BR', {numeric:true}));
+  const nomeLoja = filtroLoja ? String(((config.lojas||[]).find(l=>l.id===filtroLoja)||{}).nome||'').toUpperCase() : '';
+  if(!lista.length){
+    openModal(`<h3>RECEBER DA FÁBRICA</h3><p class="muted">Nenhuma via PRODUZIDA${nomeLoja?' em '+escapeHtml(nomeLoja):''} esperando para voltar da fábrica.</p><div class="modal-actions"><button class="btn btn-accent" id="rfFechar">Fechar</button></div>`);
+    document.getElementById('rfFechar').addEventListener('click', closeModal);
+    return;
+  }
+  const chave = t => String(t||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  openModal(`
+    <h3>RECEBER DA FÁBRICA</h3>
+    <p class="muted">Vias PRODUZIDAS${nomeLoja?' — '+escapeHtml(nomeLoja):''}. Leia o código de cada via que chegou na caixa, ou marque na lista. As marcadas passam para PRONTO e voltam para a loja.</p>
+    <input id="rfLeitor" placeholder="Leia ou digite o código da via e tecle Enter" autocomplete="off" autocapitalize="characters" spellcheck="false" style="width:100%;min-height:44px;font-size:16px;font-weight:700;letter-spacing:.04em;padding:10px 12px;border:2px solid var(--accent);border-radius:10px;margin-bottom:10px;">
+    <label class="chk" style="margin:6px 0;"><input type="checkbox" id="rfTodos"> Marcar todas — <b><span id="rfQtd">0</span> de ${lista.length}</b> marcadas</label>
+    <div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:10px;">
+      ${lista.map(o=>`<label class="chk" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);"><input type="checkbox" class="rfItem" data-id="${o.id}" data-cod="${escapeHtml(chave(o.codigoVia||o.via||''))}"><span style="font-family:monospace;font-weight:700;min-width:72px;">${escapeHtml(o.codigoVia||o.via||'—')}</span><span style="flex:1;">${escapeHtml(o.cliente||'')}</span></label>`).join('')}
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="rfCancel">Cancelar</button>
+      <button class="btn btn-accent" id="rfReceber" disabled>${ico('pacote')} RECEBER</button>
+    </div>`);
+  const itens = ()=>[...document.querySelectorAll('.rfItem')];
+  const atualiza = ()=>{
+    const marcadas = itens().filter(i=>i.checked).length;
+    document.getElementById('rfQtd').textContent = marcadas;
+    document.getElementById('rfReceber').disabled = marcadas===0;
+    document.getElementById('rfTodos').checked = marcadas===itens().length;
+  };
+  document.getElementById('rfTodos').addEventListener('change', e=>{ itens().forEach(i=>i.checked = e.target.checked); atualiza(); });
+  itens().forEach(i=>i.addEventListener('change', atualiza));
+  const leitor = document.getElementById('rfLeitor');
+  leitor.addEventListener('keydown', e=>{
+    if(e.key!=='Enter') return;
+    e.preventDefault();
+    const cod = chave(leitor.value); leitor.value = '';
+    if(!cod) return;
+    const alvo = itens().find(i=>i.dataset.cod===cod);
+    if(!alvo){ showToast('A via ' + cod + ' não está nesta lista — confira se ela está como PRODUZIDA e se é desta loja.'); return; }
+    if(alvo.checked){ showToast('A via ' + cod + ' já estava marcada.'); return; }
+    alvo.checked = true; atualiza();
+    const linha = alvo.closest('label');
+    try{ linha.scrollIntoView({ block:'nearest' }); }catch(x){}
+    linha.style.background = 'var(--ok-soft)';
+    setTimeout(()=>{ linha.style.background = ''; }, 900);
+  });
+  setTimeout(()=>{ try{ leitor.focus(); }catch(e){} }, 80);
+  document.getElementById('rfCancel').addEventListener('click', closeModal);
+  document.getElementById('rfReceber').addEventListener('click', async ()=>{
+    const ids = itens().filter(i=>i.checked).map(i=>i.dataset.id);
+    if(!ids.length) return;
+    const btn = document.getElementById('rfReceber'); btn.disabled = true;
+    let n = 0;
+    ids.forEach(id=>{ const o = orders.find(x=>x.id===id); if(o && o.status==='oficina_pronto'){ o.status = 'pronto'; sincronizarLocalPorStatus(o); n++; } });
+    try{ await saveOrders(); }catch(e){ console.error(e); showToast('Não foi possível salvar. Tente de novo.'); btn.disabled = false; return; }
+    closeModal();
+    showToast(n + (n===1 ? ' via recebida' : ' vias recebidas') + '. Já pode avisar o cliente para retirar.');
     if(aoConcluir) aoConcluir();
   });
 }

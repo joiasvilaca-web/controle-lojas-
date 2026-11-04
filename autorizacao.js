@@ -4,7 +4,7 @@
  *   Autorizacao.pedir({ sessao, titulo, texto, acao, modulo, registroId, resumo }) -> Promise<{nome,nivel}|null>
  */
 (function(){
-  var URL_FN = 'https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/autorizar-gestor';
+  var URL_FN = (window.SUPABASE_URL || 'https://wxiokmqnjtgbejgoepch.supabase.co') + '/functions/v1/autorizar-gestor';
   var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc';
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function css(){

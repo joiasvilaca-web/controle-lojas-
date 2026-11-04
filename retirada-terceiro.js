@@ -4,7 +4,7 @@
  * Uso: RetiradaTerceiro.abrir({ tipo:'os'|'venda'|'orc', id, via, cliente, telefone, senha, usuario, lojaId, aoConcluir })
  */
 (function(){
-  var URL_FN = 'https://wxiokmqnjtgbejgoepch.supabase.co/functions/v1/retirada-terceiro';
+  var URL_FN = (window.SUPABASE_URL || 'https://wxiokmqnjtgbejgoepch.supabase.co') + '/functions/v1/retirada-terceiro';
   var BASE = 'https://vilaca.app/';
   function anon(){ try{ return SUPABASE_ANON_KEY; }catch(e){ return ''; } }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
