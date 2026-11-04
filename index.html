@@ -803,7 +803,16 @@
       <div class="troca-erro" id="trocaErro"></div>
       <button type="button" class="btn btn-accent" id="trocaEntrar" style="width:100%;">Entrar</button>
     </div>
+    <div class="troca-foot show" id="trocaComoBox" style="display:none;border-top:1px solid var(--line);">
+      <div class="troca-sub"><b>Diretoria:</b> entrar como outro usuário, sem a senha dele (vale por 2 horas e fica registrado no Log).</div>
+      <select id="trocaComoSel" aria-label="Usuário"></select>
+      <div class="troca-erro" id="trocaComoErro"></div>
+      <button type="button" class="btn btn-ghost" id="trocaComoBtn" style="width:100%;">Entrar como este usuário</button>
+    </div>
   </div>
+</div>
+<div id="bannerComo" style="display:none;position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:99999;background:#8A4B00;color:#fff;padding:9px 14px;border-radius:999px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.35);align-items:center;gap:10px;max-width:calc(100vw - 24px);">
+  <span id="bannerComoTxt"></span><button type="button" id="bannerComoVoltar" style="background:#fff;color:#8A4B00;border:0;border-radius:999px;padding:5px 12px;font-weight:700;cursor:pointer;white-space:nowrap;">Voltar para minha conta</button>
 </div>
 <div class="termos-overlay" id="termosOverlay">
   <div class="termos-box" role="dialog" aria-modal="true" aria-label="Termo de Uso">
@@ -983,7 +992,7 @@ function lerSessao(){
   }catch(e){ return null; }
 }
 function limparSessao(){
-  try{ localStorage.removeItem(SESSAO_CHAVE); }catch(e){}
+  try{ localStorage.removeItem(SESSAO_CHAVE); localStorage.removeItem('vilaca_como'); }catch(e){}
 }
 
 async function gatewayCall(body){
@@ -1572,13 +1581,15 @@ async function tentarRestaurarSessao(){
   if(!s) return false;
   const r = await gatewayValidarSessao(s.senha);
   if(!r || !r.ok){ limparSessao(); return false; }
-  if(!(await exigirTermos(s.senha))){ await sairPorRecusaTermos(s.senha); limparSessao(); return false; }
+  const __c = lerComo();
+  if(!(__c && __c.token===s.senha) && !(await exigirTermos(s.senha))){ await sairPorRecusaTermos(s.senha); limparSessao(); return false; }   // 'entrar como': a diretoria nunca aceita o Termo pelo outro
   __gatewaySenha = s.senha;
   currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:s.senha, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
   salvarSessao(); // renova a validade
   enterShell(s.modulo || null);
+  atualizarBannerComo();
   return true;
 }
 window.addEventListener('DOMContentLoaded', ()=>{ tentarRestaurarSessao(); });
@@ -1796,6 +1807,7 @@ function abrirTrocaUsuario(modo){
   u.value = ''; s.value = '';
   document.getElementById('trocaErro').classList.remove('show');
   document.getElementById('trocaOverlay').classList.add('show');
+  prepararEntrarComo();
   setTimeout(()=> u.focus(), 60);
   return new Promise(res=>{ __trocaResolver = res; });
 }
@@ -1829,6 +1841,7 @@ async function confirmarTrocaUsuario(){
     return;
   }
   const antigo = __gatewaySenha;
+  try{ localStorage.removeItem('vilaca_como'); }catch(e){}
   if(antigo && antigo !== r.token){ try{ await gatewayCall({ op:'logout', senha: antigo }); }catch(e){} }
   const novoUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   if(__trocaModo === 'salvar'){
@@ -1859,6 +1872,72 @@ async function confirmarTrocaUsuario(){
   enterShell();
   showToast('Agora você está como ' + currentUser.nome);
 }
+/* ===== DIRETORIA: ENTRAR COMO OUTRO USUÁRIO ===== */
+const ENTRAR_COMO_URL = SUPABASE_URL + '/functions/v1/entrar-como';
+function lerComo(){ try{ const c = JSON.parse(localStorage.getItem('vilaca_como')||'null'); return (c && c.token && Number(c.exp)>Date.now()) ? c : null; }catch(e){ return null; } }
+function atualizarBannerComo(){
+  const c = lerComo(), b = document.getElementById('bannerComo');
+  const ativo = !!(c && currentUser && c.token===__gatewaySenha);
+  b.style.display = ativo ? 'flex' : 'none';
+  if(ativo) document.getElementById('bannerComoTxt').textContent = 'Você está como ' + c.alvo + ' (acesso da diretoria)';
+}
+async function prepararEntrarComo(){
+  const box = document.getElementById('trocaComoBox');
+  const pode = !!(currentUser && currentUser.nivel==='diretoria' && !lerComo());
+  box.style.display = pode ? '' : 'none';
+  document.getElementById('trocaComoErro').classList.remove('show');
+  if(!pode) return;
+  if(!__trocaLista.length){ const j = await trocaCarregarLista(); if(j) __trocaLista = j.usuarios || []; }
+  const sel = document.getElementById('trocaComoSel');
+  sel.innerHTML = '<option value="">Escolha o usuário…</option>' + __trocaLista.filter(u=>!u.atual).map(u=>`<option value="${escapeHtml(u.id)}">${escapeHtml(u.nome)} — ${escapeHtml(levelLabel(u.nivel))}</option>`).join('');
+}
+async function reiniciarComSessao(token, user, msg){
+  pararVigiaInatividade();
+  Object.values(iframesCriados).forEach(f=> f.remove());
+  for(const k in iframesCriados) delete iframesCriados[k];
+  for(const k in tabsCache) delete tabsCache[k];
+  moduloAtual = null; config = null; __trocaLista = []; __minhaFoto = '';
+  __gatewaySenha = token;
+  currentUser = { id:user.id, nome:user.nome, nivel:user.nivel, senha:token, funcionarioId:user.funcionarioId||null, lojas:Array.isArray(user.lojas)?user.lojas:[], lojaExtra:user.lojaExtra||null };
+  currentPermissoes = permissoesDoUsuario(user);
+  fecharTrocaUsuario(true);
+  try{ fecharMenuMobile(); }catch(e){}
+  await loadConfig();
+  salvarSessao();
+  enterShell();
+  atualizarBannerComo();
+  showToast(msg + currentUser.nome);
+}
+async function entrarComoUsuario(){
+  const sel = document.getElementById('trocaComoSel'), err = document.getElementById('trocaComoErro'), btn = document.getElementById('trocaComoBtn');
+  const alvoId = sel.value;
+  const falha = m=>{ err.textContent = m; err.classList.add('show'); btn.disabled = false; btn.textContent = 'Entrar como este usuário'; };
+  if(!alvoId){ falha('Escolha o usuário.'); return; }
+  btn.disabled = true; btn.textContent = 'Entrando…'; err.classList.remove('show');
+  let r;
+  try{
+    const res = await fetch(ENTRAR_COMO_URL, { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, usuarioId: alvoId }) });
+    r = await res.json();
+  }catch(e){ r = { error:'Sem conexão.' }; }
+  if(!r || !r.ok){ falha((r && r.error) || 'Não foi possível entrar.'); return; }
+  // o servidor guarda a configuração por alguns segundos: espera ele enxergar a sessão nova
+  let v = null;
+  for(let i=0;i<7;i++){ v = await gatewayValidarSessao(r.token); if(v && v.ok) break; await new Promise(x=>setTimeout(x,1500)); }
+  if(!v || !v.ok){ falha('A sessão foi criada, mas o servidor ainda não liberou. Tente de novo em alguns segundos.'); return; }
+  try{ localStorage.setItem('vilaca_como', JSON.stringify({ token:r.token, dirToken:__gatewaySenha, diretor:r.diretor.nome, alvo:r.user.nome, exp:r.expiraEm })); }catch(e){}
+  btn.disabled = false; btn.textContent = 'Entrar como este usuário';
+  await reiniciarComSessao(r.token, v.user, 'Agora você está como ');
+}
+async function voltarParaDiretor(){
+  const c = lerComo(); if(!c) return;
+  try{ await gatewayCall({ op:'logout', senha: c.token }); }catch(e){}
+  try{ localStorage.removeItem('vilaca_como'); }catch(e){}
+  const v = await gatewayValidarSessao(c.dirToken);
+  if(!v || !v.ok){ limparSessao(); location.reload(); return; }
+  await reiniciarComSessao(c.dirToken, v.user, 'Voltou para ');
+}
+document.getElementById('trocaComoBtn').addEventListener('click', entrarComoUsuario);
+document.getElementById('bannerComoVoltar').addEventListener('click', voltarParaDiretor);
 /* Confirmação ao salvar (pedido pelo módulo): mostra a conta logada com a foto. */
 let __confUsuResolver = null;
 function confirmarUsuarioShell(acao){
