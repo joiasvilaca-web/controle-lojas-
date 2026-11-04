@@ -5,7 +5,7 @@
  */
 (function(){
   var URL_FN = (window.SUPABASE_URL || 'https://wxiokmqnjtgbejgoepch.supabase.co') + '/functions/v1/retirada-terceiro';
-  var BASE = 'https://vilaca.app/';
+  var BASE = (window.APP_URL || 'https://vilaca.app') + '/';
   function anon(){ try{ return SUPABASE_ANON_KEY; }catch(e){ return ''; } }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function ic(n,t){ return window.Icone ? Icone(n,{tam:t||16}) : ''; }

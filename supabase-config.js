@@ -6,15 +6,18 @@
    teste.vilaca.app ...... banco de TESTE (aprovar mudança antes de publicar)
    treino.vilaca.app ..... banco de TESTE (treinamento de funcionária nova)
 
-   Enquanto o banco de teste não existir, TESTE fica em branco e todo mundo
-   usa o real — nada muda. Para ligar, é só preencher url e chave do TESTE.
+   O banco de TESTE é um projeto separado (dados anonimizados). Se url/chave
+   do TESTE ficarem em branco, todo mundo usa o real — nada muda.
    ────────────────────────────────────────────────────────────────────────── */
 (function () {
   var REAL = {
     url: "https://wxiokmqnjtgbejgoepch.supabase.co",
     key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind4aW9rbXFuanRnYmVqZ29lcGNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE2NDgsImV4cCI6MjA4Nzc4NzY0OH0.F38uxHayhbNHGQC9-W0R1IonfJ-VtbK2ZJfS8vZshTc"
   };
-  var TESTE = { url: "", key: "" };   // preencher quando o projeto de teste existir
+  var TESTE = {
+    url: "https://mpgkvstzigeaimuynpxc.supabase.co",
+    key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wZ2t2c3R6aWdlYWltdXlucHhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM4MDA1MzMsImV4cCI6MjEwOTM3NjUzM30.IBixkjodLOZovZzYRfGFkEY9NmQwbVB8Z8IfHdo6Bvo"
+  };
 
   var host = String(location.hostname || "").toLowerCase();
   var ehTeste = /^(teste|treino)\./.test(host) || /-teste\./.test(host);
@@ -23,6 +26,10 @@
   window.SUPABASE_URL = usar.url;
   window.SUPABASE_ANON_KEY = usar.key;
   window.AMBIENTE = (usar === TESTE) ? (/^treino\./.test(host) ? "treino" : "teste") : "producao";
+
+  /* Endereço que entra nos links mandados ao cliente (acompanhar, via, retirada).
+     No sistema de verdade continua exatamente https://vilaca.app. */
+  window.APP_URL = (window.AMBIENTE === "producao") ? "https://vilaca.app" : location.origin;
 
   /* Faixa de aviso: impossível confundir o treino com o sistema de verdade. */
   if (window.AMBIENTE !== "producao") {
