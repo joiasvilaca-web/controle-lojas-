@@ -380,3 +380,29 @@ Regras que continuam da v1:
 - Ops públicas (`publicInit`, `publicCriar`, `publicConsultar`, `publicAceitar`) não têm sessão: rate limit 5 pedidos/telefone/24h e 25/IP/24h; a visão pública nunca inclui observações internas.
 - Numeração do pedido: `R` + `numero` (bigserial) com 5 dígitos (`R00012`). Status: `novo` → `orcado` → `aprovado`/`recusado` → `em_custodia` → `os_gerada` → `pronto` → (`enviado`, só se devolução for Correios) → `entregue` (ou `cancelado`; `expirado` é calculado quando `validadeAte` passou).
 - Shell/DP: acréscimos únicos foram `{ id:'reforma', label:'Reforma', icon:'💍', src:'reforma-admin.html' }` em `SIDEBAR_MODULES`, `reforma` em `MODULOS_APP` e `reforma:{ ativo:true|false }` nos três blocos de `permissoesPadrao` (index.html e dp.html). Nada disso mudou na v2 — v2 foi só `reforma-api`, `reforma.html` e `reforma-admin.html`.
+
+---
+
+## 17. Ambiente de TREINO/TESTE (4/nov/2026)
+
+Um só código (mesmo repo, mesmo projeto Vercel `vilaca-controle-lojas`), três endereços. O banco é escolhido pelo endereço em `supabase-config.js`:
+
+- `vilaca.app` (e `www`) → banco REAL `wxiokmqnjtgbejgoepch`. Nada mudou.
+- `treino.vilaca.app` e `teste.vilaca.app` → banco de TESTE `mpgkvstzigeaimuynpxc` (projeto "VILACA TESTE", organização grátis "VILACA TESTE", região us-west-2, custo zero). Faixa fixa no rodapé (verde = TREINAMENTO, marrom = TESTE). Qualquer host `teste.*`, `treino.*` ou `*-teste.*` cai no teste.
+- DNS: `vilaca.app` está no DNS da Vercel com `*` ALIAS; subdomínio novo só precisa ser adicionado ao projeto (`add_project_domain`), sem mexer em DNS.
+
+Regras de código para TODA edição futura:
+- Tela nova nunca escreve URL/chave do Supabase fixa: usar `window.SUPABASE_URL` / `window.SUPABASE_ANON_KEY`. Link que vai para o cliente usa `window.APP_URL` (real = `https://vilaca.app`; treino/teste = o próprio endereço).
+- `index.html` desliga `atendimento`, `site`, `ia` e `reforma` fora da produção (`MODULOS_DESLIGADOS_FORA_DA_PRODUCAO`, dentro de `permissoesDoUsuario`). Nada do treino pode falar com o mundo de fora (WhatsApp, e-mail, Drive, IA).
+- A chave anon do teste fica no `supabase-config.js` (pública por natureza, como a do real). Ao digitar chave nova: provar contra o servidor (pg_net) e comparar sha256 — chave errada derruba o login do endereço.
+
+Banco de teste:
+- Mesmas tabelas, funções e gatilhos do real + 15 edge functions: `db-gateway`, `trocar-usuario`, `autorizar-gestor`, `entrar-como`, `meus-dados`, `termos-uso`, `funcionario-acesso` (link de convite aponta para o treino), `estoque-api`, `caixa-resumo` (sem WhatsApp: devolve `desligado`), `retirada-terceiro`, `reservas-api`, `agenda-tarefas`, `lancamentos-api`, `inventario-api`, `insumos-api`.
+- NÃO publicadas no teste de propósito (falam com o exterior ou são de outros apps): `send-email-gmail`, `upload-foto-drive`, `backup-*`, `atendimento-*`, `ia-chat`, `gemini-agente`, `reforma-api`, `site-*`, `crm-api`, `cotacoes-mercado`, `bi4cia-*`, `confirmar-leitura-*`. Chamar uma delas no teste dá 404 (inofensivo).
+- Dados: cópia ANONIMIZADA (clientes com nome, telefone e CPF inventados; produtos e estoque reais; configuração com as lojas + a loja `loja_tr` TREINAMENTO). A função `treino-export` no REAL só entrega dado já anonimizado, protegida por chave (no real fica só o hash); o teste puxa por pg_net.
+- Logins de treino: `TREINO GERENTE`, `TREINO VENDEDORA 1`, `TREINO VENDEDORA 2` (loja TREINAMENTO) e `TREINO OFICINA` (loja OFICINA). A senha combinada com o Felipe não fica neste arquivo (repo público). `FELIPE` e `PHA` estão em primeiro acesso no teste (cada um escolhe a sua senha lá).
+- Mudou função ou tabela no REAL? Repetir no TESTE (mesmo código; a única diferença é o `APP_BASE_URL` da `funcionario-acesso`).
+
+Manutenção:
+- Projeto grátis pausa após ~7 dias sem uso. O pg_cron do REAL tem o job `treino-mantem-acordado` (todo dia 09:23 UTC) que dá um toque no `db-gateway` do teste. Se pausar mesmo assim: `restore_project` pelo conector "Supabase Teste".
+- O conector MCP "Supabase Teste" é separado do "Supabase" (real): uma organização por conector.
