@@ -971,12 +971,14 @@
     const mostraFinanceiro = currentUser.nivel === "diretoria" || currentUser.nivel === "gerente" || currentUser.nivel === "vendedora";   // vendedora vê tudo, só das lojas dela (pedido do Felipe, 03/11)
     const ehGestaoDash = currentUser.nivel === "diretoria" || currentUser.nivel === "gerente";
     const mostraTransf = currentUser.nivel !== "oficina";
+    const ehDiretoriaDash = currentUser.nivel === "diretoria";   // 04/11: Custo e margem é só da diretoria
     ultimaAtualizacaoDash = new Date();
 
     const abas = [];
     if(mostraFinanceiro) abas.push(["geral","Visão geral"], ["analises","Análises"], ["recebimentos","Recebimentos"], ["formas","Formas de pagamento"]);
     abas.push(["ordens","Ordens de serviço"]);
     if(mostraTransf) abas.push(["vendas","Vendas"], ["transf","Transferências"]);
+    if(ehDiretoriaDash) abas.push(["margem","Custo e margem"]);
 
     main.innerHTML = `
       <div class="dash-head">
@@ -1005,6 +1007,7 @@
       <div class="dash-painel" data-painel="ordens" id="painel-ordens" role="tabpanel"><div class="section" id="secOrdens"></div></div>
       ${mostraTransf ? `<div class="dash-painel" data-painel="vendas" id="painel-vendas" role="tabpanel"><div class="section" id="secVendas"></div></div>` : ""}
       ${mostraTransf ? `<div class="dash-painel" data-painel="transf" id="painel-transf" role="tabpanel"><div class="section" id="secTransf"></div></div>` : ""}
+      ${ehDiretoriaDash ? `<div class="dash-painel" data-painel="margem" id="painel-margem" role="tabpanel"><div class="section" id="secMargem"></div></div>` : ""}
     `;
 
     document.getElementById("btnAtualizarDash").addEventListener("click", atualizarDadosDash);
@@ -1029,6 +1032,7 @@
     renderSecaoOrdens(mostraFinanceiro);
     if(mostraTransf) renderSecaoVendas(mostraFinanceiro);
     if(mostraTransf) renderSecaoTransf();
+    if(ehDiretoriaDash) renderSecaoMargem();
     // abre a aba lembrada (ou a primeira); se for Visão geral, ela já desenha o gráfico com a largura certa
     selecionarAbaDash(abaDashAtual || (abas[0] && abas[0][0]));
     if(mostraFinanceiro && abaDashAtual !== "geral") renderVisaoGeral();
@@ -1475,7 +1479,7 @@
         <div class="card pad">
           <div class="card-head">
             <div><span class="card-title">Metas do mês</span><span class="card-sub">Recebido no mês (vendas + O.S.) contra a meta de cada loja</span></div>
-            ${(currentUser.nivel==="diretoria"||currentUser.nivel==="gerente") ? `<button class="btn btn-ghost btn-sm" id="btnEditarMetas">${ico("lapis")} Editar metas</button>` : ""}
+            ${(currentUser.nivel==="diretoria"||currentUser.nivel==="gerente"||currentUser.nivel==="vendedora") ? `<button class="btn btn-ghost btn-sm" id="btnEditarMetas">${ico("lapis")} Editar metas</button>` : ""}
           </div>
           <div id="metasLista"></div>
         </div>
@@ -2335,6 +2339,104 @@
     atualizar();
   }
 
+  /* ================= CUSTO E MARGEM (04/11 — só diretoria) =================
+     Vendas do PDV no período: receita de cada item (preço da venda, com o desconto/acréscimo do total rateado)
+     menos o custo cadastrado no produto (Configurações › Produto: "custo"; relógio: "custo de compra").
+     Item sem custo cadastrado fica de fora da margem e aparece na lista "sem custo" para completar o cadastro. */
+  let produtosMargem = null, carregandoProdMargem = null;
+  const filtrosMargem = { loja:"", dataIni:"", dataFim:"" };
+  function mesAtualIntervalo(){ const d = new Date(); const ini = new Date(d.getFullYear(), d.getMonth(), 1); const p = x=> x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0"); return [p(ini), p(d)]; }
+  async function carregarProdutosMargem(){
+    if(produtosMargem) return produtosMargem;
+    if(!carregandoProdMargem) carregandoProdMargem = (async()=>{
+      const r = await gatewayCall({ op:"selectAll", table:"produtos_estoque", params:{ leve:true } });
+      if(!r || r.error) throw new Error((r && r.error) || "sem resposta");
+      const m = new Map(); ((r && r.data) || []).forEach(row=>{ if(row && row.payload) m.set(String(row.id), row.payload); });
+      produtosMargem = m; return m;
+    })().catch(e=>{ carregandoProdMargem = null; throw e; });
+    return carregandoProdMargem;
+  }
+  function custoUnitarioProduto(p){
+    if(!p) return null;
+    const c = Number(p.custo); if(Number.isFinite(c) && c > 0) return c;
+    const cc = Number(p.custoCompra); if(Number.isFinite(cc) && cc > 0) return cc;
+    return null;
+  }
+  function renderSecaoMargem(){
+    const el = document.getElementById("secMargem"); if(!el) return;
+    const lojas = (ordersConfig && ordersConfig.lojas) || [];
+    if(!filtrosMargem.dataIni){ const [a,b] = mesAtualIntervalo(); filtrosMargem.dataIni = a; filtrosMargem.dataFim = b; }
+    el.innerHTML = `
+      <div class="sec-head"><div>
+        <h2 class="section-title">Custo e margem</h2>
+        <p class="section-sub">Vendas do PDV no período. Lucro = valor vendido − custo cadastrado no produto. Só a diretoria vê esta aba.</p>
+      </div></div>
+      <div class="filters" role="search" aria-label="Filtros de margem">
+        <label class="f"><span>Loja</span><select id="mgLoja"><option value="">Todas as lojas</option>${lojas.filter(l=>!l.interna).map(l=>`<option value="${escapeHtml(l.nome)}">${escapeHtml(l.nome)}</option>`).join("")}</select></label>
+        <label class="f"><span>De</span><input type="date" id="mgIni"></label>
+        <label class="f"><span>Até</span><input type="date" id="mgFim"></label>
+      </div>
+      <div class="kpis" id="kpisMargem"></div>
+      <div class="card"><div id="tabelaMargem">${vazioHtml("Calculando…", "")}</div></div>
+    `;
+    document.getElementById("mgLoja").value = filtrosMargem.loja;
+    document.getElementById("mgIni").value = filtrosMargem.dataIni;
+    document.getElementById("mgFim").value = filtrosMargem.dataFim;
+    const reler = ()=>{ filtrosMargem.loja = document.getElementById("mgLoja").value; filtrosMargem.dataIni = document.getElementById("mgIni").value; filtrosMargem.dataFim = document.getElementById("mgFim").value; calcular(); };
+    ["mgLoja","mgIni","mgFim"].forEach(id=> document.getElementById(id).addEventListener("change", reler));
+    async function calcular(){
+      const wrap = document.getElementById("tabelaMargem"), kp = document.getElementById("kpisMargem");
+      let prods;
+      try{ prods = await carregarProdutosMargem(); }
+      catch(e){ wrap.innerHTML = vazioHtml("Não consegui carregar o cadastro de produtos.", "Confira a internet e clique em Atualizar dados."); return; }
+      const lista = vendas.filter(v=> v && v.status!=="cancelada" && (!filtrosMargem.loja || v.loja===filtrosMargem.loja)
+        && (!filtrosMargem.dataIni || (v.data||"") >= filtrosMargem.dataIni) && (!filtrosMargem.dataFim || (v.data||"") <= filtrosMargem.dataFim));
+      let receita = 0, receitaComCusto = 0, custoTotal = 0, nItens = 0, nComCusto = 0;
+      const porItem = new Map(), semCusto = new Map();
+      lista.forEach(v=>{
+        const itens = (v.itens||[]).filter(it=> it && !it.devolvido && !it.trocado);
+        const bruto = itens.reduce((a,it)=> a + (Number(it.valorUnitario)||0) * (Number(it.quantidade)||1), 0);
+        const total = Number(v.valorTotal) || bruto;
+        const fator = bruto > 0 ? total / bruto : 1;   // rateia desconto/acréscimo do total entre os itens
+        receita += total;
+        itens.forEach(it=>{
+          const qtd = Number(it.quantidade)||1;
+          const rec = (Number(it.valorUnitario)||0) * qtd * fator;
+          const p = it.produtoEstoqueId ? prods.get(String(it.produtoEstoqueId)) : null;
+          const cu = custoUnitarioProduto(p);
+          const nome = (p && p.nome) || it.produto || "—";
+          nItens += qtd;
+          if(cu == null){ const x = semCusto.get(nome) || { nome, qtd:0, receita:0 }; x.qtd += qtd; x.receita += rec; semCusto.set(nome, x); return; }
+          nComCusto += qtd; receitaComCusto += rec; custoTotal += cu * qtd;
+          const x = porItem.get(nome) || { nome, qtd:0, receita:0, custo:0 }; x.qtd += qtd; x.receita += rec; x.custo += cu * qtd; porItem.set(nome, x);
+        });
+      });
+      const margem = receitaComCusto - custoTotal;
+      const pct = receitaComCusto > 0 ? (margem / receitaComCusto) * 100 : 0;
+      const cobertura = receita > 0 ? (receitaComCusto / receita) * 100 : 0;
+      const pctTxt = n=> (Math.round(n*10)/10).toLocaleString("pt-BR") + "%";
+      kp.innerHTML = `
+        ${kpiHtml("Vendido no período", fmtMoeda(receita), "", fmtNum(lista.length) + " venda(s)")}
+        ${kpiHtml("Lucro (itens com custo)", fmtMoeda(margem), margem >= 0 ? "ok" : "danger", "margem " + pctTxt(pct))}
+        ${kpiHtml("Custo dos itens", fmtMoeda(custoTotal), "", fmtNum(nComCusto) + " de " + fmtNum(nItens) + " peça(s) com custo")}
+        ${kpiHtml("Vendas com custo conhecido", pctTxt(cobertura), cobertura < 60 ? "danger" : "", "do valor vendido")}
+      `;
+      if(!lista.length){ wrap.innerHTML = vazioHtml("Nenhuma venda nesse período.", "Troque as datas ou a loja."); return; }
+      const top = [...porItem.values()].map(x=>({ ...x, lucro: x.receita - x.custo })).sort((a,b)=> b.lucro - a.lucro).slice(0, 15);
+      const sem = [...semCusto.values()].sort((a,b)=> b.receita - a.receita).slice(0, 15);
+      wrap.innerHTML = `
+        <h3 style="margin:4px 0 8px;font-size:15px;">Peças que mais deram lucro</h3>
+        ${top.length ? `<div class="tabela-wrap"><table class="tbl"><thead><tr><th>Peça</th><th class="r">Qtd</th><th class="r">Vendido</th><th class="r">Custo</th><th class="r">Lucro</th><th class="r">Margem</th></tr></thead><tbody>
+          ${top.map(x=>`<tr><td>${escapeHtml(x.nome)}</td><td class="r">${fmtNum(x.qtd)}</td><td class="r">${fmtMoeda(x.receita)}</td><td class="r">${fmtMoeda(x.custo)}</td><td class="r"><b>${fmtMoeda(x.lucro)}</b></td><td class="r">${x.receita>0?pctTxt((x.lucro/x.receita)*100):"—"}</td></tr>`).join("")}
+        </tbody></table></div>` : vazioHtml("Nenhuma peça vendida tem custo cadastrado.", "Cadastre o custo em Configurações › Produto para ver o lucro.")}
+        <h3 style="margin:18px 0 8px;font-size:15px;">Vendidas sem custo cadastrado <span class="muted" style="font-weight:400;font-size:13px;">— complete o custo em Configurações › Produto</span></h3>
+        ${sem.length ? `<div class="tabela-wrap"><table class="tbl"><thead><tr><th>Peça</th><th class="r">Qtd</th><th class="r">Vendido</th></tr></thead><tbody>
+          ${sem.map(x=>`<tr><td>${escapeHtml(x.nome)}</td><td class="r">${fmtNum(x.qtd)}</td><td class="r">${fmtMoeda(x.receita)}</td></tr>`).join("")}
+        </tbody></table></div>` : `<p class="muted" style="margin:0 0 8px;">Todas as peças vendidas no período têm custo. ✔</p>`}
+      `;
+    }
+    calcular();
+  }
   function renderSecaoTransf(){
     const el = document.getElementById("secTransf");
     const lojas = (transfConfig && transfConfig.stores) || [];

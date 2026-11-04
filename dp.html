@@ -442,7 +442,8 @@ const MODULOS_APP = {
 };
 function permissoesPadrao(nivel){
   const todasAbas = (moduloId)=>{ const o={}; MODULOS_APP[moduloId].abas.forEach(a=>o[a.id]=true); return o; };
-  if(nivel==='diretoria' || nivel==='gerente'){
+  // 04/11 (Felipe): vendedora tem o mesmo padrão da gerente (as lojas e o "DP só o dela" continuam valendo)
+  if(nivel==='diretoria' || nivel==='gerente' || nivel==='vendedora'){
     return {
       transferencias:{ ativo:true, abas:todasAbas('transferencias') },
       os:{ ativo:true, abas:todasAbas('os') },
@@ -1002,7 +1003,7 @@ function renderEnviarLinkDP(main){
     <div class="page-head">
       <div>
         <h1 class="page-title">Enviar link de cadastro</h1>
-        <p class="page-sub">Para funcionário novo, que ainda não está no sistema. Preencha o básico: o link (vale 24 horas) leva a pessoa a completar os dados pessoais, profissionais e bancários e a escolher a senha.</p>
+        <p class="page-sub">Para funcionário novo, que ainda não está no sistema. Preencha o básico e a <b>senha inicial</b>: a pessoa entra com ela, aceita o Termo de Uso e troca a senha quando quiser em Meus dados. O link (opcional, vale 24 horas) leva a pessoa a completar os dados pessoais, profissionais e bancários.</p>
       </div>
     </div>
     <div class="card" style="max-width:600px;">
@@ -1024,14 +1025,16 @@ function renderEnviarLinkDP(main){
       <div class="field"><label class="rot">Lojas de acesso</label>
         <div class="cargo-checks">${(config.lojas||[]).map(l=>`<label><input type="checkbox" value="${l.id}" class="el_loja"> ${escapeHtml(l.nome)}</label>`).join('')}</div>
       </div>
-      <div class="field"><label class="rot">Enviar por</label>
+      <div class="field" style="max-width:360px;"><label for="el_senhaIni">Senha inicial</label><input id="el_senhaIni" type="text" autocomplete="new-password" spellcheck="false" placeholder="Mínimo 6 caracteres">
+        <p class="dica">Passe essa senha para a pessoa. Ela entra com o apelido (ou nome) e essa senha.</p></div>
+      <div class="field"><label class="rot">Enviar link de cadastro por <span class="opc">(opcional)</span></label>
         <div class="mini-tabs" style="margin-bottom:4px;">
           <button type="button" id="el_btnEmail">${ic('email')} E-mail</button>
           <button type="button" id="el_btnWhats">${ic('whatsapp')} WhatsApp</button>
         </div>
       </div>
       <div id="el_campoContato"></div>
-      <div style="display:flex; justify-content:flex-end; margin-top:4px;"><button type="button" class="btn btn-accent" id="el_btnEnviar">Criar e enviar</button></div>
+      <div style="display:flex; justify-content:flex-end; margin-top:4px;"><button type="button" class="btn btn-accent" id="el_btnEnviar">Criar acesso</button></div>
       <p class="muted" id="el_status" style="margin:10px 0 0;" role="status"></p>
     </div>
   `;
@@ -1054,31 +1057,44 @@ function renderEnviarLinkDP(main){
     const cargos = Array.from(document.querySelectorAll('.el_cargo:checked')).map(c=>c.value);
     const lojasEscolhidas = Array.from(document.querySelectorAll('.el_loja:checked')).map(c=>c.value);
     const contato = document.getElementById('el_contato').value.trim();
+    const senhaIni = (document.getElementById('el_senhaIni').value || '').trim();
     const status = document.getElementById('el_status');
     if(!nome){ showToast('Informe o nome do funcionário.'); return; }
     if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
     if(lojasEscolhidas.length===0 && !cargos.includes('diretor')){ showToast('Selecione ao menos uma loja de acesso.'); return; }
-    if(!contato){ showToast(canal==='email' ? 'Informe o e-mail.' : 'Informe o celular.'); return; }
+    if(senhaIni.length < 6){ showToast('Crie a senha inicial (mínimo 6 caracteres).'); document.getElementById('el_senhaIni').focus(); return; }
     const btn = document.getElementById('el_btnEnviar');
-    btn.disabled = true; btn.textContent = 'Enviando…';
+    btn.disabled = true; btn.textContent = 'Criando…';
 
     const rCriar = await chamarFuncionarioAcesso({ op:'criarFuncionario', senha: __gatewaySenha, nome, apelido, cargos });
-    if(!rCriar || !rCriar.ok){ btn.disabled = false; btn.textContent = 'Criar e enviar'; status.textContent = (rCriar && rCriar.error) || 'Não foi possível salvar o cadastro. Tente de novo.'; return; }
+    if(!rCriar || !rCriar.ok){ btn.disabled = false; btn.textContent = 'Criar acesso'; status.textContent = (rCriar && rCriar.error) || 'Não foi possível salvar o cadastro. Tente de novo.'; return; }
     const novoId = rCriar.funcionarioId;
     await chamarFuncionarioAcesso({ op:'inicializarAcesso', senha: __gatewaySenha, funcionarioId: novoId, lojas: lojasEscolhidas });
     const selFuncaoEl = document.getElementById('el_funcao');
     if(selFuncaoEl && selFuncaoEl.value){ const okF = await atribuirFuncaoAoFuncionario(novoId, selFuncaoEl.value, lojasEscolhidas); if(!okF) showToast('Atenção: não foi possível aplicar a função de acesso; defina na ficha dela, em Acesso.'); }
+    // 04/11 (Felipe): a diretoria cria a senha inicial (acabou a senha padrão 123456)
+    const rSenha = await chamarFuncionarioAcesso({ op:'definirSenhaManual', senha: __gatewaySenha, funcionarioId: novoId, novaSenha: senhaIni });
+    const senhaOk = !!(rSenha && rSenha.ok);
+    const usuarioLogin = apelido || nome;
+    if(!contato){
+      btn.disabled = false; btn.textContent = 'Criar acesso';
+      status.textContent = senhaOk ? `Acesso criado! ${nome} entra com o usuário "${usuarioLogin}" e a senha inicial que você criou.` : 'Funcionário criado, mas a senha inicial não foi salva: ' + ((rSenha && rSenha.error) || 'erro desconhecido') + '. Defina na ficha dela, em Acesso.';
+      if(senhaOk){ showToast('Acesso criado.'); limparFormEnviarLink(); }
+      funcionarios = mesclarFuncionariosDoCadastro(await funcionariosGet(), config);
+      return;
+    }
+    if(!senhaOk) showToast('Atenção: a senha inicial não foi salva — defina na ficha dela, em Acesso.');
 
     if(canal==='email'){
       const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email: contato, canal:'email' });
-      btn.disabled = false; btn.textContent = 'Criar e enviar';
-      if(r && r.ok){ status.textContent = `Funcionário criado! Link de cadastro enviado por e-mail pra ${nome} — válido por 24 horas.`; showToast('Enviado!'); limparFormEnviarLink(); }
+      btn.disabled = false; btn.textContent = 'Criar acesso';
+      if(r && r.ok){ status.textContent = `Acesso criado (usuário "${usuarioLogin}" + senha inicial)! Link de cadastro enviado por e-mail pra ${nome} — válido por 24 horas.`; showToast('Enviado!'); limparFormEnviarLink(); }
       else { status.textContent = 'Funcionário criado, mas não foi possível enviar o e-mail: ' + ((r && r.error) || 'erro desconhecido'); }
     } else {
       const r = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, canal:'whatsapp' });
-      btn.disabled = false; btn.textContent = 'Criar e enviar';
+      btn.disabled = false; btn.textContent = 'Criar acesso';
       if(r && r.ok && r.link){
-        const msg = `Olá, ${nome}! Complete seu cadastro no sistema da Vilaça Joias e escolha sua senha (link válido por 24h): ${r.link}`;
+        const msg = `Olá, ${nome}! Complete seu cadastro no sistema da Vilaça Joias (link válido por 24h): ${r.link}`;
         window.open(`https://wa.me/55${onlyDigitsDp(contato)}?text=${encodeURIComponent(msg)}`, '_blank');
         status.textContent = `Funcionário criado! WhatsApp aberto com a mensagem pronta pra ${nome} — confirme o envio por lá.`;
         limparFormEnviarLink();
@@ -1095,6 +1111,8 @@ function renderEnviarLinkDP(main){
     document.querySelectorAll('.el_loja').forEach(c=> c.checked = false);
     const contatoEl = document.getElementById('el_contato');
     if(contatoEl) contatoEl.value = '';
+    const senhaEl = document.getElementById('el_senhaIni');
+    if(senhaEl) senhaEl.value = '';
   }
 }
 function renderAcessosDP(main){
@@ -2181,6 +2199,7 @@ function renderFuncionarios(main){
             <select id="func_lojaNova"><option value="">Escolha a loja…</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
           </div>
           <div class="field"><label for="func_emailNovo">E-mail <span class="opc">(opcional)</span></label><input type="email" id="func_emailNovo" placeholder="email@exemplo.com"><p class="dica">Se preencher, a pessoa recebe o link para completar o cadastro.</p></div>
+          <div class="field"><label for="func_senhaNova">Senha inicial</label><input id="func_senhaNova" type="text" autocomplete="new-password" spellcheck="false" placeholder="Mínimo 6 caracteres"><p class="dica">A pessoa entra com o apelido (ou nome) e essa senha; aceita o Termo e troca depois em Meus dados.</p></div>
         </div>
         <div class="field"><label class="rot">Cargo</label>
           <div class="cargo-checks">
@@ -2210,7 +2229,9 @@ function renderFuncionarios(main){
         const cargos = Array.from(document.querySelectorAll('.func_cargo_new:checked')).map(c=>c.value);
         const lojaEscolhida = document.getElementById('func_lojaNova').value;
         const email = document.getElementById('func_emailNovo').value.trim();
+        const senhaNova = ((document.getElementById('func_senhaNova')||{}).value || '').trim();
         if(!nome){ showToast('Informe o nome do funcionário.'); return; }
+        if(senhaNova.length < 6){ showToast('Crie a senha inicial (mínimo 6 caracteres).'); const sn=document.getElementById('func_senhaNova'); if(sn) sn.focus(); return; }
         if(cargos.length===0){ showToast('Selecione ao menos uma função.'); return; }
         if(!lojaEscolhida && !cargos.includes('diretor')){ showToast('Selecione a loja de acesso do funcionário.'); return; }
         const rCriar = await chamarFuncionarioAcesso({ op:'criarFuncionario', senha: __gatewaySenha, nome, apelido, cargos });
@@ -2220,7 +2241,10 @@ function renderFuncionarios(main){
         const selFuncaoNova = document.getElementById('func_funcaoNova');
         let avisoFuncao = '';
         if(selFuncaoNova && selFuncaoNova.value){ const okF = await atribuirFuncaoAoFuncionario(novoId, selFuncaoNova.value, [lojaEscolhida]); if(!okF) avisoFuncao = ' Atenção: não foi possível aplicar a função de acesso; defina em Acesso, na ficha dela.'; }
-        let mensagem = 'Funcionário cadastrado.' + avisoFuncao;
+        // 04/11 (Felipe): a diretoria cria a senha inicial (acabou a senha padrão 123456)
+        const rSenhaNova = await chamarFuncionarioAcesso({ op:'definirSenhaManual', senha: __gatewaySenha, funcionarioId: novoId, novaSenha: senhaNova });
+        if(!(rSenhaNova && rSenhaNova.ok)) avisoFuncao += ' Atenção: a senha inicial não foi salva — defina na ficha, em Acesso.';
+        let mensagem = 'Funcionário cadastrado com a senha inicial.' + avisoFuncao;
         if(email){
           const rConvite = await chamarFuncionarioAcesso({ op:'enviarConviteCadastro', senha: __gatewaySenha, funcionarioId: novoId, email });
           mensagem = (rConvite && rConvite.ok)
@@ -2571,8 +2595,9 @@ async function abrirFuncionarioCompletoModal(funcionario, abaInicial){
       const status = usuarioLigado ? usuarioLigado.status : 'sem_acesso';
       const bloqueado = !!(usuarioLigado && usuarioLigado.bloqueado);
       const tentativas = usuarioLigado ? (Number(usuarioLigado.tentativasFalhas)||0) : 0;
-      const statusLabel = bloqueado ? 'Bloqueado: 6 senhas erradas seguidas' : status==='ativo' ? 'Ativo, já tem senha' : status==='pendente' ? 'Convite enviado, aguardando o cadastro' : 'Ainda sem acesso';
-      const statusBadge = bloqueado ? 'badge-erro' : status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
+      const semSenhaIni = !!(usuarioLigado && usuarioLigado.primeiroAcesso===true);   // 04/11: senha padrão acabou — precisa da senha inicial
+      const statusLabel = bloqueado ? 'Bloqueado: 6 senhas erradas seguidas' : semSenhaIni ? 'Sem senha: crie a senha inicial abaixo' : status==='ativo' ? 'Ativo, já tem senha' : status==='pendente' ? 'Convite enviado, aguardando o cadastro' : 'Ainda sem acesso (crie a senha inicial abaixo)';
+      const statusBadge = bloqueado ? 'badge-erro' : semSenhaIni ? 'badge-wait' : status==='ativo' ? 'badge-ok' : status==='pendente' ? 'badge-wait' : 'badge-loja';
       const usuarioLogin = (d.apelido || funcionario.apelido || '').trim() || funcionario.nome;
       const souDiretoria = currentUser.nivel==='diretoria';
       const fnAtual = usuarioLigado ? funcaoDoUsuario(usuarioLigado) : null;
