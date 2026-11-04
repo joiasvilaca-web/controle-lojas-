@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="pt-BR" data-ds>
 <head>
+<script src="vilaca-extras.js"></script>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
 <script src="icones.js"></script>
@@ -479,7 +480,7 @@ function mensagemConfiavel(ev){
     const todos = registrosFiscais(de, ate, lojaId);
     const lista = todos.filter(x=> com ? x.reg.emissaoNota==='sim' : x.reg.emissaoNota!=='sim');
     const total = lista.reduce((s,x)=> s + (Number(x.reg.valorTotal)||0), 0);
-    const semNumero = lista.filter(x=> com && !String(x.reg.numeroNota||'').trim()).length;
+    const semNumero = lista.filter(x=> com && !String(x.reg.numeroNota||'').trim() && !(x.reg.momentoPagamento==='na_volta' && !(x.reg.pagamentos||[]).some(p=>Number(p.valor)>0))).length;
     const box = document.getElementById('caixaResumo'); document.getElementById('caixaDetalhes').innerHTML = '';
     box.innerHTML = `<div class="card">
       <div class="section-label" style="margin-bottom:8px;">${com?'Com nota fiscal':'Sem nota fiscal'} · ${lista.length} ${lista.length===1?'registro':'registros'} · ${fmtMoeda(total)}${semNumero?` · <span style="color:var(--danger);font-weight:600;">${semNumero} sem número da nota</span>`:''}</div>
@@ -512,6 +513,24 @@ function mensagemConfiavel(ev){
       closeModal(); showToast('Nota registrada.'); if(aoSalvar) aoSalvar();
     });
   }
+  /* Nota de ENTRADA do ouro (04/11): na via o número é opcional, mas o fechamento do caixa exige. */
+  function abrirNotaEntrada(x, aoSalvar){
+    const r = x.reg;
+    openModal(`<h3>Nota de entrada (ouro) · ${escapeHtml(x.origem)} ${escapeHtml(viaDe(r))}</h3>
+      <p class="muted">${fmtDate(r.data)} · ${fmtMoeda(r.valorTotal)} · ${escapeHtml(r.cliente||'')}</p>
+      <div class="field" style="margin-top:12px;"><label for="ne_numero">Número da nota de entrada</label><input id="ne_numero" autocomplete="off" placeholder="Ex.: 12345" value="${escapeHtml((r.notaEntrada&&r.notaEntrada.numero)||'')}"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="ne_cancel" type="button">Cancelar</button><button class="btn btn-accent" id="ne_ok" type="button">Registrar nota</button></div>`);
+    document.getElementById('ne_cancel').addEventListener('click', closeModal);
+    document.getElementById('ne_ok').addEventListener('click', async ()=>{
+      const numero = document.getElementById('ne_numero').value.trim();
+      if(!numero){ Destaque.marcar('#ne_numero','Digite o número da nota de entrada.'); return; }
+      const copia = { ...r, notaEntrada: { ...(r.notaEntrada||{}), emitida:true, numero, numeroRegistradoEm: new Date().toISOString(), numeroRegistradoPor: currentUser ? currentUser.nome : '' } };
+      const res = await gatewayCall({ op:'upsert', table:x.tabela, params:{ row:{ id:r.id, payload:copia, updated_at:new Date().toISOString() } } });
+      if(res && res.error){ showToast('Não foi possível salvar: ' + res.error); return; }
+      Object.assign(r, copia);
+      closeModal(); showToast('Nota de entrada registrada.'); if(aoSalvar) aoSalvar();
+    });
+  }
   /* Fechamento do dia: um dia + uma loja. Gravado em painel_ordens_kv (caixa_fech:<loja>:<data>). Reabrir: só gerente/diretoria. */
   const chaveFech = (loja, dia)=> 'caixa_fech:'+loja+':'+dia;
   async function lerFechamento(loja, dia){
@@ -527,11 +546,13 @@ function mensagemConfiavel(ev){
     const fech = umDia ? await lerFechamento(lojaId, de) : null;
     const fechado = !!(fech && fech.fechado);
     const todos = registrosFiscais(de, ate, lojaId);
-    const emitir = todos.filter(x=> x.reg.emissaoNota!=='sim' && pagouPixOuCartao(x.reg));
+    const semPagto = r=> r.momentoPagamento==='na_volta' && !(r.pagamentos||[]).some(p=>Number(p.valor)>0);   // pagar depois ainda sem pagamento: nada de nota pendente
+    const emitir = todos.filter(x=> !semPagto(x.reg) && (x.reg.emissaoNota!=='sim' && (x.reg.emissaoNota!=='nao' || (x.reg.pagamentos||[]).some(formaExigeNota))) && pagouPixOuCartao(x.reg));   // 'não' escolhido na via vale (só LINK ECO sempre exige nota)
     // Só Pix pessoa física (PF): não cobra o número da nota, mesmo se marcaram nota.
     const soPixPF = r=>{ const v=(r.pagamentos||[]).filter(p=>(Number(p.valor)||0)>0); return v.length>0 && v.every(p=> /pix/i.test(nomeForma(p)) && p.pessoa==='PF'); };
-    const faltaNum = todos.filter(x=> x.reg.emissaoNota==='sim' && !String(x.reg.numeroNota||'').trim() && !soPixPF(x.reg));
-    const tudoOk = !emitir.length && !faltaNum.length;
+    const faltaNum = todos.filter(x=> x.reg.emissaoNota==='sim' && !semPagto(x.reg) && !String(x.reg.numeroNota||'').trim() && !soPixPF(x.reg));
+    const faltaEntrada = todos.filter(x=> x.reg.notaEntrada && x.reg.status!=='cancelada' && x.reg.status!=='cancelado' && !String(x.reg.notaEntrada.numero||'').trim());
+    const tudoOk = !emitir.length && !faltaNum.length && !faltaEntrada.length;
     const linha = (x,motivo,i,grupo)=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
       <div><b>${escapeHtml(x.origem)} ${escapeHtml(viaDe(x.reg))}</b> · ${fmtDate(x.reg.data)} · ${escapeHtml(nomeLojaCaixa(x.reg.lojaId)||'')}<div class="muted" style="font-size:12.5px;">${escapeHtml(x.reg.cliente||'')} · ${fmtMoeda(x.reg.valorTotal)}${motivo?' · '+motivo:''}</div></div>
       <button class="btn btn-ghost btn-sm" data-fc="${grupo}:${i}" type="button">${grupo==='e'?'Nota emitida':'Informar nº'}</button></div>`;
@@ -547,13 +568,14 @@ function mensagemConfiavel(ev){
       ${acao}
       ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão/LINK ECO sem nota</div>${emitir.map((x,i)=>linha(x,(x.reg.pagamentos||[]).some(formaExigeNota) ? 'LINK ECO: nota pela '+escapeHtml(nomeLojaCaixa(lojaNotaDaForma(x.reg))||'Ecommerce') : 'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
+      ${faltaEntrada.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Falta o número da nota de ENTRADA (ouro) — ${faltaEntrada.length} via(s)</div>${faltaEntrada.map((x,i)=>linha(x,'pagou em ouro, sem número da nota de entrada',i,'o')).join('')}</div>` : ''}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="fc_fechar" type="button" data-fechar>Voltar</button>
         ${umDia && fechado ? `<button class="btn btn-danger" id="fc_reabrir" type="button">${gestao ? 'Reabrir caixa' : 'Reabrir caixa (senha da gerência)'}</button>` : ''}
         ${umDia && !fechado && tudoOk ? `<button class="btn btn-accent" id="fc_confirmar" type="button">Fechar caixa do dia</button>` : ''}
       </div>`);
     document.getElementById('fc_fechar').addEventListener('click', closeModal);
-    document.querySelectorAll('[data-fc]').forEach(b=> b.addEventListener('click', ()=>{ const [g,i]=b.dataset.fc.split(':'); const x=(g==='e'?emitir:faltaNum)[+i]; abrirNotaEmitida(x, ()=> abrirFecharCaixa(de, ate, lojaId)); }));
+    document.querySelectorAll('[data-fc]').forEach(b=> b.addEventListener('click', ()=>{ const [g,i]=b.dataset.fc.split(':'); const x=(g==='e'?emitir:g==='o'?faltaEntrada:faltaNum)[+i]; (g==='o'?abrirNotaEntrada:abrirNotaEmitida)(x, ()=> abrirFecharCaixa(de, ate, lojaId)); }));
     const bc = document.getElementById('fc_confirmar');
     if(bc) bc.addEventListener('click', async ()=>{
       bc.disabled = true;

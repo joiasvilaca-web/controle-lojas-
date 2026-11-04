@@ -9,6 +9,7 @@
 <script src="autorizacao.js"></script>
 <script src="cupom.js"></script>
 <script src="condicoes-pagamento.js"></script>
+<script src="vilaca-extras.js"></script>
 <script src="retirada-terceiro.js"></script>
 <script src="formato.js"></script>
 <script src="cashback.js"></script>
@@ -1356,6 +1357,15 @@ async function reverterFiadoECreditoOrdem(order, rotulo){
     cliCad.creditoMovimentos.push({ data: hojeStr(), valor: order.creditoUsado, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''}` });
     mudou = true;
   }
+  if(order.creditoGerado > 0){
+    const tirar = Math.min(Number(order.creditoGerado)||0, Math.max(0, Number(cliCad.credito)||0));
+    if(tirar > 0){
+      cliCad.credito = (Number(cliCad.credito)||0) - tirar;
+      if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
+      cliCad.creditoMovimentos.push({ data: hojeStr(), valor: -tirar, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''} (sobra do ouro)` });
+      mudou = true;
+    }
+  }
   if(order.fiadoDebitoId && Array.isArray(cliCad.fiadoDebitos)){
     const idx = cliCad.fiadoDebitos.findIndex(d=>d.id===order.fiadoDebitoId);
     if(idx > -1){
@@ -2661,6 +2671,12 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const total = temSemCusto ? 0 : (Number(holder.valorTotal)||calcTotalItens());
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
+    { let neEl = container.querySelector('#pagNotaEntrada'); if(!neEl){ neEl = document.createElement('div'); neEl.id = 'pagNotaEntrada'; hint.parentNode.insertBefore(neEl, hint.nextSibling); } OuroPag.renderNota(neEl, holder, config, currentUser && currentUser.nome); }
+    const exOuro = (saldo < -0.009) ? OuroPag.excesso(holder.pagamentos, total, config) : null;
+    if(exOuro && exOuro.ok){
+      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Ouro passou do total em ${fmtMoeda(exOuro.ex)} — fica de CRÉDITO para o cliente (usa na próxima compra; cliente precisa estar cadastrado).</span></div>`;
+      return;
+    }
     if(saldo > 0.009){
       hint.innerHTML = `<div class="aviso-linha falta">${ico('carteira')}<span>Falta lançar ${fmtMoeda(saldo)} <span class="fraco">(total ${fmtMoeda(total)} · lançado ${fmtMoeda(soma)})</span></span></div>`;
     } else if(saldo < -0.009){
@@ -4983,18 +4999,19 @@ function renderNovaOrdem(main){
       viaInp.value = `${abrev}-${proximo}`;
     }
     if(!tempPagHolder.momentoPagamento){ showToast('Em Pagamento, escolha: "Pagar agora" ou "Pagar depois".'); return; }
-    if(tempPagHolder.momentoPagamento==='na_volta'){ tempPagHolder.pagamentos=[]; tempPagHolder.emissaoNota=''; tempPagHolder.numeroNota=''; }
+    if(tempPagHolder.momentoPagamento==='na_volta'){ tempPagHolder.pagamentos=[]; tempPagHolder.emissaoNota='nao'; tempPagHolder.numeroNota=''; }   // pagar depois: nota 'não' (o número só é cobrado quando houver pagamento)
     else {
-      if((tempPagHolder.pagamentos||[]).some(p=>p._modo==='editar' && (p.formaId||p.valor))){ showToast('Confirme a forma de pagamento clicando em “Adicionar”.'); return; }
+      if((tempPagHolder.pagamentos||[]).some(p=>p._modo==='editar' && (p.formaId||p.valor))){ Destaque.marcar('#pagRows','Confirme a forma de pagamento clicando em “Adicionar”.'); return; }
       tempPagHolder.pagamentos=(tempPagHolder.pagamentos||[]).filter(p=>p._modo!=='editar');
-      if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { showToast('Em Pagamento, responda se a nota fiscal já foi emitida (Sim ou Não).'); return; } }
-      if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
+      if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { Destaque.marcar('.pag-nota-bloco','Em Pagamento, responda se a nota fiscal já foi emitida (Sim ou Não).'); return; } }
+      if(pixSemPessoa(tempPagHolder.pagamentos)){ Destaque.marcar('#pagRows','No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
     }
     const erroNota = notaEmpresasErro(tempPagHolder, lojaSel.value);
     if(erroNota){
-      showToast(erroNota);
+      Destaque.marcar('.pag-nota-bloco', erroNota);
       return;
     }
+    if(tempPagHolder.momentoPagamento!=='na_volta'){ const eNe = OuroPag.erroNota(tempPagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
     const res = checkSlot(sid, dt, null);
     let encaixe = false;
     let autorizadoPor = null;
@@ -5034,6 +5051,8 @@ function renderNovaOrdem(main){
     const pagsFiadoOS = (tempPagHolder.pagamentos||[]).filter(p=>p.formaId==='__fiado');
     const totalCredOS = pagsCreditoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
     const totalFiaOS = pagsFiadoOS.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const exOuroOS = tempPagHolder.momentoPagamento==='na_volta' ? { ex:0, ok:false } : OuroPag.excesso(tempPagHolder.pagamentos, Number(tempPagHolder.valorTotal)||0, config);
+    const creditoGeradoOS = (exOuroOS.ex > 0.009 && exOuroOS.ok) ? exOuroOS.ex : 0;   // sobra do ouro vira crédito do cliente (04/11)
     const novoFiadoDebitoIdOS = totalFiaOS>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
     const novaOrdem = {
       id: uid('ord'),
@@ -5060,10 +5079,13 @@ function renderNovaOrdem(main){
       fotos: tempFotoHolder.fotos,
       infoInterna: (document.getElementById('f_infoInterna')?.value||'').trim(),
       creditoUsado: totalCredOS,
+      creditoGerado: creditoGeradoOS || 0,
+      notaEntrada: (tempPagHolder.momentoPagamento!=='na_volta' && OuroPag.temOuro(tempPagHolder.pagamentos, config)) ? { ...(tempPagHolder.notaEntrada||{}) } : null,
       fiadoDebitoId: novoFiadoDebitoIdOS,
       itens: itensNova,
       criadoEm: Date.now()
     };
+    OuroPag.liquidar(novaOrdem.pagamentos, creditoGeradoOS, config);
     if(planoNova.itens.length) novaOrdem.reservaLojaId = planoNova.lojaId;
     if(orcamentoOrigem){ novaOrdem.orcamentoOrigemId = orcamentoOrigem.id; novaOrdem.orcamentoId = orcamentoOrigem.id; }
     // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
@@ -5076,7 +5098,7 @@ function renderNovaOrdem(main){
     // Forma "Sem custo": zera o valorTotal e pula validações de Fiado/Crédito
     const temSemCustoNova = (tempPagHolder.pagamentos||[]).some(p=>p.formaId==='__sem_custo');
     if(temSemCustoNova){ novaOrdem.valorTotal = 0; }
-    if(!temSemCustoNova && (pagsCreditoOS.length>0 || pagsFiadoOS.length>0)){
+    if(!temSemCustoNova && (pagsCreditoOS.length>0 || pagsFiadoOS.length>0 || creditoGeradoOS>0)){
       const telD = onlyDigits(novaOrdem.telefone||'');
       // Clientes não ficam em memória (22k+) — busca pelo telefone ou nome
       let cliCad = clientes.find(c=> telD && onlyDigits(c.telefone||'')===telD);
@@ -5089,7 +5111,7 @@ function renderNovaOrdem(main){
         }catch(e){ cliCad = null; }
       }
       if(!cliCad){
-        showToast('Pra usar Crédito ou Fiado, o cliente precisa estar no cadastro (selecione pela busca).');
+        Destaque.marcar('#f_clienteAcWrap', creditoGeradoOS>0 && !totalCredOS && !totalFiaOS ? 'Pra deixar o crédito do ouro, o cliente precisa estar no cadastro (selecione pela busca).' : 'Pra usar Crédito ou Fiado, o cliente precisa estar no cadastro (selecione pela busca).');
         return;
       }
       if(totalCredOS>0 && (Number(cliCad.credito)||0) < totalCredOS - 0.001){
@@ -5100,6 +5122,11 @@ function renderNovaOrdem(main){
         cliCad.credito = (Number(cliCad.credito)||0) - totalCredOS;
         if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
         cliCad.creditoMovimentos.push({ data: dt, valor: -totalCredOS, tipo:'uso', obs:`O.S. ${via}` });
+      }
+      if(creditoGeradoOS>0){
+        cliCad.credito = (Number(cliCad.credito)||0) + creditoGeradoOS;
+        if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
+        cliCad.creditoMovimentos.push({ data: dt, valor: creditoGeradoOS, tipo:'ouro', obs:`Sobra do ouro — O.S. ${via}` });
       }
       if(totalFiaOS>0){
         if(!cliCad.fiadoDebitos) cliCad.fiadoDebitos = [];
@@ -5548,8 +5575,8 @@ function openEditModalCompleto(order, opts){
       valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal,
       pagamentos: carimbarPagamentosOS(editPagHolder ? editPagHolder.pagamentos : order.pagamentos),
       momentoPagamento: editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento,
-      emissaoNota: editPagHolder ? editPagHolder.emissaoNota : order.emissaoNota,
-      numeroNota: editPagHolder ? (editPagHolder.emissaoNota==='sim' ? (editPagHolder.numeroNota||'') : '') : order.numeroNota,
+      emissaoNota: (editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento)==='na_volta' && !((editPagHolder ? editPagHolder.pagamentos : order.pagamentos)||[]).some(p=>Number(p.valor)>0) ? 'nao' : (editPagHolder ? editPagHolder.emissaoNota : order.emissaoNota),
+      numeroNota: (editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento)==='na_volta' && !((editPagHolder ? editPagHolder.pagamentos : order.pagamentos)||[]).some(p=>Number(p.valor)>0) ? '' : editPagHolder ? (editPagHolder.emissaoNota==='sim' ? (editPagHolder.numeroNota||'') : '') : order.numeroNota,
       lojaSaidaId: editPagHolder ? editPagHolder.lojaSaidaId : order.lojaSaidaId,
       lojaPagamentoId: editPagHolder ? editPagHolder.lojaPagamentoId : order.lojaPagamentoId,
       lojaNotaId: editPagHolder ? editPagHolder.lojaNotaId : order.lojaNotaId,

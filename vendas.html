@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"></noscript></noscript>
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
+<script src="vilaca-extras.js"></script>
 <script src="foto-produto.js"></script>
 <script src="autorizacao.js"></script>
 <script src="cupom.js"></script>
@@ -2168,6 +2169,12 @@ function mountPagamentos(container, holder, getLojaVendaId){
     if(container.id==='pagamentoContainerNova') atualizarBarraPdv(total, soma);
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
+    { let neEl = container.querySelector('#pagNotaEntrada'); if(!neEl){ neEl = document.createElement('div'); neEl.id = 'pagNotaEntrada'; hint.parentNode.insertBefore(neEl, hint.nextSibling); } OuroPag.renderNota(neEl, holder, config, currentUser && currentUser.nome); }
+    const exOuro = saldo < -0.009 ? OuroPag.excesso(holder.pagamentos, total, config) : null;
+    if(exOuro && exOuro.ok){
+      hint.innerHTML = `<div class="aviso aviso-ok">${ic('check')}<div><b>Ouro passou do total em ${fmtMoeda(exOuro.ex)} — fica de CRÉDITO para o cliente</b><small>O crédito pode ser usado inteiro na próxima compra. O cliente precisa estar cadastrado.</small></div></div>`;
+      return;
+    }
     if(saldo > 0.009){
       hint.innerHTML = `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Falta cobrir ${fmtMoeda(saldo)}</b><small>Total ${fmtMoeda(total)} · lançado ${fmtMoeda(soma)}</small></div></div>`;
     } else if(saldo < -0.009){
@@ -3859,23 +3866,26 @@ function renderNovaVenda(main){
     const telefone = document.getElementById('v_telefone').value.trim();
     const itensValidos = tempItensHolder.itens.filter(it=>it.produto);
 
-    if(!lojaId || !vendedora || !data){ showToast('Escolha a vendedora e a data da venda.'); return; }
-    if(itensValidos.length===0){ showToast('Adicione pelo menos um item à venda.'); return; }
+    if(!lojaId || !vendedora || !data){ Destaque.marcar('#v_vendedora','Escolha a vendedora e a data da venda.'); return; }
+    if(itensValidos.length===0){ Destaque.marcar('#itensContainerNova','Adicione pelo menos um item à venda.'); return; }
     { const semCat = itensSemCatalogo(tempItensHolder.itens); if(semCat.length){ showToast(mensagemItensSemCatalogo(semCat)); return; } }
-    if(!cliente){ showToast('Escolha o cliente antes de lançar a venda (F4 vai direto para a busca).'); return; }
-    if((tempPagHolder.pagamentos||[]).some(p=>p._modo==='editar' && (p.formaId||p.valor))){ showToast('Confirme a forma de pagamento clicando em “Adicionar”.'); return; }
+    if(!cliente){ Destaque.marcar('#v_cliente','Escolha o cliente antes de lançar a venda (F4 vai direto para a busca).'); return; }
+    if((tempPagHolder.pagamentos||[]).some(p=>p._modo==='editar' && (p.formaId||p.valor))){ Destaque.marcar('#pagRows','Confirme a forma de pagamento clicando em “Adicionar”.'); return; }
     tempPagHolder.pagamentos=(tempPagHolder.pagamentos||[]).filter(p=>p._modo!=='editar');
     if(!tempPagHolder.momentoPagamento){ showToast('Marque quando o cliente paga: “Pago agora” ou “Paga na volta”.'); return; }
-    if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { showToast('Marque se a nota fiscal foi emitida (Sim ou Não).'); return; } }
-    if(pixSemPessoa(tempPagHolder.pagamentos)){ showToast('No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
-    if(!tempPagHolder.pagamentos || tempPagHolder.pagamentos.length===0){ showToast('Adicione pelo menos uma forma de pagamento.'); return; }
+    if(!tempPagHolder.emissaoNota){ if(soPixPF(tempPagHolder.pagamentos)) tempPagHolder.emissaoNota='nao'; else { Destaque.marcar('.pag-nota-bloco','Marque se a nota fiscal foi emitida (Sim ou Não).'); return; } }
+    if(pixSemPessoa(tempPagHolder.pagamentos)){ Destaque.marcar('#pagRows','No pagamento em Pix, escolha Pix loja ou Pix pessoa física.'); return; }
+    if(!tempPagHolder.pagamentos || tempPagHolder.pagamentos.length===0){ Destaque.marcar('#btnAddPagamento','Adicione pelo menos uma forma de pagamento.'); return; }
     const totalPago = CondPag.somaBase(tempPagHolder.pagamentos, config);  // cartão conta pela parte do à vista que quita
     // O total à vista sai sempre dos itens + desconto (antes, se o campo oculto ficasse vazio, a venda salvava com total 0 e o cupom mostrava só os 20% do cartão).
     if(!(Number(tempPagHolder.valorTotal)>0) && window.__pagTotalAtual) tempPagHolder.valorTotal = Math.round(window.__pagTotalAtual()*100)/100 || null;
     const totalVenda = Number(tempPagHolder.valorTotal)||0;
-    if(totalVenda>0 && Math.abs(totalPago-totalVenda)>0.009){ showToast(totalVenda>totalPago ? `Pagamento incompleto — falta cobrir ${fmtMoeda(totalVenda-totalPago)}.` : `As formas de pagamento passam do total em ${fmtMoeda(totalPago-totalVenda)}. Ajuste os valores.`); return; }
+    const exOuroSv = OuroPag.excesso(tempPagHolder.pagamentos, totalVenda, config);
+    const creditoGerado = (exOuroSv.ex > 0.009 && exOuroSv.ok) ? exOuroSv.ex : 0;
+    if(totalVenda>0 && Math.abs(totalPago-totalVenda)>0.009 && !creditoGerado){ Destaque.marcar(['#pagRows','#pagSomaHint'], totalVenda>totalPago ? `Pagamento incompleto — falta cobrir ${fmtMoeda(totalVenda-totalPago)}.` : `As formas de pagamento passam do total em ${fmtMoeda(totalPago-totalVenda)}. Ajuste os valores.`); return; }
+    { const eNe = OuroPag.erroNota(tempPagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
     const erroNota = notaEmpresasErro(tempPagHolder, lojaId);
-    if(erroNota){ showToast(erroNota); return; }
+    if(erroNota){ Destaque.marcar('.pag-nota-bloco',erroNota); return; }
 
     // Planeja o desconto de estoque (com explosão em cascata pela composição) pra
     // cada item vinculado a um produto do catálogo. Itens sem vínculo (produtoEstoqueId
@@ -3944,12 +3954,15 @@ function renderNovaVenda(main){
       estoqueConsumido: reservas,
       estoqueLojaId: lojaEstoque,
       creditoUsado: totalCredito,
+      creditoGerado: creditoGerado || 0,   // ouro passou do valor da compra: a sobra fica de crédito do cliente (04/11)
+      notaEntrada: OuroPag.temOuro(tempPagHolder.pagamentos, config) ? { ...(tempPagHolder.notaEntrada||{}) } : null,
       fiadoDebitoId: novoFiadoDebitoId,
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
       observacaoGeral: observacaoGeral || '',
       infoInterna: infoInterna || '',
     };
+    OuroPag.liquidar(venda.pagamentos, creditoGerado, config);
     CondPag.fecharTotal(venda, config);   // concluída: total = o que o cliente pagou (cartão com os 20%)
     if(convOrc && convOrc.orcamentoId) venda.orcamentoId = convOrc.orcamentoId;
     if(convRes) venda.reservaId = convRes.reserva.id;
@@ -3961,12 +3974,12 @@ function renderNovaVenda(main){
     if(!cbVal.ok){ showToast(cbVal.erro); return; }
     if(cbVal.resumo) venda.cashback = cbVal.resumo;
     let clienteCadastro = null;
-    if(pagsCredito.length>0 || pagsFiado.length>0){
+    if(pagsCredito.length>0 || pagsFiado.length>0 || creditoGerado>0){
       const telD = (venda.telefone||'').replace(/\D/g,'');
       const nomeL = (venda.cliente||'').trim().toLowerCase();
       clienteCadastro = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
       if(!clienteCadastro){
-        showToast('Para usar Crédito ou Fiado, escolha um cliente já cadastrado na busca de cliente.');
+        Destaque.marcar('#v_cliente', creditoGerado>0 && !totalCredito && !totalFiado ? 'Para deixar o crédito do ouro, escolha um cliente já cadastrado na busca de cliente.' : 'Para usar Crédito ou Fiado, escolha um cliente já cadastrado na busca de cliente.');
         return;
       }
       if(totalCredito>0 && (Number(clienteCadastro.credito)||0) < totalCredito - 0.001){
@@ -3983,11 +3996,16 @@ function renderNovaVenda(main){
           if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
           clienteCadastro.creditoMovimentos.push({ data: venda.data, valor: -totalCredito, tipo:'uso', obs:`Venda ${String(venda.id).slice(-8)}` });
         }
+        if(creditoGerado>0){
+          clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + creditoGerado;
+          if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
+          clienteCadastro.creditoMovimentos.push({ data: venda.data, valor: creditoGerado, tipo:'ouro', obs:`Sobra do ouro — venda ${String(venda.id).slice(-8)}` });
+        }
         if(totalFiado>0){
           if(!clienteCadastro.fiadoDebitos) clienteCadastro.fiadoDebitos = [];
           clienteCadastro.fiadoDebitos.push({ id:novoFiadoDebitoId, origem:'Venda', numero:String(venda.id).slice(-8), data:venda.data, valor:totalFiado, valorPago:0, loja:venda.loja||'' });
         }
-        if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteCadastro);
+        if(totalCredito>0 || totalFiado>0 || creditoGerado>0) await salvarUmCliente(clienteCadastro);
       }
       await aplicarConsumosEstoque(reservas, lojaEstoque, venda.id);
       vendas.unshift(venda);
@@ -4163,6 +4181,15 @@ async function reverterEfeitosVenda(venda, acao){
       if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
       clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: venda.creditoUsado, tipo:'estorno', obs:`${acao} venda ${String(venda.id).slice(-8)}` });
       mudou = true;
+    }
+    if(venda.creditoGerado > 0){
+      const tirar = Math.min(Number(venda.creditoGerado)||0, Math.max(0, Number(clienteCadastro.credito)||0));   // se o cliente já gastou parte, tira só o que ainda tem
+      if(tirar > 0){
+        clienteCadastro.credito = (Number(clienteCadastro.credito)||0) - tirar;
+        if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
+        clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: -tirar, tipo:'estorno', obs:`${acao} venda ${String(venda.id).slice(-8)} (sobra do ouro)` });
+        mudou = true;
+      }
     }
     if(venda.fiadoDebitoId && Array.isArray(clienteCadastro.fiadoDebitos)){
       const idx = clienteCadastro.fiadoDebitos.findIndex(d=>d.id===venda.fiadoDebitoId);
@@ -4989,10 +5016,11 @@ function abrirFormularioEdicaoCompleta(v){
   window.__itensHolderPrev = window.__itensHolder; window.__itensHolder = itensHolder;  // total dos itens = itens desta venda
   const _vistaEd = CondPag.abrirTotal({ valorTotal:v.valorTotal, valorAVista:v.valorAVista, pagamentos:(v.pagamentos||[]).map(p=>({...p})) }, config);
   const pagHolder = {
-    valorTotal: _vistaEd.valorTotal, pagamentos: _vistaEd.pagamentos,
+    valorTotal: _vistaEd.valorTotal, pagamentos: OuroPag.restaurar(_vistaEd.pagamentos),
     descTotalTipo: v.descTotalTipo||'nenhum', descTotalModo: v.descTotalModo||'percentual', descTotalPerc: v.descTotalPerc||'', descTotalR: v.descTotalR||'',
     momentoPagamento: v.momentoPagamento, emissaoNota: v.emissaoNota, numeroNota: v.numeroNota,
     lojaSaidaId: '', lojaPagamentoId: '', lojaNotaId: '', lojaBaixaEstoqueId: '',
+    notaEntrada: v.notaEntrada ? { ...v.notaEntrada } : undefined,
   };
   if(v.emissaoNota==='sim'){
     const nomeLojaAnterior = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l ? l.abreviacao : '—'; };
@@ -5014,6 +5042,7 @@ function abrirFormularioEdicaoCompleta(v){
     { const semCat = itensSemCatalogo(itensHolder.itens); if(semCat.length){ showToast(mensagemItensSemCatalogo(semCat)); return; } }
     const erroNota = notaEmpresasErro(pagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
+    { const eNe = OuroPag.erroNota(pagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
 
     // ===== 1) Desfaz o que a venda original lançou (estoque + crédito/fiado do cliente antigo) =====
     // Devolve na mesma loja de onde saiu (vendas antigas sem esse registro não são revertidas
@@ -5040,6 +5069,15 @@ function abrirFormularioEdicaoCompleta(v){
         if(!clienteAntigo.creditoMovimentos) clienteAntigo.creditoMovimentos = [];
         clienteAntigo.creditoMovimentos.push({ data: hoje(), valor: v.creditoUsado, tipo:'estorno', obs:`Edição da venda ${String(v.id).slice(-8)}` });
         mudou = true;
+      }
+      if(v.creditoGerado > 0){
+        const tirar = Math.min(Number(v.creditoGerado)||0, Math.max(0, Number(clienteAntigo.credito)||0));
+        if(tirar > 0){
+          clienteAntigo.credito = (Number(clienteAntigo.credito)||0) - tirar;
+          if(!clienteAntigo.creditoMovimentos) clienteAntigo.creditoMovimentos = [];
+          clienteAntigo.creditoMovimentos.push({ data: hoje(), valor: -tirar, tipo:'estorno', obs:`Edição da venda ${String(v.id).slice(-8)} (sobra do ouro)` });
+          mudou = true;
+        }
       }
       if(v.fiadoDebitoId && Array.isArray(clienteAntigo.fiadoDebitos)){
         const idx = clienteAntigo.fiadoDebitos.findIndex(d=>d.id===v.fiadoDebitoId);
@@ -5081,8 +5119,10 @@ function abrirFormularioEdicaoCompleta(v){
     const pagsFiado = (pagHolder.pagamentos||[]).filter(p=>p.formaId==='__fiado');
     const totalCredito = pagsCredito.reduce((a,p)=>a+(Number(p.valor)||0),0);
     const totalFiado = pagsFiado.reduce((a,p)=>a+(Number(p.valor)||0),0);
+    const exOuroEd = OuroPag.excesso(pagHolder.pagamentos, Number(pagHolder.valorTotal)||0, config);
+    const creditoGeradoEd = (exOuroEd.ex > 0.009 && exOuroEd.ok) ? exOuroEd.ex : 0;
     let clienteNovo = null;
-    if(pagsCredito.length>0 || pagsFiado.length>0){
+    if(pagsCredito.length>0 || pagsFiado.length>0 || creditoGeradoEd>0){
       const telD = (telefone||'').replace(/\D/g,'');
       const nomeL = (cliente||'').trim().toLowerCase();
       clienteNovo = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
@@ -5108,7 +5148,8 @@ function abrirFormularioEdicaoCompleta(v){
         if(!clienteNovo.fiadoDebitos) clienteNovo.fiadoDebitos = [];
         clienteNovo.fiadoDebitos.push({ id:novoFiadoDebitoId, origem:'Venda', numero:String(v.id).slice(-8), data, valor:totalFiado, valorPago:0, loja:loja?loja.nome:'' });
       }
-      if(totalCredito>0 || totalFiado>0) await salvarUmCliente(clienteNovo);
+      if(creditoGeradoEd>0){ clienteNovo.credito = (Number(clienteNovo.credito)||0) + creditoGeradoEd; if(!clienteNovo.creditoMovimentos) clienteNovo.creditoMovimentos = []; clienteNovo.creditoMovimentos.push({ data: hoje(), valor: creditoGeradoEd, tipo:'ouro', obs:`Sobra do ouro — venda ${String(v.id).slice(-8)} (editada)` }); }
+      if(totalCredito>0 || totalFiado>0 || creditoGeradoEd>0) await salvarUmCliente(clienteNovo);
     }
 
     const dataAntigaV = v.data;
@@ -5123,6 +5164,7 @@ function abrirFormularioEdicaoCompleta(v){
     v.valorTotal = pagHolder.valorTotal;
     v.descTotalTipo = pagHolder.descTotalTipo||'nenhum'; v.descTotalModo = pagHolder.descTotalModo||'percentual'; v.descTotalPerc = pagHolder.descTotalPerc||''; v.descTotalR = pagHolder.descTotalR||'';
     v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV);
+    OuroPag.liquidar(v.pagamentos, creditoGeradoEd, config);
     delete v.valorAVista; delete v.acrescimoCartao; CondPag.fecharTotal(v, config);
     v.momentoPagamento = pagHolder.momentoPagamento;
     v.emissaoNota = pagHolder.emissaoNota;
@@ -5134,6 +5176,8 @@ function abrirFormularioEdicaoCompleta(v){
     v.estoqueConsumido = reservas;
     v.estoqueLojaId = lojaEstoqueEdicao;
     v.creditoUsado = totalCredito;
+    v.creditoGerado = creditoGeradoEd || 0;
+    v.notaEntrada = OuroPag.temOuro(pagHolder.pagamentos, config) ? { ...(pagHolder.notaEntrada||{}) } : null;
     v.fiadoDebitoId = novoFiadoDebitoId;
     const _cbAntV = v.cashback || null;
     const _cbE = v.status!=='cancelada' ? await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'validar', _cbAntV, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };

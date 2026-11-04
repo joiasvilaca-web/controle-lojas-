@@ -407,7 +407,7 @@ Manutenção:
 - Projeto grátis pausa após ~7 dias sem uso. O pg_cron do REAL tem o job `treino-mantem-acordado` (todo dia 09:23 UTC) que dá um toque no `db-gateway` do teste. Se pausar mesmo assim: `restore_project` pelo conector "Supabase Teste".
 - O conector MCP "Supabase Teste" é separado do "Supabase" (real): uma organização por conector.
 
-## 18. Versão nova em TESTE (branch `teste`, 4/nov/2026)
+## 18. Versão de 4/nov/2026 (testada no branch `teste`, publicada no real no mesmo dia)
 
 Fluxo: mudança grande vai primeiro para o branch `teste` → `teste.vilaca.app` (banco de TESTE). `treino.vilaca.app` segue o `main` (mesmo banco de teste). Só depois do OK do Felipe: passos do REAL abaixo + merge no `main`.
 - `teste.vilaca.app` está no projeto como domínio de produção (sem branch), então é apontado por ALIAS para o último deploy do branch `teste` (`assign_alias` do conector Vercel). A cada envio ao branch `teste`: esperar o deploy ficar READY e refazer o alias. Todo deploy do `main` devolve o domínio ao `main`. Para prender de vez ao branch é no painel da Vercel (Settings › Domains › teste.vilaca.app › Git Branch = `teste`), que precisa do login do Felipe.
@@ -427,8 +427,17 @@ Servidor (banco de TESTE):
 - Funções SQL `cfg_sessao_abrir`, `cfg_login_falhou`, `cfg_sessao_fechar`, `cfg_sessao_loja_extra`, `cfg_usuario_patch`, `cfg_salvar`, `cfg_set_chave` (+ `_agora_ms`, `_cfg_user_idx`, `_sessoes_vivas`): SECURITY DEFINER, execução só para service_role. Gravam só o pedaço que mudou do `gestao_config`, com trava de linha — login, logout e salvar configuração não apagam mais a sessão de outra pessoa. Foram criadas por SQL direto (não estão em migration): para levar ao real, copiar com `pg_get_functiondef`.
 - `db-gateway` v64 usa as `cfg_*`, tem `buscaGeral`, devolve `semSenha`, aceita `senhaInicial` em usuário novo e desliga `primeiroAcesso`. `termos-uso` e `entrar-como` gravam via `cfg_usuario_patch`. `agenda-tarefas`, `insumos-api`, `lancamentos-api`, `inventario-api`: vendedora = gerente nas lojas dela. `funcionario-acesso`: senha definida pela diretoria encerra o primeiro acesso antigo (ainda grava a configuração inteira; trocar por `cfg_usuario_patch` numa próxima).
 
-Para promover ao REAL (nesta ordem — servidor antes da tela):
-1. Criar as funções `cfg_*` no real (mesmo SQL do teste).
-2. Publicar no real as edge functions acima, mesmo código (a `funcionario-acesso` do real mantém `APP_BASE_URL = https://vilaca.app`).
+Publicado no REAL em 04/11/2026 (nesta ordem — servidor antes da tela; repetir a ordem nas próximas):
+1. Migration `cfg_funcoes_atomicas` (funções `cfg_*` idênticas às do teste, conferidas por md5 do `pg_get_functiondef`).
+2. Edge functions: `db-gateway` v65, `termos-uso` v5, `entrar-como` v2, `funcionario-acesso` v29 (`APP_BASE_URL = https://vilaca.app`), `insumos-api` v10, `inventario-api` v7, `lancamentos-api` v21, `reservas-api` v3, `agenda-tarefas` v5.
 3. Merge `teste` → `main`.
-4. Dados do real: forma LINK ECO (botão em Config › Pagamento), função Vendedora = Gerente, senha inicial para quem ainda estava no primeiro acesso antigo (DP › Acesso).
+4. Dados: forma LINK ECO (`cartao`, `exigeNota`, `lojaNotaId = loja_ec`) e função Vendedora = Gerente (vendedoras com permissões gravadas recalculadas). Ninguém estava no primeiro acesso antigo.
+
+Lição (deploy de edge function pelo conector): a camada de ferramentas troca `\u` + 4 dígitos hex pelo caractere de verdade antes de enviar (ex.: regex `[\u0300-\u036f]` vira acentos soltos). Funciona igual, mas o arquivo publicado não fica idêntico ao do repositório. Ao publicar arquivo com esse tipo de escape, mandar a barra como `\u005c` no JSON e conferir depois com `get_edge_function` + `diff`.
+
+## 19. Ouro, nota de entrada, campos em vermelho e login do teste (04/11)
+- `vilaca-extras.js` (novo, carregado em vendas, painel-ordens, orcamentos, caixa): `Destaque.marcar(alvos, msg)` pinta o campo faltando/errado de vermelho (classe `.v-erro`), rola e foca; `OuroPag` cuida do ouro.
+- Ouro maior que a compra: a sobra vira CRÉDITO do cliente (`creditoGerado` na via; cliente precisa estar cadastrado). A linha do ouro é gravada só com o valor da compra (`valorEntregue` guarda o que o cliente trouxe) para o caixa/relatórios baterem. Cancelar/editar a via desfaz o crédito (tira só o que o cliente ainda tem). Só o ouro pode passar do total.
+- Nota de ENTRADA (via com ouro): botão Emitir obrigatório + nº opcional (`notaEntrada {emitida, numero}`); o fechamento do caixa (caixa.html) exige o número.
+- `login-teste` (função só no banco de teste; recusa se o projeto não for o de teste): em teste.vilaca.app o login mostra Oficina/Vendedora/Gerente sem senha; Diretoria pede a senha (definida no banco de teste, não está no repositório). Não existe em produção nem no treino.
+- 04/11: pagar depois = nota "não" (criação e edição); o Caixa não cobra nota de via "pagar depois" sem pagamento e respeita o "não" escolhido na via (só LINK ECO sempre exige). Todo login entra na primeira loja do cadastro da pessoa (seletor troca depois).
