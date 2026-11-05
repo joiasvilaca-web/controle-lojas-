@@ -925,6 +925,11 @@ function abrirComposer(msgExistente){
               <input type="number" id="fDiasNum" min="1" max="999" value="30" style="width:70px;" aria-label="Dias"> dias
               <span class="dica">Ainda em construção: por enquanto inclui todos os clientes.</span>
             </label></div>
+            <div class="filtro-opcao"><input type="radio" name="mdFiltro" value="posVenda" id="fPosVenda"><label for="fPosVenda">Compraram há
+              <select id="fPosModo" aria-label="Exatamente ou até"><option value="exato">exatamente</option><option value="ate">até</option></select>
+              <input type="number" id="fPosDias" min="0" max="3650" value="${Number((config&&config.mensagens&&config.mensagens.posVendaDias)||7)}" style="width:70px;" aria-label="Dias"> dias
+              <span class="dica">Vendas lançadas (conta do dia da venda) e pedidos com status Entregue (conta do dia em que ficou Entregue). Canceladas não entram.</span>
+            </label></div>
             <div class="filtro-opcao"><input type="radio" name="mdFiltro" value="aniversariantes" id="fAniv"><label for="fAniv">Aniversariantes do mês
               <select id="fAnivMes" aria-label="Mês"><option value="">Escolha</option>${['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'].map((n,i)=>`<option value="${i+1}">${n}</option>`).join('')}</select>
             </label></div>
@@ -981,13 +986,15 @@ function abrirComposer(msgExistente){
   document.getElementById('btnPreviewDestinatarios').addEventListener('click', async ()=>{
     showToast('Carregando clientes…', 1500);
     await carregarClientesSeNecessario();
+    if(document.getElementById('fPosVenda').checked) await carregarComprasSeNecessario();
     const lista = filtrarDestinatarios();
+    const pos = document.getElementById('fPosVenda').checked;
     if(lista.length===0){ showToast('Nenhum cliente nesse grupo. Escolha outro grupo.'); return; }
     openModal(`
       <h3>Quem vai receber <span class="cnt">${lista.length}</span></h3>
       <div class="lista-rolavel">
-        <table class="cartoes"><thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th></tr></thead><tbody>
-          ${lista.map(c=>`<tr><td class="principal">${escapeHtml(c.nome)}</td><td data-label="Telefone" class="nw">${c.telefone?escapeHtml(telFmt(c.telefone)):'<span class="muted">—</span>'}</td><td data-label="E-mail">${c.email?escapeHtml(c.email):'<span class="muted">—</span>'}</td></tr>`).join('')}
+        <table class="cartoes"><thead><tr><th>Nome</th><th>Telefone</th><th>E-mail</th>${pos?'<th>Comprou</th>':''}</tr></thead><tbody>
+          ${lista.map(c=>`<tr><td class="principal">${escapeHtml(c.nome)}</td><td data-label="Telefone" class="nw">${c.telefone?escapeHtml(telFmt(c.telefone)):'<span class="muted">—</span>'}</td><td data-label="E-mail">${c.email?escapeHtml(c.email):'<span class="muted">—</span>'}</td>${pos?`<td data-label="Comprou">${(c._compras||[]).map(x=>`${escapeHtml(x.origem)} ${escapeHtml(x.via)} · ${x.dia.split('-').reverse().join('/')} (há ${x.n} dia${x.n===1?'':'s'})${nomeLojaMd(x.lojaId)?' · '+escapeHtml(nomeLojaMd(x.lojaId)):''}`).join('<br>')}</td>`:''}</tr>`).join('')}
         </tbody></table>
       </div>
       <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>
@@ -1004,6 +1011,14 @@ function abrirComposer(msgExistente){
     mensagensSalvas.push(nova);
     showToast('Mensagem salva. Ela aparece em Mensagens salvas.');
   });
+
+  // 06/11: pós-venda — com o texto vazio, puxa a mensagem configurada em Configurações › Cadastro › Status e Mensagens
+  document.getElementById('fPosVenda').addEventListener('change', ()=>{
+    const t = document.getElementById('mdTexto');
+    const padrao = (config && config.mensagens && config.mensagens.posVenda) || MSG_POS_VENDA_PADRAO;
+    if(t && !t.value.trim()){ t.value = padrao; showToast('Mensagem de pós-venda das Configurações colocada no texto (pode editar).'); }
+  });
+  ['fPosModo','fPosDias'].forEach(id=> document.getElementById(id).addEventListener('focus', ()=>{ const r=document.getElementById('fPosVenda'); if(!r.checked){ r.checked=true; r.dispatchEvent(new Event('change')); } }));
 
   // Enviar
   document.getElementById('btnEnviarMalaDireta').addEventListener('click', ()=> confirmarEnvioMalaDireta());
@@ -1071,10 +1086,51 @@ async function ajudarComIA(){
   });
 }
 
+/* ===== 06/11: Pós-venda — clientes que compraram há X dias =====
+   Vendas (cartão Venda): data base = dia da venda. Pedidos (cartão Pedido) com status Entregue: data base = dia em que ficou
+   Entregue (recebidoEm). As vias não guardam o id do cliente: o vínculo com o cadastro é pelo telefone, senão pelo nome. */
+const MSG_POS_VENDA_PADRAO = 'Olá, {cliente}! Aqui é da {loja}. Passando para agradecer pela sua compra e saber se está tudo certo com a sua joia. Qualquer coisa, é só chamar! 💍';
+let comprasCarregadas = false, comprasVendas = [], comprasPedidos = [];
+async function carregarComprasSeNecessario(){
+  if(comprasCarregadas) return;
+  const [v, o] = await Promise.all([gatewaySelectTudo('vendas_pdv'), gatewaySelectTudo('ordens_servico')]);
+  comprasVendas = v.map(r=>r.payload).filter(Boolean);
+  comprasPedidos = o.map(r=>r.payload).filter(Boolean);
+  comprasCarregadas = true;
+}
+function diaLocal(ts){ const d = new Date(Number(ts)||ts); if(isNaN(d)) return ''; return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function diasDesde(diaIso){ const h = diaLocal(Date.now()); const a = Date.UTC(+h.slice(0,4), +h.slice(5,7)-1, +h.slice(8,10)); const b = Date.UTC(+diaIso.slice(0,4), +diaIso.slice(5,7)-1, +diaIso.slice(8,10)); return Math.round((a-b)/86400000); }
+function chaveTel(t){ let d = onlyDigits(t||''); if(d.startsWith('55') && d.length>=12) d = d.slice(2); return d.length>=10 ? d.slice(-8) : ''; }
+function nomeLojaMd(id){ const l = (config.lojas||[]).find(x=>x.id===id); return l ? (l.nomeFantasia||l.nome) : ''; }
+function destinatariosPosVenda(){
+  const dias = parseInt(document.getElementById('fPosDias').value, 10);
+  const modo = document.getElementById('fPosModo').value;
+  if(isNaN(dias) || dias < 0){ showToast('Digite o número de dias.'); return []; }
+  const entra = n=> modo==='ate' ? (n>=0 && n<=dias) : n===dias;
+  const compras = [];
+  comprasVendas.forEach(v=>{ if(v.status==='cancelada' || !v.data) return; const n = diasDesde(String(v.data).slice(0,10)); if(entra(n)) compras.push({ origem:'Venda', via:v.codigoVia||'', dia:String(v.data).slice(0,10), n, nome:v.cliente, telefone:v.telefone, email:v.email, lojaId:v.lojaId }); });
+  comprasPedidos.forEach(o=>{ if(o.status!=='entregue') return; const dia = o.recebidoEm ? diaLocal(o.recebidoEm) : ''; if(!dia) return; const n = diasDesde(dia); if(entra(n)) compras.push({ origem:'Pedido entregue', via:o.via||o.codigoVia||'', dia, n, nome:o.cliente, telefone:o.telefone, email:o.email, lojaId:o.lojaId }); });
+  // liga com o cadastro (telefone, senão nome) e junta compras do mesmo cliente
+  const porTel = new Map(), porNome = new Map();
+  clientes.forEach(c=>{ const k = chaveTel(c.telefone); if(k && !porTel.has(k)) porTel.set(k, c); const nm = String(c.nome||'').trim().toUpperCase(); if(nm && !porNome.has(nm)) porNome.set(nm, c); });
+  const saida = new Map();
+  compras.sort((a,b)=> a.n-b.n).forEach(x=>{
+    const k = chaveTel(x.telefone); const nm = String(x.nome||'').trim().toUpperCase();
+    const cad = (k && porTel.get(k)) || (nm && porNome.get(nm)) || null;
+    const id = cad ? cad.id : ('via:' + (k || nm));
+    if(!k && !nm) return;
+    if(saida.has(id)){ saida.get(id)._compras.push(x); return; }
+    saida.set(id, { ...(cad||{}), id, nome: (cad&&cad.nome) || x.nome || '', telefone: (cad&&cad.telefone) || x.telefone || '', email: (cad&&cad.email) || x.email || '',
+      _lojaNome: nomeLojaMd(x.lojaId), _compras:[x] });
+  });
+  return [...saida.values()];
+}
+
 function filtrarDestinatarios(){
   const filtro = document.querySelector('input[name="mdFiltro"]:checked')?.value || 'todos';
   let lista = [...clientes];
   if(filtro==='todos') return lista;
+  if(filtro==='posVenda') return destinatariosPosVenda();
   if(filtro==='semEmail') return lista.filter(c=>!c.email);
   if(filtro==='semTel') return lista.filter(c=>!c.telefone);
   if(filtro==='semCompraNoMes'){
@@ -1100,6 +1156,7 @@ function filtrarDestinatarios(){
 
 async function confirmarEnvioMalaDireta(){
   await carregarClientesSeNecessario();
+  if(document.getElementById('fPosVenda') && document.getElementById('fPosVenda').checked) await carregarComprasSeNecessario();
   const lista = filtrarDestinatarios();
   const texto = (document.getElementById('mdTexto')||{}).value||'';
   const viaWa = document.getElementById('envWhats')?.checked;
@@ -1126,7 +1183,7 @@ async function executarEnvioMalaDireta(lista, texto, viaWa, viaEmail){
   let enviados=0, falhas=0;
   showToast(`Enviando para ${lista.length} clientes...`, 10000);
   for(const c of lista){
-    const msg = texto.replaceAll('{cliente}',c.nome||'').replaceAll('{loja}',config.lojas&&config.lojas[0]?config.lojas[0].nome:'Vilaça Joias').replaceAll('{data}',new Date().toLocaleDateString('pt-BR'));
+    const msg = texto.replaceAll('{cliente}',c.nome||'').replaceAll('{loja}',c._lojaNome || (config.lojas&&config.lojas[0]?config.lojas[0].nome:'Vilaça Joias')).replaceAll('{data}',new Date().toLocaleDateString('pt-BR'));
     if(viaWa && c.telefone){
       window.open(`https://wa.me/55${onlyDigits(c.telefone)}?text=${encodeURIComponent(msg)}`, '_blank');
       await new Promise(r=>setTimeout(r,300));

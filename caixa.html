@@ -786,7 +786,6 @@ function mensagemConfiavel(ev){
     const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (dentroPeriodo(p.data || v.data) ? (Number(p.valor)||0) : 0)), 0);
     /* 05/11: no Pedido o campo "data" é a data de ENTREGA; a data do pedido é criadoEm. "Pago depois" = pagamento feito depois do dia em que a via foi lançada. */
     const dataLancamento = r=> (r && r.criadoEm) ? (dataDeTimestamp(Number(r.criadoEm)||r.criadoEm) || r.data) : r.data;
-    const pagoDepois = v=> (v.pagamentos||[]).some(p=> p && p.data && p.data > (dataLancamento(v)||'') && dentroPeriodo(p.data));
     let vendasRecBase = vendas.filter(v=> recebidoNoPeriodo(v) > 0);
     let osRecBase = caixaOrdens.filter(o=> recebidoNoPeriodo(o) > 0);
     let aReceberVendasBase = vendas.filter(v=> v.status==='ativa' && dentroPeriodo(v.data) && valorAReceberDe(v) > 0);
@@ -896,14 +895,16 @@ function mensagemConfiavel(ev){
     let html = '';
     const soma = (lista, fn)=> lista.reduce((a,x)=> a + (Number(fn(x))||0), 0);
     const selo = (txt, tipo)=> `<span class="selo selo-${tipo||'neutro'}">${escapeHtml(txt)}</span>`;
+    /* 06/11: etiqueta mostra a situação ATUAL da via (depois de editada): Pago (nada a receber) ou Parcial (falta receber). */
+    const seloPagamento = v=>{ const falta = valorAReceberDe(v); return falta > 0.009 ? selo('Parcial · falta '+fmtMoeda(falta),'wait') : selo('Pago','ok'); };
     if(tipos.includes('vendasRecebidas')){
       html += detalheSecao('Vendas recebidas', vendasRecBase, v=>`
-        <tr${v.status==='cancelada'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(v.data)+(pagoDepois(v)?' '+selo('Pago depois','info'):''))}${celula('Loja', escapeHtml(v.loja))}${celula('Recebido', vEntrada(recebidoNoPeriodo(v)), 'r')}</tr>
+        <tr${v.status==='cancelada'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(v.data)+(v.status!=='cancelada'?' '+seloPagamento(v):''))}${celula('Loja', escapeHtml(v.loja))}${celula('Recebido', vEntrada(recebidoNoPeriodo(v)), 'r')}</tr>
       `, ['Cliente','Data','Loja','Recebido'], { icone:'carrinho', total: vEntrada(soma(vendasRecBase, recebidoNoPeriodo)) });
     }
     if(tipos.includes('osRecebidas')){
       html += detalheSecao('O.S. recebidas', osRecBase, o=>`
-        <tr${o.status==='cancelado'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(dataLancamento(o))+(pagoDepois(o)?' '+selo('Pago depois','info'):'')+(o.data && o.data!==dataLancamento(o)?`<div class="muted" style="font-size:12px;">entrega ${fmtDate(o.data)}</div>`:''))}${celula('Loja', escapeHtml(nomeLojaCaixa(o.lojaId)))}${celula('Recebido', vEntrada(recebidoNoPeriodo(o)), 'r')}</tr>
+        <tr${o.status==='cancelado'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(dataLancamento(o))+(o.status!=='cancelado'?' '+seloPagamento(o):'')+(o.data && o.data!==dataLancamento(o)?`<div class="muted" style="font-size:12px;">entrega ${fmtDate(o.data)}</div>`:''))}${celula('Loja', escapeHtml(nomeLojaCaixa(o.lojaId)))}${celula('Recebido', vEntrada(recebidoNoPeriodo(o)), 'r')}</tr>
       `, ['Cliente','Data','Loja','Recebido'], { icone:'recibo', total: vEntrada(soma(osRecBase, recebidoNoPeriodo)) });
     }
     if(tipos.includes('contasPagas')){
