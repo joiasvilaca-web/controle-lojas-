@@ -67,8 +67,8 @@
        +'<div class="rt-sub">'+esc(o.via?('Via '+o.via+' · '):'')+esc(o.cliente||'')+'</div>'
        +'<div class="rt-estado"><b>'+esc(estadoTxt)+'</b>'+(det?'<span>'+det+'</span>':'')+'</div>'
        +(st==='usado' ? '' : (!hab
-          ? '<p style="margin:0 0 6px;">Libere quando o cliente pedir para outra pessoa retirar. Ele gera o código no link da via e repassa ao portador.</p><div class="rt-row"><button class="rt-btn pri" data-hab>'+ic('check',15)+' Liberar retirada por terceiros</button></div>'
-          : '<div class="rt-row">'+(tel?'<a class="rt-btn" target="_blank" rel="noopener" href="https://wa.me/'+tel+'?text='+encodeURIComponent(txt)+'">Enviar link ao cliente (WhatsApp)</a>':'')+'<button class="rt-btn" data-copy>Copiar link</button></div>'
+          ? '<p style="margin:0 0 6px;">Libere quando o cliente pedir para outra pessoa retirar. No mesmo link da via que ele já recebeu aparece o botão para gerar o código, e ele repassa ao portador.</p><div class="rt-row"><button class="rt-btn pri" data-hab>'+ic('check',15)+' Liberar retirada por terceiros</button></div>'
+          : '<div class="rt-row">'+(tel?'<a class="rt-btn" target="_blank" rel="noopener" href="https://wa.me/'+tel+'?text='+encodeURIComponent(txt)+'">Reenviar link (se o cliente não tiver)</a>':'')+'<button class="rt-btn" data-copy>Copiar link</button></div>'
            +'<div style="margin-top:12px;font-weight:700;">Recebido com código</div>'
            +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="4" autocomplete="off" spellcheck="false" placeholder="____" '+(podeConferir?'':'disabled')+' aria-label="Código do portador"><button class="rt-btn pri" data-conf '+(podeConferir?'':'disabled')+'>Conferir código</button></div>'
            +(podeConferir?'':'<div class="rt-sub" style="margin:0;">'+(st==='sem_codigo'?'Aguardando o cliente gerar o código no link.':'Peça ao cliente para gerar um novo código no link.')+'</div>')
@@ -79,7 +79,7 @@
        +((r.historico||[]).length?'<div class="rt-hist"><b>Registro</b>'+r.historico.slice().reverse().map(function(h){ return '<div>'+dh(h.em)+' — '+esc(h.acao)+(h.por?' · '+esc(h.por):'')+'</div>'; }).join('')+'</div>':'');
       box.querySelector('[data-x]').onclick=fechar;
       var b;
-      if((b=box.querySelector('[data-hab]'))) b.onclick=async function(){ this.disabled=true; var x=await chamar(Object.assign({acao:'habilitar',on:true},base)); desenhar(x.error||'Retirada por terceiros liberada. Envie o link ao cliente.', x.error?'err':'ok'); };
+      if((b=box.querySelector('[data-hab]'))) b.onclick=async function(){ this.disabled=true; var x=await chamar(Object.assign({acao:'habilitar',on:true},base)); desenhar(x.error||'Retirada por terceiros liberada. O link da via que o cliente já tem atualiza sozinho (até 20 segundos) e mostra o botão para gerar o código. Não precisa enviar de novo.', x.error?'err':'ok'); };
       if((b=box.querySelector('[data-deslig]'))) b.onclick=async function(){ if(!confirm('Desligar a retirada por terceiros? O código atual deixa de valer.')) return; var x=await chamar(Object.assign({acao:'habilitar',on:false},base)); desenhar(x.error||'Retirada por terceiros desligada.', x.error?'err':'ok'); };
       if((b=box.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(link); this.textContent='Link copiado'; }catch(e){ prompt('Copie o link:',link); } };
       var inp=box.querySelector('.rt-cod');
