@@ -380,7 +380,12 @@ function mensagemConfiavel(ev){
     const r = await gatewayCall({ op:'getConfig' });
     config = (r && r.data) ? r.data : { lojas:[] };
   }
+  /* 05/11: a tela guardava os dados de quando foi aberta (edição feita depois em Venda/Pedido não aparecia).
+     Agora Pesquisar, Hoje e Fechar caixa buscam de novo no servidor se a última carga tem mais de 20 s. */
+  let ultimaCargaCaixa = 0;
+  async function garantirDadosAtuais(){ if(Date.now() - ultimaCargaCaixa > 20000) await carregarTudo(true); }
   async function carregarTudo(forcar){
+    ultimaCargaCaixa = Date.now();
     await carregarConfig();
     try{
       const r = await gatewayCall({ op:'selectAll', table:'vendas_pdv' });
@@ -457,10 +462,16 @@ function mensagemConfiavel(ev){
       if(v==='resumo') renderRelatorioCaixa(elDe.value, elAte.value, elLoja.value, tipos());
       else renderNotas(v, elDe.value, elAte.value, elLoja.value);
     }
-    wrap.querySelector('#cx_fechar').addEventListener('click', ()=> abrirFecharCaixa(elDe.value, elAte.value, elLoja.value));
+    async function comDadosAtuais(btn, fn){
+      const rot = btn.innerHTML; btn.disabled = true;
+      try{ await garantirDadosAtuais(); }catch(e){ console.error(e); }
+      finally{ btn.disabled = false; btn.innerHTML = rot; }
+      fn();
+    }
+    wrap.querySelector('#cx_fechar').addEventListener('click', e=> comDadosAtuais(e.currentTarget, ()=> abrirFecharCaixa(elDe.value, elAte.value, elLoja.value)));
     // Filtros NÃO disparam render automaticamente — lista só carrega via Pesquisar ou Hoje
-    wrap.querySelector('#cx_pesquisar').addEventListener('click', render);
-    wrap.querySelector('#cx_hoje').addEventListener('click', ()=>{ elDe.value = hoje(); elAte.value = hoje(); render(); });
+    wrap.querySelector('#cx_pesquisar').addEventListener('click', e=> comDadosAtuais(e.currentTarget, render));
+    wrap.querySelector('#cx_hoje').addEventListener('click', e=>{ elDe.value = hoje(); elAte.value = hoje(); comDadosAtuais(e.currentTarget, render); });
     wrap.querySelector('#cx_atualizar').addEventListener('click', async ()=>{
       const btn = wrap.querySelector('#cx_atualizar');
       const rotulo = btn.innerHTML;
