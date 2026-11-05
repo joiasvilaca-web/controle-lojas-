@@ -5315,12 +5315,14 @@ function openEditModalCompleto(order, opts){
     // pagamento antigo sem data fica com a data de criação da ordem (não vira "hoje" só porque a ordem foi editada)
     valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p, data: p.data || dataLocalDeMs(order.criadoEm)})),
     momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'', numeroNota: order.numeroNota||'',
+    notaEntrada: order.notaEntrada ? { ...order.notaEntrada } : undefined,
     permitirPagarDepois: true,   // 04/11: incluir pagamento numa via "Pagar depois"
     lojaSaidaId: order.lojaSaidaId||'', lojaPagamentoId: order.lojaPagamentoId||'',
     lojaNotaId: order.lojaNotaId||'', lojaBaixaEstoqueId: order.lojaBaixaEstoqueId||'',
     descTotalTipo: order.descTotalTipo||'nenhum', descTotalModo: order.descTotalModo||'percentual',
     descTotalPerc: order.descTotalPerc!==undefined?order.descTotalPerc:'', descTotalR: order.descTotalR!==undefined?order.descTotalR:'',
   };
+  OuroPag.restaurar(editPagHolder.pagamentos);   // ouro volta ao valor que o cliente trouxe (recalcula a sobra)
   mountPagamentos(document.getElementById('pagamentoContainerEdit'), editPagHolder, ()=>order.lojaId||'');
   wireClienteFields('e', { buscarClientePorCpf: true });
   const btnEditarCadCliEdit = document.getElementById('btnEditarCadastroClienteEdit');
@@ -5563,6 +5565,30 @@ function openEditModalCompleto(order, opts){
       }
     }
 
+    // 05/11: ouro na edição — nota de entrada obrigatória e sobra vira crédito (igual ao Pedido novo)
+    let _exOuroEd = { ex:0, ok:false };
+    if(editPagHolder && editPagHolder.momentoPagamento!=='na_volta' && status!=='rascunho' && status!=='cancelado'){
+      const _eNe = OuroPag.erroNota(editPagHolder, config);
+      if(_eNe){ Destaque.marcar('#neEmitir', _eNe); return; }
+      _exOuroEd = OuroPag.excesso(editPagHolder.pagamentos, Number(editPagHolder.valorTotal)||0, config);
+    }
+    const _credNovoEd = (_exOuroEd.ex > 0.009 && _exOuroEd.ok) ? _exOuroEd.ex : 0;
+    const _credAntEd = Number(order.creditoGerado)||0;
+    if(Math.abs(_credNovoEd - _credAntEd) > 0.009){
+      const _telE = onlyDigits(telefone||'');
+      let _cli = clientes.find(c=> _telE && onlyDigits(c.telefone||'')===_telE);
+      if(!_cli && _telE) _cli = await buscarClientePorTelefoneOuCpf(telefone, '');
+      if(!_cli && cliente){ try{ const r = await gatewayCall({ op:'searchClients', params:{ termo: cliente.trim() } }); const nl = cliente.trim().toLowerCase(); _cli = ((r&&r.data)||[]).find(c=>(c.nome||'').trim().toLowerCase()===nl)||null; }catch(e){ _cli = null; } }
+      if(!_cli){ Destaque.marcar('#e_cliente', 'Pra deixar o crédito do ouro, o cliente precisa estar no cadastro.'); return; }
+      const _dl = _credNovoEd - _credAntEd;
+      const _mov = _dl > 0 ? _dl : -Math.min(-_dl, Math.max(0, Number(_cli.credito)||0));
+      if(Math.abs(_mov) > 0.009){
+        _cli.credito = (Number(_cli.credito)||0) + _mov;
+        if(!_cli.creditoMovimentos) _cli.creditoMovimentos = [];
+        _cli.creditoMovimentos.push({ data: hojeStr(), valor: _mov, tipo:'ouro', obs:`Sobra do ouro (edição) — O.S. ${order.via||''}` });
+        await salvarUmCliente(_cli);
+      }
+    }
     const st = config.serviceTypes.find(s=>s.id===sid);
     const _snapCb = JSON.parse(JSON.stringify(order));
     Object.assign(order, {
@@ -5574,6 +5600,8 @@ function openEditModalCompleto(order, opts){
       itens: editItensHolder ? itensOsParaSalvar(editItensHolder) : order.itens,
       valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal,
       pagamentos: carimbarPagamentosOS(editPagHolder ? editPagHolder.pagamentos : order.pagamentos),
+      creditoGerado: editPagHolder ? _credNovoEd : (order.creditoGerado||0),
+      notaEntrada: (editPagHolder && editPagHolder.momentoPagamento!=='na_volta' && OuroPag.temOuro(editPagHolder.pagamentos, config)) ? { ...(editPagHolder.notaEntrada||{}) } : null,
       momentoPagamento: editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento,
       emissaoNota: (editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento)==='na_volta' && !((editPagHolder ? editPagHolder.pagamentos : order.pagamentos)||[]).some(p=>Number(p.valor)>0) ? 'nao' : (editPagHolder ? editPagHolder.emissaoNota : order.emissaoNota),
       numeroNota: (editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento)==='na_volta' && !((editPagHolder ? editPagHolder.pagamentos : order.pagamentos)||[]).some(p=>Number(p.valor)>0) ? '' : editPagHolder ? (editPagHolder.emissaoNota==='sim' ? (editPagHolder.numeroNota||'') : '') : order.numeroNota,
@@ -5586,6 +5614,7 @@ function openEditModalCompleto(order, opts){
       descTotalPerc: editPagHolder ? editPagHolder.descTotalPerc : order.descTotalPerc,
       descTotalR: editPagHolder ? editPagHolder.descTotalR : order.descTotalR,
     });
+    if(_credNovoEd > 0.009) OuroPag.liquidar(order.pagamentos, _credNovoEd, config);
     const _cbAntO = order.cashback || null;
     const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', order.valorTotal, 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
     if(!_cbEO.ok){ Object.keys(order).forEach(k=>delete order[k]); Object.assign(order, _snapCb); showToast(_cbEO.erro); return; }
