@@ -355,6 +355,9 @@ tr.linha-cancelada .cli-nome{text-decoration:line-through;color:var(--ink-faint)
 .item-row-estoque{margin-top:8px;display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-faint);}
 .item-row-estoque .ico{color:var(--ink-faint);}
 .disp-ok{color:var(--ok);} .disp-falta{color:var(--danger);}
+.cv-radio{display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;line-height:1.4;}
+.cv-radio input[type=radio]{width:18px;height:18px;min-height:0;flex:0 0 18px;margin:2px 0 0;padding:0;}
+.cv-radio span{flex:1;min-width:0;}
 .aviso{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;font-size:13px;line-height:1.45;margin-top:8px;border:1px solid;}
 .aviso .ico{margin-top:1px;}
 .aviso-wait{background:var(--wait-soft);border-color:var(--wait);color:var(--wait);}
@@ -4066,11 +4069,11 @@ function motivoSemEdicao(reg){
 }
 
 function podeCancelarVenda(venda){
-  return !!(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (venda ? ehVendedoraDaLoja(venda.lojaId) : (currentUser.nivel==='vendedora' && ehVendedoraDaLoja(window.__lojaAtual && window.__lojaAtual.id)))));
+  return !!(currentUser && currentUser.nivel!=='oficina');   // 05/11: todos cancelam (sem senha); fica no LOG e no fechamento do caixa
 }
 async function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
-  if((!podeCancelarVenda(venda) || !podeEditarRegistro(venda)) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id, venda.lojaId); if(!a) return; __vendasLiberadas.add(venda.id); }
+  if(!podeCancelarVenda(venda) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id, venda.lojaId); if(!a) return; __vendasLiberadas.add(venda.id); }
   if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
   if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
   const recebido = valorRecebidoDe(venda);
@@ -4079,11 +4082,7 @@ async function abrirCancelarVenda(venda){
     <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)} · <b>${fmtMoeda(venda.valorTotal)}</b></p>
     ${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Esta venda já recebeu ${fmtMoeda(recebido)}.</b><small>Ao confirmar, você escolhe: deixar como crédito do cliente ou devolver o valor.</small></div></div>` : ''}
     ${venda.estoqueConsumido && Object.keys(venda.estoqueConsumido).length>0 ? `<div class="aviso aviso-info">${ic('pacote')}<div>Os itens desta venda voltam ao estoque automaticamente.</div></div>` : `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Venda antiga, sem registro de baixa de estoque.</b><small>Se ela baixou estoque, ajuste à mão em Configurações › Cadastro › Produto.</small></div></div>`}
-    <div class="field" style="margin-top:14px;display:grid;gap:8px;">
-      <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="cancelar" checked> <span><b>Cancelar e manter o registro</b><br><small class="muted">A venda fica na lista como cancelada, para consulta.</small></span></label>
-      <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="cv_modo" value="excluir"> <span><b>Desfazer tudo — a venda deixa de existir</b><br><small class="muted">${venda.data !== hoje() ? 'Venda de outro dia: ela fica no dia em que foi feita e entra como <b>devolução hoje</b> (desconta no faturamento e na comissão de hoje). ' : ''}Estoque volta, crédito/fiado/cashback do cliente são desfeitos${recebido>0?', o valor recebido ('+fmtMoeda(recebido)+') é devolvido ao cliente':''} e a venda some das listas, do caixa e dos relatórios.</small></span></label>
-    </div>
-    <div id="cv_avisoExcluir" style="display:none;">${recebido>0 ? `<div class="aviso aviso-danger">${ic('alerta')}<div><b>Devolva ${fmtMoeda(recebido)} ao cliente</b><small>Pela mesma forma em que foi pago: ${escapeHtml((venda.pagamentos||[]).filter(p=>!['__fiado','__credito','__cashback'].includes(p.formaId)).map(p=>(((config.formasPagamento||[]).find(f=>f.id===p.formaId)||{nome:'—'}).nome)+' '+fmtMoeda(p.valor)).join(' · '))}. Cartão: estorne na maquininha.</small></div></div>` : ''}</div>
+    <div class="aviso aviso-info">${ic('alerta')}<div>A venda fica na lista como <b>CANCELADA</b>, para consulta.${venda.data !== hoje() ? '<small>Venda de outro dia: ela fica no dia em que foi feita e entra como <b>devolução hoje</b> (desconta no faturamento e na comissão de hoje).</small>' : ''}</div></div>
     <div class="field" style="margin-top:14px;"><label for="cv_motivo">Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="cv_motivo" style="min-height:70px;" placeholder="Ex.: cliente desistiu, erro de lançamento"></textarea></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="cv_fechar">Voltar</button>
@@ -4091,21 +4090,9 @@ async function abrirCancelarVenda(venda){
     </div>
   `);
   document.getElementById('cv_fechar').addEventListener('click', closeModal);
-  document.querySelectorAll('input[name=cv_modo]').forEach(r=> r.addEventListener('change', ()=>{
-    const ex = (document.querySelector('input[name=cv_modo]:checked')||{}).value === 'excluir';
-    document.getElementById('cv_avisoExcluir').style.display = ex ? '' : 'none';
-    document.getElementById('cv_confirmar').innerHTML = ex ? ic('lixeira')+' Desfazer e excluir venda' : ic('cancelar')+' Cancelar venda';
-  }));
   document.getElementById('cv_confirmar').addEventListener('click', async ()=>{
     const motivo = maiusc(document.getElementById('cv_motivo').value);
     if(!motivo){ showToast('Escreva o motivo do cancelamento.'); return; }
-    if((document.querySelector('input[name=cv_modo]:checked')||{}).value === 'excluir' && venda.data === hoje()){
-      if(!confirm('Desfazer tudo e excluir esta venda? Ela deixa de aparecer no sistema.')) return;
-      const btn = document.getElementById('cv_confirmar'); btn.disabled = true; btn.textContent = 'Desfazendo…';
-      try{ await excluirVendaDefinitivo(venda, motivo); closeModal(); }
-      catch(e){ btn.disabled = false; btn.innerHTML = ic('lixeira')+' Desfazer e excluir venda'; showToast(String(e.message||e)); }
-      return;
-    }
     let dest = null;
     if(recebido > 0.004){
       const cli = await localizarClienteDaVenda(venda);
@@ -4130,8 +4117,8 @@ function perguntarDestinoEstorno(recebido, temCliente, quem){
       <h3>Destino do valor recebido</h3>
       <p>${quem} já recebeu <b>${fmtMoeda(recebido)}</b>. O que fazer com esse valor?</p>
       <div class="field" style="display:grid;gap:8px;">
-        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
-        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
+        <label class="cv-radio"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
+        <label class="cv-radio"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
       </div>
       <div class="field" id="dst_formaBox" style="display:${temCliente?'none':''};"><label for="dst_forma">Forma da devolução</label>
         <select id="dst_forma"><option value="dinheiro">Dinheiro — sai direto do caixa</option><option value="pix">Pix — sai da conta bancária da loja</option></select></div>

@@ -259,6 +259,9 @@
   .slot-bad .dot{background:var(--wait);}
   .locked-note{display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft);color:var(--ink);padding:11px 13px;border-radius:10px;font-size:13px;line-height:1.5;margin-bottom:16px;}
   .locked-note .ico{color:var(--accent);margin-top:2px;}
+  .cv-radio{display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;line-height:1.4;}
+  .cv-radio input[type=radio]{width:18px;height:18px;min-height:0;flex:0 0 18px;margin:2px 0 0;padding:0;}
+  .cv-radio span{flex:1;min-width:0;}
   .aviso-linha{margin-top:6px;padding:9px 12px;border-radius:8px;font-size:13px;font-weight:600;display:flex;gap:8px;align-items:flex-start;line-height:1.45;}
   .aviso-linha .ico{margin-top:2px;flex-shrink:0;}
   .aviso-linha.falta{background:var(--wait-soft);color:var(--wait);}
@@ -1334,8 +1337,10 @@ function ehVendedoraDaLoja(lojaId){
   return minhas.includes(lojaId);
 }
 function podeCancelarOrdem(order){
-  return !!(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (order && ehVendedoraDaLoja(order.lojaId))));
+  return !!(currentUser && currentUser.nivel!=='oficina');   // 05/11: todos cancelam (sem senha); fica no LOG e no fechamento do caixa
 }
+/* Excluir (apagar o registro) só a diretoria — o normal é CANCELAR, que mantém o registro. */
+function podeExcluirOrdem(order){ return !!(currentUser && currentUser.nivel==='diretoria'); }
 async function reverterFiadoECreditoOrdem(order, rotulo){
   rotulo = rotulo || 'Cancelamento';
   const telD = onlyDigits(order.telefone||'');
@@ -1446,8 +1451,8 @@ function perguntarDestinoEstorno(recebido, temCliente, quem){
       <h3>Destino do valor recebido</h3>
       <p>${quem} já recebeu <b>${fmtMoeda(recebido)}</b>. O que fazer com esse valor?</p>
       <div class="field" style="display:grid;gap:8px;">
-        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
-        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
+        <label class="cv-radio"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
+        <label class="cv-radio"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
       </div>
       <div class="field" id="dst_formaBox" style="display:${temCliente?'none':''};"><label for="dst_forma">Forma da devolução</label>
         <select id="dst_forma"><option value="dinheiro">Dinheiro — sai direto do caixa</option><option value="pix">Pix — sai da conta bancária da loja</option></select></div>
@@ -1557,7 +1562,7 @@ async function excluirOrdemDefinitivo(order, motivo){
 }
 function abrirExcluirOrdem(order){
   if(!order) return;
-  if(!podeCancelarOrdem(order)){ showToast('Só gerente ou diretoria podem excluir uma O.S. (vendedora: só das lojas dela).'); return; }
+  if(!podeExcluirOrdem(order)){ showToast('Só a diretoria exclui um pedido. Use Cancelar: o registro fica na lista e o valor aparece no fechamento do caixa.'); return; }
   const recebido = valorRecebidoDe(order);
   const temCredito = order.status!=='cancelado' && Number(order.creditoUsado)>0;
   const temFiado = order.status!=='cancelado' && !!order.fiadoDebitoId;
@@ -6006,10 +6011,10 @@ function renderPainel(main){
               <button type="button" role="menuitem" data-view="${o.id}">${ico('olho')} Ver detalhes</button>
               <button type="button" role="menuitem" data-mail="${o.id}">${ico('email')} Enviar e-mail ao cliente</button>
               <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada por terceiros</button>
-              ${podeCancelarOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
+              ${podeExcluirOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
             </div>
           </div>
-          ` : (podeCancelarOrdem(o) ? `<button class="btn-icone perigo" data-del="${o.id}" title="Excluir pedido" aria-label="Excluir pedido">${ico('lixeira')}</button>` : '')}
+          ` : (podeExcluirOrdem(o) ? `<button class="btn-icone perigo" data-del="${o.id}" title="Excluir pedido" aria-label="Excluir pedido">${ico('lixeira')}</button>` : '')}
           </div>
         </td>
       </tr>
