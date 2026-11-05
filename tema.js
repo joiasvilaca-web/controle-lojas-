@@ -96,3 +96,52 @@
     if(digitavel(el) && !permitido(el)){ try{ el.blur(); }catch(x){} }
   }, true);
 })();
+
+/* 06/11: Fileiras que rolam de lado (abas, filtros em "chip", ícones do CHAT, tabelas largas) — no celular e em janela estreita
+ * não havia sinal de que tinha mais coisa à direita. Agora a borda do lado que ainda tem conteúdo fica esmaecida
+ * (classes .rola-dir / .rola-esq, CSS no tema.css) e, ao tocar numa aba, ela rola para ficar inteira na tela.
+ * Automático: vale para qualquer elemento com overflow-x auto/scroll que de fato passa da largura. */
+(function(){
+  var marcados = new Set(), agendado = 0;
+  function atualizar(el){
+    var max = el.scrollWidth - el.clientWidth;
+    var tem = max > 4;
+    el.classList.toggle('rola-dir', tem && el.scrollLeft < max - 4);
+    el.classList.toggle('rola-esq', tem && el.scrollLeft > 4);
+  }
+  function varrer(){
+    agendado = 0;
+    var todos = document.body ? document.body.getElementsByTagName('*') : [];
+    for(var i = 0; i < todos.length; i++){
+      var el = todos[i];
+      if(el.clientWidth === 0 || el.scrollWidth <= el.clientWidth + 4){ if(marcados.has(el)) atualizar(el); continue; }
+      var ox = getComputedStyle(el).overflowX;
+      if(ox !== 'auto' && ox !== 'scroll') continue;
+      if(!marcados.has(el)){
+        marcados.add(el);
+        el.addEventListener('scroll', function(){ atualizar(this); }, { passive:true });
+      }
+      atualizar(el);
+    }
+  }
+  function agendar(){ if(!agendado) agendado = setTimeout(varrer, 250); }
+  function iniciar(){
+    varrer();
+    try{ new MutationObserver(agendar).observe(document.body, { childList:true, subtree:true }); }catch(e){}
+    window.addEventListener('resize', agendar);
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
+  // aba tocada (ou que virou ativa) rola para ficar inteira dentro da fileira
+  document.addEventListener('click', function(e){
+    var b = e.target && e.target.closest && e.target.closest('button,a,[role=tab]');
+    if(!b) return;
+    var p = b.parentElement;
+    while(p && p !== document.body){ if(marcados.has(p)) break; p = p.parentElement; }
+    if(!p || p === document.body || p.clientHeight > 140) return;   // só fileiras (não tabelas inteiras)
+    setTimeout(function(){
+      var r = b.getBoundingClientRect(), rp = p.getBoundingClientRect();
+      if(r.left < rp.left + 8) p.scrollBy({ left: r.left - rp.left - 24, behavior:'smooth' });
+      else if(r.right > rp.right - 8) p.scrollBy({ left: r.right - rp.right + 24, behavior:'smooth' });
+    }, 30);
+  }, true);
+})();
