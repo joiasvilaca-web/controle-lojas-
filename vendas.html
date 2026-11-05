@@ -3977,7 +3977,7 @@ function renderNovaVenda(main){
     if(pagsCredito.length>0 || pagsFiado.length>0 || creditoGerado>0){
       const telD = (venda.telefone||'').replace(/\D/g,'');
       const nomeL = (venda.cliente||'').trim().toLowerCase();
-      clienteCadastro = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+      clienteCadastro = await acharClienteDaVenda({ telefone: venda.telefone, cliente: venda.cliente });
       if(!clienteCadastro){
         Destaque.marcar('#v_cliente', creditoGerado>0 && !totalCredito && !totalFiado ? 'Para deixar o crédito do ouro, escolha um cliente já cadastrado na busca de cliente.' : 'Para usar Crédito ou Fiado, escolha um cliente já cadastrado na busca de cliente.');
         return;
@@ -4173,7 +4173,7 @@ async function reverterEfeitosVenda(venda, acao){
   // Reverte crédito/fiado do cliente
   const telD = (venda.telefone||'').replace(/\D/g,'');
   const nomeL = (venda.cliente||'').trim().toLowerCase();
-  const clienteCadastro = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+  const clienteCadastro = await acharClienteDaVenda(venda);
   if(clienteCadastro){
     let mudou = false;
     if(venda.creditoUsado > 0){
@@ -4292,6 +4292,17 @@ function lojaEstoqueDaVenda(lojaIdVenda, dadosNota){
      do cliente; se negativa, é devolvida a ele. Ambas registradas em venda.trocas
      pra aparecer depois na aba Caixa.
    ============================================================ */
+/* Os clientes não ficam todos em memória: se não achar no cache, procura no servidor (telefone e depois nome exato). */
+async function acharClienteDaVenda(venda){
+  const local = encontrarClienteDaVenda(venda);
+  if(local) return local;
+  try{
+    if((venda.telefone||'').replace(/\D/g,'')){ const c = await buscarClientePorTelefoneOuCpf(venda.telefone, ''); if(c) return c; }
+    const termo = (venda.cliente||'').trim();
+    if(termo){ const r = await gatewayCall({ op:'searchClients', params:{ termo } }); const nomeL = termo.toLowerCase(); const ach = ((r&&r.data)||[]).find(c=>(c.nome||'').trim().toLowerCase()===nomeL); if(ach){ if(!clientes.some(x=>x.id===ach.id)) clientes.push(ach); return ach; } }
+  }catch(e){ console.error('acharClienteDaVenda', e); }
+  return null;
+}
 function encontrarClienteDaVenda(venda){
   const telD = (venda.telefone||'').replace(/\D/g,'');
   const nomeL = (venda.cliente||'').trim().toLowerCase();
@@ -4360,7 +4371,7 @@ function abrirDevolucaoItem(venda){
       if(!forma){ showToast('Escolha como devolver o valor.'); return; }
       let cliente = null;
       if(forma==='__credito'){
-        cliente = encontrarClienteDaVenda(venda);
+        cliente = await acharClienteDaVenda(venda);
         if(!cliente){ showToast('Para devolver como crédito, o cliente precisa estar cadastrado. Escolha outra forma ou cadastre o cliente.'); return; }
       } else {
         // alerta se o valor devolvido em dinheiro passa do que realmente foi recebido nesta venda
@@ -4566,7 +4577,7 @@ function abrirTrocaVenda(venda){
     // Movimenta crédito/fiado do cliente se a diferença usar isso
     let clienteCadastro = null;
     if(formaDiferenca==='__credito' || formaDiferenca==='__fiado'){
-      clienteCadastro = encontrarClienteDaVenda(venda);
+      clienteCadastro = await acharClienteDaVenda(venda);
       if(!clienteCadastro){ showToast('Pra usar Crédito ou Fiado na diferença, o cliente precisa estar no cadastro.'); return; }
     }
     let fiadoDebitoIdTroca = null;
@@ -4582,7 +4593,7 @@ function abrirTrocaVenda(venda){
         clienteCadastro.fiadoDebitos.push({ id:fiadoDebitoIdTroca, origem:'Troca', numero:String(venda.id).slice(-8), data:hoje(), valor:diferenca, valorPago:0, loja:venda.loja||'' });
       }
     } else if(diferenca < 0 && formaDiferenca==='__credito'){
-      clienteCadastro = clienteCadastro || encontrarClienteDaVenda(venda);
+      clienteCadastro = clienteCadastro || await acharClienteDaVenda(venda);
       if(!clienteCadastro){ showToast('Pra devolver como crédito, o cliente precisa estar no cadastro.'); return; }
       clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + Math.abs(diferenca);
       if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
@@ -5061,7 +5072,7 @@ function abrirFormularioEdicaoCompleta(v){
         else{ console.error('erro ao desfazer consumo original (edição)', produtoId, r && r.error); p.estoquePorLoja[v.estoqueLojaId] = (Number(p.estoquePorLoja[v.estoqueLojaId])||0) + qtd; }
       }
     }
-    const clienteAntigo = encontrarClienteDaVenda(v);
+    const clienteAntigo = await acharClienteDaVenda(v);
     if(clienteAntigo){
       let mudou = false;
       if(v.creditoUsado > 0){
@@ -5125,7 +5136,7 @@ function abrirFormularioEdicaoCompleta(v){
     if(pagsCredito.length>0 || pagsFiado.length>0 || creditoGeradoEd>0){
       const telD = (telefone||'').replace(/\D/g,'');
       const nomeL = (cliente||'').trim().toLowerCase();
-      clienteNovo = clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL));
+      clienteNovo = await acharClienteDaVenda({ telefone, cliente });
       if(!clienteNovo){ showToast('Para usar Crédito ou Fiado, o cliente precisa estar cadastrado.'); return; }
       if(totalCredito>0 && (Number(clienteNovo.credito)||0) < totalCredito - 0.001){
         showToast(`Crédito insuficiente: o cliente tem ${fmtMoeda(clienteNovo.credito)}.`);
