@@ -123,6 +123,33 @@ html[data-ds] .field input[readonly]{background:var(--surface-2);color:var(--ink
 :is(.modal,.modal-box) h3{margin:0 0 16px;font-size:18px;font-weight:700;letter-spacing:-.01em;padding-right:24px;}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid var(--line);}
 
+/* 05/11: painel do Fechar caixa (somatório por forma × loja + gráficos). Cores dos gráficos validadas (paleta categórica, claro e escuro). */
+:is(.modal,.modal-box).largo{max-width:1000px;}
+.fc-dash{--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;margin:14px 0 4px;}
+html[data-theme=dark] .fc-dash{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767;}
+.fc-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;}
+.fc-kpi{text-align:left;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--surface);}
+.fc-kpi .k-rot{font-size:12px;color:var(--ink-faint);font-weight:600;}
+.fc-kpi .k-val{font-size:20px;font-weight:700;color:var(--ink);margin-top:2px;font-variant-numeric:tabular-nums;}
+.fc-kpi .k-det{font-size:12px;color:var(--ink-faint);margin-top:2px;}
+.fc-kpi.destaque{border-color:var(--t-primary-line,var(--line));background:var(--t-primary-soft,var(--surface-2));}
+.fc-graf{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--surface);margin-bottom:12px;}
+.fc-graf h4{margin:0 0 8px;font-size:14px;font-weight:700;color:var(--ink);}
+.fc-leg{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0 0 10px;font-size:12.5px;color:var(--ink-soft);}
+.fc-leg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
+.fc-linha{display:grid;grid-template-columns:minmax(90px,170px) 1fr auto;gap:10px;align-items:center;margin:6px 0;font-size:13px;}
+.fc-linha .nm{color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fc-linha .tot{font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.fc-barra{display:flex;height:18px;min-width:0;}
+.fc-seg{height:100%;min-width:3px;border-right:2px solid var(--surface);cursor:default;}
+.fc-seg:first-child{border-radius:4px 0 0 4px;}
+.fc-seg:last-child{border-radius:0 4px 4px 0;border-right:0;}
+.fc-seg:only-child{border-radius:4px;}
+.fc-seg:hover{filter:brightness(1.12);}
+.fc-tip{position:fixed;z-index:400;pointer-events:none;background:var(--t-surface-3,var(--surface));color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12.5px;box-shadow:var(--t-shadow-sm);display:none;max-width:260px;}
+.fc-tabela td,.fc-tabela th{white-space:nowrap;}
+.fc-tabela tfoot td{font-weight:700;border-top:2px solid var(--line);}
+@media (max-width:600px){ .fc-linha{grid-template-columns:1fr auto;gap:2px 10px;margin:8px 0;} .fc-linha .fc-barra{grid-column:1/-1;grid-row:2;} }
 @media (prefers-reduced-motion:no-preference){ .esq{animation:pulsar 1.2s ease-in-out infinite;} @keyframes pulsar{50%{opacity:.5;}} }
 
 /* celular */
@@ -340,9 +367,11 @@ function mensagemConfiavel(ev){
   function closeModal(){
     document.getElementById('modalOverlay').classList.remove('show');
     document.getElementById('modalBox').innerHTML='';
+    const tp=document.getElementById('fcTip'); if(tp) tp.style.display='none';
   }
   function openModal(html){
-    document.getElementById('modalBox').innerHTML = html;
+    const mb = document.getElementById('modalBox'); mb.classList.remove('largo');
+    mb.innerHTML = html;
     document.getElementById('modalOverlay').classList.add('show');
   }
 
@@ -540,6 +569,89 @@ function mensagemConfiavel(ev){
   async function gravarFechamento(loja, dia, valor){
     return gatewayCall({ op:'kvSet', table:'painel_ordens_kv', params:{ key: chaveFech(loja, dia), value: valor } });
   }
+  /* 05/11: dados do painel do Fechar caixa — recebido por forma de pagamento e por loja no período (pagamento conta no dia em que foi recebido). */
+  function nomeFormaPainel(p){
+    if(!p) return '';
+    if(String(p.formaId||'').startsWith('__')) return p.formaId==='__credito' ? 'CRÉDITO CLIENTE' : (p.tipoNome || p.tipo || 'OUTROS');
+    return nomeForma(p) || p.tipoNome || p.tipo || 'SEM FORMA';
+  }
+  function dadosPainelCaixa(de, ate, lojaId){
+    const dentro = d=> !!d && d>=de && d<=ate;
+    const daLoja = r=> !lojaId || r.lojaId===lojaId;
+    const porLoja = {}; const totForma = {}; let recebido = 0;
+    const soma = (reg, p)=>{
+      const v = Number(p && p.valor)||0; if(!v) return;
+      if(!dentro((p.data||reg.data||'').slice(0,10))) return;
+      const f = nomeFormaPainel(p); const l = reg.lojaId || '—';
+      porLoja[l] = porLoja[l] || {}; porLoja[l][f] = (porLoja[l][f]||0) + v;
+      totForma[f] = (totForma[f]||0) + v; recebido += v;
+    };
+    const vAtivas = vendas.filter(v=> v.status!=='cancelada' && daLoja(v));
+    const oAtivas = caixaOrdens.filter(o=> o.status!=='cancelado' && o.status!=='rascunho' && daLoja(o));
+    vAtivas.forEach(v=> (v.pagamentos||[]).forEach(p=> soma(v,p)));
+    oAtivas.forEach(o=> (o.pagamentos||[]).forEach(p=> soma(o,p)));
+    // ordem fixa das formas = ordem do cadastro (a cor segue a forma, não o valor); até 8 cores, o resto vira "OUTRAS"
+    const ordemCad = (config.formasPagamento||[]).map(f=> f.nome);
+    let formas = Object.keys(totForma).sort((a,b)=>{ const ia=ordemCad.indexOf(a), ib=ordemCad.indexOf(b); return (ia<0?999:ia)-(ib<0?999:ib) || a.localeCompare(b); });
+    if(formas.length > 8){
+      const ficam = formas.slice(0,7), sobram = formas.slice(7);
+      Object.values(porLoja).forEach(m=>{ sobram.forEach(f=>{ if(m[f]){ m.OUTRAS=(m.OUTRAS||0)+m[f]; delete m[f]; } }); });
+      totForma.OUTRAS = sobram.reduce((a,f)=> a+(totForma[f]||0), 0); sobram.forEach(f=> delete totForma[f]);
+      formas = ficam.concat('OUTRAS');
+    }
+    const lojas = Object.keys(porLoja).map(id=>({ id, nome: nomeLojaCaixa(id) || id, formas: porLoja[id], total: Object.values(porLoja[id]).reduce((a,b)=>a+b,0) })).sort((a,b)=> b.total-a.total);
+    const vPer = vAtivas.filter(v=> dentro(v.data)), oPer = oAtivas.filter(o=> dentro(o.data));
+    const canc = vendas.filter(v=> v.status==='cancelada' && daLoja(v) && dentro(dataDeTimestamp(v.canceladoEm))).concat(caixaOrdens.filter(o=> o.status==='cancelado' && daLoja(o) && dentro(dataDeTimestamp(o.canceladoEm))));
+    const contas = caixaGastos.filter(g=> g.pago && dentro(g.dataPagamento) && daLoja(g));
+    return { formas, totForma, lojas, recebido,
+      vendasQtd: vPer.length, vendasValor: vPer.reduce((a,v)=>a+(Number(v.valorTotal)||0),0),
+      pedidosQtd: oPer.length, pedidosValor: oPer.reduce((a,o)=>a+(Number(o.valorTotal)||0),0),
+      aReceber: vPer.reduce((a,v)=>a+valorAReceberDe(v),0) + oPer.reduce((a,o)=>a+valorAReceberDe(o),0),
+      contasQtd: contas.length, contasValor: contas.reduce((a,g)=>a+(Number(g.valor)||0),0),
+      cancQtd: canc.length, cancValor: canc.reduce((a,r)=>a+(Number(r.valorTotal)||0),0) };
+  }
+  function htmlPainelCaixa(d){
+    if(!d.recebido && !d.vendasQtd && !d.pedidosQtd) return `<div class="fc-dash">${estadoHtml('calendario','Nada recebido neste período','Sem vendas, pedidos ou pagamentos no período e loja escolhidos.')}</div>`;
+    const cor = f=> `var(--s${d.formas.indexOf(f)+1})`;
+    const tip = (t)=> escapeHtml(t).replace(/"/g,'&quot;');
+    const kpi = (r,v,dd,cls)=> `<div class="fc-kpi ${cls||''}"><div class="k-rot">${r}</div><div class="k-val">${v}</div>${dd?`<div class="k-det">${dd}</div>`:''}</div>`;
+    const maxLoja = Math.max(1, ...d.lojas.map(l=> l.total));
+    const maxForma = Math.max(1, ...d.formas.map(f=> d.totForma[f]||0));
+    const pct = (v,t)=> t ? ((v/t)*100).toFixed(1).replace('.',',')+'%' : '0%';
+    const legenda = `<div class="fc-leg" aria-hidden="true">${d.formas.map(f=>`<span><i style="background:${cor(f)}"></i>${escapeHtml(f)}</span>`).join('')}</div>`;
+    const barrasLoja = d.lojas.map(l=> `<div class="fc-linha"><span class="nm" title="${tip(l.nome)}">${escapeHtml(l.nome)}</span>
+      <div class="fc-barra" style="width:${(l.total/maxLoja*100).toFixed(2)}%">${d.formas.filter(f=> l.formas[f]).map(f=> `<span class="fc-seg" style="flex:${l.formas[f]};background:${cor(f)}" data-tip="${tip(l.nome+' · '+f+': '+fmtMoeda(l.formas[f])+' ('+pct(l.formas[f], l.total)+')')}"></span>`).join('')}</div>
+      <span class="tot">${fmtMoeda(l.total)}</span></div>`).join('');
+    const formasOrd = d.formas.slice().sort((a,b)=> (d.totForma[b]||0)-(d.totForma[a]||0));
+    const barrasForma = formasOrd.map(f=> `<div class="fc-linha"><span class="nm">${escapeHtml(f)}</span>
+      <div class="fc-barra" style="width:${((d.totForma[f]||0)/maxForma*100).toFixed(2)}%"><span class="fc-seg" style="flex:1;background:${cor(f)}" data-tip="${tip(f+': '+fmtMoeda(d.totForma[f])+' ('+pct(d.totForma[f], d.recebido)+' do recebido)')}"></span></div>
+      <span class="tot">${fmtMoeda(d.totForma[f])} <span class="muted" style="font-weight:500;">${pct(d.totForma[f], d.recebido)}</span></span></div>`).join('');
+    const tabela = `<div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr><th>Loja</th>${d.formas.map(f=>`<th class="r">${escapeHtml(f)}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
+      ${d.lojas.map(l=> `<tr>${celula('Loja', '<b>'+escapeHtml(l.nome)+'</b>')}${d.formas.map(f=> celula(f, l.formas[f]?fmtMoeda(l.formas[f]):'<span class="muted">—</span>', 'r')).join('')}${celula('Total', '<b>'+fmtMoeda(l.total)+'</b>', 'r')}</tr>`).join('')}
+      </tbody>${d.lojas.length>1?`<tfoot><tr>${celula('Loja','Todas as lojas')}${d.formas.map(f=> celula(f, fmtMoeda(d.totForma[f]||0), 'r')).join('')}${celula('Total', fmtMoeda(d.recebido), 'r')}</tr></tfoot>`:''}</table></div>`;
+    return `<div class="fc-dash">
+      <div class="fc-kpis">
+        ${kpi('Recebido', fmtMoeda(d.recebido), d.formas.length+' forma(s) de pagamento', 'destaque')}
+        ${kpi('Vendas', fmtMoeda(d.vendasValor), d.vendasQtd+' venda(s)')}
+        ${kpi('Pedidos (O.S.)', fmtMoeda(d.pedidosValor), d.pedidosQtd+' pedido(s)')}
+        ${kpi('A receber', fmtMoeda(d.aReceber), 'das vendas e pedidos do período')}
+        ${kpi('Contas pagas', fmtMoeda(d.contasValor), d.contasQtd+' conta(s)')}
+        ${kpi('Cancelamentos', fmtMoeda(d.cancValor), d.cancQtd+' via(s)')}
+      </div>
+      <div class="fc-graf"><h4>Somatório por forma de pagamento, por loja</h4>${tabela}</div>
+      ${d.recebido ? `<div class="fc-graf"><h4>Recebido por loja</h4>${d.formas.length>1?legenda:''}${barrasLoja}</div>
+      <div class="fc-graf"><h4>Recebido por forma de pagamento</h4>${barrasForma}</div>` : ''}
+    </div>`;
+  }
+  function ativarDicasPainel(){
+    let t = document.getElementById('fcTip');
+    if(!t){ t = document.createElement('div'); t.id='fcTip'; t.className='fc-tip'; t.setAttribute('role','tooltip'); document.body.appendChild(t); }
+    document.querySelectorAll('.fc-dash [data-tip]').forEach(el=>{
+      el.addEventListener('mousemove', e=>{ t.textContent = el.dataset.tip; t.style.display='block'; const x = Math.min(e.clientX+14, innerWidth - t.offsetWidth - 8); t.style.left = x+'px'; t.style.top = (e.clientY+14)+'px'; });
+      el.addEventListener('mouseleave', ()=>{ t.style.display='none'; });
+      el.addEventListener('click', ()=> showToast(el.dataset.tip));   // no celular (toque) mostra o valor
+    });
+  }
   async function abrirFecharCaixa(de, ate, lojaId){
     const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (currentUser.nivel==='vendedora' && (currentUser.lojas||[]).includes(lojaId)));
     const umDia = de && de===ate && !!lojaId;
@@ -571,8 +683,9 @@ function mensagemConfiavel(ev){
       ${gestao ? '' : `<div class="muted" style="margin-bottom:8px;">Para reabrir, use a senha de um gerente ou da diretoria.</div>`}`;
     else if(!tudoOk) acao = `<div class="muted" style="margin:10px 0;">Resolva as pendências abaixo para poder fechar o caixa do dia.</div>`;
     else acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>`;
-    openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):''}</h3>
+    openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):' · todas as lojas'}</h3>
       ${acao}
+      ${htmlPainelCaixa(dadosPainelCaixa(de, ate, lojaId))}
       ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão/LINK ECO sem nota</div>${emitir.map((x,i)=>linha(x,(x.reg.pagamentos||[]).some(formaExigeNota) ? 'LINK ECO: nota pela '+escapeHtml(nomeLojaCaixa(lojaNotaDaForma(x.reg))||'Ecommerce') : 'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
       ${faltaEntrada.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Falta o número da nota de ENTRADA (ouro) — ${faltaEntrada.length} via(s)</div>${faltaEntrada.map((x,i)=>linha(x,'pagou em ouro, sem número da nota de entrada',i,'o')).join('')}</div>` : ''}
@@ -582,6 +695,7 @@ function mensagemConfiavel(ev){
         ${umDia && fechado ? `<button class="btn btn-danger" id="fc_reabrir" type="button">${gestao ? 'Reabrir caixa' : 'Reabrir caixa (senha da gerência)'}</button>` : ''}
         ${umDia && !fechado && tudoOk ? `<button class="btn btn-accent" id="fc_confirmar" type="button">Fechar caixa do dia</button>` : ''}
       </div>`);
+    document.getElementById('modalBox').classList.add('largo'); ativarDicasPainel();
     document.getElementById('fc_fechar').addEventListener('click', closeModal);
     document.querySelectorAll('[data-fc]').forEach(b=> b.addEventListener('click', ()=>{ const [g,i]=b.dataset.fc.split(':'); const x=(g==='e'?emitir:g==='o'?faltaEntrada:faltaNum)[+i]; (g==='o'?abrirNotaEntrada:abrirNotaEmitida)(x, ()=> abrirFecharCaixa(de, ate, lojaId)); }));
     const bc = document.getElementById('fc_confirmar');
