@@ -68,7 +68,7 @@
        +'<div class="rt-estado"><b>'+esc(estadoTxt)+'</b>'+(det?'<span>'+det+'</span>':'')+'</div>'
        +(st==='usado' ? '' : (!hab
           ? '<p style="margin:0 0 6px;">Libere quando o cliente pedir para outra pessoa retirar. No mesmo link da via que ele já recebeu aparece o botão para gerar o código, e ele repassa ao portador.</p><div class="rt-row"><button class="rt-btn pri" data-hab>'+ic('check',15)+' Liberar retirada por terceiros</button></div>'
-          : '<div class="rt-row">'+(tel?'<a class="rt-btn" target="_blank" rel="noopener" href="https://wa.me/'+tel+'?text='+encodeURIComponent(txt)+'">Reenviar link (se o cliente não tiver)</a>':'')+'<button class="rt-btn" data-copy>Copiar link</button></div>'
+          : '<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link (se o cliente não tiver)</button>':'')+'<button class="rt-btn" data-copy>Copiar link</button></div>'
            +'<div style="margin-top:12px;font-weight:700;">Recebido com código</div>'
            +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="4" autocomplete="off" spellcheck="false" placeholder="____" '+(podeConferir?'':'disabled')+' aria-label="Código do portador"><button class="rt-btn pri" data-conf '+(podeConferir?'':'disabled')+'>Conferir código</button></div>'
            +(podeConferir?'':'<div class="rt-sub" style="margin:0;">'+(st==='sem_codigo'?'Aguardando o cliente gerar o código no link.':'Peça ao cliente para gerar um novo código no link.')+'</div>')
@@ -81,6 +81,11 @@
       var b;
       if((b=box.querySelector('[data-hab]'))) b.onclick=async function(){ this.disabled=true; var x=await chamar(Object.assign({acao:'habilitar',on:true},base)); desenhar(x.error||'Retirada por terceiros liberada. O link da via que o cliente já tem atualiza sozinho (até 20 segundos) e mostra o botão para gerar o código. Não precisa enviar de novo.', x.error?'err':'ok'); };
       if((b=box.querySelector('[data-deslig]'))) b.onclick=async function(){ if(!confirm('Desligar a retirada por terceiros? O código atual deixa de valer.')) return; var x=await chamar(Object.assign({acao:'habilitar',on:false},base)); desenhar(x.error||'Retirada por terceiros desligada.', x.error?'err':'ok'); };
+      if((b=box.querySelector('[data-wa]'))) b.onclick=async function(){
+        if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
+        if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
+        var a=document.createElement('a'); a.href='https://wa.me/'+tel+'?text='+encodeURIComponent(txt); a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      };
       if((b=box.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(link); this.textContent='Link copiado'; }catch(e){ prompt('Copie o link:',link); } };
       var inp=box.querySelector('.rt-cod');
       if(inp){ inp.addEventListener('input',function(){ inp.value=inp.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,4); }); inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ var c=box.querySelector('[data-conf]'); if(c && !c.disabled) c.click(); } }); if(podeConferir) setTimeout(function(){ inp.focus(); },50); }

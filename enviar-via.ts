@@ -1,6 +1,7 @@
+// enviar-via v2 (05/11/2026) — v2: loja opcional (sem loja ou loja desconhecida = instância "vilaca"); usado também por Gravações, Reserva, Site e Retirada.
 // enviar-via v1 (05/11/2026) — dispara a via (link) ao cliente pelo WhatsApp da loja, sem abrir o WhatsApp Web.
 // Loja Reforma → instância "reformajoias"; demais lojas → instância "vilaca". Se a instância não estiver conectada, devolve fallback:true
-// (o app então abre o wa.me como antes). Tudo fica no LOG (auditoria_log) e a mensagem aparece no Atendimento via webhook SEND_MESSAGE.
+// (o app então abre o wa.me como antes). Tudo fica no LOG (auditoria_log). O "vilaca" é só disparo (não entra no CHAT; ver disparo-webhook).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -52,11 +53,10 @@ Deno.serve(async (req: Request) => {
     if (!texto || texto.length > 3000) return json({ error: "mensagem vazia ou longa demais" }, 400);
     const numero = normalizaTelefone(body.telefone);
     if (!numero) return json({ ok: false, erro: "Telefone do cliente inválido (precisa de DDD + número).", fallback: false }, 200);
-    const loja = (Array.isArray(config.lojas) ? config.lojas : []).find((l: any) => l && l.id === lojaId);
-    if (!loja) return json({ error: "loja inválida" }, 400);
-    if (user.nivel !== "diretoria" && !lojasDaSessao(user, senha).includes(lojaId)) return json({ error: "sem acesso a esta loja" }, 403);
+    const loja = lojaId ? (Array.isArray(config.lojas) ? config.lojas : []).find((l: any) => l && l.id === lojaId) : null;
+    if (loja && lojaId === "loja_rj" && user.nivel !== "diretoria" && !lojasDaSessao(user, senha).includes(lojaId)) return json({ error: "sem acesso a esta loja" }, 403);
 
-    const instancia = INSTANCIA_POR_LOJA[lojaId] || INSTANCIA_PADRAO;
+    const instancia = (loja && INSTANCIA_POR_LOJA[lojaId]) || INSTANCIA_PADRAO;
     const seg = await segredos();
     if (!seg.EVOLUTION_URL || !seg.EVOLUTION_API_KEY) return json({ ok: false, fallback: true, erro: "Servidor de WhatsApp não configurado." });
     const H = { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY };
@@ -72,7 +72,7 @@ Deno.serve(async (req: Request) => {
     const rj = await r.json().catch(() => ({}));
     const ok = r.ok && rj && rj.key;
     try {
-      await admin.from("auditoria_log").insert({ usuario_id: user.id || null, usuario_nome: user.nome || null, nivel: user.nivel || null, loja_sessao: lojaId, em_outra_loja: !(Array.isArray(user.lojas) ? user.lojas : []).includes(lojaId) && user.nivel !== "diretoria",
+      await admin.from("auditoria_log").insert({ usuario_id: user.id || null, usuario_nome: user.nome || null, nivel: user.nivel || null, loja_sessao: lojaId || null, em_outra_loja: !!lojaId && !(Array.isArray(user.lojas) ? user.lojas : []).includes(lojaId) && user.nivel !== "diretoria",
         acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Envio da via", tabela: String(body.tipo || ""), registro_id: String(body.registroId || ""),
         resumo: `${ok ? "Enviou" : "Falhou ao enviar"} a via ${String(body.via || "")} por WhatsApp (${instancia}) para ${numero.slice(0, 4)}…${numero.slice(-4)}`, detalhe: { instancia, status: r.status }, agente: String(req.headers.get("user-agent") || "").slice(0, 160) });
     } catch (e) { console.error("log enviar-via", e); }
