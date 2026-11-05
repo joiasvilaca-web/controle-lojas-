@@ -92,3 +92,37 @@
   window.Destaque = Destaque;
   window.OuroPag = { ehOuro: ehOuro, temOuro: temOuro, excesso: excesso, renderNota: renderNota, erroNota: erroNota, liquidar: liquidar, restaurar: restaurar };
 })();
+
+/* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
+   Se o WhatsApp da loja não estiver conectado, cai no jeito antigo (abre o wa.me com a mensagem pronta). ===== */
+(function(){
+  var emAndamento = false;
+  function abrirManual(telefone, texto){
+    var d = String(telefone||'').replace(/\D/g,''); if(d.length<=11) d = '55'+d;
+    var a = document.createElement('a'); a.href = 'https://wa.me/'+d+'?text='+encodeURIComponent(texto); a.target='_blank'; a.rel='noopener noreferrer';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+  function aviso(m){ try{ if(typeof showToast==='function') showToast(m); }catch(e){} }
+  /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
+  async function enviar(opts){
+    if(emAndamento) return;
+    emAndamento = true;
+    aviso('Enviando pelo WhatsApp da loja…');
+    try{
+      var r = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'apikey':window.SUPABASE_ANON_KEY, 'Authorization':'Bearer '+window.SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via })
+      });
+      var j = await r.json().catch(function(){ return {}; });
+      if(j && j.ok){ aviso('Enviado pelo WhatsApp da loja ✓'); return; }
+      if(j && j.fallback){ aviso((j.erro||'WhatsApp da loja indisponível')+' Abrindo o WhatsApp manual.'); abrirManual(opts.telefone, opts.texto); return; }
+      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');
+    }catch(e){
+      console.error('WhatsAuto:', e);
+      aviso('Sem conexão com o envio automático. Abrindo o WhatsApp manual.');
+      abrirManual(opts.telefone, opts.texto);
+    }finally{ emAndamento = false; }
+  }
+  window.WhatsAuto = { enviar: enviar };
+})();
