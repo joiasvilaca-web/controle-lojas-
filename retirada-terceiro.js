@@ -118,7 +118,7 @@
   /* Caixa "Retirada por terceiros" no formulário da via: marcada, libera o gerador de código no link do cliente ao salvar. */
   function checkboxHtml(marcado){
     return '<label style="display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;cursor:pointer;margin-top:12px;padding:8px 12px;border:1px solid var(--t-line-strong,#bcc);border-radius:8px;">'
-      + '<input type="checkbox" id="chkRetiradaTerceiro" style="width:auto;margin:0;"'+(marcado?' checked':'')+'> Retirada por terceiros <span style="font-weight:400;color:var(--t-ink-faint,#667);">— o cliente gera o código no link</span></label>';
+      + '<input type="checkbox" id="chkRetiradaTerceiro" style="width:auto;margin:0;"'+(marcado?' checked':'')+'> <span>Retirada por terceiros <span style="font-weight:400;color:var(--t-ink-faint,#667);">— o cliente gera o código no link</span></span></label>';
   }
   async function habilitarSeMarcado(o){
     var c = document.getElementById('chkRetiradaTerceiro');

@@ -9,10 +9,16 @@
   var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   function get(){ try{ return localStorage.getItem(CHAVE) || 'claro'; }catch(e){ return 'claro'; } }
   function efetivo(){ var p = get(); return (p === 'escuro' || (p === 'auto' && mq && mq.matches)) ? 'dark' : 'light'; }
+  function corStatus(t){
+    if(window.top !== window) return;
+    try{ var m = document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content', (t||efetivo()) === 'dark' ? '#122130' : '#FFFFFF'); }catch(e){}
+  }
   function aplicar(){
     var t = efetivo(), h = document.documentElement;
     h.setAttribute('data-theme', t);
     h.style.colorScheme = t;
+    // 05/11: barra de status do celular (Android/PWA) na mesma cor do cabeçalho do app, clara ou escura conforme o tema
+    corStatus(t);
     try{ document.dispatchEvent(new CustomEvent('vilaca-tema', { detail:{ tema:t, preferencia:get() } })); }catch(e){}
   }
   function set(v){
@@ -22,6 +28,7 @@
     try{ for(var i = 0; i < window.frames.length; i++){ var f = window.frames[i]; if(f.VilacaTema) f.VilacaTema.aplicar(); } }catch(e){}
   }
   aplicar();
+  document.addEventListener('DOMContentLoaded', function(){ corStatus(); });
   window.addEventListener('storage', function(e){ if(e.key === CHAVE) aplicar(); });
   if(mq){ try{ mq.addEventListener('change', aplicar); }catch(e){ try{ mq.addListener(aplicar); }catch(e2){} } }
   window.VilacaTema = { get:get, set:set, efetivo:efetivo, aplicar:aplicar };
