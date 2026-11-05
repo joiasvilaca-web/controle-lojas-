@@ -61,7 +61,7 @@
     if(!temOuro(holder.pagamentos, config)){ el.innerHTML = ''; return; }
     var ne = holder.notaEntrada || {};
     el.innerHTML = '<div class="ne-box" id="neBox"><b>Nota de entrada (ouro)</b>'
-      + '<div class="muted" style="font-size:12px;">Aperte Emitir para a nota de entrada do ouro recebido. O número pode ser informado depois, mas o fechamento do caixa exige.</div>'
+      + '<div class="muted" style="font-size:12px;">Nota de entrada do ouro recebido: o número é opcional agora e pode ser informado depois, mas o fechamento do caixa exige o número.</div>'
       + '<div class="ne-lin"><button type="button" class="btn ' + (ne.emitida ? 'btn-ghost' : 'btn-accent') + ' btn-sm" id="neEmitir">' + (ne.emitida ? '✓ Emitida' : 'Emitir') + '</button>'
       + '<input id="neNumero" autocomplete="off" placeholder="Nº da nota de entrada" value="' + esc(ne.numero || '') + '"></div></div>';
     el.querySelector('#neEmitir').addEventListener('click', function(){
@@ -73,7 +73,7 @@
   /* Antes de salvar: ouro no pagamento exige ter apertado Emitir. */
   function erroNota(holder, config){
     if(!temOuro(holder.pagamentos, config)) return null;
-    return (holder.notaEntrada && holder.notaEntrada.emitida) ? null : 'Pagamento em ouro: aperte “Emitir” na nota de entrada.';
+    return null;   // 05/11: não trava mais o salvamento (botão Emitir e nº são opcionais na via); o fechamento do caixa cobra o número
   }
   /* Ao gravar: a linha de ouro fica só com o valor da compra (caixa e relatórios batem); o que o cliente trouxe a mais vira crédito e fica em valorEntregue. */
   function liquidar(pags, ex, config){
