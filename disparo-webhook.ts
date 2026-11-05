@@ -6,7 +6,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const INTERVALO_MS = 12 * 60 * 60 * 1000;
-const TEXTO_PADRAO = "Olá! 😊 Este número da Vilaça Joias é usado apenas para envio automático de avisos e campanhas, e as mensagens enviadas para cá não são lidas.\n\nPara falar com a nossa equipe, chame no WhatsApp (43) 98830-7617:\nhttps://wa.me/5543988307617";
+const TEXTO_PADRAO = "Olá! 😊 Este número da Vilaça Joias é usado apenas para envio automático de avisos e campanhas, e as mensagens enviadas para cá não são lidas.\n\nPara falar com a nossa equipe, chame no WhatsApp (32) 98830-7617:\nhttps://wa.me/5532988307617";
 
 let cache: { em: number; seg: Record<string, string> } | null = null;
 async function segredos(): Promise<Record<string, string>> {
