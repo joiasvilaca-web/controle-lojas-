@@ -802,6 +802,19 @@
     <div class="field"><label>Usuário</label><input type="text" id="loginUser" placeholder="Seu apelido" autocomplete="username" autocapitalize="characters"></div>
     <div class="field"><label>Senha</label><input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password"></div>
     <button class="btn btn-accent btn-block" id="btnLogin">Entrar</button>
+    <div id="loginTesteBox" style="display:none;margin-top:14px;padding:12px;border:1px dashed #8A4B00;border-radius:10px;background:#FFF6E8;">
+      <div style="font-size:12.5px;font-weight:700;color:#8A4B00;text-align:center;margin-bottom:8px;">TREINO — entrada aberta: escolha o tipo de login</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+        <button type="button" class="btn btn-ghost" data-lt="oficina">Oficina</button>
+        <button type="button" class="btn btn-ghost" data-lt="vendedora">Vendedora</button>
+        <button type="button" class="btn btn-ghost" data-lt="gerente">Gerente</button>
+        <button type="button" class="btn btn-ghost" data-lt="diretoria">Diretoria</button>
+      </div>
+      <div id="loginTesteDir" style="display:none;margin-top:10px;">
+        <input type="password" id="loginTesteSenha" placeholder="Senha da diretoria" autocomplete="off" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;">
+        <button type="button" class="btn btn-accent btn-block" id="btnLoginTesteDir" style="margin-top:8px;">Entrar como diretoria</button>
+      </div>
+    </div>
     <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:var(--surface-2,#f4eef1);font-size:12.5px;line-height:1.5;text-align:center;color:var(--muted);">Ainda não tem senha? A diretoria cria a sua senha inicial no DP.</div>
     <div class="login-rodape">VILAÇA APP</div>
   </div>
@@ -1368,8 +1381,7 @@ function decidirLojaInicial(){
   if(permitidas.length===1){ salvarLojaAtual(permitidas[0]); return permitidas[0]; }
   const salva = lerLojaSalva();
   if(salva && permitidas.includes(salva)){ salvarLojaAtual(salva); return salva; }
-  if(currentUser && (currentUser.nivel==='gerente' || currentUser.nivel==='diretoria')){ salvarLojaAtual(permitidas[0]); return permitidas[0]; }   // escolhe sozinho; troca no seletor do topo
-  return 'PRECISA_ESCOLHER';
+  salvarLojaAtual(permitidas[0]); return permitidas[0];   // 04/11: todo login já entra na loja a que pertence (a primeira do cadastro); troca no seletor do topo
 }
 
 /**
@@ -1509,6 +1521,39 @@ document.getElementById('btnLogin').addEventListener('click', ()=> doLogin());
 document.getElementById('loginPass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
 document.getElementById('loginUser').addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('loginPass').focus(); });
 
+/* TESTE (04/11, Felipe): só em treino.vilaca.app — entrada aberta por tipo. A função login-teste só existe no banco de teste. */
+(function(){
+  if(window.AMBIENTE!=='treino') return;   // 04/11 (Felipe): só em treino.vilaca.app (banco de teste); nunca no vilaca.app nem no teste
+  const box=document.getElementById('loginTesteBox'); if(!box) return;
+  box.style.display='';
+  const err=()=>document.getElementById('loginError');
+  const falha=m=>{ const e=err(); e.textContent=m; e.classList.add('show'); };
+  const chamar=async body=>{ const r=await fetch(SUPABASE_URL+'/functions/v1/login-teste',{method:'POST',headers:{'Content-Type':'application/json',apikey:SUPABASE_ANON_KEY,Authorization:'Bearer '+SUPABASE_ANON_KEY},body:JSON.stringify(body)}); return r.json().catch(()=>({})); };
+  box.querySelectorAll('[data-lt]').forEach(b=>b.addEventListener('click',async()=>{
+    err().classList.remove('show');
+    const t=b.dataset.lt;
+    if(t==='diretoria'){ document.getElementById('loginTesteDir').style.display=''; document.getElementById('loginTesteSenha').focus(); return; }
+    document.getElementById('loginTesteDir').style.display='none';
+    b.disabled=true;
+    const r=await chamar({op:'entrar',nivel:t});
+    b.disabled=false;
+    if(!r||!r.ok){ falha((r&&(r.error))||'Não foi possível entrar.'); return; }
+    await finalizarLogin(r);
+  }));
+  const dir=async()=>{
+    err().classList.remove('show');
+    const senha=document.getElementById('loginTesteSenha').value;
+    if(!senha){ falha('Digite a senha da diretoria.'); return; }
+    const u=await chamar({op:'diretoria'});
+    if(!u||!u.ok){ falha('Não há usuário da diretoria no teste.'); return; }
+    const r=await gatewayLogin(u.usuario,senha);
+    if(!r||!r.ok){ falha('Senha da diretoria incorreta.'); document.getElementById('loginTesteSenha').value=''; return; }
+    await finalizarLogin(r);
+  };
+  document.getElementById('btnLoginTesteDir').addEventListener('click',dir);
+  document.getElementById('loginTesteSenha').addEventListener('keydown',e=>{ if(e.key==='Enter') dir(); });
+})();
+
 async function doLogin(){
   const usuario = document.getElementById('loginUser').value.trim();
   const pass = document.getElementById('loginPass').value;   // senha exata; o usuário não diferencia maiúsculas/minúsculas
@@ -1550,6 +1595,7 @@ async function finalizarLogin(r){
   __gatewaySenha = r.token;
   currentUser = { id:r.user.id, nome:r.user.nome, nivel:r.user.nivel, senha:r.token, funcionarioId:r.user.funcionarioId||null, lojas:Array.isArray(r.user.lojas)?r.user.lojas:[], lojaExtra:r.user.lojaExtra||null };
   currentPermissoes = permissoesDoUsuario(r.user);
+  try{ if(currentUser.nivel!=='diretoria') localStorage.removeItem('vilaca_loja_atual'); }catch(e){}   // login novo: entra na loja dela, não na que o aparelho lembrava
   await loadConfig();
   salvarSessao();
   enterShell();
