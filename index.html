@@ -1264,8 +1264,12 @@ function lojasPropriasDoUsuario(){
   const ids = Array.isArray(currentUser && currentUser.lojas) ? currentUser.lojas : [];
   return ids.filter(id=> (config.lojas||[]).some(l=>l.id===id));
 }
+/* 05/11: vendedora e gerente começam na loja do cadastro, mas trocam de loja livremente (sem senha) pelo seletor do topo;
+   a troca vale só nesta sessão, fica no LOG e a tarja vermelha avisa quando não é a loja delas. */
+function trocaLojaLivre(){ return !!currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='gerente'); }
 function lojasPermitidasParaUsuario(){
   if(currentUser && currentUser.nivel==='diretoria') return (config.lojas||[]).map(l=>l.id);   // diretoria vê todas as lojas, sem loja fixa
+  if(trocaLojaLivre() && lojasPropriasDoUsuario().length) return (config.lojas||[]).filter(l=>!l.interna).map(l=>l.id);
   const proprias = lojasPropriasDoUsuario();
   if(proprias.length) return proprias;
   if(currentUser && currentUser.nivel==='diretoria') return (config.lojas||[]).map(l=>l.id);
@@ -1310,7 +1314,7 @@ function atualizarBarraOutraLoja(){
   const chip = document.getElementById('shellLojaChip');
   if(lojaExtra && currentUser){
     const info = lojaInfo(lojaExtra), casa = lojaInfo(lojasPropriasDoUsuario()[0]);
-    document.getElementById('barraOutraLojaTxt').textContent = `⚠ Você está operando na loja ${info?(info.abreviacao||info.nome):lojaExtra}${casa?` (a sua é ${casa.abreviacao||casa.nome})`:''}. Sem movimento por 10 minutos o sistema desloga.`;
+    document.getElementById('barraOutraLojaTxt').textContent = `⚠ ATENÇÃO: você está na loja ${info?(info.abreviacao||info.nome):lojaExtra}${casa?` — a sua é ${casa.abreviacao||casa.nome}`:''}. Tudo que você lançar fica nesta loja.${trocaLojaLivre()?'':' Sem movimento por 10 minutos o sistema desloga.'}`;
     bar.classList.add('on'); if(chip) chip.classList.add('outra');
   }else{
     bar.classList.remove('on'); if(chip) chip.classList.remove('outra');
@@ -1343,28 +1347,63 @@ function renderLojaSelect(){
     return;
   }
   const caixaLoja = document.getElementById('shellLojaBox');
-  if(lojaExtra || lojasPermitidas.length===1){   // loja fixa: só o balão colorido, sem seletor
+  if((lojaExtra && !trocaLojaLivre()) || lojasPermitidas.length===1){   // loja fixa: só o balão colorido, sem seletor
     sel.style.display = 'none'; if(caixaLoja) caixaLoja.classList.add('fixa');
     renderLojaChip(); return;
   }
   if(caixaLoja) caixaLoja.classList.remove('fixa');
   sel.style.display = '';
   sel.innerHTML = lojasPermitidas.map(l=>
-    `<option value="${l.id}" ${lojaAtual===l.id?'selected':''}>${escapeHtml(l.abreviacao||l.nome)} — ${escapeHtml(l.nome)}</option>`
+    `<option value="${l.id}" ${lojaAtual===l.id?'selected':''}>${escapeHtml(l.abreviacao||l.nome)} — ${escapeHtml(l.nome)}${trocaLojaLivre() && lojasPropriasDoUsuario().includes(l.id) ? ' (sua)' : ''}</option>`
   ).join('');
   renderLojaChip();
 }
-document.getElementById('shellLojaSelect').addEventListener('change', (e)=>{
-  const escolhida = e.target.value;
+/* Troca de loja livre (vendedora/gerente): avisa o servidor (LOG + acesso à loja nesta sessão). */
+async function trocarLojaLivre(id){
+  const sel = document.getElementById('shellLojaSelect');
+  const proprias = lojasPropriasDoUsuario();
+  if(proprias.includes(id) && !lojaExtra) return true;   // de uma loja sua para outra loja sua: nada a avisar no servidor
+  sel.disabled = true; showToast('Trocando de loja…');
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/trocar-loja', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, lojaId: id }) }).then(x=>x.json());
+    if(!r || !r.ok){ showToast('Não consegui trocar de loja: ' + ((r && r.error) || 'tente de novo')); return false; }
+    if(proprias.includes(id)){ lojaExtra = null; currentUser.lojaExtra = null; }
+    else{ lojaExtra = id; currentUser.lojaExtra = id; await new Promise(res=>setTimeout(res, 4500)); }   // o servidor guarda a configuração por ~4 s
+    agendarVerificacaoLojaExtra();
+    return true;
+  }catch(e){ showToast('Sem conexão para trocar de loja. Tente de novo.'); return false; }
+  finally{ sel.disabled = false; }
+}
+async function aplicarEscolhaLoja(escolhida){
   if(!escolhida) return;
   const eraForcado = lojaAtual===null;
+  if(trocaLojaLivre() && escolhida!==lojaAtual){
+    const ok = await trocarLojaLivre(escolhida);
+    if(!ok){ renderLojaSelect(); return; }
+  }
   salvarLojaAtual(escolhida);
+  renderLojaSelect();
   showToast('Loja alterada: ' + (lojaInfo(escolhida)?lojaInfo(escolhida).nome:''));
-  // Se era a escolha forçada de primeiro acesso (ainda sem módulo carregado), agora
-  // sim entra no Dashboard. Se só estava trocando de loja, os módulos já abertos são
-  // avisados da troca por salvarLojaAtual — não precisa navegar.
-  if(eraForcado) selecionarModulo('dashboard');
-});
+  // Se era a escolha forçada de primeiro acesso (ainda sem módulo carregado), agora entra no módulo inicial.
+  if(eraForcado){
+    const perm = SIDEBAR_MODULES.filter(podeVerModulo);
+    let alvo = null;
+    if(currentUser.nivel==='vendedora') alvo = perm.find(m=>m.id==='caixa');
+    if(!alvo && currentUser.nivel==='gerente'){ alvo = perm.find(m=>m.id==='dashboard'); try{ localStorage.setItem('vilaca_dash_aba','geral'); }catch(e){} }
+    if(!alvo) alvo = perm.find(m=>m.id==='dashboard') || perm.find(m=>m.id!=='config' && m.id!=='loja') || perm[0];
+    if(alvo) selecionarModulo(alvo.id);
+  }
+}
+document.getElementById('shellLojaSelect').addEventListener('change', (e)=>{ aplicarEscolhaLoja(e.target.value); });
+/* Quem tem 2+ lojas no cadastro (ex.: Camila) responde "em qual loja você está?" a cada login. */
+function perguntarLojaDoLogin(){
+  const lojas = lojasPropriasDoUsuario().map(id=>lojaInfo(id)).filter(Boolean);
+  openModal(`
+    <div class="section-label">Em qual loja você está?</div>
+    <p class="muted" style="margin:0 0 12px;font-size:13px;">Tudo vai abrir de acordo com o seu nome e a loja escolhida. Para mudar depois, use a lista de lojas no topo.</p>
+    <div style="display:flex;flex-direction:column;gap:8px;">${lojas.map(l=>`<button type="button" class="btn btn-accent" data-pergloja="${escapeHtml(l.id)}" style="padding:14px;font-size:15px;">${escapeHtml((l.abreviacao||'')+(l.abreviacao?' — ':'')+l.nome)}</button>`).join('')}</div>`);
+  document.querySelectorAll('[data-pergloja]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); aplicarEscolhaLoja(b.dataset.pergloja); }));
+}
 
 /* Decide a loja ativa ao entrar no shell: se só existe 1 loja liberada, entra
  * direto nela sem mostrar tela. Se a loja salva na sessão anterior ainda é
@@ -1374,9 +1413,16 @@ function apelidoUsuarioAtual(){
   const f = ((config && config.funcionarios) || []).find(x=> currentUser.funcionarioId && x.id === currentUser.funcionarioId);
   return String((f && (f.apelido || f.nome)) || currentUser.nome || '').trim().toUpperCase();
 }
-function decidirLojaInicial(){
+function decidirLojaInicial(novoLogin){
   if(lojaExtra && lojaInfo(lojaExtra)){ salvarLojaAtual(lojaExtra); return lojaExtra; }   // sessão já estava em outra loja (recarregou a página)
   const permitidas = lojasPermitidasParaUsuario();
+  if(trocaLojaLivre()){   // 05/11: começa na loja do cadastro; 2+ lojas no cadastro = pergunta a cada login
+    const proprias = lojasPropriasDoUsuario();
+    if(proprias.length>1 && novoLogin){ lojaAtual = null; aplicarCorLoja(); return 'PRECISA_ESCOLHER'; }
+    const salva = lerLojaSalva();
+    const alvo = (!novoLogin && salva && proprias.includes(salva)) ? salva : proprias[0];
+    if(alvo){ salvarLojaAtual(alvo); return alvo; }
+  }
   if(permitidas.length===0){ lojaAtual = null; aplicarCorLoja(); return null; }
   if(permitidas.length===1){ salvarLojaAtual(permitidas[0]); return permitidas[0]; }
   const salva = lerLojaSalva();
@@ -1456,7 +1502,7 @@ function subCaixaPermitidos(){
   if(currentUser && currentUser.nivel==='oficina' && currentPermissoes['os'] && currentPermissoes['os'].ativo) out.push('codigo');
   // Perfil OFICINA: só Código, Oficina (e o Leitor, barra à parte) — sem Gravações, Consulta de preço, Cancelamento, Pedido etc.
   if(currentUser && currentUser.nivel==='oficina') return out.filter(x=>x==='insumos' || x==='codigo');
-  if(out.length && currentUser && currentUser.nivel!=='oficina' && (config.lojas||[]).filter(l=>!l.interna).length>1) out.push('outraloja');   // cartão de ação: não abre tela
+  if(out.length && currentUser && currentUser.nivel!=='oficina' && !trocaLojaLivre() && (config.lojas||[]).filter(l=>!l.interna).length>1) out.push('outraloja');   // cartão de ação: não abre tela
   return out;
 }
 /* Aniversário (com a aba Mala direta) herdou a permissão do antigo Marketing. */
@@ -1615,6 +1661,7 @@ async function tentarRestaurarSessao(){
   currentPermissoes = permissoesDoUsuario(r.user);
   await loadConfig();
   salvarSessao(); // renova a validade
+  __restauracaoSessao = true;
   enterShell(s.modulo || null);
   atualizarBannerComo();
   return true;
@@ -1676,10 +1723,10 @@ function abrirOutraLoja(){
 function aplicarVoltaParaMinhaLoja(aviso){
   lojaExtra = null; if(currentUser) currentUser.lojaExtra = null;
   if(__verifLojaExtra){ clearInterval(__verifLojaExtra); __verifLojaExtra = null; }
-  const permitidas = lojasPermitidasParaUsuario();
+  const permitidas = trocaLojaLivre() ? lojasPropriasDoUsuario() : lojasPermitidasParaUsuario();
   const salva = lerLojaSalva();
   salvarLojaAtual(permitidas.includes(salva) ? salva : (permitidas[0] || null));
-  atualizarBarraOutraLoja(); registrarAtividade();
+  renderLojaSelect(); atualizarBarraOutraLoja(); registrarAtividade();
   if(aviso) showToast(aviso);
 }
 async function voltarMinhaLoja(){
@@ -2031,7 +2078,7 @@ function registrarAtividade(){
   __avisoVisivel = false;
   if(__idleTimer) clearTimeout(__idleTimer);
   if(__idleAviso) clearTimeout(__idleAviso);
-  const limite = lojaExtra ? INATIVIDADE_OUTRA_LOJA_MS : INATIVIDADE_MS;   // em outra loja: 10 min
+  const limite = (lojaExtra && !trocaLojaLivre()) ? INATIVIDADE_OUTRA_LOJA_MS : INATIVIDADE_MS;   // em outra loja: 10 min
   __idleAviso = setTimeout(()=>{
     if(!currentUser) return;
     const bar = document.getElementById('avisoInatividade');
@@ -2039,7 +2086,7 @@ function registrarAtividade(){
   }, limite - AVISO_ANTES_MS);
   __idleTimer = setTimeout(()=>{
     if(!currentUser) return;
-    encerrarSessao(lojaExtra ? 'Sessão encerrada: 10 minutos sem movimento em outra loja. Entre novamente.' : 'Sessão encerrada por inatividade. Entre novamente.');
+    encerrarSessao((lojaExtra && !trocaLojaLivre()) ? 'Sessão encerrada: 10 minutos sem movimento em outra loja. Entre novamente.' : 'Sessão encerrada por inatividade. Entre novamente.');
   }, limite);
 }
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -2125,6 +2172,7 @@ function preaquecerModulos(){
     if('requestIdleCallback' in window) requestIdleCallback(proximo, { timeout: 5000 }); else setTimeout(proximo, 2500);
   }catch(e){ /* só otimização */ }
 }
+let __restauracaoSessao = false;   // true quando o app só reabriu a sessão salva (F5): não repete a pergunta de loja
 function enterShell(moduloInicial){
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('shellView').style.display = 'flex';
@@ -2137,7 +2185,7 @@ function enterShell(moduloInicial){
   atualizarAvatar();
   __chatDesde = null; pollChatInternoShell();
   lojaExtra = (currentUser && currentUser.lojaExtra) || null;
-  const decisaoLoja = decidirLojaInicial();
+  const decisaoLoja = decidirLojaInicial(!__restauracaoSessao); __restauracaoSessao = false;
   agendarVerificacaoLojaExtra();
   // Alerta de contas vencendo hoje (módulo Gastos) — aparece sempre ao logar
   verificarAlertaGastos();
@@ -2149,6 +2197,7 @@ function enterShell(moduloInicial){
     document.getElementById('shellEmptyState').style.display = 'block';
     document.getElementById('shellEmptyState').textContent = 'Escolha uma loja pra começar (no seletor de loja, no canto superior direito).';
     document.getElementById('shellBreadcrumb').innerHTML = '<span class="bc-item atual">Escolha a loja</span>';
+    if(trocaLojaLivre()) perguntarLojaDoLogin();
     return;
   }
   if(permitidos.length===0){

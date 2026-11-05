@@ -553,6 +553,13 @@ function mensagemConfiavel(ev){
     const faltaNum = todos.filter(x=> x.reg.emissaoNota==='sim' && !semPagto(x.reg) && !String(x.reg.numeroNota||'').trim() && !soPixPF(x.reg));
     const faltaEntrada = todos.filter(x=> x.reg.notaEntrada && x.reg.status!=='cancelada' && x.reg.status!=='cancelado' && !String(x.reg.notaEntrada.numero||'').trim());
     const tudoOk = !emitir.length && !faltaNum.length && !faltaEntrada.length;
+    // 05/11: cancelamentos do período aparecem no fechamento (informativo — não trava o fechamento)
+    const noPeriodoC = ms=>{ const d0 = dataDeTimestamp(ms); return d0 && d0>=de && d0<=ate; };
+    const cancelados = [
+      ...vendas.filter(v=> v.status==='cancelada' && (!lojaId || v.lojaId===lojaId) && noPeriodoC(v.canceladoEm)).map(v=>({ origem:'Venda', via:v.codigoVia||'', reg:v })),
+      ...caixaOrdens.filter(o=> o.status==='cancelado' && (!lojaId || o.lojaId===lojaId) && noPeriodoC(o.canceladoEm)).map(o=>({ origem:'O.S.', via:o.via||'', reg:o }))
+    ];
+    const destinoC = r=>{ const t = r.cancelamentoDestino && r.cancelamentoDestino.tipo; const v = Number(r.cancelamentoDestino && r.cancelamentoDestino.valor)||0; if(!v) return 'sem valor recebido'; return t==='credito' ? fmtMoeda(v)+' viraram crédito do cliente' : t==='pix' ? fmtMoeda(v)+' devolvidos por Pix' : fmtMoeda(v)+' devolvidos em dinheiro'; };
     const linha = (x,motivo,i,grupo)=>`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;">
       <div><b>${escapeHtml(x.origem)} ${escapeHtml(viaDe(x.reg))}</b> · ${fmtDate(x.reg.data)} · ${escapeHtml(nomeLojaCaixa(x.reg.lojaId)||'')}<div class="muted" style="font-size:12.5px;">${escapeHtml(x.reg.cliente||'')} · ${fmtMoeda(x.reg.valorTotal)}${motivo?' · '+motivo:''}</div></div>
       <button class="btn btn-ghost btn-sm" data-fc="${grupo}:${i}" type="button">${grupo==='e'?'Nota emitida':'Informar nº'}</button></div>`;
@@ -569,6 +576,7 @@ function mensagemConfiavel(ev){
       ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão/LINK ECO sem nota</div>${emitir.map((x,i)=>linha(x,(x.reg.pagamentos||[]).some(formaExigeNota) ? 'LINK ECO: nota pela '+escapeHtml(nomeLojaCaixa(lojaNotaDaForma(x.reg))||'Ecommerce') : 'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
       ${faltaEntrada.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Falta o número da nota de ENTRADA (ouro) — ${faltaEntrada.length} via(s)</div>${faltaEntrada.map((x,i)=>linha(x,'pagou em ouro, sem número da nota de entrada',i,'o')).join('')}</div>` : ''}
+      ${cancelados.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);"><div style="font-weight:700;margin-bottom:4px;">Cancelamentos do período — ${cancelados.length} via(s) <span class="muted" style="font-weight:500;">(informativo)</span></div>${cancelados.map(c=>`<div style="padding:6px 0;border-bottom:1px solid var(--line);"><b>${escapeHtml(c.origem)} ${escapeHtml(c.via)}</b> · ${escapeHtml(c.reg.cliente||'')} · ${fmtMoeda(c.reg.valorTotal)}<div class="muted" style="font-size:12.5px;">${escapeHtml(destinoC(c.reg))} · por ${escapeHtml(c.reg.canceladoPor||'—')}${c.reg.motivoCancelamento?' · '+escapeHtml(c.reg.motivoCancelamento):''}</div></div>`).join('')}</div>` : ''}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="fc_fechar" type="button" data-fechar>Voltar</button>
         ${umDia && fechado ? `<button class="btn btn-danger" id="fc_reabrir" type="button">${gestao ? 'Reabrir caixa' : 'Reabrir caixa (senha da gerência)'}</button>` : ''}

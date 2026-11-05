@@ -259,6 +259,9 @@
   .slot-bad .dot{background:var(--wait);}
   .locked-note{display:flex;gap:10px;align-items:flex-start;background:var(--accent-soft);color:var(--ink);padding:11px 13px;border-radius:10px;font-size:13px;line-height:1.5;margin-bottom:16px;}
   .locked-note .ico{color:var(--accent);margin-top:2px;}
+  .cv-radio{display:flex;gap:10px;align-items:flex-start;cursor:pointer;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;line-height:1.4;}
+  .cv-radio input[type=radio]{width:18px;height:18px;min-height:0;flex:0 0 18px;margin:2px 0 0;padding:0;}
+  .cv-radio span{flex:1;min-width:0;}
   .aviso-linha{margin-top:6px;padding:9px 12px;border-radius:8px;font-size:13px;font-weight:600;display:flex;gap:8px;align-items:flex-start;line-height:1.45;}
   .aviso-linha .ico{margin-top:2px;flex-shrink:0;}
   .aviso-linha.falta{background:var(--wait-soft);color:var(--wait);}
@@ -893,6 +896,30 @@ function closeModal(){
   if(history.state && history.state.modalAberto) history.back();
   if(modalOnClose){ const cb = modalOnClose; modalOnClose = null; cb(); }
 }
+/* Sub-diálogo EMPILHADO: guarda o conteúdo atual (ex.: a via em edição, com tudo digitado) e mostra o diálogo por cima;
+   ao fechar, devolve o conteúdo intacto. Assim perguntas do pagamento (Pix PF/loja, nº da nota) não fecham a via. */
+const _subStack = [];
+function openSubModal(html){
+  const box = document.getElementById('modalBox'), ov = document.getElementById('modalOverlay');
+  const wasShown = ov.classList.contains('show');
+  const frag = document.createDocumentFragment();
+  while(box.firstChild) frag.appendChild(box.firstChild);
+  _subStack.push({ frag, wasShown, wasTela: ov.classList.contains('tela-cheia'), onClose: modalOnClose });
+  modalOnClose = null;
+  box.innerHTML = html;
+  ov.classList.remove('tela-cheia'); ov.classList.add('show');
+  if(!wasShown) history.pushState({ modalAberto:true }, '');
+}
+function closeSubModal(){
+  const s = _subStack.pop();
+  if(!s){ closeModal(); return; }
+  const box = document.getElementById('modalBox'), ov = document.getElementById('modalOverlay');
+  box.innerHTML = '';
+  if(!s.wasShown){ modalOnClose = s.onClose; closeModal(); return; }
+  box.appendChild(s.frag);
+  if(s.wasTela) ov.classList.add('tela-cheia');
+  modalOnClose = s.onClose;
+}
 function openModal(html){
   document.getElementById('modalBox').innerHTML = html;
   document.getElementById('modalOverlay').classList.remove('tela-cheia');   // só a edição da via liga a tela cheia (depois de abrir)
@@ -1334,8 +1361,10 @@ function ehVendedoraDaLoja(lojaId){
   return minhas.includes(lojaId);
 }
 function podeCancelarOrdem(order){
-  return !!(currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (order && ehVendedoraDaLoja(order.lojaId))));
+  return !!(currentUser && currentUser.nivel!=='oficina');   // 05/11: todos cancelam (sem senha); fica no LOG e no fechamento do caixa
 }
+/* Excluir (apagar o registro) só a diretoria — o normal é CANCELAR, que mantém o registro. */
+function podeExcluirOrdem(order){ return !!(currentUser && currentUser.nivel==='diretoria'); }
 async function reverterFiadoECreditoOrdem(order, rotulo){
   rotulo = rotulo || 'Cancelamento';
   const telD = onlyDigits(order.telefone||'');
@@ -1446,8 +1475,8 @@ function perguntarDestinoEstorno(recebido, temCliente, quem){
       <h3>Destino do valor recebido</h3>
       <p>${quem} já recebeu <b>${fmtMoeda(recebido)}</b>. O que fazer com esse valor?</p>
       <div class="field" style="display:grid;gap:8px;">
-        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
-        <label style="display:flex;gap:8px;align-items:flex-start;"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
+        <label class="cv-radio"><input type="radio" name="dst" value="credito" ${temCliente?'checked':'disabled'}> <span>Deixar como <b>crédito do cliente</b> ${temCliente?'(aparece nas próximas compras e pedidos)':'<span class="muted">— cliente não está no cadastro</span>'}</span></label>
+        <label class="cv-radio"><input type="radio" name="dst" value="devolver" ${temCliente?'':'checked'}> <span><b>Devolver o valor</b> ao cliente</span></label>
       </div>
       <div class="field" id="dst_formaBox" style="display:${temCliente?'none':''};"><label for="dst_forma">Forma da devolução</label>
         <select id="dst_forma"><option value="dinheiro">Dinheiro — sai direto do caixa</option><option value="pix">Pix — sai da conta bancária da loja</option></select></div>
@@ -1557,7 +1586,7 @@ async function excluirOrdemDefinitivo(order, motivo){
 }
 function abrirExcluirOrdem(order){
   if(!order) return;
-  if(!podeCancelarOrdem(order)){ showToast('Só gerente ou diretoria podem excluir uma O.S. (vendedora: só das lojas dela).'); return; }
+  if(!podeExcluirOrdem(order)){ showToast('Só a diretoria exclui um pedido. Use Cancelar: o registro fica na lista e o valor aparece no fechamento do caixa.'); return; }
   const recebido = valorRecebidoDe(order);
   const temCredito = order.status!=='cancelado' && Number(order.creditoUsado)>0;
   const temFiado = order.status!=='cancelado' && !!order.fiadoDebitoId;
@@ -2351,7 +2380,7 @@ function numeroNotaBtnHtml(holder){
   return `<button type="button" class="btn btn-ghost btn-sm" data-numnota style="margin-top:6px;" title="Informar o número da nota fiscal (marca Nota fiscal: Sim)">${n ? 'Nota nº ' + esc(n) : 'Número da nota'}</button>`;
 }
 function abrirNumeroNota(holder, aoSalvar){
-  openModal(`
+  openSubModal(`
     <h3>Número da nota fiscal</h3>
     <p class="muted">Ao informar o número, a venda/pedido fica como <b>com nota</b>.</p>
     <div class="field" style="margin-top:12px;"><label for="nn_numero">Número da nota</label><input id="nn_numero" autocomplete="off" placeholder="Ex.: 12345" value="${(holder.numeroNota||'').replace(/"/g,'&quot;')}"></div>
@@ -2359,12 +2388,12 @@ function abrirNumeroNota(holder, aoSalvar){
       <button class="btn btn-ghost" id="nn_cancel" type="button">Cancelar</button>
       <button class="btn btn-accent" id="nn_ok" type="button">Confirmar</button>
     </div>`);
-  document.getElementById('nn_cancel').addEventListener('click', closeModal);
+  document.getElementById('nn_cancel').addEventListener('click', closeSubModal);
   const ok = ()=>{
     const n = document.getElementById('nn_numero').value.trim();
     if(!n){ showToast('Digite o número da nota fiscal.'); return; }
     holder.emissaoNota = 'sim'; holder.numeroNota = n;
-    closeModal(); if(aoSalvar) aoSalvar();
+    closeSubModal(); if(aoSalvar) aoSalvar();
   };
   document.getElementById('nn_ok').addEventListener('click', ok);
   document.getElementById('nn_numero').addEventListener('keydown', e=>{ if(e.key==='Enter') ok(); });
@@ -2411,14 +2440,14 @@ function regraNotaPix(container, holder){
 /* Pergunta de onde veio o Pix: da loja (PJ) ou de pessoa física (PF). */
 function perguntarPixTipo(){
   return new Promise(resolve=>{
-    openModal(`
+    openSubModal(`
       <h3>Pix recebido em…</h3>
       <p class="muted">O Pix foi para a conta da loja ou para uma pessoa física?</p>
       <div class="modal-actions" style="flex-wrap:wrap;gap:10px;margin-top:14px;">
         <button class="btn btn-accent" type="button" data-pixtipo="PJ">Pix loja</button>
         <button class="btn btn-ghost" type="button" data-pixtipo="PF">Pix pessoa física</button>
       </div>`);
-    document.querySelectorAll('[data-pixtipo]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); resolve(b.dataset.pixtipo); }));
+    document.querySelectorAll('[data-pixtipo]').forEach(b=> b.addEventListener('click', ()=>{ closeSubModal(); resolve(b.dataset.pixtipo); }));
   });
 }
 
@@ -5168,7 +5197,7 @@ function renderNovaOrdem(main){
 /* ============================================================
    EDITAR ORDEM (modal)
    ============================================================ */
-async function openEditModal(orderId, somenteLeitura){
+async function openEditModal(orderId, somenteLeitura, soPagamento){
   // Recarrega SÓ essa ordem direto do banco (uma linha, não a lista inteira): o
   // cliente pode ter confirmado uma leitura (ou o status pode ter mudado em outra
   // aba/sessão) depois que esta página carregou.
@@ -5185,7 +5214,7 @@ async function openEditModal(orderId, somenteLeitura){
   if(currentUser.nivel==='oficina'){
     openEditModalOficina(order);
   } else {
-    openEditModalCompleto(order, { somenteLeitura: !!somenteLeitura });
+    openEditModalCompleto(order, { somenteLeitura: !!somenteLeitura, soPagamento: !!soPagamento });
   }
 }
 
@@ -5239,7 +5268,7 @@ function openEditModalCompleto(order, opts){
   const bloqueadoPorLoja = !podeEditarRegistro(order) && !__pedidosLiberados.has(order.id);
   const somenteLeitura = !!opts.somenteLeitura || bloqueadoPorLoja;
   openModal(`
-    <h3>${somenteLeitura ? 'Pedido' : 'Editar pedido'} ${escapeHtml(order.via||'')}</h3>
+    <h3>${opts.soPagamento && !somenteLeitura ? 'Pagamento — pedido' : somenteLeitura ? 'Pedido' : 'Editar pedido'} ${escapeHtml(order.via||'')}</h3>
     <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <b style="color:var(--ink);">${escapeHtml(order.cliente||'')}</b>${order.encaixe?` <span class="badge badge-encaixe" title="Autorizado por ${escapeHtml(order.autorizadoPor||'')}">Encaixe autorizado por ${escapeHtml(order.autorizadoPor||'—')}</span>`:''}</div>
     ${bloqueadoPorLoja ? `<div class="locked-note">${ico('cadeado')}<span>${escapeHtml(motivoSemEdicao(order))}</span> <button type="button" class="btn btn-ghost btn-sm" id="btnLiberarEdicao">Liberar edição (senha da gerência)</button></div>` : `<p>${somenteLeitura ? 'Só leitura. Para alterar, feche e clique no lápis da lista.' : 'Se a nova data ou o novo serviço saírem do padrão, o sistema pede o código de autorização.'}</p>`}
     <div class="section-label">Cliente</div>
@@ -5296,10 +5325,18 @@ function openEditModalCompleto(order, opts){
       <button class="btn btn-ghost" id="printBtnCompleto">${ico('impressora')} Imprimir via</button>
       <span class="espaco"></span>
       <button class="btn btn-ghost" id="editCancel">${somenteLeitura ? 'Fechar' : 'Cancelar'}</button>
-      ${somenteLeitura ? '' : '<button class="btn btn-accent" id="editSave">Salvar alterações</button>'}
+      ${somenteLeitura ? '' : `<button class="btn btn-accent" id="editSave">${opts.soPagamento ? 'Salvar pagamento' : 'Salvar alterações'}</button>`}
     </div>
   `);
   { const ovTc = document.getElementById('modalOverlay'); ovTc.classList.add('tela-cheia'); ovTc.scrollTop = 0; }   // 04/11: a via de verdade, em tela cheia
+  if(opts.soPagamento && !somenteLeitura){   // acesso rápido "Pagar": mostra só o pagamento (o resto continua na tela, escondido, e o salvar é o mesmo da edição)
+    const _bx = document.getElementById('modalBox');
+    Array.from(_bx.children).forEach(el=>{
+      if(el.tagName==='H3' || el.classList.contains('resumo-ordem') || el.id==='pagamentoContainerEdit' || el.classList.contains('modal-actions') || el.classList.contains('locked-note')) return;
+      el.style.display = 'none';
+    });
+    const _pb = document.getElementById('printBtnCompleto'); if(_pb) _pb.style.display = 'none';
+  }
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
@@ -5915,6 +5952,9 @@ function renderPainel(main){
         await trocarStatusOrdem(ord, sel.value, ()=>{ sel.value = previous; applyStatusClass(sel); });
       });
     });
+    wrap.querySelectorAll('[data-pagar]').forEach(b=>{
+      b.addEventListener('click', ()=> openEditModal(b.dataset.pagar, false, true));
+    });
     wrap.querySelectorAll('[data-wa]').forEach(b=>{
       b.addEventListener('click', ()=> sendWhatsApp(orders.find(x=>x.id===b.dataset.wa)) );
     });
@@ -5996,6 +6036,7 @@ function renderPainel(main){
         <td class="acoes">
           <div class="acoes-linha">
           ${oficina ? `<button class="btn-icone" data-view="${o.id}" title="Ver detalhes" aria-label="Ver detalhes">${ico('olho')}</button>` : ''}
+          ${(!oficina && aReceber>0.009 && o.status!=='cancelado' && !isRascunho) ? `<button class="btn btn-accent btn-sm" data-pagar="${o.id}" title="Ir direto para o pagamento deste pedido" style="white-space:nowrap;">${recebido>0.009 ? 'Pagar parcial' : 'Pagar'}</button>` : ''}
           <button class="btn-icone" data-edit="${o.id}" title="${oficina?'Observações':'Editar pedido'}" aria-label="${oficina?'Observações':'Editar pedido'}">${ico('lapis')}</button>
           <button class="btn-icone" data-print="${o.id}" title="Imprimir via" aria-label="Imprimir via">${ico('impressora')}</button>
           ${!oficina ? `
@@ -6006,10 +6047,10 @@ function renderPainel(main){
               <button type="button" role="menuitem" data-view="${o.id}">${ico('olho')} Ver detalhes</button>
               <button type="button" role="menuitem" data-mail="${o.id}">${ico('email')} Enviar e-mail ao cliente</button>
               <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada por terceiros</button>
-              ${podeCancelarOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
+              ${podeExcluirOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
             </div>
           </div>
-          ` : (podeCancelarOrdem(o) ? `<button class="btn-icone perigo" data-del="${o.id}" title="Excluir pedido" aria-label="Excluir pedido">${ico('lixeira')}</button>` : '')}
+          ` : (podeExcluirOrdem(o) ? `<button class="btn-icone perigo" data-del="${o.id}" title="Excluir pedido" aria-label="Excluir pedido">${ico('lixeira')}</button>` : '')}
           </div>
         </td>
       </tr>
