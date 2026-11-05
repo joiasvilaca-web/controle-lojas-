@@ -12,6 +12,7 @@
 <script src="icones.js"></script>
 <script src="formato.js"></script>
 <script src="marketing-off.js"></script>
+<script src="vilaca-extras.js"></script>
 <style>
   /* Cores: só variáveis do sistema (tema.css manda nelas em <html data-ds>, claro e escuro). */
   :root{ --radius:12px; --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
@@ -656,12 +657,23 @@ async function marcarAniversarioEnviado(clienteId){
   c.ultimoAniversarioEnviado = new Date().getFullYear();
   await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id:c.id, payload:c } } });
 }
+// Loja usada no envio automático (WhatsApp da loja, função enviar-via): a loja aberta no app; senão a 1ª loja do usuário.
+function lojaParaWhats(){
+  if(window.__lojaAtual && window.__lojaAtual.id) return window.__lojaAtual.id;
+  const ls = (currentUser && Array.isArray(currentUser.lojas)) ? currentUser.lojas : [];
+  return ls[0] || '';
+}
 async function sendWhatsAppAniversario(clienteId){
   const c = acharCliente(clienteId);
   if(!c || !c.telefone){ showToast('Este cliente não tem telefone. Cadastre o número em Cadastro › Clientes.', 4000); return; }
   if(!(await MarketingOff.permitir({ telefone:c.telefone, nome:c.nome, tags:c.tags||[] }))) return;
-  const msg = encodeURIComponent(buildAniversarioMsg(c.nome));
-  window.open(`https://wa.me/55${onlyDigits(c.telefone)}?text=${msg}`, '_blank');
+  const lojaWa = lojaParaWhats();
+  if(window.WhatsAuto && lojaWa){
+    await WhatsAuto.enviar({ telefone:c.telefone, texto:buildAniversarioMsg(c.nome), lojaId:lojaWa, senha:__gatewaySenha, tipo:'aniversario', registroId:c.id, via:'' });
+  } else {
+    const msg = encodeURIComponent(buildAniversarioMsg(c.nome));
+    window.open(`https://wa.me/55${onlyDigits(c.telefone)}?text=${msg}`, '_blank');
+  }
   await marcarAniversarioEnviado(clienteId);
   desenharTabelaAniv();
 }
@@ -797,6 +809,8 @@ async function enviarWhatsAppOrc(orcId){
   const si = statusInfoDe(o.status);
   let msg = si.mensagemWhatsapp || `Olá, ${o.cliente||''}! Passando para lembrar do seu orçamento na Vilaça Joias. Podemos confirmar?`;
   msg = msg.replaceAll('{cliente}',o.cliente||'').replaceAll('{loja}',o.loja||'').replaceAll('{valor}',`R$ ${(Number(o.valorTotal)||0).toFixed(2)}`);
+  const lojaWa = o.lojaId || lojaParaWhats();
+  if(window.WhatsAuto && lojaWa){ await WhatsAuto.enviar({ telefone:o.telefone, texto:msg, lojaId:lojaWa, senha:__gatewaySenha, tipo:'orcamento', registroId:o.id, via:o.via||o.codigoVia||'' }); return; }
   window.open(`https://wa.me/55${onlyDigits(o.telefone)}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 async function enviarEmailOrc(orcId){
