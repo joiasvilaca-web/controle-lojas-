@@ -441,3 +441,8 @@ Lição (deploy de edge function pelo conector): a camada de ferramentas troca `
 - Nota de ENTRADA (via com ouro): botão Emitir obrigatório + nº opcional (`notaEntrada {emitida, numero}`); o fechamento do caixa (caixa.html) exige o número.
 - `login-teste` (função só no banco de teste; recusa se o projeto não for o de teste): em treino.vilaca.app o login mostra Oficina/Vendedora/Gerente sem senha; Diretoria pede a senha (definida no banco de teste, não está no repositório). Não aparece nem funciona em produção (vilaca.app) nem em teste.vilaca.app.
 - 04/11: pagar depois = nota "não" (criação e edição); o Caixa não cobra nota de via "pagar depois" sem pagamento e respeita o "não" escolhido na via (só LINK ECO sempre exige). Todo login entra na primeira loja do cadastro da pessoa (seletor troca depois).
+
+## 20. WhatsApp automático da via (05/11)
+- `enviar-via` (código em `enviar-via.ts`): o ícone do WhatsApp em vendas/painel-ordens/orcamentos chama `WhatsAuto.enviar` → envia pela Evolution sem abrir o WhatsApp Web. Loja `loja_rj` usa a instância `reformajoias`; as demais, `vilaca` (chip 32 99961-9350). Instância fora do ar → `fallback:true` e o app abre o `wa.me` como antes. Envio registrado em `auditoria_log`.
+- `qr-instancia` (código em `qr-instancia.ts`) + `qr.html?t=TOKEN`: mostra o QR da instância `vilaca` para conectar pelo celular. Token em `atendimento_segredos.QR_TOKEN` (`token|expiraMs`), apagado quando conecta.
+- Lição: os "401 / Log out instance" da `vilaca` em 05/11 vinham de cliques em Logout/Restart no painel (Manager) da Evolution enquanto o QR estava na tela, não do WhatsApp. Para conectar: só ler o QR, sem mexer no Manager.
