@@ -2518,12 +2518,17 @@ function mountPagamentos(container, holder, getLojaVendaId){
     return Math.max(0,holder.descTotalTipo==='desconto'?subtotal-delta:subtotal+delta);
   }
 
+  /* 06/11: cartão/débito/link cobram +20% — o que o cliente PAGOU (à vista + acréscimo) é o valor que a via mostra. */
+  function acrescPag(){
+    return (holder.pagamentos||[]).filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config))
+      .reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
+  }
   function ajusteLinhaHtml(sub,fin){
     if(holder.descTotalTipo==='nenhum') return '';
     const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return '';
     const d=holder.descTotalTipo==='desconto';
     const pct=holder.descTotalModo==='percentual'&&holder.descTotalPerc?' ('+String(holder.descTotalPerc).replace('.',',')+'%)':'';
-    return `<div style="display:flex;flex-direction:column;gap:8px;width:100%;margin-top:4px;"><div style="display:flex;justify-content:space-between;gap:8px;font-weight:700;font-variant-numeric:tabular-nums;color:${d?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};"><span>${d?'Desconto':'Acréscimo'}${pct}</span><span>${d?'−':'+'}${fmtMoeda(delta)}</span></div><div class="pag-saldo"><span>Saldo a pagar</span><strong>${fmtMoeda(fin)}</strong></div></div>`;
+    return `<div style="display:flex;flex-direction:column;gap:8px;width:100%;margin-top:4px;"><div style="display:flex;justify-content:space-between;gap:8px;font-weight:700;font-variant-numeric:tabular-nums;color:${d?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};"><span>${d?'Desconto':'Acréscimo'}${pct}</span><span>${d?'−':'+'}${fmtMoeda(delta)}</span></div><div class="pag-saldo"><span>Saldo a pagar</span><strong>${fmtMoeda(fin+acrescPag())}</strong></div></div>`;
   }
 
   function draw(){
@@ -2557,7 +2562,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
         <!-- Valor total -->
         <div class="pag-info-cel" style="flex:1 1 auto;min-width:120px;">
           <div class="pag-info-cel-label">Valor total</div>
-          <div class="pag-info-cel-val" id="pagValorTotalDisplay">${fmtMoeda(totalFinal>0?totalFinal:0)}</div>
+          <div class="pag-info-cel-val" id="pagValorTotalDisplay">${fmtMoeda((totalFinal>0?totalFinal:0)+acrescPag())}</div>
           <input type="hidden" id="pagValorTotal" value="${totalFinal>0?totalFinal.toFixed(2):''}">
         </div>
         <!-- Momento do pagamento -->
@@ -2620,7 +2625,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
       const sub=calcTotalItens(), fin=calcTotalFinal(sub);
       const el=container.querySelector('#pagSubtotal'); if(el) el.textContent=fmtMoeda(sub);
       const ln=container.querySelector('#pagAjusteLinha'); if(ln) ln.innerHTML=ajusteLinhaHtml(sub,fin);
-      const dsp=container.querySelector('#pagValorTotalDisplay'); if(dsp) dsp.textContent=fmtMoeda(fin>0?fin:0);
+      const dsp=container.querySelector('#pagValorTotalDisplay'); if(dsp) dsp.textContent=fmtMoeda((fin>0?fin:0)+acrescPag());
       const inpT=container.querySelector('#pagValorTotal'); if(inpT) inpT.value=fin>0?fin.toFixed(2):'';
       holder.valorTotal = fin>0 ? fin : null;
       drawRows();
@@ -2736,6 +2741,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const total = temSemCusto ? 0 : (Number(holder.valorTotal)||calcTotalItens());
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
+    { const _ac = temSemCusto ? 0 : acrescPag(), _d = container.querySelector('#pagValorTotalDisplay'), _s = container.querySelector('.pag-saldo strong');
+      if(_d) _d.textContent = fmtMoeda(total + _ac);
+      if(_s) _s.textContent = fmtMoeda(total + _ac); }
     { let neEl = container.querySelector('#pagNotaEntrada'); if(!neEl){ neEl = document.createElement('div'); neEl.id = 'pagNotaEntrada'; hint.parentNode.insertBefore(neEl, hint.nextSibling); } OuroPag.renderNota(neEl, holder, config, currentUser && currentUser.nome); }
     const exOuro = (saldo < -0.009) ? OuroPag.excesso(holder.pagamentos, total, config) : null;
     if(exOuro && exOuro.ok){
@@ -2747,7 +2755,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso-linha excede">${ico('alerta')}<span>Os pagamentos passam do total em ${fmtMoeda(Math.abs(saldo))}. Confira os valores.</span></div>`;
     } else {
-      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total)}</span></div>`;
+      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + (temSemCusto ? 0 : acrescPag()))}</span></div>`;
     }
   }
 
@@ -2911,7 +2919,8 @@ function mountPagamentosEdicao(container, holder){
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso-linha excede">${ico('alerta')}<span>Os pagamentos passam do total em ${fmtMoeda(Math.abs(saldo))}. Confira os valores.</span></div>`;
     } else {
-      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total)}</span></div>`;
+      const _ac = holder.pagamentos.filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config)).reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
+      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + _ac)}</span></div>`;
     }
   }
 
