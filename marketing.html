@@ -183,19 +183,22 @@
     table.cartoes tbody tr:hover > td{background:transparent;}
     .lista-rolavel{border:none;border-radius:0;max-height:none;}
   }
+
+/* 06/11: etiquetas da Fila de envios */
+.selo{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;line-height:1.5;white-space:nowrap;background:var(--t-surface-2,#eef1f4);color:var(--t-text-soft,#445);}
 </style>
 </head>
 <body>
 
 <div id="lojaFaixa" style="display:none;"></div>
 <div class="tabs-bar abas-std" id="tabsBar">
-  <button class="active" data-tab="aniversario">Aniversário</button>
+  <button class="active" data-tab="maladire">Mala direta</button>
   <button data-tab="orcamentos" id="tabBtnOrcamentos">Orçamentos</button>
-  <button data-tab="maladire">Mala direta</button>
+  <button data-tab="fila">Fila de envios</button>
 </div>
 
 <!-- ===== ANIVERSÁRIO ===== -->
-<div class="tab-content active" id="tab-aniversario">
+<div class="tab-content" id="tab-aniversario"><!-- 06/11: a aba saiu; aniversariantes do dia agora são um grupo da Mala direta -->
   <div class="page-head">
     <div><h1 class="page-title">Aniversário</h1><p class="page-sub">Mande os parabéns por WhatsApp ou e-mail. Veja quem faz aniversário hoje ou escolha outra data.</p></div>
   </div>
@@ -243,10 +246,11 @@
 </div>
 
 <!-- ===== MALA DIRETA ===== -->
-<div class="tab-content" id="tab-maladire">
+<div class="tab-content active" id="tab-maladire">
   <div class="page-head">
-    <div><h1 class="page-title">Mala direta</h1><p class="page-sub">Escreva uma mensagem, escolha os clientes e envie por WhatsApp ou e-mail.</p></div>
+    <div><h1 class="page-title">Mala direta</h1><p class="page-sub">Escreva uma mensagem, escolha os clientes (aniversariantes de hoje, quem comprou há X dias, todos…) e envie. O WhatsApp sai pela fila do número de disparo: uma mensagem a cada 30 s, das 9h às 18h.</p></div>
     <div class="page-actions">
+      <button class="btn btn-ghost" id="btnChamarCliente"><span data-ico="whatsapp"></span> Chamar cliente</button>
       <button class="btn btn-ghost" id="btnMensagensSalvas"><span data-ico="documento"></span> Mensagens salvas</button>
       <button class="btn btn-accent" id="btnNovaMensagem"><span data-ico="mais"></span> Nova mensagem</button>
     </div>
@@ -256,6 +260,17 @@
       <div class="estado"><span class="estado-ico" data-ico="mensagem" data-tam="22"></span><span class="estado-tit">Comece uma mala direta</span>Clique em <b>Nova mensagem</b> para escrever do zero, ou em <b>Mensagens salvas</b> para reaproveitar uma campanha anterior.</div>
     </div>
   </div>
+</div>
+
+<!-- ===== FILA DE ENVIOS (06/11) ===== -->
+<div class="tab-content" id="tab-fila">
+  <div class="page-head">
+    <div><h1 class="page-title">Fila de envios</h1><p class="page-sub">Mensagens de WhatsApp do Marketing esperando a vez e as últimas enviadas. Regras: 1 a cada 30 s; pausa de 2 min a cada 30; cada novo bloco de 30 fica 10% mais lento; só das 9h às 18h. Aniversário que não sair no dia é cancelado; o resto passa para o dia seguinte.</p></div>
+    <div class="page-actions">
+      <button class="btn btn-accent" id="btnFilaAtualizar"><span data-ico="atualizar"></span> Ver fila</button>
+    </div>
+  </div>
+  <div id="filaConteudo"><div class="card"><div class="estado"><span class="estado-ico" data-ico="relogio" data-tam="22"></span><span class="estado-tit">Clique em Ver fila</span>Mostra o que está esperando para sair, o que já saiu e o que deu erro nos últimos 3 dias.</div></div></div>
 </div>
 
 <!-- ===== MODAL GENÉRICO ===== -->
@@ -406,9 +421,9 @@ function waIconSvg(){
 const SECAO = new URLSearchParams(location.search).get('secao');
 if(SECAO==='aniversario'){ const b=document.getElementById('tabBtnOrcamentos'); if(b) b.remove(); }
 function abasDoModulo(){
-  const t = [{ id:'aniversario', label:'Aniversário' }];
+  const t = [{ id:'maladire', label:'Mala direta' }];
   if(SECAO!=='aniversario') t.push({ id:'orcamentos', label:'Orçamentos' });
-  t.push({ id:'maladire', label:'Mala direta' });
+  t.push({ id:'fila', label:'Fila de envios' });
   return t;
 }
 document.querySelectorAll('.tabs-bar button').forEach(b=>{
@@ -425,6 +440,7 @@ document.querySelectorAll('.tabs-bar button').forEach(b=>{
       carregarOrcamentosSeNecessario().then(renderOrcamentosMarketing);
     }
     if(b.dataset.tab==='maladire') renderMalaDirete();
+    if(b.dataset.tab==='fila') document.getElementById('btnFilaAtualizar').onclick = carregarFila;
   });
 });
 
@@ -453,8 +469,9 @@ window.addEventListener('message', async ev=>{
     currentUser = ev.data.user;
     __gatewaySenha = currentUser ? currentUser.senha : null;
     await loadAll();
-    renderAniversario();
-    parent.postMessage({ type:'tabs', modulo:'marketing', tabs: abasDoModulo(), active:'aniversario' }, '*');
+    renderMalaDirete();
+    document.getElementById('btnFilaAtualizar').onclick = carregarFila;
+    parent.postMessage({ type:'tabs', modulo:'marketing', tabs: abasDoModulo(), active:'maladire' }, '*');
   }
   if(ev.data && ev.data.type==='lojaAtual'){
     window.__lojaAtual = { id: ev.data.lojaId||null, cor: ev.data.cor||null, nome: ev.data.nome||null };
@@ -836,6 +853,7 @@ let mdDestinatarios = []; // ids de clientes selecionados
 
 function renderMalaDirete(){
   document.getElementById('btnNovaMensagem').onclick = abrirComposer;
+  document.getElementById('btnChamarCliente').onclick = abrirChamarCliente;
   document.getElementById('btnMensagensSalvas').onclick = abrirMensagensSalvas;
 }
 
@@ -930,8 +948,8 @@ function abrirComposer(msgExistente){
               <input type="number" id="fPosDias" min="0" max="3650" value="${Number((config&&config.mensagens&&config.mensagens.posVendaDias)||7)}" style="width:70px;" aria-label="Dias"> dias
               <span class="dica">Vendas lançadas (conta do dia da venda) e pedidos com status Entregue (conta do dia em que ficou Entregue). Canceladas não entram.</span>
             </label></div>
-            <div class="filtro-opcao"><input type="radio" name="mdFiltro" value="aniversariantes" id="fAniv"><label for="fAniv">Aniversariantes do mês
-              <select id="fAnivMes" aria-label="Mês"><option value="">Escolha</option>${['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'].map((n,i)=>`<option value="${i+1}">${n}</option>`).join('')}</select>
+            <div class="filtro-opcao"><input type="radio" name="mdFiltro" value="aniversariantes" id="fAniv"><label for="fAniv">Aniversariantes de hoje
+              <span class="dica">Sempre os do dia. Se não sair até as 18h, a mensagem de aniversário é cancelada (não vai no dia seguinte).</span>
             </label></div>
             <div class="filtro-opcao"><input type="radio" name="mdFiltro" value="semEmail" id="fSemEmail"><label for="fSemEmail">Sem e-mail cadastrado (só WhatsApp)</label></div>
             <div class="filtro-opcao"><input type="radio" name="mdFiltro" value="semTel" id="fSemTel"><label for="fSemTel">Sem telefone (só e-mail)</label></div>
@@ -1017,6 +1035,10 @@ function abrirComposer(msgExistente){
     const t = document.getElementById('mdTexto');
     const padrao = (config && config.mensagens && config.mensagens.posVenda) || MSG_POS_VENDA_PADRAO;
     if(t && !t.value.trim()){ t.value = padrao; showToast('Mensagem de pós-venda das Configurações colocada no texto (pode editar).'); }
+  });
+  document.getElementById('fAniv').addEventListener('change', ()=>{
+    const t = document.getElementById('mdTexto');
+    if(t && !t.value.trim()){ t.value = (config && config.mensagens && config.mensagens.aniversario) || 'Feliz aniversário, {cliente}! A Vilaça Joias deseja a você um dia especial! 🎂💍'; showToast('Mensagem de aniversário das Configurações colocada no texto (pode editar).'); }
   });
   ['fPosModo','fPosDias'].forEach(id=> document.getElementById(id).addEventListener('focus', ()=>{ const r=document.getElementById('fPosVenda'); if(!r.checked){ r.checked=true; r.dispatchEvent(new Event('change')); } }));
 
@@ -1126,6 +1148,114 @@ function destinatariosPosVenda(){
   return [...saida.values()];
 }
 
+/* ===== 06/11: fila de envios do WhatsApp (Edge Function marketing-disparo) ===== */
+const DISPARO_URL = SUPABASE_URL + '/functions/v1/marketing-disparo';
+async function chamarDisparo(body){
+  try{
+    const r = await fetch(DISPARO_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ ...body, senha: __gatewaySenha }) });
+    return await r.json().catch(()=>({ error:'Resposta inválida do servidor ('+r.status+')' }));
+  }catch(e){ return { error:'Sem conexão com o servidor.' }; }
+}
+/** Tempo aproximado para a fila mandar n mensagens (30 s cada, 2 min a cada 30, +10% por bloco). */
+function tempoEstimado(n){
+  let s = 0; for(let i=1;i<=n;i++){ const f = Math.pow(1.1, Math.floor((i-1)/30)); s += (i%30===0 ? 120 : 30) * f; }
+  const min = Math.round(s/60); return min < 60 ? `${Math.max(1,min)} min de envio` : `${Math.floor(min/60)} h ${min%60} min de envio`;
+}
+const TIPO_ROT = { aniversario:'Aniversário', posVenda:'Pós-venda', campanha:'Mala direta', chamar:'Chamar cliente' };
+const STATUS_ROT = { pendente:['Na fila','info'], enviado:['Enviado','ok'], falhou:['Erro','erro'], expirado:['Aniversário cancelado (fora do horário)','pend'], cancelado:['Cancelado',''] };
+async function carregarFila(){
+  const box = document.getElementById('filaConteudo');
+  box.innerHTML = '<div class="card"><div class="carregando">Buscando a fila…</div></div>';
+  const r = await chamarDisparo({ op:'fila' });
+  if(!r || r.error){ box.innerHTML = `<div class="card">${estadoHtml('alerta','Não foi possível ver a fila', (r&&r.error)||'Tente de novo.', true)}</div>`; return; }
+  const pend = r.pendentes||[], rec = r.recentes||[];
+  const hojeIso = r.agora ? r.agora.dia : '';
+  const enviadosHoje = r.estado && r.estado.dia===hojeIso ? r.estado.enviados_dia : 0;
+  const prox = r.estado && r.estado.proximo_em ? new Date(r.estado.proximo_em) : null;
+  const grupos = {}; pend.forEach(p=>{ const k = p.campanha || TIPO_ROT[p.tipo] || p.tipo; (grupos[k] = grupos[k] || { qtd:0, tipos:new Set() }).qtd++; grupos[k].tipos.add(p.tipo); });
+  const selo = (st)=>{ const x = STATUS_ROT[st] || [st,'']; return `<span class="selo ${x[1]}">${escapeHtml(x[0])}</span>`; };
+  const dh = s=> s ? new Date(s).toLocaleString('pt-BR',{ day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+  box.innerHTML = `
+    <div class="card">
+      <div style="display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;">
+        <span>${r.dentroDoHorario ? '<span class="selo ok">Enviando agora (9h–18h)</span>' : '<span class="selo pend">Fora do horário: volta às 9h</span>'}</span>
+        <span><b>${pend.length}</b> na fila</span>
+        <span><b>${enviadosHoje}</b> enviadas hoje</span>
+        ${pend.length && prox && r.dentroDoHorario ? `<span class="muted">próxima por volta de ${prox.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>` : ''}
+        ${pend.length ? `<span class="muted">tempo para esvaziar: ${tempoEstimado(pend.length)}</span>` : ''}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h2 class="card-title">Esperando a vez <span class="cnt">${pend.length}</span></h2>${pend.length?'<button class="btn btn-ghost btn-sm" id="filaCancelarTudo" type="button">Cancelar tudo</button>':''}</div>
+      ${pend.length ? `<table class="cartoes"><thead><tr><th>Envio</th><th>Tipo</th><th class="r">Mensagens</th><th></th></tr></thead><tbody>
+        ${Object.entries(grupos).map(([k,g],i)=>`<tr><td class="principal">${escapeHtml(k)}</td><td data-label="Tipo">${[...g.tipos].map(t=>escapeHtml(TIPO_ROT[t]||t)).join(', ')}</td><td data-label="Mensagens" class="r">${g.qtd}</td><td><button class="btn btn-ghost btn-sm" type="button" data-cancelcamp="${escapeHtml(k)}">Cancelar</button></td></tr>`).join('')}
+      </tbody></table>` : estadoHtml('check','Nada esperando','Todas as mensagens já saíram.')}
+    </div>
+    <div class="card">
+      <div class="card-head"><h2 class="card-title">Últimos 3 dias <span class="cnt">${rec.length}</span></h2></div>
+      ${rec.length ? `<div class="lista-rolavel"><table class="cartoes"><thead><tr><th>Cliente</th><th>Tipo</th><th>Situação</th><th>Quando</th></tr></thead><tbody>
+        ${rec.map(x=>`<tr><td class="principal">${escapeHtml(x.cliente_nome||'—')}<div class="muted" style="font-size:12px;">${escapeHtml(telFmt(x.telefone))}${x.campanha?' · '+escapeHtml(x.campanha):''}</div></td><td data-label="Tipo">${escapeHtml(TIPO_ROT[x.tipo]||x.tipo)}</td><td data-label="Situação">${selo(x.status)}${x.erro && x.status!=='enviado'?`<div class="muted" style="font-size:12px;">${escapeHtml(x.erro)}</div>`:''}</td><td data-label="Quando" class="nw">${dh(x.enviado_em||x.atualizado_em)}</td></tr>`).join('')}
+      </tbody></table></div>` : estadoHtml('mensagem','Nada nos últimos 3 dias','')}
+    </div>`;
+  const ct = document.getElementById('filaCancelarTudo');
+  if(ct) ct.onclick = async ()=>{ if(!confirm('Cancelar TODAS as mensagens que ainda estão na fila?')) return; const x = await chamarDisparo({ op:'cancelar', todos:true }); showToast(x&&x.ok ? `${x.qtd} cancelada(s).` : 'Não foi possível cancelar.'); carregarFila(); };
+  box.querySelectorAll('[data-cancelcamp]').forEach(b=> b.onclick = async ()=>{
+    const k = b.dataset.cancelcamp; if(!confirm('Cancelar as mensagens de "'+k+'" que ainda estão na fila?')) return;
+    const ids = pend.filter(p=> (p.campanha || TIPO_ROT[p.tipo] || p.tipo)===k).map(p=>p.id);
+    const x = await chamarDisparo({ op:'cancelar', ids }); showToast(x&&x.ok ? `${x.qtd} cancelada(s).` : 'Não foi possível cancelar.'); carregarFila();
+  });
+}
+
+/* ===== 06/11: Chamar cliente — mensagem livre para um cliente + rodapé fixo (vendedora, loja e número de atendimento) ===== */
+const NUMERO_ATENDIMENTO = '(32) 98830-7617', NUMERO_ATENDIMENTO_LINK = 'https://wa.me/5532988307617';
+function nomeLojaAtual(){   // nome fantasia (o cliente não vê "LTDA")
+  const id = (window.__lojaAtual && window.__lojaAtual.id) || (currentUser && Array.isArray(currentUser.lojas) ? currentUser.lojas[0] : '');
+  const l = (config && config.lojas || []).find(x=>x.id===id);
+  return l ? (l.nomeFantasia || l.nome) : ((window.__lojaAtual && window.__lojaAtual.nome) || 'Vilaça Joias');
+}
+function rodapeChamar(){
+  const vend = (currentUser && (currentUser.apelido || currentUser.nome)) || '';
+  return `\n\n—\n${vend ? vend + ' · ' : ''}${nomeLojaAtual()}\nPara continuar a conversa, chame a gente no WhatsApp ${NUMERO_ATENDIMENTO}: ${NUMERO_ATENDIMENTO_LINK}`;
+}
+async function abrirChamarCliente(){
+  openModal(`<h3>Chamar cliente</h3>
+    <p class="muted" style="margin-top:-6px;">A mensagem sai pelo número de disparo (fila de envios, das 9h às 18h) com o rodapé abaixo, pedindo para o cliente continuar no número de atendimento.</p>
+    <div class="field"><label for="ccBusca">Cliente</label><input id="ccBusca" autocomplete="off" placeholder="Digite o nome ou o telefone"></div>
+    <div id="ccLista" class="lista-rolavel" style="max-height:220px;"></div>
+    <div id="ccEscolhido" style="display:none;margin:8px 0;padding:10px 12px;border-radius:10px;background:var(--t-surface-2,var(--surface-2));"></div>
+    <div class="field"><label for="ccTexto">Mensagem</label><textarea id="ccTexto" style="min-height:110px;" placeholder="Escreva a mensagem para o cliente"></textarea></div>
+    <div class="field"><label>Rodapé (vai junto, automático)</label><div class="previa-msg" style="font-size:13px;">${escapeHtml(rodapeChamar().trim()).replace(/\n/g,'<br>')}</div></div>
+    <div class="modal-actions"><button class="btn btn-ghost" type="button" onclick="closeModal()">Cancelar</button><button class="btn btn-accent" id="ccEnviar" type="button">${ico('mensagem')} Enviar</button></div>`);
+  let escolhido = null;
+  const lista = document.getElementById('ccLista');
+  lista.innerHTML = '<div class="carregando">Carregando clientes…</div>';
+  await carregarClientesSeNecessario();
+  const desenhar = ()=>{
+    const q = (document.getElementById('ccBusca').value||'').trim().toLowerCase(); const qd = onlyDigits(q);
+    const achados = !q ? [] : clientes.filter(c=> String(c.nome||'').toLowerCase().includes(q) || (qd.length>=4 && onlyDigits(c.telefone).includes(qd))).slice(0,30);
+    lista.innerHTML = !q ? '<div class="muted" style="padding:6px 2px;">Digite para procurar no cadastro.</div>' : achados.length ? achados.map(c=>`<button type="button" class="msg-salva-item" data-cc="${escapeHtml(c.id)}" style="width:100%;text-align:left;cursor:pointer;background:none;"><div class="txt"><div class="tit">${escapeHtml(c.nome||'')}</div><div class="muted" style="font-size:12.5px;">${c.telefone?escapeHtml(telFmt(c.telefone)):'sem telefone'}</div></div></button>`).join('') : '<div class="muted" style="padding:6px 2px;">Nenhum cliente encontrado.</div>';
+    lista.querySelectorAll('[data-cc]').forEach(b=> b.onclick = ()=>{
+      const c = clientes.find(x=>x.id===b.dataset.cc); if(!c) return;
+      if(!c.telefone){ showToast('Este cliente não tem telefone no cadastro.'); return; }
+      escolhido = c; lista.innerHTML = ''; document.getElementById('ccBusca').value = c.nome||'';
+      const e = document.getElementById('ccEscolhido'); e.style.display = 'block'; e.innerHTML = `<b>${escapeHtml(c.nome||'')}</b> · ${escapeHtml(telFmt(c.telefone))}`;
+    });
+  };
+  document.getElementById('ccBusca').addEventListener('input', ()=>{ escolhido = null; document.getElementById('ccEscolhido').style.display='none'; desenhar(); });
+  desenhar();
+  document.getElementById('ccEnviar').onclick = async ()=>{
+    const txt = document.getElementById('ccTexto').value.trim();
+    if(!escolhido){ showToast('Escolha o cliente na lista.'); return; }
+    if(!txt){ showToast('Escreva a mensagem.'); return; }
+    if(!(await MarketingOff.permitir({ telefone:escolhido.telefone, nome:escolhido.nome, tags:escolhido.tags||[] }))) return;
+    const b = document.getElementById('ccEnviar'); b.disabled = true;
+    const r = await chamarDisparo({ op:'enfileirar', itens:[{ tipo:'chamar', campanha:'CHAMAR CLIENTE · '+((currentUser&&(currentUser.apelido||currentUser.nome))||''), nome:escolhido.nome||'', telefone:escolhido.telefone, texto: txt + rodapeChamar(), clienteId: escolhido.id, lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||null }] });
+    b.disabled = false;
+    if(r && r.ok){ closeModal(); showToast(r.foraDoHorario ? 'Mensagem na fila. Agora está fora do horário: sai às 9h.' : 'Mensagem na fila: sai em até 30 segundos.', 5000); }
+    else showToast('Não foi possível enviar: ' + ((r && r.error) || 'erro desconhecido'), 6000);
+  };
+}
+
 function filtrarDestinatarios(){
   const filtro = document.querySelector('input[name="mdFiltro"]:checked')?.value || 'todos';
   let lista = [...clientes];
@@ -1146,9 +1276,8 @@ function filtrarDestinatarios(){
     return lista;
   }
   if(filtro==='aniversariantes'){
-    const mes = parseInt(document.getElementById('fAnivMes').value)||0;
-    if(!mes){ showToast('Selecione o mês.'); return []; }
-    return lista.filter(c=>c.dataNascimento && parseInt(c.dataNascimento.split('-')[1])===mes);
+    const h = new Date(), mes = h.getMonth()+1, dia = h.getDate();
+    return lista.filter(c=>{ const p = String(c.dataNascimento||'').split('-'); return p.length===3 && Number(p[1])===mes && Number(p[2])===dia; });
   }
   if(filtro==='selecionados') return lista.filter(c=>mdDestinatarios.includes(c.id));
   return lista;
@@ -1167,7 +1296,7 @@ async function confirmarEnvioMalaDireta(){
 
   openModal(`
     <h3>Confirmar envio</h3>
-    <p>Esta mensagem vai para <b>${lista.length} cliente(s)</b> por ${[viaWa?'WhatsApp':'',viaEmail?'e-mail':''].filter(Boolean).join(' e ')}.${viaWa?' Cada WhatsApp abre numa aba nova: confira e toque em enviar em cada uma.':''}</p>
+    <p>Esta mensagem vai para <b>${lista.length} cliente(s)</b> por ${[viaWa?'WhatsApp':'',viaEmail?'e-mail':''].filter(Boolean).join(' e ')}.${viaWa?` O WhatsApp entra na <b>fila de envios</b> e sai sozinho pelo número de disparo: 1 a cada 30 s, das 9h às 18h (${lista.filter(c=>c.telefone).length} com telefone; mais ou menos ${tempoEstimado(lista.filter(c=>c.telefone).length)}). Pode fechar o app.`:''}</p>
     <div class="previa-msg">${escapeHtml(texto).replace(/\n/g,'<br>')}</div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -1181,14 +1310,24 @@ async function executarEnvioMalaDireta(lista, texto, viaWa, viaEmail){
   lista = await MarketingOff.lote(lista); if(!lista) return;
   if(!lista.length){ showToast('Nenhum cliente sobrou para enviar.'); return; }
   let enviados=0, falhas=0;
-  showToast(`Enviando para ${lista.length} clientes...`, 10000);
-  for(const c of lista){
-    const msg = texto.replaceAll('{cliente}',c.nome||'').replaceAll('{loja}',c._lojaNome || (config.lojas&&config.lojas[0]?config.lojas[0].nome:'Vilaça Joias')).replaceAll('{data}',new Date().toLocaleDateString('pt-BR'));
-    if(viaWa && c.telefone){
-      window.open(`https://wa.me/55${onlyDigits(c.telefone)}?text=${encodeURIComponent(msg)}`, '_blank');
-      await new Promise(r=>setTimeout(r,300));
-      enviados++;
+  const filtro = document.querySelector('input[name="mdFiltro"]:checked')?.value || 'todos';
+  const tipo = filtro==='aniversariantes' ? 'aniversario' : filtro==='posVenda' ? 'posVenda' : 'campanha';
+  const titulo = (document.getElementById('mdTitulo')||{}).value || '';
+  const campanha = (titulo.trim() || ({aniversario:'ANIVERSÁRIO', posVenda:'PÓS-VENDA', campanha:'MALA DIRETA'})[tipo]) + ' · ' + new Date().toLocaleDateString('pt-BR');
+  const montar = c=> texto.replaceAll('{cliente}',c.nome||'').replaceAll('{loja}',c._lojaNome || (config.lojas&&config.lojas[0]?config.lojas[0].nome:'Vilaça Joias')).replaceAll('{data}',new Date().toLocaleDateString('pt-BR'));
+  // WhatsApp: vai para a fila do servidor (marketing-disparo), que respeita intervalo, pausas e horário
+  if(viaWa){
+    const itens = lista.filter(c=>c.telefone).map(c=>({ tipo, campanha, nome:c.nome||'', telefone:c.telefone, texto:montar(c), clienteId: String(c.id||'').startsWith('via:') ? null : c.id, lojaId: (c._compras&&c._compras[0]&&c._compras[0].lojaId) || null }));
+    if(itens.length){
+      const r = await chamarDisparo({ op:'enfileirar', itens });
+      if(r && r.ok){
+        showToast(`${r.qtd} mensagem(ns) de WhatsApp na fila.${r.foraDoHorario?' Agora está fora do horário (9h–18h): começam no próximo horário permitido.':''}`, 6000);
+        if(tipo==='aniversario') for(const c of lista){ if(c.id && !String(c.id).startsWith('via:')){ try{ await marcarAniversarioEnviado(c.id); }catch(e){} } }
+      } else { showToast('Não foi possível colocar na fila: ' + ((r && r.error) || 'erro desconhecido'), 6000); }
     }
+  }
+  for(const c of lista){
+    const msg = montar(c);
     if(viaEmail && c.email){
       try{
         await enviarEmailGmail(c.email, 'Vilaça Joias — Novidades para você', msg);
@@ -1196,7 +1335,7 @@ async function executarEnvioMalaDireta(lista, texto, viaWa, viaEmail){
       }catch(e){ falhas++; }
     }
   }
-  showToast(falhas ? `Envio concluído: ${enviados} enviado(s), ${falhas} com falha.` : `Envio concluído: ${enviados} enviado(s).`, 4000);
+  if(viaEmail) showToast((viaWa ? 'WhatsApp na fila. ' : '') + (falhas ? `E-mail: ${enviados} enviado(s), ${falhas} com falha.` : `E-mail: ${enviados} enviado(s).`), 6000);
 }
 
 /* Avisa o shell que houve atividade aqui dentro, para o contador de inatividade
