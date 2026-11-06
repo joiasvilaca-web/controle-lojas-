@@ -743,7 +743,11 @@ function rotuloDia(iso){
 /* ================= LISTA ================= */
 async function carregarLista(silencioso){
   if(estado.soInterno){ estado.conversas=[]; renderLista(); return; }   // Oficina: só chat interno e Grupo Vilaça
-  const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: estado.busca, canal: estado.canal || undefined, botId: estado.botId || undefined, departamentoId: estado.depId || undefined });
+  // busca: o servidor só filtra por UMA palavra (a mais longa; acento/ponto/vírgula viram "qualquer caractere") e aqui a lista é refinada por todas as palavras, em qualquer ordem, na ordem do que foi digitado
+  const _q = String(estado.busca||'').trim();
+  const _pal = _q.split(/\s+/).filter(Boolean).sort((a,b)=>b.length-a.length)[0] || '';
+  const _srv = _pal.replace(/[^A-Za-z0-9]/g,'_');
+  const r = await api({ op:'listarConversas', filtro: estado.filtro, busca: _srv, canal: estado.canal || undefined, botId: estado.botId || undefined, departamentoId: estado.depId || undefined });
   if(!r){ if(!silencioso) showToast('Erro ao carregar'); return; }
   if(r.error){
     // Sessão expirada: parar polling e pedir novo login
@@ -755,7 +759,9 @@ async function carregarLista(silencioso){
     if(!silencioso) showToast(r.error || 'Erro ao carregar');
     return;
   }
-  estado.conversas = aplicarBl(aplicarFx(r.data || []));
+  let _lista = r.data || [];
+  if(_q) _lista = Busca.filtrar(_lista, _q, c=>[c.contato_nome, c.contato_id]);
+  estado.conversas = aplicarBl(aplicarFx(_lista));
   renderLista();
   contadores();
 }

@@ -3,6 +3,7 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="busca.js"></script>
 <script src="maiusculas.js"></script>
 <script src="icones.js"></script>
 <script src="formato.js"></script>
@@ -467,7 +468,18 @@ document.getElementById('btnBuscar').addEventListener('click', buscarPedidos);
 document.getElementById('flBusca').addEventListener('keydown', e=>{ if(e.key==='Enter') buscarPedidos(); });
 async function buscarPedidos(){
   const lista = document.getElementById('lista'); lista.innerHTML = carregandoHtml('Buscando pedidos…');
-  try{ const r = await api('listar', { status: Array.from(statusSel), lojaId: document.getElementById('flLoja').value||'', de: document.getElementById('flDe').value||'', ate: document.getElementById('flAte').value||'', busca: document.getElementById('flBusca').value||'' }); pedidos = r.pedidos || []; renderLista(); }
+  try{
+    // busca única: o servidor traz pelos filtros e a busca (qualquer parte, qualquer ordem, sem acento) é feita aqui; se nada bater, tenta a busca do servidor (lacre etc.)
+    const bq = (document.getElementById('flBusca').value||'').trim();
+    const base = { status: Array.from(statusSel), lojaId: document.getElementById('flLoja').value||'', de: document.getElementById('flDe').value||'', ate: document.getElementById('flAte').value||'' };
+    const r = await api('listar', { ...base, busca: '' }); pedidos = r.pedidos || [];
+    if(bq){
+      const bd = onlyDigits(bq);
+      pedidos = Busca.filtrar(pedidos, bq, p=>[p.codigo, p.cliente&&p.cliente.nome, p.cliente&&p.cliente.telefone, p.os&&p.os.codigoVia, p.rastreio, p.resumo]);
+      if(!pedidos.length && bd.length>=4) pedidos = (r.pedidos||[]).filter(p=> onlyDigits(p.cliente&&p.cliente.telefone).includes(bd));
+      if(!pedidos.length){ const r2 = await api('listar', { ...base, busca: bq }); pedidos = r2.pedidos || []; }
+    }
+    renderLista(); }
   catch(e){ lista.innerHTML = erroHtml(e.message); }
 }
 function renderLista(){
@@ -1195,7 +1207,16 @@ document.getElementById('cImprimir').addEventListener('click', ()=>{
 let estLista = [];
 async function buscarEstimativas(){
   const box = document.getElementById('estLista'); box.innerHTML = carregandoHtml('Buscando estimativas…');
-  try{ const r = await api('listarEstimativas',{ busca:document.getElementById('estBusca').value, de:document.getElementById('estDe').value, ate:document.getElementById('estAte').value }); estLista = r.estimativas||[]; renderEstLista(); }
+  try{
+    const bq = (document.getElementById('estBusca').value||'').trim();
+    const base = { de:document.getElementById('estDe').value, ate:document.getElementById('estAte').value };
+    const r = await api('listarEstimativas',{ ...base, busca:'' }); estLista = r.estimativas||[];
+    if(bq){
+      const bd = onlyDigits(bq);
+      estLista = Busca.filtrar(estLista, bq, e=>[e.codigo, e.cliente&&e.cliente.nome, e.cliente&&e.cliente.telefone, e.modeloNome, e.tipo, e.metal]);
+      if(!estLista.length && bd.length>=4) estLista = (r.estimativas||[]).filter(e=> onlyDigits(e.cliente&&e.cliente.telefone).includes(bd));
+    }
+    renderEstLista(); }
   catch(e){ box.innerHTML = erroHtml(e.message); }
 }
 function erroPct(real, central){ return central>0 ? (real-central)/central*100 : 0; }
