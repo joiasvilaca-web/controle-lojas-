@@ -1,4 +1,4 @@
-// insumos-api v6 — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// insumos-api v11 (06/11: Envio Felipe) — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
 // v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
 // v5: quebra padrão (insumos._config.quebraPadraoPct, padrão 5%) e contagem real da Oficina (insumos_contagens):
@@ -40,13 +40,15 @@ const finalidadeDoTipo = (nome: string) => /SERVI|RELOG|GRAVA|CONSERT/i.test(Str
 function permissoes(user: any) {
   const nivel = user.nivel || "vendedora";
   const padrao: Record<string, boolean> =
-    nivel === "diretoria" || nivel === "gerente" ? { vias: true, saldos: true, movimentos: true, cadastro: true, baixaVia: true }
+    nivel === "diretoria" || nivel === "gerente" || nivel === "vendedora" ? { vias: true, saldos: true, movimentos: true, cadastro: true, baixaVia: true }
     : nivel === "oficina" ? { vias: true, saldos: true, movimentos: false, cadastro: false, baixaVia: true }
     : { vias: false, saldos: false, movimentos: false, cadastro: false, baixaVia: false };
-  const ativoPadrao = nivel !== "vendedora";
+  const ativoPadrao = true;   // 04/11: vendedora = gerente
   const m = user.permissoes && user.permissoes.insumos;
   const ativo = m && typeof m.ativo === "boolean" ? m.ativo : ativoPadrao;
   const out: Record<string, boolean> = { ativo };
+  // "Envio Felipe": quem lança movimentos, ou a Oficina (06/11)
+  out.envioFelipe = ativo && (nivel === "oficina" || nivel === "diretoria" || nivel === "gerente" || !!(m && m.abas && m.abas.movimentos === true));
   // aba salva no acesso vale; sem ela, o padrão do nível (com módulo ligado à mão numa vendedora, as abas salvas no DP decidem)
   for (const a of ABAS) out[a] = ativo && (m && m.abas && typeof m.abas[a] === "boolean" ? m.abas[a] : (ativoPadrao ? padrao[a] : !!(m && m.ativo)));
   return out;
@@ -239,11 +241,26 @@ Deno.serve(async (req: Request) => {
     }
 
     if (op === "lancar") {
-      precisa("movimentos");
       const tipo = String(p.tipo || "");
-      if (!["COMPRA", "ENVIO", "RETORNO", "PERDA", "AJUSTE"].includes(tipo)) return json({ error: "Tipo de lançamento inválido." }, 400);
+      if (tipo === "ENVIO_FELIPE") { if (!perm.envioFelipe && !perm.movimentos) precisa("movimentos"); } else precisa("movimentos");
+      if (!["COMPRA", "ENVIO", "RETORNO", "PERDA", "AJUSTE", "ENVIO_FELIPE"].includes(tipo)) return json({ error: "Tipo de lançamento inválido." }, 400);
       const ins = await insumoExiste(texto(p.insumoId, 60));
       if (!ins) return json({ error: "Insumo não encontrado." }, 400);
+      if (tipo === "ENVIO_FELIPE") {
+        // 06/11: a quantidade entra no crédito de Vilaça (loja_mc), JV (loja_jb) e Jardim Norte (loja_jn), dividida igualmente
+        let qt = num(p.quantidade);
+        if (!(qt > 0)) return json({ error: "Informe uma quantidade maior que zero." }, 400);
+        qt = Math.round(qt * 10000) / 10000;
+        const destinos = ["loja_mc", "loja_jb", "loja_jn"].filter(lojaValida);
+        if (destinos.length < 3) return json({ error: "Não achei as 3 lojas (Vilaça, JV e Jardim Norte) no cadastro." }, 400);
+        const cota = Math.floor((qt / 3) * 10000) / 10000;
+        const resto = Math.round((qt - cota * 3) * 10000) / 10000;   // sobra de arredondamento vai para a 1ª loja
+        const par = crypto.randomUUID();
+        const localF = p.local === "loja" ? "loja" : "oficina";
+        const r = await inserir(destinos.map((lj, i) => ({ insumo_id: ins.id, loja_id: lj, local: localF, tipo, quantidade: i === 0 ? Math.round((cota + resto) * 10000) / 10000 : cota,
+          payload: { por: quem, obs: texto(p.obs, 300), par, totalEnviado: qt, divisao: "igual" } })));
+        return json({ ok: true, ids: r.map((x: any) => x.id), cota, resto });
+      }
       const lojaId = texto(p.lojaId, 60);
       if (!lojaValida(lojaId)) return json({ error: "Escolha a loja dona do insumo (a Oficina não é dona de estoque)." }, 400);
       let q = num(p.quantidade);
