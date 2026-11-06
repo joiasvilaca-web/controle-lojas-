@@ -43,7 +43,7 @@
       + '<style>@page{ margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }'
       + 'body{ font-family:"Courier New", monospace; box-sizing:border-box; width:'+areaImpressaoMm(c.larguraBobina)+'mm; margin:0 auto; padding:'+c.margemSupMm+'mm 0 '+c.margemInfMm+'mm; '+alturaCss+' color:#000; font-weight:'+peso+'; font-size:'+px.base+'px; line-height:1.42; -webkit-font-smoothing:none; '+reforco+' }'
       + '.titulo{ font-size:'+px.titulo+'px; font-weight:800; text-align:center; letter-spacing:.02em; } .sub{ font-size:'+px.sub+'px; color:#000; text-align:center; }'
-      + '.linha{ border-top:1px dashed #000; margin:6px 0; } .rodape{ text-align:center; margin-top:10px; font-size:'+px.sub+'px; } b{ font-weight:800; }'
+      + 'hr{ border:0; border-top:1px dashed #000; margin:6px 0; } .linha{ border-top:1px dashed #000; margin:6px 0; } .rodape{ text-align:center; margin-top:10px; font-size:'+px.sub+'px; } b{ font-weight:800; }'
       + '.assinatura{ border-top:1px solid #000; margin-top:26px; } .destaque{ font-weight:800; font-size:'+Math.round(px.base*1.25)+'px; }'
       + '.barcode-wrap{ text-align:center; margin-top:6px; } .barcode-wrap svg{ max-width:100%; }'
       + 'html{ margin:0; padding:0; height:auto; background:#fff; } body > :first-child{ margin-top:0 !important; } body > :last-child{ margin-bottom:0 !important; }'
@@ -102,5 +102,31 @@
     if(tipo==='os' && on('assinatura')) L.push('<div class="assinatura"></div><div class="sub">Assinatura do cliente</div>');
     return L.join('');
   }
-  window.Cupom = { cfg: cfg, html: html, imprimir: imprimir, previa: previa, exemplo: exemplo, TIPO_POR_TITULO: TIPO_POR_TITULO };
+  /* 06/11: padrão para impressora térmica de cupom não fiscal (Elgin e similares, bobina 80 mm).
+   * Aplica o mesmo ajuste a TODAS as vias (Pedido, Venda, Orçamento, Reserva, Gravações, Transferências).
+   * Margem inferior de 6 mm evita a guilhotina cortar a última linha; a superior fica mínima. */
+  var TIPOS_CUPOM = ['os','vendas','orcamentos','reservas','gravacoes','transferencias'];
+  function padraoTermico(config, largura){
+    config.impressao = config.impressao || {};
+    config.impressao.cupons = config.impressao.cupons || {};
+    var p = { larguraBobina: largura===58 ? 58 : 80, escalaTexto:'media', negrito:true, reforcoTraco:false, alturaMm:0, margemSupMm:1, margemInfMm:6 };
+    config.impressao.larguraBobina = p.larguraBobina; config.impressao.escalaTexto = p.escalaTexto; config.impressao.negrito = p.negrito; config.impressao.reforcoTraco = p.reforcoTraco;
+    TIPOS_CUPOM.forEach(function(t){ config.impressao.cupons[t] = Object.assign({}, config.impressao.cupons[t]||{}, p); });
+    return p;
+  }
+  /* Cupom de teste: régua da área imprimível + linhas de texto, para conferir largura, corte e espaços na impressora. */
+  function teste(config, tipo){
+    var c = cfg(config, tipo || 'vendas'); var area = areaImpressaoMm(c.larguraBobina);
+    var agora = new Date().toLocaleString('pt-BR');
+    var conteudo = '<div class="titulo">TESTE DE IMPRESSÃO</div><div class="sub">'+esc(agora)+'</div><div class="linha"></div>'
+      + '<div style="border:1.5px solid #000; padding:2px 4px; text-align:center; font-weight:800;">◄ borda esquerda e direita ►</div>'
+      + '<div style="margin:6px 0 2px; height:7px; background:repeating-linear-gradient(to right,#000 0,#000 1px,transparent 1px,transparent 10mm); border-bottom:1px solid #000;"></div>'
+      + '<div class="sub" style="text-align:left;">cada traço = 1 cm · largura total '+area+' mm</div>'
+      + '<div><b>Bobina:</b> '+c.larguraBobina+' mm (imprime '+area+' mm)</div>'
+      + '<div><b>Texto:</b> '+esc(c.escalaTexto)+' · <b>Margens:</b> '+c.margemSupMm+' mm topo / '+c.margemInfMm+' mm base</div>'
+      + '<div class="linha"></div><div>Cliente: MARIA APARECIDA DA SILVA</div><div>Valor total: R$ 1.730,00</div><div>0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ</div>'
+      + '<div class="linha"></div><div class="sub">Confira: as duas bordas inteiras, nenhuma letra cortada e a última linha abaixo, antes do corte.</div>';
+    imprimir(config, 'Teste de impressão', conteudo, '', tipo || 'vendas');
+  }
+  window.Cupom = { cfg: cfg, html: html, imprimir: imprimir, previa: previa, exemplo: exemplo, padraoTermico: padraoTermico, teste: teste, TIPOS: TIPOS_CUPOM, TIPO_POR_TITULO: TIPO_POR_TITULO };
 })();

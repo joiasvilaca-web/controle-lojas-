@@ -7497,8 +7497,10 @@ const CAMPOS_IMPRESSAO = {
     { id:'itens', label:'Joias reservadas' }, { id:'vendedora', label:'Vendedora' },
     { id:'valores', label:'Valores' }, { id:'prazo', label:'Prazo da reserva' },
   ],
+  gravacoes: [],        // 06/11: Gravações e Transferências usam o mesmo cupom (só largura, texto, traço e margens)
+  transferencias: [],
 };
-const NOMES_MODULOS_IMPRESSAO = { os:'Pedido (O.S.)', vendas:'Venda', orcamentos:'Orçamento', reservas:'Reserva' };
+const NOMES_MODULOS_IMPRESSAO = { os:'Pedido (O.S.)', vendas:'Venda', orcamentos:'Orçamento', reservas:'Reserva', gravacoes:'Gravação', transferencias:'Transferência' };
 
 function garantirConfigImpressao(){
   if(!config.impressao){
@@ -7633,6 +7635,15 @@ function renderCupomEditor(tipo){
   card.innerHTML = `
     <div class="section-label">Cupom das vias (impressora de bobina)</div>
     <p class="muted" style="margin:0 0 12px;">Cada via tem o seu cupom. Escolha a via, ajuste e clique em <b>Ver cupom</b> para conferir antes de salvar.</p>
+    <div style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:14px;background:var(--surface-2);">
+      <div style="font-weight:700;margin-bottom:4px;">Impressora térmica de cupom não fiscal (Elgin e similares)</div>
+      <p class="muted" style="margin:0 0 10px;font-size:13px;">O botão abaixo deixa <b>todas as vias</b> iguais: bobina escolhida, texto médio, traço forte, margem de 1 mm em cima e 6 mm embaixo (para o corte não pegar a última linha). Depois use <b>Imprimir teste</b> em cada loja: as duas bordas do quadro têm de sair inteiras.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-accent btn-sm" id="cpPadrao80">Aplicar padrão térmico 80 mm a todas as vias</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="cpPadrao58">Padrão 58 mm</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="cpTeste">Imprimir teste (via ${escapeHtml(NOMES_MODULOS_IMPRESSAO[tipo]||tipo)})</button>
+      </div>
+    </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
       ${Object.keys(CAMPOS_IMPRESSAO).map(t=>`<button type="button" class="btn ${t===tipo?'btn-accent':'btn-ghost'} btn-sm" data-cupomtipo="${t}">${escapeHtml(NOMES_MODULOS_IMPRESSAO[t]||t)}</button>`).join('')}
     </div>
@@ -7651,7 +7662,8 @@ function renderCupomEditor(tipo){
         <p class="muted" style="margin:-4px 0 10px;font-size:12px;">Altura vazia = automática (do tamanho do conteúdo). Com altura fixa, o que passar dela é cortado.</p>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink-soft);margin:0 0 10px;"><input type="checkbox" id="cpReforco" ${c.reforcoTraco?'checked':''}> Reforço extra de traço (texto ainda mais escuro)</label>
         <div class="field"><label>Mensagem de rodapé <span class="muted">opcional</span></label><input id="cpRodape" value="${escapeHtml(c.mensagemRodape||'')}" placeholder="Ex: Obrigado pela preferência! Volte sempre."></div>
-        <div class="section-label" style="margin-top:6px;">O que aparece no cupom</div>
+        ${(CAMPOS_IMPRESSAO[tipo]||[]).length ? '' : '<p class="muted" style="font-size:12.5px;margin:4px 0 8px;">Esta via sai com o conteúdo padrão (sem campos para ligar ou desligar); aqui você ajusta só o formato do papel.</p>'}
+        <div class="section-label" style="margin-top:6px;${(CAMPOS_IMPRESSAO[tipo]||[]).length?'':'display:none;'}">O que aparece no cupom</div>
         <div style="display:flex;flex-wrap:wrap;gap:10px 16px;">${(CAMPOS_IMPRESSAO[tipo]||[]).map(cp=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;color:var(--ink-soft);"><input type="checkbox" data-cpcampo="${cp.id}" ${campos[cp.id]!==false?'checked':''}> ${escapeHtml(cp.label)}</label>`).join('')}</div>
         <div class="cad-rodape-bloco" style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-ghost" id="cpVer" type="button">${cadIco('olho')} Ver cupom</button>
@@ -7664,6 +7676,14 @@ function renderCupomEditor(tipo){
       </div>
     </div>`;
   card.querySelectorAll('[data-cupomtipo]').forEach(b=> b.addEventListener('click', ()=> renderCupomEditor(b.dataset.cupomtipo)));
+  [['cpPadrao80',80],['cpPadrao58',58]].forEach(([id,larg])=> document.getElementById(id).addEventListener('click', async ()=>{
+    if(!window.Cupom){ showToast('Recarregue a página.'); return; }
+    if(!confirm('Aplicar o padrão térmico de '+larg+' mm a TODAS as vias (Pedido, Venda, Orçamento, Reserva, Gravação e Transferência)? Os ajustes de largura, texto, traço e margens de cada via serão substituídos. Os campos que aparecem no cupom não mudam.')) return;
+    Cupom.padraoTermico(config, larg);
+    const ok = await configSave();
+    if(ok){ showToast('Padrão térmico de '+larg+' mm aplicado a todas as vias. Faça o teste de impressão em cada loja.'); renderCupomEditor(tipo); }
+  }));
+  document.getElementById('cpTeste').addEventListener('click', ()=>{ if(window.Cupom) Cupom.teste(config, tipo); else showToast('Recarregue a página.'); });
   function lerForm(){
     const alt = document.getElementById('cpAltura').value;
     return {
