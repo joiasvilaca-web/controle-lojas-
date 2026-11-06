@@ -2,6 +2,7 @@
 <html lang="pt-BR" data-ds>
 <head>
 <script src="vilaca-extras.js"></script>
+<script src="caixa-calc.js"></script>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
 <script src="maiusculas.js"></script>
@@ -41,6 +42,9 @@ input,select,textarea{font-family:inherit;}
 .campo > label{font-size:12px;font-weight:600;color:var(--ink-soft);}
 .campo input,.campo select{height:36px;padding:0 10px;font-size:13.5px;min-width:0;}
 .campo.busca{flex:1 1 220px;}
+.aviso-conf{margin:0 0 12px;padding:10px 12px;border-radius:10px;font-size:13px;border:1px solid var(--line);}
+.aviso-conf.ok{background:var(--ok-soft,#e7f5ec);color:var(--ok,#1b7a3d);border-color:transparent;}
+.aviso-conf.erro{background:var(--bad-soft,#fdecea);color:var(--bad,#b3261e);border-color:transparent;}
 .barra .acoes{display:flex;gap:8px;margin-left:auto;align-items:center;flex-wrap:wrap;}
 .barra .btn{height:36px;}
 .barra-linha{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding-top:10px;border-top:1px solid var(--line);}
@@ -367,43 +371,9 @@ function mensagemConfiavel(ev){
     const l = (config.lojas||[]).find(x=>{ const a = String(x.nome||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''), b = String(x.nomeFantasia||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); return (a && (a.includes(n) || n.includes(a))) || (b && (b.includes(n) || n.includes(b))); });
     return l ? l.id : '';
   }
+  /* 06/11: a conta vive em caixa-calc.js (a MESMA do Dashboard). Aqui só entrega os dados desta tela. */
   function movimentosCaixa(de, ate, lojaId){
-    const dentro = d=> !!d && d>=de && d<=ate;
-    const daLoja = id=> !lojaId || id===lojaId;
-    const entradas = [], saidas = [], naoDinheiro = [];
-    const tipoVia = (r, ehOS)=> r.tipo==='recargaCredito' ? 'Recarga de crédito' : r.tipo==='recebimentoFiado' ? 'Fiado recebido' : ehOS ? 'Pedido' : 'Venda';
-    const add = (r, ehOS)=>{
-      if(!daLoja(r.lojaId)) return;
-      const base = ehOS ? dataLancamentoVia(r) : r.data;
-      (r.pagamentos||[]).forEach(p=>{
-        const v = Number(p && p.valor)||0; if(!v) return;
-        const dia = String(p.data || base || '').slice(0,10); if(!dentro(dia)) return;
-        const mov = { dia, lojaId:r.lojaId||'', tipo:tipoVia(r, ehOS), via:r.codigoVia||r.via||'', cliente:r.cliente||'', forma:nomeFormaPainel(p), valor:v, reg:r, ehOS,
-          obs: (r.status==='cancelada'||r.status==='cancelado') ? 'cancelada depois' : '' };
-        if(FORMAS_NAO_DINHEIRO.includes(p.formaId)) naoDinheiro.push(mov); else entradas.push(mov);
-      });
-      // devolução de cancelamento: sai no dia do cancelamento
-      const saida = Number(r.caixaSaidaCancelamento)||0;
-      if((r.status==='cancelada'||r.status==='cancelado') && saida > 0){
-        const dia = dataDeTimestamp(r.canceladoEm);
-        if(dentro(dia)){
-          const t = r.cancelamentoDestino && r.cancelamentoDestino.tipo;
-          const pg1 = (r.pagamentos||[]).find(p=> (Number(p.valor)||0)>0 && !FORMAS_NAO_DINHEIRO.includes(p.formaId));
-          const forma = t==='pix' ? 'PIX' : t==='dinheiro' ? 'DINHEIRO' : (pg1 ? nomeFormaPainel(pg1) : 'DEVOLUÇÃO');
-          saidas.push({ dia, lojaId:r.lojaId||'', tipo:'Devolução (cancelamento)', via:r.codigoVia||r.via||'', cliente:r.cliente||'', forma, valor:saida, reg:r, ehOS, obs: r.motivoCancelamento||'' });
-        }
-      }
-    };
-    vendas.forEach(v=> add(v, false));
-    caixaOrdens.filter(o=> o.status!=='rascunho').forEach(o=> add(o, true));
-    caixaGastos.filter(g=> g.pago && dentro(String(g.dataPagamento||'').slice(0,10))).forEach(g=>{
-      const lid = lojaIdDoGasto(g); if(!daLoja(lid)) return;
-      saidas.push({ dia:String(g.dataPagamento).slice(0,10), lojaId:lid, tipo:'Conta paga', via:'', cliente:g.nome||g.categoria||'Conta', forma:String(g.formaPagamento||'CONTA').toUpperCase(), valor:Number(g.valor)||0, reg:g, obs:g.categoria||'' });
-    });
-    const ord = (a,b)=> (a.dia||'').localeCompare(b.dia||'') || nomeLojaCaixa(a.lojaId).localeCompare(nomeLojaCaixa(b.lojaId)) || String(a.via).localeCompare(String(b.via), 'pt-BR', { numeric:true });
-    entradas.sort(ord); saidas.sort(ord); naoDinheiro.sort(ord);
-    return { entradas, saidas, naoDinheiro,
-      totEntradas: entradas.reduce((a,m)=>a+m.valor,0), totSaidas: saidas.reduce((a,m)=>a+m.valor,0) };
+    return CaixaCalc.movimentos({ vendas, ordens: caixaOrdens, gastos: caixaGastos, formas: config.formasPagamento, lojas: config.lojas }, de, ate, lojaId);
   }
   function dataDeTimestamp(ts){
     if(!ts) return '';
@@ -716,6 +686,21 @@ function mensagemConfiavel(ev){
       <div class="fc-graf"><h4>Recebido por forma de pagamento</h4>${barrasForma}</div>` : ''}
     </div>`;
   }
+  /* Quadro dia a dia: uma linha por dia com cada forma de pagamento, total de entradas, saídas e saldo (só aparece com 2+ dias). */
+  function htmlPorDiaCaixa(d){
+    const mv = d.mv;
+    const dias = [...new Set(mv.entradas.concat(mv.saidas, mv.naoDinheiro).map(m=> m.dia))].sort();
+    if(dias.length < 2) return '';
+    const F = d.formasTodas;
+    const ndForm = [...new Set(mv.naoDinheiro.map(m=> m.forma))].sort();
+    const linhas = dias.map(dia=>{
+      const e = mv.entradas.filter(m=> m.dia===dia), sd = mv.saidas.filter(m=> m.dia===dia), nd = mv.naoDinheiro.filter(m=> m.dia===dia);
+      const te = e.reduce((a,m)=>a+m.valor,0), ts = sd.reduce((a,m)=>a+m.valor,0);
+      return `<tr>${celula('Dia', '<b>'+fmtDate(dia)+'</b>')}${F.map(f=>{ const v = e.filter(m=>m.forma===f).reduce((a,m)=>a+m.valor,0); return celula(f, v?fmtMoeda(v):'<span class="muted">—</span>','r'); }).join('')}${celula('Entradas','<b>'+fmtMoeda(te)+'</b>','r')}${celula('Saídas', ts?'<span style="color:var(--bad,#b3261e);">−'+fmtMoeda(ts)+'</span>':'<span class="muted">—</span>','r')}${celula('Saldo','<b>'+fmtMoeda(te-ts)+'</b>','r')}${ndForm.length?celula('Não é dinheiro', nd.length?nd.map(m=>escapeHtml(m.forma)+' '+fmtMoeda(m.valor)).join('<br>'):'<span class="muted">—</span>','r'):''}</tr>`;
+    }).join('');
+    return `<div class="fc-graf"><h4>Dia a dia</h4><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr><th>Dia</th>${F.map(f=>`<th class="r">${escapeHtml(f)}</th>`).join('')}<th class="r">Entradas</th><th class="r">Saídas</th><th class="r">Saldo</th>${ndForm.length?'<th class="r">Não é dinheiro</th>':''}</tr></thead><tbody>${linhas}</tbody>
+      <tfoot><tr>${celula('Dia','Período')}${F.map(f=> celula(f, fmtMoeda(d.totFormaTodas[f]||0),'r')).join('')}${celula('Entradas', fmtMoeda(d.recebido),'r')}${celula('Saídas', '−'+fmtMoeda(d.saidasTot),'r')}${celula('Saldo', fmtMoeda(d.saldo),'r')}${ndForm.length?celula('Não é dinheiro','','r'):''}</tr></tfoot></table></div></div>`;
+  }
   function ativarDicasPainel(){
     let t = document.getElementById('fcTip');
     if(!t){ t = document.createElement('div'); t.id='fcTip'; t.className='fc-tip'; t.setAttribute('role','tooltip'); document.body.appendChild(t); }
@@ -840,7 +825,7 @@ function mensagemConfiavel(ev){
     let contasPagasBase = caixaGastos.filter(g=> g.pago && dentroPeriodo(g.dataPagamento));
     /* Caixa do dia = dinheiro que ENTROU no dia: cada pagamento conta na data em que foi recebido
        (pagamento incluído depois numa via "pagar depois" entra no caixa do dia em que foi lançado). */
-    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || FORMAS_NAO_DINHEIRO.includes(p.formaId)) ? 0 : (dentroPeriodo(p.data || (caixaOrdens.includes(v) ? dataLancamentoVia(v) : v.data)) ? (Number(p.valor)||0) : 0)), 0);   // 06/11: pedido sem data no pagamento = dia do lançamento (o "data" do pedido é a entrega)
+    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || FORMAS_NAO_DINHEIRO.includes(p.formaId)) ? 0 : (dentroPeriodo(String(p.data || (caixaOrdens.includes(v) ? dataLancamentoVia(v) : v.data) || '').slice(0,10)) ? CaixaCalc.valorDe(p) : 0)), 0);   // 06/11: mesma regra do caixa-calc.js (pedido sem data no pagamento = dia do lançamento; valor "1.234,50" lido certo)
     /* 05/11: no Pedido o campo "data" é a data de ENTREGA; a data do pedido é criadoEm. "Pago depois" = pagamento feito depois do dia em que a via foi lançada. */
     const dataLancamento = r=> (r && r.criadoEm) ? (dataDeTimestamp(Number(r.criadoEm)||r.criadoEm) || r.data) : r.data;
     let vendasRecBase = vendas.filter(v=> recebidoNoPeriodo(v) > 0);
@@ -943,8 +928,23 @@ function mensagemConfiavel(ev){
               </table>
             </div>
           </section>`;
+        // 06/11: conferência — TODA entrada do período por forma de pagamento (ouro, pix, cartão, dinheiro, crédito…), dia a dia e via a via.
+        // Sai da mesma conta do Fechar caixa (caixa-calc.js); se o total dos cartões acima não fechar com ela, avisa.
+        const dPainel = dadosPainelCaixa(de, ate, lojaId);
+        const difConf = (mc.recVendas + mc.recOS) - dPainel.recebido;
+        const alertaConf = Math.abs(difConf) > 0.009
+          ? `<div class="aviso-conf erro" role="alert"><b>Atenção:</b> o total de Vendas + O.S. recebidas (${fmtMoeda(mc.recVendas + mc.recOS)}) não bate com a soma das formas de pagamento (${fmtMoeda(dPainel.recebido)}). Diferença de ${fmtMoeda(Math.abs(difConf))}. Me avise com o período e a loja.</div>`
+          : `<div class="aviso-conf ok">Conferido: Vendas + O.S. recebidas = soma de todas as formas de pagamento (${fmtMoeda(dPainel.recebido)}).</div>`;
+        html += `
+          <section class="card" aria-label="Todas as entradas por forma de pagamento">
+            <div class="card-head"><h2>${ic('carteira')} Todas as entradas por forma de pagamento</h2><span class="muted" style="font-size:12.5px;">Cada pagamento conta no dia em que foi recebido</span></div>
+            ${alertaConf}
+            ${htmlPorDiaCaixa(dPainel)}
+            ${htmlPainelCaixa(dPainel, !lojaId)}
+          </section>`;
       }
       resumoEl.innerHTML = html;
+      try{ ativarDicasPainel(); }catch(e){}
     }
 
     const det = document.getElementById('caixaDetalhes');

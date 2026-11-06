@@ -4,6 +4,7 @@
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
 <script src="busca.js"></script>
+<script src="caixa-calc.js"></script>
 <script src="icones.js"></script>
 <script src="formato.js"></script>
 <meta charset="UTF-8">
@@ -1139,19 +1140,15 @@
     return avisos;
   }
 
+  /* 06/11: "recebido no mês" = o que ENTROU no mês pela data do pagamento (regra única do caixa-calc.js), menos as devoluções de cancelamento. */
+  function dadosCaixaDash(){ return { vendas, ordens: orders, gastos: [], formas: (configCompleto && configCompleto.formasPagamento) || [], lojas: (configCompleto && configCompleto.lojas) || [] }; }
   function totalDoMesPorLoja(){
     const hoje = new Date();
-    const mesRef = hoje.toISOString().slice(0,7); // YYYY-MM
+    const ini = vgDataStr(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), fim = vgDataStr(new Date(hoje.getFullYear(), hoje.getMonth()+1, 0));
+    const mv = CaixaCalc.movimentos(dadosCaixaDash(), ini, fim, "");
     const totais = {};
-    orders.forEach(o=>{
-      if((o.data||"").slice(0,7) !== mesRef) return;
-      const nomeL = nomeLojaDash(o.lojaId);
-      totais[nomeL] = (totais[nomeL]||0) + valorRecebidoDe(o);
-    });
-    vendas.forEach(v=>{
-      if((v.data||"").slice(0,7) !== mesRef) return;
-      totais[v.loja] = (totais[v.loja]||0) + valorRecebidoDe(v);
-    });
+    mv.entradas.forEach(m=>{ const n = nomeLojaDash(m.lojaId) || "—"; totais[n] = (totais[n]||0) + m.valor; });
+    mv.saidas.forEach(m=>{ const n = nomeLojaDash(m.lojaId) || "—"; totais[n] = (totais[n]||0) - m.valor; });
     return totais;
   }
 
@@ -2046,8 +2043,9 @@
 
   /* ================= FORMAS DE PAGAMENTO (03/11) =================
      Tudo o que entrou, por forma de pagamento, no Dia / Semana / Mês / Ano da data escolhida.
-     Mesma regra do resumo do Caixa: vendas ativas e pedidos (sem rascunho/cancelado), pagamento na
-     data do próprio pagamento (ou da via). Fiado, crédito do cliente e cashback não são dinheiro recebido. */
+     06/11: MESMA conta do Resumo/Fechar caixa (caixa-calc.js): todo pagamento no dia em que foi recebido (ouro, pix, cartão…),
+     vias canceladas depois e pedidos em rascunho com pagamento incluídos; devolução de cancelamento e "não é dinheiro" (crédito,
+     fiado, cashback) aparecem à parte. */
   let fpPeriodo = "dia", fpRef = "", fpLoja = "";
   const FP_PERIODOS = [["dia","Dia"],["semana","Semana"],["mes","Mês"],["ano","Ano"]];
   function fpNomeForma(p){
@@ -2091,26 +2089,28 @@
       <div class="card pad"><div id="listaFormasPag"></div></div>
     `;
     const [ini, fim] = fpIntervalo();
-    const dentro = d=> !!d && d >= ini && d <= fim;
-    const formas = {}; let total = 0, qtd = 0;
-    const soma = (p, dataVia)=>{
-      const nome = fpNomeForma(p); const v = Number(p.valor)||0;
-      if(!nome || !v || !dentro(p.data || dataVia)) return;
-      const f = formas[nome] || (formas[nome] = { valor:0, qtd:0 });
-      f.valor += v; f.qtd++; total += v; qtd++;
-    };
-    vendas.filter(v=> !vgEhCanc(v) && fpDaLoja(v)).forEach(v=> (v.pagamentos||[]).forEach(p=> soma(p, v.data)));
-    orders.filter(o=> !vgEhCanc(o) && o.status !== "rascunho" && fpDaLoja(o)).forEach(o=> (o.pagamentos||[]).forEach(p=> soma(p, o.data)));
+    // 06/11: mesma conta do Caixa (caixa-calc.js): pagamento no dia em que foi recebido (pedido sem data = dia do lançamento, não a entrega),
+    // inclui ouro, pix, cartão…, vias canceladas depois (a devolução aparece à parte) e pedido em rascunho com pagamento.
+    const mv = CaixaCalc.movimentos(dadosCaixaDash(), ini, fim, fpLoja);
+    const formas = {};
+    mv.entradas.forEach(m=>{ const f = formas[m.forma] || (formas[m.forma] = { valor:0, qtd:0 }); f.valor += m.valor; f.qtd++; });
+    const total = mv.totEntradas, qtd = mv.entradas.length;
+    const devolvido = mv.totSaidas;
+    const naoDin = {}; mv.naoDinheiro.forEach(m=>{ const f = naoDin[m.forma] || (naoDin[m.forma] = { valor:0, qtd:0 }); f.valor += m.valor; f.qtd++; });
     const lista = Object.entries(formas).map(([nome,x])=>({ nome, valor:x.valor, qtd:x.qtd })).sort((a,b)=> b.valor - a.valor);
     const periodoTxt = ini === fim ? fmtDate(ini) : `${fmtDate(ini)} a ${fmtDate(fim)}`;
     document.getElementById("kpisFormasPag").innerHTML = `
       ${kpiHtml("Recebido", fmtMoeda(total), "ok", escapeHtml(periodoTxt))}
+      ${devolvido > 0 ? kpiHtml("Devolvido (cancelamentos)", fmtMoeda(devolvido), "danger", "saiu do caixa no período") : ""}
+      ${devolvido > 0 ? kpiHtml("Saldo", fmtMoeda(total - devolvido), "ok", "recebido − devolvido") : ""}
       ${kpiHtml("Pagamentos", fmtNum(qtd))}
       ${kpiHtml("Formas usadas", fmtNum(lista.length))}
     `;
-    document.getElementById("listaFormasPag").innerHTML = lista.length ? `
+    const naoDinLista = Object.entries(naoDin);
+    document.getElementById("listaFormasPag").innerHTML = (lista.length ? `
       ${barrasHtml(lista.map(x=>({ nome: `${x.nome} · ${x.qtd} ${x.qtd===1?"pagamento":"pagamentos"} · ${total ? Math.round(x.valor/total*100) : 0}%`, valor: x.valor })), fmtMoeda)}
-    ` : vazioHtml("Nenhum pagamento recebido neste período.", "Troque o período ou a data de referência.");
+    ` : vazioHtml("Nenhum pagamento recebido neste período.", "Troque o período ou a data de referência."))
+    + (naoDinLista.length ? `<p class="section-sub" style="margin-top:14px;"><b>Não é dinheiro</b> (não entra no recebido): ${naoDinLista.map(([n,x])=>`${escapeHtml(n)} ${fmtMoeda(x.valor)} (${x.qtd})`).join(" · ")}</p>` : "");
     el.querySelectorAll("[data-fpper]").forEach(b=> b.addEventListener("click", ()=>{ fpPeriodo = b.dataset.fpper; renderSecaoFormasPag(); }));
     document.getElementById("fpRef").addEventListener("change", e=>{ fpRef = e.target.value || vgDataStr(new Date()); renderSecaoFormasPag(); });
     const sl = document.getElementById("fpLoja"); if(sl) sl.addEventListener("change", e=>{ fpLoja = e.target.value; renderSecaoFormasPag(); });
