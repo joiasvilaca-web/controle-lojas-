@@ -3659,7 +3659,7 @@ function printOrder(order){
     linhas.push(`<div class="assinatura"></div>`);
     linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
   }
-  if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, order.valorTotal, fmtMoeda));
+  if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, (order.valorAVista != null ? order.valorAVista : order.valorTotal), fmtMoeda));
 
   abrirImpressaoBobina('Ordem de Serviço', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(order, escapeHtml) : ''), larguraMm, order.codigoVia);
 }
@@ -5161,18 +5161,19 @@ function renderNovaOrdem(main){
       criadoEm: Date.now()
     };
     OuroPag.liquidar(novaOrdem.pagamentos, creditoGeradoOS, config);
+    CondPag.fecharTotal(novaOrdem, config);   // 06/11: lançada com pagamento: o total passa a ser o que o cliente PAGOU (cartão/débito com os 20%); o à vista fica em valorAVista
     if(planoNova.itens.length) novaOrdem.reservaLojaId = planoNova.lojaId;
     if(orcamentoOrigem){ novaOrdem.orcamentoOrigemId = orcamentoOrigem.id; novaOrdem.orcamentoId = orcamentoOrigem.id; }
     // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
     // (rascunho não gera código — só quando vira uma O.S. de verdade).
     novaOrdem.codigoVia = await bumpCodigoVia('pedido', novaOrdem.lojaId||'');
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de lançar
-    const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
+    const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', (novaOrdem.valorAVista ?? novaOrdem.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
     if(!cbValO.ok){ showToast(cbValO.erro); return; }
     if(cbValO.resumo) novaOrdem.cashback = cbValO.resumo;
     // Forma "Sem custo": zera o valorTotal e pula validações de Fiado/Crédito
     const temSemCustoNova = (tempPagHolder.pagamentos||[]).some(p=>p.formaId==='__sem_custo');
-    if(temSemCustoNova){ novaOrdem.valorTotal = 0; }
+    if(temSemCustoNova){ novaOrdem.valorTotal = 0; delete novaOrdem.valorAVista; delete novaOrdem.acrescimoCartao; }
     if(!temSemCustoNova && (pagsCreditoOS.length>0 || pagsFiadoOS.length>0 || creditoGeradoOS>0)){
       const telD = onlyDigits(novaOrdem.telefone||'');
       // Clientes não ficam em memória (22k+) — busca pelo telefone ou nome
@@ -5396,7 +5397,7 @@ function openEditModalCompleto(order, opts){
   // ── PAGAMENTO COMPLETO (com desconto/acréscimo e nota fiscal) ──
   const editPagHolder = {
     // pagamento antigo sem data fica com a data de criação da ordem (não vira "hoje" só porque a ordem foi editada)
-    valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p, data: p.data || dataLocalDeMs(order.criadoEm)})),
+    valorTotal: (order.valorAVista != null ? order.valorAVista : order.valorTotal), pagamentos: (order.pagamentos||[]).map(p=>{ const q = {...p, data: p.data || dataLocalDeMs(order.criadoEm)}; if(q.noTotal){ delete q.noTotal; q.valorBase = CondPag.r2((Number(q.valor)||0) / CondPag.FATOR); } return q; }),
     momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'', numeroNota: order.numeroNota||'',
     notaEntrada: order.notaEntrada ? { ...order.notaEntrada } : undefined,
     permitirPagarDepois: true,   // 04/11: incluir pagamento numa via "Pagar depois"
@@ -5699,8 +5700,10 @@ function openEditModalCompleto(order, opts){
       descTotalR: editPagHolder ? editPagHolder.descTotalR : order.descTotalR,
     });
     if(_credNovoEd > 0.009) OuroPag.liquidar(order.pagamentos, _credNovoEd, config);
+    delete order.valorAVista; delete order.acrescimoCartao;
+    if(status !== 'rascunho' && status !== 'cancelado') CondPag.fecharTotal(order, config);   // 06/11: total = o que o cliente pagou (cartão/débito com os 20%)
     const _cbAntO = order.cashback || null;
-    const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', order.valorTotal, 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
+    const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
     if(!_cbEO.ok){ Object.keys(order).forEach(k=>delete order[k]); Object.assign(order, _snapCb); showToast(_cbEO.erro); return; }
     if(_cbEO.resumo) order.cashback = _cbEO.resumo;
     // Estoque: entregue → baixa; demais → (re)reserva os itens atuais. Nunca bloqueia.
@@ -5715,7 +5718,7 @@ function openEditModalCompleto(order, opts){
     }
     await saveOrders();
     await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado });
-    if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', order.valorTotal, 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }
+    if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }
     closeModal();
     showToast('Pedido atualizado.');
     if(sincronizarDepois) await sincronizarReservasOrdem(order, planoEdit);
