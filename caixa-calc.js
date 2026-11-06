@@ -40,6 +40,7 @@
     var f = id ? (formas || []).find(function(x){ return x.id === id; }) : null;
     return String((f && f.nome) || p.tipoNome || p.tipo || 'SEM FORMA').toUpperCase();
   }
+  function moeda(v){ return 'R$ ' + (Number(v) || 0).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
   function ehCanc(r){ return r && (r.status === 'cancelada' || r.status === 'cancelado'); }
   /** Valor de um pagamento como número (aceita "1.234,50", "1234.5", vazio). */
   function valorDe(p){
@@ -52,6 +53,15 @@
     return isFinite(n) ? n : 0;
   }
 
+  /** Valor que ENTROU no caixa por um pagamento. Ouro entregue a mais que a compra: entra o valor TOTAL entregue (valorEntregue);
+   *  a sobra fica de crédito do cliente (creditoSobra) e depois, quando o crédito for usado, não movimenta mais caixa nem comissão. */
+  function valorEntrada(p){
+    var v = valorDe(p), e = p && p.valorEntregue;
+    e = (e === '' || e == null) ? NaN : Number(e);
+    return (isFinite(e) && e > v + 0.004) ? e : v;
+  }
+  function creditoSobra(p){ return Math.max(0, valorEntrada(p) - valorDe(p)); }
+
   function movimentos(dados, de, ate, lojaId){
     var formas = dados.formas || [], lojas = dados.lojas || [];
     var dentro = function(d){ return !!d && d >= de && d <= ate; };
@@ -63,9 +73,13 @@
       var base = ehOS ? diaLancamento(r) : r.data;
       var obs = ehCanc(r) ? 'cancelada depois' : (ehOS && r.status === 'rascunho') ? 'rascunho (pedido ainda não lançado)' : '';
       (r.pagamentos || []).forEach(function(p){
-        var v = valorDe(p); if(!v) return;
+        var v = valorEntrada(p); if(!v) return;
         var dia = String((p && p.data) || base || '').slice(0, 10); if(!dentro(dia)) return;
-        var mov = { dia: dia, lojaId: r.lojaId || '', tipo: tipoVia(r, ehOS), via: r.codigoVia || r.via || '', cliente: r.cliente || '', forma: nomeForma(p, formas), formaId: p.formaId || '', valor: v, reg: r, ehOS: !!ehOS, obs: obs };
+        var sobra = creditoSobra(p), usado = valorDe(p);
+        var obsMov = obs;
+        if(sobra > 0.004) obsMov = (obs ? obs + ' · ' : '') + 'inclui ' + moeda(sobra) + ' que ficou de CRÉDITO do cliente (via ' + (r.codigoVia || r.via || '') + '): entrou no caixa agora; usar esse crédito depois não movimenta mais caixa nem comissão';
+        if(p.formaId === '__credito') obsMov = (obs ? obs + ' · ' : '') + 'crédito do cliente usado como forma de pagamento: o valor já entrou no caixa quando o crédito foi gerado (não movimenta caixa nem comissão)';
+        var mov = { dia: dia, lojaId: r.lojaId || '', tipo: tipoVia(r, ehOS), via: r.codigoVia || r.via || '', cliente: r.cliente || '', forma: nomeForma(p, formas), formaId: p.formaId || '', valor: v, usado: usado, creditoSobra: sobra, reg: r, ehOS: !!ehOS, obs: obsMov };
         if(NAO_DINHEIRO.indexOf(p.formaId) >= 0) naoDinheiro.push(mov); else entradas.push(mov);
       });
       // devolução de cancelamento: sai no dia do cancelamento
@@ -90,10 +104,10 @@
     var ord = function(a, b){ return (a.dia || '').localeCompare(b.dia || '') || nome(a.lojaId).localeCompare(nome(b.lojaId)) || String(a.via).localeCompare(String(b.via), 'pt-BR', { numeric: true }); };
     entradas.sort(ord); saidas.sort(ord); naoDinheiro.sort(ord);
     var soma = function(l){ return l.reduce(function(a, m){ return a + m.valor; }, 0); };
-    return { entradas: entradas, saidas: saidas, naoDinheiro: naoDinheiro, totEntradas: soma(entradas), totSaidas: soma(saidas) };
+    return { entradas: entradas, saidas: saidas, naoDinheiro: naoDinheiro, creditosGerados: entradas.filter(function(m){ return m.creditoSobra > 0.004; }), totEntradas: soma(entradas), totSaidas: soma(saidas) };
   }
 
-  var api = { movimentos: movimentos, nomeForma: nomeForma, diaDeTs: diaDeTs, diaLancamento: diaLancamento, valorDe: valorDe, ehCanc: ehCanc, lojaIdDoGasto: lojaIdDoGasto, NAO_DINHEIRO: NAO_DINHEIRO };
+  var api = { movimentos: movimentos, nomeForma: nomeForma, diaDeTs: diaDeTs, diaLancamento: diaLancamento, valorDe: valorDe, valorEntrada: valorEntrada, creditoSobra: creditoSobra, ehCanc: ehCanc, lojaIdDoGasto: lojaIdDoGasto, NAO_DINHEIRO: NAO_DINHEIRO };
   if(typeof window !== 'undefined') window.CaixaCalc = api;
   if(typeof module !== 'undefined') module.exports = api;
 })();

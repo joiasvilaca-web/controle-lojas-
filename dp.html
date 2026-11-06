@@ -1605,8 +1605,10 @@ async function comOrdensGet(){
   if(r && r.error){ console.error('ordens', r.error); comCache.ordens = []; return []; }
   comCache.ordens = ((r && r.data)||[]).map(row=>row.payload); return comCache.ordens;
 }
+/** 06/11: ouro entregue a mais que a compra entra pelo valor TOTAL entregue (a sobra vira crédito do cliente e, depois, usar o crédito não gera comissão de novo). */
+function comValorEntrada(p){ const e = p && p.valorEntregue != null && p.valorEntregue !== '' ? comNumBR(p.valorEntregue) : 0; const v = comNumBR(p && p.valor); return e > v + 0.004 ? e : v; }
 function comValorRecebido(reg){
-  return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) ? 0 : comNumBR(p.valor)), 0));
+  return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) ? 0 : comValorEntrada(p)), 0));
 }
 function comValorAReceber(reg){
   return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (p.formaId==='__fiado' ? comNumBR(p.valor) : 0), 0));
@@ -1674,7 +1676,7 @@ function comLancamentosDoMes(mes, vendas, ordens, produtos){
     }
     const base = baseDe(v,'venda');
     const dataVenda = comDataLocal(v.data);
-    pagamentosEmDinheiro(v).forEach(p=>{ entrada(base, comDataLocal(p.data) || dataVenda, comNumBR(p.valor), { estimada: !p.data && v.momentoPagamento==='na_volta' }); });
+    pagamentosEmDinheiro(v).forEach(p=>{ entrada(base, comDataLocal(p.data) || dataVenda, comValorEntrada(p), { estimada: !p.data && v.momentoPagamento==='na_volta' }); });
     if(v.status==='cancelada'){
       // Venda cancelada = devolução no mês do cancelamento, pelo valor que entrou (mesmo que o cliente tenha ficado com crédito).
       devol(base, comDataLocal(v.canceladoEm), comValorRecebido(v), v.motivoCancelamento);
@@ -1697,7 +1699,7 @@ function comLancamentosDoMes(mes, vendas, ordens, produtos){
     let houveEntrada = false;
     pagamentosEmDinheiro(o).forEach(p=>{
       const dt = naVolta ? dataEntrega : (comDataLocal(p.data) || dataCriacao);
-      if(dt){ entrada(base, dt, comNumBR(p.valor), {}); houveEntrada = true; }
+      if(dt){ entrada(base, dt, comValorEntrada(p), {}); houveEntrada = true; }
     });
     if(cancelada && houveEntrada){
       devol(base, comDataLocal(o.canceladoEm), comValorRecebido(o), o.motivoCancelamento);

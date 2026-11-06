@@ -668,7 +668,10 @@ function mensagemConfiavel(ev){
       ${d.mv.entradas.map(m=> linhaMov(m, 1)).join('')}
       ${d.mv.saidas.map(m=> linhaMov(m, -1)).join('')}
       </tbody><tfoot><tr><td colspan="${4+(multiDia?1:0)+(comLoja?1:0)}">Saldo do período (${d.mv.entradas.length} entrada(s), ${d.mv.saidas.length} saída(s))</td><td class="r" colspan="2">${fmtMoeda(d.saldo)}</td></tr></tfoot></table></div>`;
-    const naoDin = d.mv.naoDinheiro.length ? `<div class="fc-graf"><h4>Não é dinheiro (não entra no saldo)</h4><p class="muted" style="margin:-4px 0 8px;font-size:12.5px;">Crédito do cliente usado, fiado lançado, cashback e itens sem custo. O dinheiro do crédito entrou na recarga; o do fiado entra quando a parcela é paga.</p><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela">${cab}<tbody>${d.mv.naoDinheiro.map(m=> linhaMov(m, 0)).join('')}</tbody></table></div></div>` : '';
+    const credGer = (d.mv.creditosGerados||[]).length ? `<div class="fc-graf"><h4>Ouro entregue a mais: a sobra ficou de crédito do cliente</h4><p class="muted" style="margin:-4px 0 8px;font-size:12.5px;">O ouro entrou no caixa (e na comissão) pelo valor total entregue, no dia da entrega. A sobra fica guardada como crédito no cadastro do cliente: quando ele usar esse crédito numa compra, o valor aparece em "Não é dinheiro" e <b>não</b> movimenta caixa nem comissão de novo.</p><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr>${multiDia?'<th>Dia</th>':''}${comLoja?'<th>Loja</th>':''}<th>Via</th><th>Cliente</th><th class="r">Ouro entregue (entrou no caixa)</th><th class="r">Usado na via</th><th class="r">Ficou de crédito</th></tr></thead><tbody>
+      ${d.mv.creditosGerados.map(m=> `<tr>${multiDia?celula('Dia', fmtDate(m.dia)):''}${comLoja?celula('Loja', escapeHtml(nomeLojaCaixa(m.lojaId)||'—')):''}${celula('Via', escapeHtml(m.via||'—'))}${celula('Cliente', escapeHtml(m.cliente||'—'))}${celula('Ouro entregue', fmtMoeda(m.valor), 'r')}${celula('Usado na via', fmtMoeda(m.usado), 'r')}${celula('Ficou de crédito', '<b>'+fmtMoeda(m.creditoSobra)+'</b>', 'r')}</tr>`).join('')}
+      </tbody></table></div></div>` : '';
+    const naoDin = d.mv.naoDinheiro.length ? `<div class="fc-graf"><h4>Não é dinheiro (não entra no saldo)</h4><p class="muted" style="margin:-4px 0 8px;font-size:12.5px;">Crédito do cliente usado, fiado lançado, cashback e itens sem custo. O valor do crédito já entrou no caixa quando foi gerado (recarga ou sobra de ouro) e por isso o uso não movimenta caixa nem comissão; o do fiado entra quando a parcela é paga.</p><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela">${cab}<tbody>${d.mv.naoDinheiro.map(m=> linhaMov(m, 0)).join('')}</tbody></table></div></div>` : '';
     return `<div class="fc-dash">
       <div class="fc-kpis">
         ${kpi('Entradas', fmtMoeda(d.recebido), d.mv.entradas.length+' pagamento(s) recebido(s)', 'destaque')}
@@ -681,6 +684,7 @@ function mensagemConfiavel(ev){
       <div class="fc-graf"><h4>Entradas por forma de pagamento, por loja</h4>${tabela}</div>
       <div class="fc-graf"><h4>Saldo por forma de pagamento</h4>${tabelaSaldo}</div>
       <div class="fc-graf"><h4>Todos os movimentos de dinheiro, via a via</h4>${lista}</div>
+      ${credGer}
       ${naoDin}
       ${d.recebido ? `<div class="fc-graf"><h4>Recebido por loja</h4>${d.formas.length>1?legenda:''}${barrasLoja}</div>
       <div class="fc-graf"><h4>Recebido por forma de pagamento</h4>${barrasForma}</div>` : ''}
@@ -825,7 +829,7 @@ function mensagemConfiavel(ev){
     let contasPagasBase = caixaGastos.filter(g=> g.pago && dentroPeriodo(g.dataPagamento));
     /* Caixa do dia = dinheiro que ENTROU no dia: cada pagamento conta na data em que foi recebido
        (pagamento incluído depois numa via "pagar depois" entra no caixa do dia em que foi lançado). */
-    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || FORMAS_NAO_DINHEIRO.includes(p.formaId)) ? 0 : (dentroPeriodo(String(p.data || (caixaOrdens.includes(v) ? dataLancamentoVia(v) : v.data) || '').slice(0,10)) ? CaixaCalc.valorDe(p) : 0)), 0);   // 06/11: mesma regra do caixa-calc.js (pedido sem data no pagamento = dia do lançamento; valor "1.234,50" lido certo)
+    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || FORMAS_NAO_DINHEIRO.includes(p.formaId)) ? 0 : (dentroPeriodo(String(p.data || (caixaOrdens.includes(v) ? dataLancamentoVia(v) : v.data) || '').slice(0,10)) ? CaixaCalc.valorEntrada(p) : 0)), 0);   // 06/11: mesma regra do caixa-calc.js (pedido sem data no pagamento = dia do lançamento; valor "1.234,50" lido certo)
     /* 05/11: no Pedido o campo "data" é a data de ENTREGA; a data do pedido é criadoEm. "Pago depois" = pagamento feito depois do dia em que a via foi lançada. */
     const dataLancamento = r=> (r && r.criadoEm) ? (dataDeTimestamp(Number(r.criadoEm)||r.criadoEm) || r.data) : r.data;
     let vendasRecBase = vendas.filter(v=> recebidoNoPeriodo(v) > 0);
