@@ -3,6 +3,8 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="maiusculas.js"></script>
+<script src="busca.js"></script>
 <script src="usuario-confirma.js"></script>
 <script src="icones.js"></script>
 <script src="foto-produto.js"></script>
@@ -803,17 +805,8 @@ function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.rando
 /** Busca de produto nos autocompletes: ignora acento e maiúscula, aceita palavras em qualquer ordem
  *  (ex.: "alianca 9 f0,3"), procura também no código interno e mostra primeiro quem começa com o texto digitado. */
 function filtrarProdutosBusca(lista, texto){
-  const norm = s=>String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[;.]/g,',');   // ponto, vírgula e ponto e vírgula valem o mesmo
-  const q = norm(texto).trim();
-  const toks = q.split(/\s+/).filter(Boolean);
-  if(!toks.length) return [];
-  const achados = (lista||[]).filter(p=>{
-    const alvo = norm([p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor].filter(x=>x!=null&&x!=='').join(' '));
-    return toks.every(t=>alvo.includes(t));
-  });
-  achados.sort((a,b)=>{ const na=norm(a.nome), nb=norm(b.nome);
-    return ((nb===q)-(na===q)) || ((nb.startsWith(q))-(na.startsWith(q))) || na.localeCompare(nb,'pt-BR',{numeric:true}); });
-  return achados.slice(0,40);
+  // busca única do app (busca.js): por qualquer parte, palavras em qualquer ordem, vírgula = ponto; vem na ordem do que foi digitado
+  return Busca.filtrar(lista, texto, p=>[p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor], {limite:40});
 }
 function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
 function fmtDate(s){
@@ -991,6 +984,7 @@ const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_A
 let __gatewaySenha = null;
 async function gatewayCall(body){
   try{
+    if(body && body.op==='searchClients' && window.Busca){ const _bc = await Busca.clientes(GATEWAY_URL, SUPABASE_ANON_KEY, __gatewaySenha, body); if(_bc) return _bc; }   // busca de cliente única (buscar-clientes); se falhar, usa o gateway
     const res = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
@@ -5870,8 +5864,8 @@ function renderPainel(main){
     if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()){
-      const q = fBusca.value.trim().toLowerCase(), qDig = onlyDigits(q);
-      list = list.filter(o=> (o.cliente||'').toLowerCase().includes(q) || String(o.via||'').toLowerCase().includes(q) || String(o.codigoVia||'').toLowerCase().includes(q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
+      const q = fBusca.value.trim(), qDig = onlyDigits(q);
+      list = list.filter(o=> Busca.testa([o.cliente,o.via,o.codigoVia].join(' '), q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
     }
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     const fimRecente = o=> { const t = Number(o.recebidoEm || o.canceladoEm || o.atualizadoEm || o.criadoEm || 0); return t >= limite; };
@@ -5951,15 +5945,15 @@ function renderPainel(main){
     if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()) {
-      const q = fBusca.value.trim().toLowerCase();
+      const q = fBusca.value.trim();
       const qDig = onlyDigits(q);
-      list = list.filter(o=> (o.cliente||'').toLowerCase().includes(q)
-        || String(o.via||'').toLowerCase().includes(q) || String(o.codigoVia||'').toLowerCase().includes(q)
+      list = list.filter(o=> Busca.testa([o.cliente,o.via,o.codigoVia].join(' '), q)
         || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
     }
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     if(fStatus.value==='todos' || fHoje.checked) list.sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0));   // mais recentes primeiro
     else list.sort((a,b)=> a.data.localeCompare(b.data) || b.criadoEm-a.criadoEm );
+    if(fBusca.value.trim()) list = list.map((o,i)=>({o,i,p:Busca.pontua([o.cliente,o.via,o.codigoVia].join(' '), fBusca.value.trim())})).sort((x,y)=>((x.p<0?9e9:x.p)-(y.p<0?9e9:y.p))||(x.i-y.i)).map(x=>x.o);   // mais parecido com o digitado primeiro
 
     const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
     const totalAReceber = list.reduce((acc,o)=> acc + valorAReceberDe(o), 0);

@@ -3,6 +3,8 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="maiusculas.js"></script>
+<script src="busca.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Aniversário e mala direta — Gestão e Controle</title>
@@ -343,6 +345,7 @@ let mensagensSalvas = [];
 
 async function gatewayCall(body){
   try{
+    if(body && body.op==='searchClients' && window.Busca){ const _bc = await Busca.clientes(GATEWAY_URL, SUPABASE_ANON_KEY, __gatewaySenha, body); if(_bc) return _bc; }
     const res = await fetch(GATEWAY_URL, {
       method:'POST',
       headers:{'Content-Type':'application/json','apikey':SUPABASE_ANON_KEY,'Authorization':'Bearer '+SUPABASE_ANON_KEY},
@@ -626,7 +629,7 @@ function desenharTabelaAniv(){
   const hoje = new Date();
   const mesHoje = hoje.getMonth()+1, diaHoje = hoje.getDate();
   let lista = (anivResultado||[]).filter(c=>c && c.dataNascimento);
-  if(q) lista = lista.filter(c=>(c.nome||'').toLowerCase().includes(q)||(c.telefone||'').includes(q));
+  if(q) lista = lista.filter(c=>Busca.testa(c.nome, q)||onlyDigits(c.telefone||'').includes(onlyDigits(q)||'§'));
   lista.sort((a,b)=>{
     const [,ma,da]=a.dataNascimento.split('-').map(Number);
     const [,mb,db]=b.dataNascimento.split('-').map(Number);
@@ -749,7 +752,7 @@ function renderOrcamentosMarketing(){
     const statusSel = document.getElementById('orcFiltroStatus').value;
     const vendSel = document.getElementById('orcFiltroVend').value;
     let lista = [...listaAbertos];
-    if(q) lista = lista.filter(o=>(o.cliente||'').toLowerCase().includes(q)||(o.vendedora||'').toLowerCase().includes(q));
+    if(q) lista = Busca.filtrar(lista, q, o=>[o.cliente,o.vendedora]);
     if(loja) lista = lista.filter(o=>o.loja===loja);
     if(statusSel) lista = lista.filter(o=>o.status===statusSel);
     if(vendSel) lista = lista.filter(o=>o.vendedora===vendSel||o.funcionario===vendSel);
@@ -1232,7 +1235,7 @@ async function abrirChamarCliente(){
   await carregarClientesSeNecessario();
   const desenhar = ()=>{
     const q = (document.getElementById('ccBusca').value||'').trim().toLowerCase(); const qd = onlyDigits(q);
-    const achados = !q ? [] : clientes.filter(c=> String(c.nome||'').toLowerCase().includes(q) || (qd.length>=4 && onlyDigits(c.telefone).includes(qd))).slice(0,30);
+    const achados = !q ? [] : [...Busca.filtrar(clientes, q, c=>c.nome), ...clientes.filter(c=> qd.length>=4 && onlyDigits(c.telefone).includes(qd) && !Busca.testa(c.nome, q))].slice(0,30);
     lista.innerHTML = !q ? '<div class="muted" style="padding:6px 2px;">Digite para procurar no cadastro.</div>' : achados.length ? achados.map(c=>`<button type="button" class="msg-salva-item" data-cc="${escapeHtml(c.id)}" style="width:100%;text-align:left;cursor:pointer;background:none;"><div class="txt"><div class="tit">${escapeHtml(c.nome||'')}</div><div class="muted" style="font-size:12.5px;">${c.telefone?escapeHtml(telFmt(c.telefone)):'sem telefone'}</div></div></button>`).join('') : '<div class="muted" style="padding:6px 2px;">Nenhum cliente encontrado.</div>';
     lista.querySelectorAll('[data-cc]').forEach(b=> b.onclick = ()=>{
       const c = clientes.find(x=>x.id===b.dataset.cc); if(!c) return;

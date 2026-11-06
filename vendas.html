@@ -3,6 +3,8 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="maiusculas.js"></script>
+<script src="busca.js"></script>
 <script src="usuario-confirma.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -688,6 +690,7 @@ let __gatewaySenha = null;
 
 async function gatewayCall(body){
   try{
+    if(body && body.op==='searchClients' && window.Busca){ const _bc = await Busca.clientes(GATEWAY_URL, SUPABASE_ANON_KEY, __gatewaySenha, body); if(_bc) return _bc; }   // busca de cliente única (buscar-clientes); se falhar, usa o gateway
     const res = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
@@ -756,17 +759,8 @@ function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.rando
 /** Busca de produto nos autocompletes: ignora acento e maiúscula, aceita palavras em qualquer ordem
  *  (ex.: "alianca 9 f0,3"), procura também no código interno e mostra primeiro quem começa com o texto digitado. */
 function filtrarProdutosBusca(lista, texto){
-  const norm = s=>String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[;.]/g,',');   // ponto, vírgula e ponto e vírgula valem o mesmo
-  const q = norm(texto).trim();
-  const toks = q.split(/\s+/).filter(Boolean);
-  if(!toks.length) return [];
-  const achados = (lista||[]).filter(p=>{
-    const alvo = norm([p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor].filter(x=>x!=null&&x!=='').join(' '));
-    return toks.every(t=>alvo.includes(t));
-  });
-  achados.sort((a,b)=>{ const na=norm(a.nome), nb=norm(b.nome);
-    return ((nb===q)-(na===q)) || ((nb.startsWith(q))-(na.startsWith(q))) || na.localeCompare(nb,'pt-BR',{numeric:true}); });
-  return achados.slice(0,40);
+  // busca única do app (busca.js): por qualquer parte, palavras em qualquer ordem, vírgula = ponto; vem na ordem do que foi digitado
+  return Busca.filtrar(lista, texto, p=>[p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor], {limite:40});
 }
 function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }   // data LOCAL (toISOString viraria o dia depois das 21h)
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
@@ -3702,11 +3696,11 @@ function renderReservas(main){
   document.getElementById('btnNovaReserva').addEventListener('click', ()=>{ __reservaEditando = null; modoNovaVenda = true; renderView(); });
   const fB = document.getElementById('resBusca'), fS = document.getElementById('resStatus');
   function desenhar(){
-    const q = fB.value.trim().toLowerCase(), st = fS.value;
+    const q = fB.value.trim(), st = fS.value;
     const lojaAtual = window.__lojaAtual && window.__lojaAtual.id;
     let lista = reservas.slice();
     if(st) lista = lista.filter(r=> situacaoReserva(r)===st);
-    if(q) lista = lista.filter(r=> [r.cliente, r.codigoVia, r.vendedora, ...(r.itens||[]).map(i=>i.produto)].join(' ').toLowerCase().includes(q));
+    if(q) lista = Busca.filtrar(lista, q, r=> [r.cliente, r.codigoVia, r.vendedora, ...(r.itens||[]).map(i=>i.produto)]);
     const wrap = document.getElementById('resTabela');
     if(!lista.length){ wrap.innerHTML = `<div class="estado-vazio">${ic('etiqueta',32)}<b>Nenhuma reserva</b>Clique em “Nova reserva” para reservar uma joia.</div>`; return; }
     wrap.innerHTML = `<table class="tabela-cartoes"><thead><tr><th>Data</th><th>Loja</th><th>Cliente</th><th>Vendedora</th><th>Joias</th><th class="num">Valor</th><th>Vence em</th><th>Situação</th><th class="acoes"><span class="so-leitor">Ações</span></th></tr></thead><tbody>
@@ -4744,11 +4738,12 @@ function renderVendas(main){
     if(fLoja.value) list = list.filter(v=>v.lojaId===fLoja.value);
     if(fData.value) list = list.filter(v=>v.data===fData.value);
     if(fBusca.value.trim()){
-      const q = fBusca.value.trim().toLowerCase();
-      list = list.filter(v=> (v.cliente||'').toLowerCase().includes(q) || (v.vendedora||'').toLowerCase().includes(q));
+      const q = fBusca.value.trim();
+      list = list.filter(v=> Busca.testa([v.cliente, v.vendedora, v.codigoVia, v.codigo].join(' '), q));
     }
     if(fSemPagamento.checked) list = list.filter(v=>semPagamentoLancado(v));
     list.sort((a,b)=> b.criadoEm - a.criadoEm);
+    if(fBusca.value.trim()) list = Busca.filtrar(list, fBusca.value.trim(), v=>[v.cliente, v.vendedora, v.codigoVia, v.codigo]);   // mais parecido com o digitado primeiro
 
     const totalRecebido = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorRecebidoDe(v), 0);
     const totalAReceber = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorAReceberDe(v), 0);
