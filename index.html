@@ -4153,10 +4153,11 @@ function abrirCreditoModal(cli){
     const obs=document.getElementById('crObs').value.trim();
     cli.credito=(Number(cli.credito)||0)+valor;
     if(!cli.creditoMovimentos) cli.creditoMovimentos=[];
-    cli.creditoMovimentos.push({ data:new Date().toISOString().slice(0,10), valor, obs, tipo:'recarga', autorizadoPor:autorizador.nome });
+    cli.creditoMovimentos.push({ data:hojeLocalIso(), valor, obs, tipo:'recarga', autorizadoPor:autorizador.nome });
     await salvarClienteCadastro(cli);
+    const lojaCx = lojaDoCaixaAtual();   // 06/11: o dinheiro entra no caixa da loja onde a pessoa está (antes ficava sem loja e não aparecia em caixa nenhum)
     const reg={ id:'venda_'+Math.random().toString(36).slice(2)+Date.now().toString(36),
-      tipo:'recargaCredito', loja:'', lojaId:'', vendedora:autorizadoPorNome(autorizador), data:new Date().toISOString().slice(0,10),
+      tipo:'recargaCredito', loja:lojaCx.nome, lojaId:lojaCx.id, vendedora:autorizadoPorNome(autorizador), data:hojeLocalIso(),
       cliente:cli.nome, telefone:cli.telefone||'', itens:[{ produtoNome:'Recarga de crédito', qtd:1, valor }],
       valorTotal:valor, pagamentos:[{ formaId, valor }], status:'ativa', criadoPor:autorizador.nome, criadoEm:Date.now() };
     await gatewayCall({ op:'upsert', table:'vendas_pdv', params:{ row:{ id:reg.id, payload:reg, updated_at:new Date().toISOString() } } });
@@ -4193,6 +4194,14 @@ function abrirDebitosModal(cli){
   document.getElementById('dbFechar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
   document.querySelectorAll('[data-receber]').forEach(b=>b.addEventListener('click', ()=> abrirReceberFiado(cli, Number(b.dataset.receber))));
 }
+/* 06/11: data de hoje no horário do aparelho (Brasil) — toISOString() é UTC e depois das 21h já era "amanhã". */
+function hojeLocalIso(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+/** Loja em que a pessoa está operando agora (seletor/balão do cabeçalho; senão a 1ª loja dela). */
+function lojaDoCaixaAtual(){
+  const id = (typeof lojaAtual!=='undefined' && lojaAtual) || ((currentUser && Array.isArray(currentUser.lojas) && currentUser.lojas[0]) || '');
+  const l = (config.lojas||[]).find(x=>x.id===id);
+  return { id: l ? l.id : id, nome: l ? l.nome : '' };
+}
 function abrirReceberFiado(cli, idx){
   const d=cli.fiadoDebitos[idx];
   const resta=Math.max(0,(Number(d.valor)||0)-(Number(d.valorPago)||0));
@@ -4217,10 +4226,11 @@ function abrirReceberFiado(cli, idx){
     const formaId=document.getElementById('rfForma').value;
     d.valorPago=(Number(d.valorPago)||0)+valor;
     if(!d.pagamentos) d.pagamentos=[];
-    d.pagamentos.push({ data:new Date().toISOString().slice(0,10), valor, formaId, recebidoPor:(currentUser&&currentUser.nome)||'' });
+    d.pagamentos.push({ data:hojeLocalIso(), valor, formaId, recebidoPor:(currentUser&&currentUser.nome)||'' });
     await salvarClienteCadastro(cli);
+    const lojaCx = lojaDoCaixaAtual();   // 06/11: entra no caixa da loja onde o dinheiro foi recebido (antes ficava sem loja)
     const reg={ id:'venda_'+Math.random().toString(36).slice(2)+Date.now().toString(36),
-      tipo:'recebimentoFiado', loja:d.loja||'', lojaId:'', vendedora:(currentUser&&currentUser.nome)||'', data:new Date().toISOString().slice(0,10),
+      tipo:'recebimentoFiado', loja:lojaCx.nome, lojaId:lojaCx.id, vendedora:(currentUser&&currentUser.nome)||'', data:hojeLocalIso(),
       cliente:cli.nome, telefone:cli.telefone||'', itens:[{ produtoNome:`Recebimento fiado (${d.origem||''} ${String(d.numero||'').slice(0,10)})`, qtd:1, valor }],
       valorTotal:valor, pagamentos:[{ formaId, valor }], refFiado:{ clienteId:cli.id, debitoId:d.id }, status:'ativa',
       criadoPor:(currentUser&&currentUser.nome)||'', criadoEm:Date.now() };

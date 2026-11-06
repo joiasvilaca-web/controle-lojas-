@@ -352,6 +352,58 @@ function mensagemConfiavel(ev){
     const porId = (config.lojas||[]).find(l=>l.id===valor);
     return porId ? porId.nome : valor;
   }
+  /* ===== 06/11: MOVIMENTOS DE CAIXA — fonte única do Fechar caixa, do Resumo e do resumo por WhatsApp =====
+     Entrada = cada pagamento recebido (vendas, pedidos, recarga de crédito, fiado recebido), no dia em que foi pago,
+     inclusive de vias canceladas depois (o dinheiro entrou naquele dia; a devolução sai no dia do cancelamento).
+     Não é dinheiro: crédito do cliente usado, fiado lançado, cashback e "sem custo". */
+  const FORMAS_NAO_DINHEIRO = ['__fiado','__credito','__cashback','__sem_custo'];
+  /** Dia em que a via foi lançada (no Pedido o campo "data" é a ENTREGA; a data do pedido é criadoEm). */
+  function dataLancamentoVia(r){ return (r && r.criadoEm) ? (dataDeTimestamp(Number(r.criadoEm)||r.criadoEm) || r.data) : (r && r.data); }
+  function lojaIdDoGasto(g){
+    if(g.lojaId) return g.lojaId;
+    const n = String(g.loja||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    if(!n) return '';
+    const l = (config.lojas||[]).find(x=>{ const a = String(x.nome||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''), b = String(x.nomeFantasia||'').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); return (a && (a.includes(n) || n.includes(a))) || (b && (b.includes(n) || n.includes(b))); });
+    return l ? l.id : '';
+  }
+  function movimentosCaixa(de, ate, lojaId){
+    const dentro = d=> !!d && d>=de && d<=ate;
+    const daLoja = id=> !lojaId || id===lojaId;
+    const entradas = [], saidas = [], naoDinheiro = [];
+    const tipoVia = (r, ehOS)=> r.tipo==='recargaCredito' ? 'Recarga de crédito' : r.tipo==='recebimentoFiado' ? 'Fiado recebido' : ehOS ? 'Pedido' : 'Venda';
+    const add = (r, ehOS)=>{
+      if(!daLoja(r.lojaId)) return;
+      const base = ehOS ? dataLancamentoVia(r) : r.data;
+      (r.pagamentos||[]).forEach(p=>{
+        const v = Number(p && p.valor)||0; if(!v) return;
+        const dia = String(p.data || base || '').slice(0,10); if(!dentro(dia)) return;
+        const mov = { dia, lojaId:r.lojaId||'', tipo:tipoVia(r, ehOS), via:r.codigoVia||r.via||'', cliente:r.cliente||'', forma:nomeFormaPainel(p), valor:v, reg:r, ehOS,
+          obs: (r.status==='cancelada'||r.status==='cancelado') ? 'cancelada depois' : '' };
+        if(FORMAS_NAO_DINHEIRO.includes(p.formaId)) naoDinheiro.push(mov); else entradas.push(mov);
+      });
+      // devolução de cancelamento: sai no dia do cancelamento
+      const saida = Number(r.caixaSaidaCancelamento)||0;
+      if((r.status==='cancelada'||r.status==='cancelado') && saida > 0){
+        const dia = dataDeTimestamp(r.canceladoEm);
+        if(dentro(dia)){
+          const t = r.cancelamentoDestino && r.cancelamentoDestino.tipo;
+          const pg1 = (r.pagamentos||[]).find(p=> (Number(p.valor)||0)>0 && !FORMAS_NAO_DINHEIRO.includes(p.formaId));
+          const forma = t==='pix' ? 'PIX' : t==='dinheiro' ? 'DINHEIRO' : (pg1 ? nomeFormaPainel(pg1) : 'DEVOLUÇÃO');
+          saidas.push({ dia, lojaId:r.lojaId||'', tipo:'Devolução (cancelamento)', via:r.codigoVia||r.via||'', cliente:r.cliente||'', forma, valor:saida, reg:r, ehOS, obs: r.motivoCancelamento||'' });
+        }
+      }
+    };
+    vendas.forEach(v=> add(v, false));
+    caixaOrdens.filter(o=> o.status!=='rascunho').forEach(o=> add(o, true));
+    caixaGastos.filter(g=> g.pago && dentro(String(g.dataPagamento||'').slice(0,10))).forEach(g=>{
+      const lid = lojaIdDoGasto(g); if(!daLoja(lid)) return;
+      saidas.push({ dia:String(g.dataPagamento).slice(0,10), lojaId:lid, tipo:'Conta paga', via:'', cliente:g.nome||g.categoria||'Conta', forma:String(g.formaPagamento||'CONTA').toUpperCase(), valor:Number(g.valor)||0, reg:g, obs:g.categoria||'' });
+    });
+    const ord = (a,b)=> (a.dia||'').localeCompare(b.dia||'') || nomeLojaCaixa(a.lojaId).localeCompare(nomeLojaCaixa(b.lojaId)) || String(a.via).localeCompare(String(b.via), 'pt-BR', { numeric:true });
+    entradas.sort(ord); saidas.sort(ord); naoDinheiro.sort(ord);
+    return { entradas, saidas, naoDinheiro,
+      totEntradas: entradas.reduce((a,m)=>a+m.valor,0), totSaidas: saidas.reduce((a,m)=>a+m.valor,0) };
+  }
   function dataDeTimestamp(ts){
     if(!ts) return '';
     const d = new Date(ts);
@@ -510,7 +562,7 @@ function mensagemConfiavel(ev){
   function registrosFiscais(de, ate, lojaId){
     const dentro = s=> !!s && s>=de && s<=ate;
     const noPeriodo = x=> dentro(x.data) || (x.pagamentos||[]).some(p=> p && dentro(p.data));   // pagamento incluído depois (pagar depois) entra no dia em que foi recebido
-    const v = vendas.filter(x=> x.status!=='cancelada' && noPeriodo(x) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Venda', tabela:'vendas_pdv', reg:x }));
+    const v = vendas.filter(x=> x.status!=='cancelada' && !x.tipo && noPeriodo(x) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Venda', tabela:'vendas_pdv', reg:x }));   // 06/11: recarga de crédito e fiado recebido não são venda (sem nota aqui)
     const o = caixaOrdens.filter(x=> x.status!=='cancelado' && x.status!=='rascunho' && noPeriodo(x) && (!lojaId || x.lojaId===lojaId)).map(x=>({ origem:'Pedido', tabela:'ordens_servico', reg:x }));
     return v.concat(o).sort((a,b)=> (b.reg.data||'').localeCompare(a.reg.data||''));
   }
@@ -589,40 +641,34 @@ function mensagemConfiavel(ev){
   function dadosPainelCaixa(de, ate, lojaId){
     const dentro = d=> !!d && d>=de && d<=ate;
     const daLoja = r=> !lojaId || r.lojaId===lojaId;
-    const porLoja = {}; const totForma = {}; let recebido = 0;
-    const soma = (reg, p)=>{
-      const v = Number(p && p.valor)||0; if(!v) return;
-      if(!dentro((p.data||reg.data||'').slice(0,10))) return;
-      const f = nomeFormaPainel(p); const l = reg.lojaId || '—';
-      porLoja[l] = porLoja[l] || {}; porLoja[l][f] = (porLoja[l][f]||0) + v;
-      totForma[f] = (totForma[f]||0) + v; recebido += v;
-    };
-    const vAtivas = vendas.filter(v=> v.status!=='cancelada' && daLoja(v));
-    const oAtivas = caixaOrdens.filter(o=> o.status!=='cancelado' && o.status!=='rascunho' && daLoja(o));
-    vAtivas.forEach(v=> (v.pagamentos||[]).forEach(p=> soma(v,p)));
-    oAtivas.forEach(o=> (o.pagamentos||[]).forEach(p=> soma(o,p)));
-    // ordem fixa das formas = ordem do cadastro (a cor segue a forma, não o valor); até 8 cores, o resto vira "OUTRAS"
-    const ordemCad = (config.formasPagamento||[]).map(f=> f.nome);
-    let formas = Object.keys(totForma).sort((a,b)=>{ const ia=ordemCad.indexOf(a), ib=ordemCad.indexOf(b); return (ia<0?999:ia)-(ib<0?999:ib) || a.localeCompare(b); });
+    const mv = movimentosCaixa(de, ate, lojaId);
+    const porLoja = {}; const totForma = {}; const saiForma = {};
+    mv.entradas.forEach(m=>{ const l = m.lojaId||'—'; porLoja[l] = porLoja[l] || {}; porLoja[l][m.forma] = (porLoja[l][m.forma]||0) + m.valor; totForma[m.forma] = (totForma[m.forma]||0) + m.valor; });
+    mv.saidas.forEach(m=>{ saiForma[m.forma] = (saiForma[m.forma]||0) + m.valor; });
+    // ordem fixa das formas = ordem do cadastro (a cor segue a forma, não o valor); até 8 cores, o resto vira "OUTRAS" (só nos gráficos)
+    const ordemCad = (config.formasPagamento||[]).map(f=> String(f.nome||'').toUpperCase());
+    const ordenar = arr=> arr.sort((a,b)=>{ const ia=ordemCad.indexOf(String(a).toUpperCase()), ib=ordemCad.indexOf(String(b).toUpperCase()); return (ia<0?999:ia)-(ib<0?999:ib) || a.localeCompare(b); });
+    const formasTodas = ordenar(Object.keys(totForma));
+    let formas = formasTodas.slice(), totGraf = { ...totForma }, porLojaGraf = JSON.parse(JSON.stringify(porLoja));
     if(formas.length > 8){
       const ficam = formas.slice(0,7), sobram = formas.slice(7);
-      Object.values(porLoja).forEach(m=>{ sobram.forEach(f=>{ if(m[f]){ m.OUTRAS=(m.OUTRAS||0)+m[f]; delete m[f]; } }); });
-      totForma.OUTRAS = sobram.reduce((a,f)=> a+(totForma[f]||0), 0); sobram.forEach(f=> delete totForma[f]);
+      Object.values(porLojaGraf).forEach(m=>{ sobram.forEach(f=>{ if(m[f]){ m.OUTRAS=(m.OUTRAS||0)+m[f]; delete m[f]; } }); });
+      totGraf.OUTRAS = sobram.reduce((a,f)=> a+(totGraf[f]||0), 0); sobram.forEach(f=> delete totGraf[f]);
       formas = ficam.concat('OUTRAS');
     }
-    const lojas = Object.keys(porLoja).map(id=>({ id, nome: nomeLojaCaixa(id) || id, formas: porLoja[id], total: Object.values(porLoja[id]).reduce((a,b)=>a+b,0) })).sort((a,b)=> b.total-a.total);
-    const vPer = vAtivas.filter(v=> dentro(v.data)), oPer = oAtivas.filter(o=> dentro(o.data));
-    const canc = vendas.filter(v=> v.status==='cancelada' && daLoja(v) && dentro(dataDeTimestamp(v.canceladoEm))).concat(caixaOrdens.filter(o=> o.status==='cancelado' && daLoja(o) && dentro(dataDeTimestamp(o.canceladoEm))));
-    const contas = caixaGastos.filter(g=> g.pago && dentro(g.dataPagamento) && daLoja(g));
-    return { formas, totForma, lojas, recebido,
+    const lojas = Object.keys(porLoja).map(id=>({ id, nome: nomeLojaCaixa(id) || id, formas: porLoja[id], formasGraf: porLojaGraf[id], total: Object.values(porLoja[id]).reduce((a,b)=>a+b,0) })).sort((a,b)=> b.total-a.total);
+    const formasSaldo = ordenar([...new Set([...Object.keys(totForma), ...Object.keys(saiForma)])]);
+    const vPer = vendas.filter(v=> v.status!=='cancelada' && !v.tipo && daLoja(v) && dentro(v.data));
+    const oPer = caixaOrdens.filter(o=> o.status!=='cancelado' && o.status!=='rascunho' && daLoja(o) && dentro(dataLancamentoVia(o)));
+    const nVias = new Set(mv.entradas.concat(mv.saidas).map(m=> m.reg)).size;
+    return { formas, totForma: totGraf, formasTodas, totFormaTodas: totForma, saiForma, formasSaldo, lojas, mv,
+      recebido: mv.totEntradas, saidasTot: mv.totSaidas, saldo: mv.totEntradas - mv.totSaidas, nVias,
       vendasQtd: vPer.length, vendasValor: vPer.reduce((a,v)=>a+(Number(v.valorTotal)||0),0),
       pedidosQtd: oPer.length, pedidosValor: oPer.reduce((a,o)=>a+(Number(o.valorTotal)||0),0),
-      aReceber: vPer.reduce((a,v)=>a+valorAReceberDe(v),0) + oPer.reduce((a,o)=>a+valorAReceberDe(o),0),
-      contasQtd: contas.length, contasValor: contas.reduce((a,g)=>a+(Number(g.valor)||0),0),
-      cancQtd: canc.length, cancValor: canc.reduce((a,r)=>a+(Number(r.valorTotal)||0),0) };
+      aReceber: vPer.reduce((a,v)=>a+valorAReceberDe(v),0) + oPer.reduce((a,o)=>a+valorAReceberDe(o),0) };
   }
-  function htmlPainelCaixa(d){
-    if(!d.recebido && !d.vendasQtd && !d.pedidosQtd) return `<div class="fc-dash">${estadoHtml('calendario','Nada recebido neste período','Sem vendas, pedidos ou pagamentos no período e loja escolhidos.')}</div>`;
+  function htmlPainelCaixa(d, comLoja){
+    if(!d.mv.entradas.length && !d.mv.saidas.length && !d.mv.naoDinheiro.length && !d.vendasQtd && !d.pedidosQtd) return `<div class="fc-dash">${estadoHtml('calendario','Nenhum movimento neste período','Sem vendas, pedidos, pagamentos, devoluções ou contas pagas no período e loja escolhidos.')}</div>`;
     const cor = f=> `var(--s${d.formas.indexOf(f)+1})`;
     const tip = (t)=> escapeHtml(t).replace(/"/g,'&quot;');
     const kpi = (r,v,dd,cls)=> `<div class="fc-kpi ${cls||''}"><div class="k-rot">${r}</div><div class="k-val">${v}</div>${dd?`<div class="k-det">${dd}</div>`:''}</div>`;
@@ -631,25 +677,40 @@ function mensagemConfiavel(ev){
     const pct = (v,t)=> t ? ((v/t)*100).toFixed(1).replace('.',',')+'%' : '0%';
     const legenda = `<div class="fc-leg" aria-hidden="true">${d.formas.map(f=>`<span><i style="background:${cor(f)}"></i>${escapeHtml(f)}</span>`).join('')}</div>`;
     const barrasLoja = d.lojas.map(l=> `<div class="fc-linha"><span class="nm" title="${tip(l.nome)}">${escapeHtml(l.nome)}</span>
-      <div class="fc-barra" style="width:${(l.total/maxLoja*100).toFixed(2)}%">${d.formas.filter(f=> l.formas[f]).map(f=> `<span class="fc-seg" style="flex:${l.formas[f]};background:${cor(f)}" data-tip="${tip(l.nome+' · '+f+': '+fmtMoeda(l.formas[f])+' ('+pct(l.formas[f], l.total)+')')}"></span>`).join('')}</div>
+      <div class="fc-barra" style="width:${(l.total/maxLoja*100).toFixed(2)}%">${d.formas.filter(f=> l.formasGraf[f]).map(f=> `<span class="fc-seg" style="flex:${l.formasGraf[f]};background:${cor(f)}" data-tip="${tip(l.nome+' · '+f+': '+fmtMoeda(l.formasGraf[f])+' ('+pct(l.formasGraf[f], l.total)+')')}"></span>`).join('')}</div>
       <span class="tot">${fmtMoeda(l.total)}</span></div>`).join('');
     const formasOrd = d.formas.slice().sort((a,b)=> (d.totForma[b]||0)-(d.totForma[a]||0));
     const barrasForma = formasOrd.map(f=> `<div class="fc-linha"><span class="nm">${escapeHtml(f)}</span>
       <div class="fc-barra" style="width:${((d.totForma[f]||0)/maxForma*100).toFixed(2)}%"><span class="fc-seg" style="flex:1;background:${cor(f)}" data-tip="${tip(f+': '+fmtMoeda(d.totForma[f])+' ('+pct(d.totForma[f], d.recebido)+' do recebido)')}"></span></div>
       <span class="tot">${fmtMoeda(d.totForma[f])} <span class="muted" style="font-weight:500;">${pct(d.totForma[f], d.recebido)}</span></span></div>`).join('');
-    const tabela = `<div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr><th>Loja</th>${d.formas.map(f=>`<th class="r">${escapeHtml(f)}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
-      ${d.lojas.map(l=> `<tr>${celula('Loja', '<b>'+escapeHtml(l.nome)+'</b>')}${d.formas.map(f=> celula(f, l.formas[f]?fmtMoeda(l.formas[f]):'<span class="muted">—</span>', 'r')).join('')}${celula('Total', '<b>'+fmtMoeda(l.total)+'</b>', 'r')}</tr>`).join('')}
-      </tbody>${d.lojas.length>1?`<tfoot><tr>${celula('Loja','Todas as lojas')}${d.formas.map(f=> celula(f, fmtMoeda(d.totForma[f]||0), 'r')).join('')}${celula('Total', fmtMoeda(d.recebido), 'r')}</tr></tfoot>`:''}</table></div>`;
+    const F = d.formasTodas;
+    const tabela = d.lojas.length ? `<div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr><th>Loja</th>${F.map(f=>`<th class="r">${escapeHtml(f)}</th>`).join('')}<th class="r">Total</th></tr></thead><tbody>
+      ${d.lojas.map(l=> `<tr>${celula('Loja', '<b>'+escapeHtml(l.nome)+'</b>')}${F.map(f=> celula(f, l.formas[f]?fmtMoeda(l.formas[f]):'<span class="muted">—</span>', 'r')).join('')}${celula('Total', '<b>'+fmtMoeda(l.total)+'</b>', 'r')}</tr>`).join('')}
+      </tbody>${d.lojas.length>1?`<tfoot><tr>${celula('Loja','Todas as lojas')}${F.map(f=> celula(f, fmtMoeda(d.totFormaTodas[f]||0), 'r')).join('')}${celula('Total', fmtMoeda(d.recebido), 'r')}</tr></tfoot>`:''}</table></div>` : '<div class="muted">Nenhuma entrada no período.</div>';
+    const tabelaSaldo = `<div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr><th>Forma</th><th class="r">Entradas</th><th class="r">Saídas</th><th class="r">Saldo</th></tr></thead><tbody>
+      ${d.formasSaldo.map(f=>{ const e=d.totFormaTodas[f]||0, sd=d.saiForma[f]||0; return `<tr>${celula('Forma','<b>'+escapeHtml(f)+'</b>')}${celula('Entradas', e?'<span style="color:var(--ok);">+'+fmtMoeda(e)+'</span>':'<span class="muted">—</span>','r')}${celula('Saídas', sd?'<span style="color:var(--danger);">−'+fmtMoeda(sd)+'</span>':'<span class="muted">—</span>','r')}${celula('Saldo','<b>'+fmtMoeda(e-sd)+'</b>','r')}</tr>`; }).join('')}
+      </tbody><tfoot><tr>${celula('Forma','Total')}${celula('Entradas','+'+fmtMoeda(d.recebido),'r')}${celula('Saídas','−'+fmtMoeda(d.saidasTot),'r')}${celula('Saldo',fmtMoeda(d.saldo),'r')}</tr></tfoot></table></div>`;
+    const multiDia = new Set(d.mv.entradas.concat(d.mv.saidas).map(m=>m.dia)).size > 1;
+    const linhaMov = (m, sinal)=> `<tr>${multiDia?celula('Dia', fmtDate(m.dia)):''}${comLoja?celula('Loja', escapeHtml(nomeLojaCaixa(m.lojaId)||'—')):''}${celula('Tipo', escapeHtml(m.tipo))}${celula('Via', escapeHtml(m.via||'—'))}${celula('Cliente / descrição', escapeHtml(m.cliente||'—')+(m.obs?`<div class="muted" style="font-size:12px;">${escapeHtml(m.obs)}</div>`:''))}${celula('Forma', escapeHtml(m.forma))}${celula('Valor', sinal>0?`<span style="color:var(--ok);font-weight:700;">+${fmtMoeda(m.valor)}</span>`:sinal<0?`<span style="color:var(--danger);font-weight:700;">−${fmtMoeda(m.valor)}</span>`:`<span class="muted">${fmtMoeda(m.valor)}</span>`, 'r')}</tr>`;
+    const cab = `<thead><tr>${multiDia?'<th>Dia</th>':''}${comLoja?'<th>Loja</th>':''}<th>Tipo</th><th>Via</th><th>Cliente / descrição</th><th>Forma</th><th class="r">Valor</th></tr></thead>`;
+    const lista = `<div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela fc-movs">${cab}<tbody>
+      ${d.mv.entradas.map(m=> linhaMov(m, 1)).join('')}
+      ${d.mv.saidas.map(m=> linhaMov(m, -1)).join('')}
+      </tbody><tfoot><tr><td colspan="${4+(multiDia?1:0)+(comLoja?1:0)}">Saldo do período (${d.mv.entradas.length} entrada(s), ${d.mv.saidas.length} saída(s))</td><td class="r" colspan="2">${fmtMoeda(d.saldo)}</td></tr></tfoot></table></div>`;
+    const naoDin = d.mv.naoDinheiro.length ? `<div class="fc-graf"><h4>Não é dinheiro (não entra no saldo)</h4><p class="muted" style="margin:-4px 0 8px;font-size:12.5px;">Crédito do cliente usado, fiado lançado, cashback e itens sem custo. O dinheiro do crédito entrou na recarga; o do fiado entra quando a parcela é paga.</p><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela">${cab}<tbody>${d.mv.naoDinheiro.map(m=> linhaMov(m, 0)).join('')}</tbody></table></div></div>` : '';
     return `<div class="fc-dash">
       <div class="fc-kpis">
-        ${kpi('Recebido', fmtMoeda(d.recebido), d.formas.length+' forma(s) de pagamento', 'destaque')}
-        ${kpi('Vendas', fmtMoeda(d.vendasValor), d.vendasQtd+' venda(s)')}
-        ${kpi('Pedidos (O.S.)', fmtMoeda(d.pedidosValor), d.pedidosQtd+' pedido(s)')}
+        ${kpi('Entradas', fmtMoeda(d.recebido), d.mv.entradas.length+' pagamento(s) recebido(s)', 'destaque')}
+        ${kpi('Saídas', fmtMoeda(d.saidasTot), d.mv.saidas.length+' devolução(ões) / conta(s)')}
+        ${kpi('Saldo do caixa', fmtMoeda(d.saldo), d.nVias+' via(s)/conta(s) com dinheiro')}
+        ${kpi('Vendas do período', fmtMoeda(d.vendasValor), d.vendasQtd+' venda(s)')}
+        ${kpi('Pedidos do período', fmtMoeda(d.pedidosValor), d.pedidosQtd+' pedido(s)')}
         ${kpi('A receber', fmtMoeda(d.aReceber), 'das vendas e pedidos do período')}
-        ${kpi('Contas pagas', fmtMoeda(d.contasValor), d.contasQtd+' conta(s)')}
-        ${kpi('Cancelamentos', fmtMoeda(d.cancValor), d.cancQtd+' via(s)')}
       </div>
-      <div class="fc-graf"><h4>Somatório por forma de pagamento, por loja</h4>${tabela}</div>
+      <div class="fc-graf"><h4>Entradas por forma de pagamento, por loja</h4>${tabela}</div>
+      <div class="fc-graf"><h4>Saldo por forma de pagamento</h4>${tabelaSaldo}</div>
+      <div class="fc-graf"><h4>Todos os movimentos de dinheiro, via a via</h4>${lista}</div>
+      ${naoDin}
       ${d.recebido ? `<div class="fc-graf"><h4>Recebido por loja</h4>${d.formas.length>1?legenda:''}${barrasLoja}</div>
       <div class="fc-graf"><h4>Recebido por forma de pagamento</h4>${barrasForma}</div>` : ''}
     </div>`;
@@ -696,7 +757,7 @@ function mensagemConfiavel(ev){
     else acao = `<div style="padding:12px 14px;border-radius:10px;background:var(--ok-soft);color:var(--ok);font-weight:700;margin:10px 0;">Nenhuma pendência de nota fiscal. Caixa pronto para fechar.</div>`;
     openModal(`<h3>Fechar caixa · ${periodo}${lojaId?' · '+escapeHtml(nomeLojaCaixa(lojaId)):' · todas as lojas'}</h3>
       ${acao}
-      ${htmlPainelCaixa(dadosPainelCaixa(de, ate, lojaId))}
+      ${htmlPainelCaixa(dadosPainelCaixa(de, ate, lojaId), !lojaId)}
       ${emitir.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Emitir nota fiscal — ${emitir.length} em Pix/cartão/LINK ECO sem nota</div>${emitir.map((x,i)=>linha(x,(x.reg.pagamentos||[]).some(formaExigeNota) ? 'LINK ECO: nota pela '+escapeHtml(nomeLojaCaixa(lojaNotaDaForma(x.reg))||'Ecommerce') : 'pago em Pix/cartão',i,'e')).join('')}</div>` : ''}
       ${faltaNum.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--wait-soft);"><div style="font-weight:700;color:var(--wait);margin-bottom:4px;">Falta o número da nota — ${faltaNum.length} marcado(s) com nota</div>${faltaNum.map((x,i)=>linha(x,'marcado com nota, sem número',i,'n')).join('')}</div>` : ''}
       ${faltaEntrada.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--danger-soft);"><div style="font-weight:700;color:var(--danger);margin-bottom:4px;">Falta o número da nota de ENTRADA (ouro) — ${faltaEntrada.length} via(s)</div>${faltaEntrada.map((x,i)=>linha(x,'pagou em ouro, sem número da nota de entrada',i,'o')).join('')}</div>` : ''}
@@ -735,31 +796,26 @@ function mensagemConfiavel(ev){
   }
   /* Resumo do dia para a diretoria pelo WhatsApp (Configurações › Resumo do caixa). Não bloqueia o fechamento. */
   function textoResumoCaixa(lojaId, dia){
+    // 06/11: mesma conta do Fechar caixa (movimentosCaixa) — antes ignorava vendas canceladas depois, devoluções e pedidos pagos sem data
     const m = v => fmtMoeda(v);
-    const daLoja = r => !lojaId || r.lojaId === lojaId;
-    const vds = vendas.filter(v=> v.data===dia && daLoja(v));
-    const ativas = vds.filter(v=> v.status!=='cancelada');
-    const oss = caixaOrdens.filter(o=> o.data===dia && daLoja(o) && o.status!=='rascunho' && o.status!=='cancelado');
-    const formas = {}; let recebido = 0;
-    const somaPag = (p)=>{ const nome = nomeForma(p); if(!nome) return; const v = Number(p.valor)||0; formas[nome] = (formas[nome]||0) + v; recebido += v; };
-    ativas.forEach(v=> (v.pagamentos||[]).forEach(somaPag));
-    caixaOrdens.filter(o=> daLoja(o) && o.status!=='rascunho' && o.status!=='cancelado').forEach(o=> (o.pagamentos||[]).forEach(p=>{ if((p.data||o.data)===dia) somaPag(p); }));
-    const aReceber = ativas.reduce((a,v)=>a+valorAReceberDe(v),0) + oss.reduce((a,o)=>a+valorAReceberDe(o),0);
-    const canc = vendas.filter(v=> v.status==='cancelada' && daLoja(v) && dataDeTimestamp(v.canceladoEm)===dia).length + caixaOrdens.filter(o=> o.status==='cancelado' && daLoja(o) && dataDeTimestamp(o.canceladoEm)===dia).length;
-    const contas = caixaGastos.filter(g=> g.pago && g.dataPagamento===dia && daLoja(g)).reduce((a,g)=>a+(Number(g.valor)||0),0);
+    const d = dadosPainelCaixa(dia, dia, lojaId);
     const L = [];
     L.push('*Fechamento de caixa — ' + (nomeLojaCaixa(lojaId)||'Loja') + '*');
     L.push(fmtDate(dia) + ' · fechado por ' + ((currentUser&&currentUser.nome)||'—') + ' às ' + new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}));
     L.push('');
-    L.push('🛍️ Vendas: ' + ativas.length + ' · ' + m(ativas.reduce((a,v)=>a+(Number(v.valorTotal)||0),0)));
-    L.push('🔧 Pedidos (O.S.): ' + oss.length + ' · ' + m(oss.reduce((a,o)=>a+(Number(o.valorTotal)||0),0)));
+    L.push('🛍️ Vendas: ' + d.vendasQtd + ' · ' + m(d.vendasValor));
+    L.push('🔧 Pedidos (O.S.): ' + d.pedidosQtd + ' · ' + m(d.pedidosValor));
     L.push('');
-    L.push('*Recebido: ' + m(recebido) + '*');
-    Object.keys(formas).sort().forEach(k=> L.push('• ' + k + ': ' + m(formas[k])));
+    L.push('*Entradas: ' + m(d.recebido) + '*');
+    d.formasTodas.forEach(k=> L.push('• ' + k + ': ' + m(d.totFormaTodas[k])));
+    if(d.saidasTot > 0){
+      L.push('');
+      L.push('*Saídas: ' + m(d.saidasTot) + '*');
+      Object.keys(d.saiForma).forEach(k=> L.push('• ' + k + ': ' + m(d.saiForma[k])));
+    }
     L.push('');
-    L.push('A receber: ' + m(aReceber));
-    if(contas > 0) L.push('Contas pagas: ' + m(contas));
-    if(canc > 0) L.push('Cancelamentos: ' + canc);
+    L.push('*Saldo do caixa: ' + m(d.saldo) + '*');
+    L.push('A receber: ' + m(d.aReceber));
     return L.join('\n');
   }
   async function enviarResumoCaixa(lojaId, dia){
@@ -783,7 +839,7 @@ function mensagemConfiavel(ev){
     let contasPagasBase = caixaGastos.filter(g=> g.pago && dentroPeriodo(g.dataPagamento));
     /* Caixa do dia = dinheiro que ENTROU no dia: cada pagamento conta na data em que foi recebido
        (pagamento incluído depois numa via "pagar depois" entra no caixa do dia em que foi lançado). */
-    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (dentroPeriodo(p.data || v.data) ? (Number(p.valor)||0) : 0)), 0);
+    const recebidoNoPeriodo = v=> (v.pagamentos||[]).reduce((acc,p)=> acc + ((!p || FORMAS_NAO_DINHEIRO.includes(p.formaId)) ? 0 : (dentroPeriodo(p.data || (caixaOrdens.includes(v) ? dataLancamentoVia(v) : v.data)) ? (Number(p.valor)||0) : 0)), 0);   // 06/11: pedido sem data no pagamento = dia do lançamento (o "data" do pedido é a entrega)
     /* 05/11: no Pedido o campo "data" é a data de ENTREGA; a data do pedido é criadoEm. "Pago depois" = pagamento feito depois do dia em que a via foi lançada. */
     const dataLancamento = r=> (r && r.criadoEm) ? (dataDeTimestamp(Number(r.criadoEm)||r.criadoEm) || r.data) : r.data;
     let vendasRecBase = vendas.filter(v=> recebidoNoPeriodo(v) > 0);
@@ -796,7 +852,7 @@ function mensagemConfiavel(ev){
     vendas.forEach(v=> (v.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:v}); }));
 
     if(lojaId){
-      contasPagasBase = contasPagasBase.filter(g=> g.lojaId === lojaId);
+      contasPagasBase = contasPagasBase.filter(g=> lojaIdDoGasto(g) === lojaId);
       vendasRecBase = vendasRecBase.filter(v=> v.lojaId === lojaId);
       osRecBase = osRecBase.filter(o=> o.lojaId === lojaId);
       aReceberVendasBase = aReceberVendasBase.filter(v=> v.lojaId === lojaId);
@@ -810,7 +866,7 @@ function mensagemConfiavel(ev){
     function grupo(nome){ if(!grupos[nome]) grupos[nome] = { nome, vendasRec:[], osRec:[], gastos:[], canceladasV:[], canceladasO:[], trocas:[] }; return grupos[nome]; }
     vendasRecBase.forEach(v=> grupo(v.loja||'—').vendasRec.push(v));
     osRecBase.forEach(o=> grupo(nomeLojaCaixa(o.lojaId)||'—').osRec.push(o));
-    contasPagasBase.forEach(g=> grupo(g.lojaId ? (nomeLojaCaixa(g.lojaId)||'—') : '__geral__').gastos.push(g));
+    contasPagasBase.forEach(g=>{ const lid = lojaIdDoGasto(g); grupo(lid ? (nomeLojaCaixa(lid)||'—') : '__geral__').gastos.push(g); });
     canceladasVendasBase.forEach(v=> grupo(v.loja||'—').canceladasV.push(v));
     canceladasOSBase.forEach(o=> grupo(nomeLojaCaixa(o.lojaId)||'—').canceladasO.push(o));
     trocasBase.forEach(t=> grupo(t.venda.loja||'—').trocas.push(t));
