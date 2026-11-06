@@ -1354,6 +1354,12 @@ async function bumpCodigoVia(tipo, lojaId){
     return null;
   }catch(e){ console.error('erro ao gerar código de via', e); return null; }
 }
+/** 06/11: pedido que nasceu como RASCUNHO não tem código de via; ao deixar de ser rascunho (pela edição ou pela troca de status na lista) o código tem que ser gerado. */
+async function garantirCodigoVia(ord, lojaId){
+  if(!ord || ord.codigoVia || ord.status==='cancelado') return;
+  const cod = await bumpCodigoVia('pedido', lojaId || ord.lojaId || '');
+  if(cod) ord.codigoVia = cod;
+}
 /** Evita lançar o mesmo pedido 2-3 vezes com cliques repetidos (gerava vias duplicadas). */
 function travarCliqueDuplo(fn){
   return async function(ev){
@@ -5667,6 +5673,7 @@ function openEditModalCompleto(order, opts){
       }
     }
     const st = config.serviceTypes.find(s=>s.id===sid);
+    if(status !== 'rascunho' && status !== 'cancelado') await garantirCodigoVia(order, loja);   // rascunho que virou pedido de verdade: gera o código da via
     const _snapCb = JSON.parse(JSON.stringify(order));
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
@@ -5818,6 +5825,7 @@ function renderPainel(main){
     const previous = ord.status;
     if(novo===previous) return;
     if(!podeColocarStatus(novo)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(novo) + '.'); desfazer(); return; }
+    if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
       if(bloqueioSaldoEntrega(ord)){ desfazer(); return; }
       promptRecebidoPor(async (nome)=>{
