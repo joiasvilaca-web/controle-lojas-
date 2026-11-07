@@ -380,6 +380,13 @@ function mensagemConfiavel(ev){
     const d = new Date(ts);
     return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
   }
+  /** Data de inclusão do registro (criadoEm pode ser timestamp, 'AAAA-MM-DD' ou ISO); sem ela usa a data do registro. */
+  function dataInclusao(r){
+    if(!r) return '';
+    const c = r.criadoEm;
+    if(c){ if(typeof c==='number' || /^\d{10,}$/.test(String(c))) return dataDeTimestamp(Number(c)); const t=String(c).slice(0,10); if(/^\d{4}-\d{2}-\d{2}$/.test(t)) return t; }
+    return r.data || '';
+  }
   function showToast(msg){
     let el = document.getElementById('toastBox');
     if(!el){ el = document.createElement('div'); el.id='toastBox'; el.className='toast'; el.setAttribute('role','status'); el.style.cssText='position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--t-text); color:var(--t-surface); padding:11px 18px; border-radius:10px; font-size:13.5px; z-index:100; box-shadow:var(--t-shadow-lg); max-width:calc(100vw - 32px);'; document.body.appendChild(el); }
@@ -548,9 +555,9 @@ function mensagemConfiavel(ev){
     box.innerHTML = `<div class="card">
       <div class="section-label" style="margin-bottom:8px;">${com?'Com nota fiscal':'Sem nota fiscal'} · ${lista.length} ${lista.length===1?'registro':'registros'} · ${fmtMoeda(total)}${semNumero?` · <span style="color:var(--danger);font-weight:600;">${semNumero} sem número da nota</span>`:''}</div>
       ${lista.length===0 ? estadoHtml('check', com?'Nenhuma venda ou pedido com nota':'Nenhuma venda ou pedido sem nota', 'Nada neste período e loja.') : `
-      <div style="overflow-x:auto;"><table class="tabela-cartoes"><thead><tr><th>Origem</th><th>Data</th><th>Via</th><th>Loja</th><th>Cliente</th>${com?'<th>Nota nº</th>':''}<th class="r">Valor</th><th></th></tr></thead><tbody>
+      <div style="overflow-x:auto;"><table class="tabela-cartoes"><thead><tr><th>Origem</th><th>Incluída em</th><th>Agendada p/</th><th>Via</th><th>Loja</th><th>Cliente</th>${com?'<th>Nota nº</th>':''}<th class="r">Valor</th><th></th></tr></thead><tbody>
       ${lista.map((x,i)=>{ const r=x.reg; return `<tr>
-        ${celula('Origem', escapeHtml(x.origem))}${celula('Data', fmtDate(r.data))}${celula('Via', escapeHtml(viaDe(r)))}${celula('Loja', escapeHtml(nomeLojaCaixa(r.lojaId)||'—'))}${celula('Cliente', escapeHtml(r.cliente||'—'))}
+        ${celula('Origem', escapeHtml(x.origem))}${celula('Incluída em', fmtDate(dataInclusao(r)))}${celula('Agendada p/', r.data && r.data!==dataInclusao(r) ? fmtDate(r.data) : '—')}${celula('Via', escapeHtml(viaDe(r)))}${celula('Loja', escapeHtml(nomeLojaCaixa(r.lojaId)||'—'))}${celula('Cliente', escapeHtml(r.cliente||'—'))}
         ${com ? celula('Nota nº', r.numeroNota ? escapeHtml(r.numeroNota) : '<span style="color:var(--danger);font-weight:600;">falta o número</span>') : ''}
         ${celula('Valor', fmtMoeda(r.valorTotal), 'r')}
         <td><button class="btn btn-ghost btn-sm" data-nota="${i}" type="button">${com ? (r.numeroNota?'Editar nº':'Informar nº') : 'Nota emitida'}</button></td></tr>`; }).join('')}
@@ -960,18 +967,18 @@ function mensagemConfiavel(ev){
     const seloPagamento = v=>{ const falta = valorAReceberDe(v); return falta > 0.009 ? selo('Parcial · falta '+fmtMoeda(falta),'wait') : selo('Pago','ok'); };
     if(tipos.includes('vendasRecebidas')){
       html += detalheSecao('Vendas recebidas', vendasRecBase, v=>`
-        <tr${v.status==='cancelada'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(v.data)+(v.status!=='cancelada'?' '+seloPagamento(v):''))}${celula('Loja', escapeHtml(v.loja))}${celula('Recebido', vEntrada(recebidoNoPeriodo(v)), 'r')}</tr>
-      `, ['Cliente','Data','Loja','Recebido'], { icone:'carrinho', total: vEntrada(soma(vendasRecBase, recebidoNoPeriodo)) });
+        <tr${v.status==='cancelada'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(v.cliente||'—')}${v.status==='cancelada'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Incluída em', fmtDate(dataInclusao(v)))}${celula('Data', fmtDate(v.data)+(v.status!=='cancelada'?' '+seloPagamento(v):''))}${celula('Loja', escapeHtml(v.loja))}${celula('Recebido', vEntrada(recebidoNoPeriodo(v)), 'r')}</tr>
+      `, ['Cliente','Incluída em','Data','Loja','Recebido'], { icone:'carrinho', total: vEntrada(soma(vendasRecBase, recebidoNoPeriodo)) });
     }
     if(tipos.includes('osRecebidas')){
       html += detalheSecao('O.S. recebidas', osRecBase, o=>`
-        <tr${o.status==='cancelado'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Data', fmtDate(dataLancamento(o))+(o.status!=='cancelado'?' '+seloPagamento(o):'')+(o.data && o.data!==dataLancamento(o)?`<div class="muted" style="font-size:12px;">entrega ${fmtDate(o.data)}</div>`:''))}${celula('Loja', escapeHtml(nomeLojaCaixa(o.lojaId)))}${celula('Recebido', vEntrada(recebidoNoPeriodo(o)), 'r')}</tr>
-      `, ['Cliente','Data','Loja','Recebido'], { icone:'recibo', total: vEntrada(soma(osRecBase, recebidoNoPeriodo)) });
+        <tr${o.status==='cancelado'?' class="apagada"':''}>${celula('Cliente', `${escapeHtml(o.cliente||'—')}${o.status==='cancelado'?' '+selo('Cancelada depois','neutro'):''}`, 'principal')}${celula('Incluída em', fmtDate(dataInclusao(o))+(o.status!=='cancelado'?' '+seloPagamento(o):''))}${celula('Agendada p/', o.data && o.data!==dataInclusao(o) ? fmtDate(o.data) : '—')}${celula('Loja', escapeHtml(nomeLojaCaixa(o.lojaId)))}${celula('Recebido', vEntrada(recebidoNoPeriodo(o)), 'r')}</tr>
+      `, ['Cliente','Incluída em','Agendada p/','Loja','Recebido'], { icone:'recibo', total: vEntrada(soma(osRecBase, recebidoNoPeriodo)) });
     }
     if(tipos.includes('contasPagas')){
       html += detalheSecao('Contas pagas', contasPagasBase, g=>`
-        <tr>${celula('Descrição', `${escapeHtml(g.nome)}<span class="sub">${escapeHtml(g.categoria||'Sem categoria')}</span>`, 'principal')}${celula('Pago em', fmtDate(g.dataPagamento))}${celula('Loja', escapeHtml(g.lojaId?(nomeLojaCaixa(g.lojaId)||'Geral'):'Geral'))}${celula('Valor', vSaida(g.valor), 'r')}</tr>
-      `, ['Descrição','Pago em','Loja','Valor'], { icone:'carteira', total: vSaida(soma(contasPagasBase, g=>g.valor)) });
+        <tr>${celula('Descrição', `${escapeHtml(g.nome)}<span class="sub">${escapeHtml(g.categoria||'Sem categoria')}</span>`, 'principal')}${celula('Incluída em', fmtDate(dataInclusao(g)))}${celula('Agendada p/', g.vencimento ? fmtDate(g.vencimento) : '—')}${celula('Pago em', fmtDate(g.dataPagamento))}${celula('Loja', escapeHtml(g.lojaId?(nomeLojaCaixa(g.lojaId)||'Geral'):'Geral'))}${celula('Valor', vSaida(g.valor), 'r')}</tr>
+      `, ['Descrição','Incluída em','Agendada p/','Pago em','Loja','Valor'], { icone:'carteira', total: vSaida(soma(contasPagasBase, g=>g.valor)) });
     }
     if(tipos.includes('canceladas')){
       const canceladasTodas = [
@@ -989,12 +996,12 @@ function mensagemConfiavel(ev){
     }
     if(tipos.includes('aReceber')){
       const aReceberTodos = [
-        ...aReceberVendasBase.map(v=>({origem:'Venda', data:v.data, loja:v.loja, cliente:v.cliente, valor:valorAReceberDe(v)})),
-        ...aReceberOSBase.map(o=>({origem:'O.S.', data:o.data, loja:nomeLojaCaixa(o.lojaId), cliente:o.cliente, valor:valorAReceberDe(o)})),
+        ...aReceberVendasBase.map(v=>({origem:'Venda', data:v.data, incl:dataInclusao(v), loja:v.loja, cliente:v.cliente, valor:valorAReceberDe(v)})),
+        ...aReceberOSBase.map(o=>({origem:'O.S.', data:o.data, incl:dataInclusao(o), agend:(o.data && o.data!==dataInclusao(o) ? o.data : ''), loja:nomeLojaCaixa(o.lojaId), cliente:o.cliente, valor:valorAReceberDe(o)})),
       ];
       html += detalheSecao('A receber em aberto', aReceberTodos, x=>`
-        <tr>${celula('Cliente', escapeHtml(x.cliente||'—'), 'principal')}${celula('Tipo', selo(x.origem))}${celula('Data', fmtDate(x.data))}${celula('Loja', escapeHtml(x.loja))}${celula('Falta receber', `<span class="val" style="color:var(--wait);">${fmtMoeda(x.valor)}</span>`, 'r')}</tr>
-      `, ['Cliente','Tipo','Data','Loja','Falta receber'], { icone:'relogio', nota:'Venda fechada ou O.S. aberta com saldo. Ainda não entrou no caixa.', total: `<span class="val" style="color:var(--wait);">${fmtMoeda(soma(aReceberTodos, x=>x.valor))}</span> <span class="muted" style="font-size:12.5px;">em aberto</span>` });
+        <tr>${celula('Cliente', escapeHtml(x.cliente||'—'), 'principal')}${celula('Tipo', selo(x.origem))}${celula('Incluída em', fmtDate(x.incl||x.data))}${celula('Agendada p/', x.agend ? fmtDate(x.agend) : '—')}${celula('Loja', escapeHtml(x.loja))}${celula('Falta receber', `<span class="val" style="color:var(--wait);">${fmtMoeda(x.valor)}</span>`, 'r')}</tr>
+      `, ['Cliente','Tipo','Incluída em','Agendada p/','Loja','Falta receber'], { icone:'relogio', nota:'Venda fechada ou O.S. aberta com saldo. Ainda não entrou no caixa.', total: `<span class="val" style="color:var(--wait);">${fmtMoeda(soma(aReceberTodos, x=>x.valor))}</span> <span class="muted" style="font-size:12.5px;">em aberto</span>` });
     }
     det.innerHTML = html || `<div class="card">${estadoHtml('filtro', 'Nenhum detalhe marcado', 'Marque ao menos um item em <b>Mostrar detalhes</b> e clique em Pesquisar.')}</div>`;
   }
@@ -1114,6 +1121,83 @@ function mensagemConfiavel(ev){
   ['click','keydown','mousemove','touchstart','scroll','wheel'].forEach(function(ev){
     document.addEventListener(ev, avisar, { passive:true, capture:true });
   });
+})();
+</script>
+<script>
+/* ===== Ordenar listas (crescente/decrescente) — clique no título da coluna ou use "Ordenar por" ===== */
+(function(){
+  var CSS = '.ord-bar{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:12.5px;color:var(--ink-faint,#6b7280);flex-wrap:wrap}'+
+    '.ord-bar select{height:32px;border:1px solid var(--line,#d1d5db);border-radius:8px;padding:0 8px;background:var(--surface,#fff);color:inherit;font:inherit}'+
+    '.ord-bar button{height:32px;min-width:36px;border:1px solid var(--line,#d1d5db);border-radius:8px;background:var(--surface,#fff);color:inherit;cursor:pointer;font:inherit}'+
+    'th.ord-th{cursor:pointer;user-select:none}th.ord-th .ord-seta{opacity:.35;margin-left:4px}th.ord-th.ord-on .ord-seta{opacity:1}';
+  var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
+  function txt(td){ return (td ? td.textContent : '').replace(/\s+/g,' ').trim(); }
+  function parseVal(t){
+    if(!t || t==='—' || t==='-') return {v:null};
+    var d = t.match(/(\d{2})\/(\d{2})\/(\d{4})(?:\D{0,3}(\d{1,2}):(\d{2}))?/); if(d) return {v:+(d[3]+d[2]+d[1])*10000 + (d[4]?(+d[4])*100+(+d[5]):0), k:'d'};
+    var m = t.match(/^([+\-−]?)\s*R\$\s*([+\-−]?)\s*([\d.]+(?:,\d+)?)/);
+    if(m){ var n=parseFloat(m[3].replace(/\./g,'').replace(',','.')); if(/[-−]/.test(m[1]+m[2])) n=-n; return {v:n,k:'n'}; }
+    if(/^[+\-−]?\d+([.,]\d+)?$/.test(t)) return {v:parseFloat(t.replace('−','-').replace(',','.')),k:'n'};
+    return {v:t.toLowerCase(), k:'t'};
+  }
+  function ordenar(table, col, dir){
+    var tb = table.tBodies[0]; if(!tb) return;
+    var rows = Array.prototype.slice.call(tb.rows);
+    var itens = rows.map(function(r,i){ return {r:r, i:i, p:parseVal(txt(r.cells[col]))}; });
+    var tipos = itens.map(function(x){return x.p.k;}).filter(Boolean);
+    var tipo = tipos.length && tipos.every(function(k){return k===tipos[0];}) ? tipos[0] : 't';
+    itens.forEach(function(x){ if(x.p.v!==null && x.p.k!==tipo) x.p = {v:String(txt(x.r.cells[col])).toLowerCase(), k:'t'}; });
+    itens.sort(function(a,b){
+      if(a.p.v===null && b.p.v===null) return a.i-b.i;
+      if(a.p.v===null) return 1; if(b.p.v===null) return -1;
+      var c = tipo==='t' ? String(a.p.v).localeCompare(String(b.p.v),'pt-BR',{numeric:true}) : (a.p.v-b.p.v);
+      return (dir==='desc' ? -c : c) || (a.i-b.i);
+    });
+    itens.forEach(function(x){ tb.appendChild(x.r); });
+  }
+  function marcar(table, col, dir){
+    var ths = table.querySelectorAll('thead th');
+    Array.prototype.forEach.call(ths, function(th,i){
+      th.classList.toggle('ord-on', i===col);
+      var s = th.querySelector('.ord-seta'); if(s) s.textContent = i===col ? (dir==='desc'?'▼':'▲') : '↕';
+    });
+    var bar = table.__ordBar;
+    if(bar){ bar.querySelector('select').value = String(col); bar.querySelector('button').textContent = dir==='desc'?'▼':'▲'; bar.querySelector('button').title = dir==='desc'?'Decrescente':'Crescente'; }
+  }
+  function ativar(table){
+    if(table.dataset.ord || table.hasAttribute('data-nosort')) return;
+    var ths = table.querySelectorAll('thead th'); var tb = table.tBodies[0];
+    if(!ths.length || !tb || tb.rows.length<2) return;
+    if(table.classList.contains('tabela-kv') || table.closest('#modalOverlay,#modalBox,.modal,.modal-overlay,[role="dialog"]') || table.querySelector('tbody input,tbody select,tbody textarea')) return;
+    for(var k=0;k<tb.rows.length;k++){ if(tb.rows[k].cells.length!==ths.length || tb.rows[k].querySelector('[colspan]')) return; }
+    table.dataset.ord = '1';
+    var estado = {col:-1, dir:'asc'};
+    function aplicar(col, dir){ estado.col=col; estado.dir=dir; ordenar(table,col,dir); marcar(table,col,dir); }
+    var opts = '';
+    Array.prototype.forEach.call(ths, function(th,i){
+      var nome = th.textContent.trim(); if(!nome) return;
+      th.classList.add('ord-th'); th.setAttribute('title','Clique para ordenar');
+      var s = document.createElement('span'); s.className='ord-seta'; s.textContent='↕'; th.appendChild(s);
+      th.addEventListener('click', function(){ aplicar(i, (estado.col===i && estado.dir==='asc') ? 'desc' : 'asc'); });
+      opts += '<option value="'+i+'">'+nome.replace(/</g,'&lt;')+'</option>';
+    });
+    var bar = document.createElement('div'); bar.className='ord-bar';
+    bar.innerHTML = '<span>Ordenar por</span><select aria-label="Ordenar por">'+opts+'</select><button type="button" aria-label="Inverter ordem" title="Crescente">▲</button>';
+    bar.querySelector('select').value = '-1';
+    bar.querySelector('select').selectedIndex = -1;
+    bar.querySelector('select').addEventListener('change', function(e){ aplicar(+e.target.value, estado.dir); });
+    bar.querySelector('button').addEventListener('click', function(){
+      if(estado.col<0){ var sel=bar.querySelector('select'); estado.col = +(sel.options[0] && sel.options[0].value) || 0; }
+      aplicar(estado.col, estado.dir==='asc'?'desc':'asc');
+    });
+    table.__ordBar = bar;
+    var alvo = table.parentNode && table.parentNode.style && table.parentNode.style.overflowX ? table.parentNode : table;
+    alvo.parentNode.insertBefore(bar, alvo);
+  }
+  var agendado = false;
+  function varrer(){ agendado=false; Array.prototype.forEach.call(document.querySelectorAll('table'), ativar); }
+  new MutationObserver(function(){ if(!agendado){ agendado=true; setTimeout(varrer, 80); } }).observe(document.body, {childList:true, subtree:true});
+  varrer();
 })();
 </script>
 <script src="modal-x.js"></script>
