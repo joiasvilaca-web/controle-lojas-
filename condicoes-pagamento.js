@@ -13,17 +13,24 @@
   var FATOR = 1.2, MAX_PARC = 12;
   function r2(n){ return Math.round((Number(n)||0)*100)/100; }
   function formas(config){ return ((config && config.formasPagamento) || []).concat((config && config.paymentTypes) || []); }
-  function ehCartao(formaId, config){
+  /* 07/11 (Felipe): DÉBITO deixa de ter os 20% do cartão — fica igual ao Pix — para pagamentos de 08/11/2026 em diante.
+     Pagamento antigo (data anterior ao corte) continua como cartão, para não mexer em vias já lançadas. */
+  var CORTE_DEBITO = '2026-11-08';
+  function hojeLocal(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function ehDebito(f){ var n = (f && f.nome) || ''; return /d[eé]bito/i.test(n) && !/cr[eé]dito|link\s*eco/i.test(n); }
+  function ehCartao(formaId, config, p){
     if(!formaId || String(formaId).indexOf('__')===0) return false;
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
     /* "Funciona como cartão" marcado na forma (ex.: LINK ECO: +20%, até 12x) ou nome de cartão */
-    return !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));
+    var cart = !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));
+    if(cart && ehDebito(f)){ var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
+    return cart;
   }
   /* Quanto do valor à vista este pagamento quita. */
   function base(p, config){
     var v = Number(p && p.valor) || 0;
     if(p && p.noTotal) return v;   // venda concluída: o valor da maquininha já está dentro do valorTotal
-    return ehCartao(p && p.formaId, config) ? r2(v / FATOR) : v;
+    return ehCartao(p && p.formaId, config, p) ? r2(v / FATOR) : v;
   }
   function somaBase(pags, config, filtro){
     return (pags||[]).filter(filtro || function(){ return true; }).reduce(function(a,p){ return a + base(p, config); }, 0);
@@ -33,7 +40,7 @@
      acréscimo, item), o valor da maquininha é refeito = (à vista que falta) × 1,2. Valor digitado à mão não muda. */
   function ajustarAuto(pags, totalVista, config){
     (pags||[]).forEach(function(p){
-      if(!p || !p._auto || !ehCartao(p.formaId, config)) return;
+      if(!p || !p._auto || !ehCartao(p.formaId, config, p)) return;
       var outros = somaBase((pags||[]).filter(function(q){ return q!==p && q._modo!=='editar'; }), config);
       var falta = Math.max(0, r2((Number(totalVista)||0) - outros));
       p.valor = falta > 0.009 ? parcelado(falta) : p.valor;
@@ -43,7 +50,7 @@
   function carimbar(pags, config){
     (pags||[]).forEach(function(p){
       delete p._auto;
-      if(ehCartao(p.formaId, config)){
+      if(ehCartao(p.formaId, config, p)){
         p.parcelas = Math.min(MAX_PARC, Math.max(1, parseInt(p.parcelas,10) || 1));
         p.valorBase = base(p, config);
       } else { delete p.parcelas; delete p.valorBase; }
@@ -56,7 +63,7 @@
     if(!via) return via;
     var acr = 0;
     (via.pagamentos||[]).forEach(function(p){
-      if(!p || p.noTotal || !ehCartao(p.formaId, config)) return;
+      if(!p || p.noTotal || !ehCartao(p.formaId, config, p)) return;
       var v = Number(p.valor)||0;
       acr += r2(v - r2(v / FATOR));
       p.valorBase = v; p.noTotal = true;
@@ -78,7 +85,7 @@
     return via;
   }
   function rotuloPag(p, nomeForma, config, fmt){
-    if(ehCartao(p.formaId, config)){
+    if(ehCartao(p.formaId, config, p)){
       var n = Math.max(1, parseInt(p.parcelas,10) || 1);
       return nomeForma + ' ' + n + 'x de ' + fmt(r2((Number(p.valor)||0)/n));
     }

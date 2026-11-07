@@ -36,6 +36,7 @@
     var peso = c.negrito ? 700 : 400;
     var reforco = c.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
     var rodape = (c.mensagemRodape||'').trim();
+    var viaCliente = !!TIPO_POR_TITULO[titulo] || /grava[cç][aã]o/i.test(String(titulo||''));   // 07/11: convite para o cliente chamar no WhatsApp de atendimento (conversa iniciada por ele)
     var alturaCss = c.alturaMm > 0 ? 'height:'+c.alturaMm+'mm; overflow:hidden;' : '';
     var codigoHtml = codigoVia ? '<div class="linha"></div><div class="barcode-wrap"><svg id="barcodeSvg"></svg></div><div class="sub" style="text-align:center; font-weight:800; letter-spacing:.04em; margin-top:2px;">'+esc(codigoVia)+'</div>' : '';
     return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>'+esc(titulo)+'</title>'
@@ -50,6 +51,7 @@
       + '@media print{ html{ height:auto !important; } }</style></head><body>'
       + (c.logo ? '<div style="text-align:center; margin:0 0 4px;"><img src="'+LOGO_IMP+'" alt="Vilaça App" style="width:'+Math.round(areaImpressaoMm(c.larguraBobina)*0.55)+'mm; height:auto;"></div>' : '')
       + codigoHtml + conteudoHtml + (rodape ? '<div class="linha"></div><div class="rodape">'+esc(rodape)+'</div>' : '')
+      + (viaCliente ? '<div class="linha"></div><div class="rodape" style="margin-top:4px;"><b>Fale com a gente no WhatsApp</b><br>(32) 98830-7617<br>Mande um &quot;oi&quot; para receber novidades.</div>' : '')
       + '</body></html>';
   }
   function desenharCodigo(win, codigoVia, depois){

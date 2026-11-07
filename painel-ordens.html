@@ -863,6 +863,10 @@ function combinarTelefoneValidado(prefix){
     showToast('Telefone incompleto — preencha o DDD (2 dígitos) e o número (9 dígitos), ou deixe os dois em branco.');
     return null;
   }
+  if(Number(ddd) < 11 || numero.charAt(0) !== '9'){   // 07/11: só celular no padrão
+    showToast('Telefone fora do padrão de celular: DDD válido + número de 9 dígitos começando com 9. Corrija para salvar.', 6000);
+    return null;
+  }
   return `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}`;
 }
 /** Ícone do WhatsApp de verdade (SVG), pra usar nos botões de envio em vez do emoji genérico. */
@@ -2520,7 +2524,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
 
   /* 06/11: cartão/débito/link cobram +20% — o que o cliente PAGOU (à vista + acréscimo) é o valor que a via mostra. */
   function acrescPag(){
-    return (holder.pagamentos||[]).filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config))
+    return (holder.pagamentos||[]).filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config, p))
       .reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
   }
   function ajusteLinhaHtml(sub,fin){
@@ -2676,7 +2680,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config, p) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
@@ -2691,9 +2695,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
-        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        const ehCart = CondPag.ehCartao(pg.formaId, config, pg);
         if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = true; } if(ehCart && !pg.parcelas) pg.parcelas = 1; }
         drawRows(); });
     });
@@ -2851,7 +2855,7 @@ function mountPagamentosEdicao(container, holder){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config, p) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
@@ -2866,9 +2870,9 @@ function mountPagamentosEdicao(container, holder){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
-        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        const ehCart = CondPag.ehCartao(pg.formaId, config, pg);
         if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = true; } if(ehCart && !pg.parcelas) pg.parcelas = 1; }
         drawRows(); });
     });
@@ -2919,7 +2923,7 @@ function mountPagamentosEdicao(container, holder){
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso-linha excede">${ico('alerta')}<span>Os pagamentos passam do total em ${fmtMoeda(Math.abs(saldo))}. Confira os valores.</span></div>`;
     } else {
-      const _ac = holder.pagamentos.filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config)).reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
+      const _ac = holder.pagamentos.filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config, p)).reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
       hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + _ac)}</span></div>`;
     }
   }

@@ -68,20 +68,27 @@
   var FATOR = 1.2, MAX_PARC = 12;
   function r2(n){ return Math.round((Number(n)||0)*100)/100; }
   function formas(config){ return ((config && config.formasPagamento) || []).concat((config && config.paymentTypes) || []); }
-  function ehCartao(formaId, config){
+  /* 07/11 (Felipe): DÉBITO deixa de ter os 20% do cartão — fica igual ao Pix — para pagamentos de 08/11/2026 em diante.
+     Pagamento antigo (data anterior ao corte) continua como cartão, para não mexer em vias já lançadas. */
+  var CORTE_DEBITO = '2026-11-08';
+  function hojeLocal(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function ehDebito(f){ var n = (f && f.nome) || ''; return /d[eé]bito/i.test(n) && !/cr[eé]dito|link\s*eco/i.test(n); }
+  function ehCartao(formaId, config, p){
     if(!formaId || String(formaId).indexOf('__')===0) return false;
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
-    return !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));   // LINK ECO = cartão (04/11)
+    var cart = !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));   // LINK ECO = cartão (04/11)
+    if(cart && ehDebito(f)){ var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
+    return cart;
   }
   /* Formas "a prazo": cartão e, quando o módulo liga CondPag.fiadoPrazo, o Fiado (Felipe, 02/nov). */
-  function ehPrazo(formaId, config){
-    return ehCartao(formaId, config) || (formaId==='__fiado' && !!(window.CondPag && window.CondPag.fiadoPrazo));
+  function ehPrazo(formaId, config, p){
+    return ehCartao(formaId, config, p) || (formaId==='__fiado' && !!(window.CondPag && window.CondPag.fiadoPrazo));
   }
   /* Quanto do valor à vista este pagamento quita. */
   function base(p, config){
     var v = Number(p && p.valor) || 0;
     if(p && p.noTotal) return v;   // venda concluída: o valor da maquininha já está dentro do valorTotal
-    return ehPrazo(p && p.formaId, config) ? r2(v / FATOR) : v;
+    return ehPrazo(p && p.formaId, config, p) ? r2(v / FATOR) : v;
   }
   function somaBase(pags, config, filtro){
     return (pags||[]).filter(filtro || function(){ return true; }).reduce(function(a,p){ return a + base(p, config); }, 0);
@@ -91,7 +98,7 @@
      acréscimo, item), o valor da maquininha é refeito = (à vista que falta) × 1,2. Valor digitado à mão não muda. */
   function ajustarAuto(pags, totalVista, config){
     (pags||[]).forEach(function(p){
-      if(!p || !p._auto || !ehPrazo(p.formaId, config)) return;
+      if(!p || !p._auto || !ehPrazo(p.formaId, config, p)) return;
       var outros = somaBase((pags||[]).filter(function(q){ return q!==p && q._modo!=='editar'; }), config);
       var falta = Math.max(0, r2((Number(totalVista)||0) - outros));
       p.valor = falta > 0.009 ? parcelado(falta) : p.valor;
@@ -101,10 +108,10 @@
   function carimbar(pags, config){
     (pags||[]).forEach(function(p){
       delete p._auto;
-      if(ehCartao(p.formaId, config)){
+      if(ehCartao(p.formaId, config, p)){
         p.parcelas = Math.min(MAX_PARC, Math.max(1, parseInt(p.parcelas,10) || 1));
         p.valorBase = base(p, config);
-      } else if(ehPrazo(p.formaId, config)){ delete p.parcelas; p.valorBase = base(p, config); }
+      } else if(ehPrazo(p.formaId, config, p)){ delete p.parcelas; p.valorBase = base(p, config); }
       else { delete p.parcelas; delete p.valorBase; }
     });
     return pags;
@@ -115,7 +122,7 @@
     if(!via) return via;
     var acr = 0;
     (via.pagamentos||[]).forEach(function(p){
-      if(!p || p.noTotal || !ehPrazo(p.formaId, config)) return;
+      if(!p || p.noTotal || !ehPrazo(p.formaId, config, p)) return;
       var v = Number(p.valor)||0;
       acr += r2(v - r2(v / FATOR));
       p.valorBase = v; p.noTotal = true;
@@ -142,7 +149,7 @@
   }
   function rotuloPag(p, nomeForma, config, fmt){
     nomeForma = String(nomeForma||'').toUpperCase();   // forma de pagamento sempre em maiúsculas (Felipe, 02/nov)
-    if(ehCartao(p.formaId, config)){
+    if(ehCartao(p.formaId, config, p)){
       var n = Math.max(1, parseInt(p.parcelas,10) || 1);
       return nomeForma + ' ' + n + 'x de ' + fmt(r2((Number(p.valor)||0)/n));
     }
@@ -1173,6 +1180,10 @@ function combinarTelefoneValidado(prefix){
     showToast('Telefone incompleto — preencha o DDD (2 dígitos) e o número (9 dígitos), ou deixe os dois em branco.');
     return null;
   }
+  if(Number(ddd) < 11 || numero.charAt(0) !== '9'){   // 07/11: só celular no padrão
+    showToast('Telefone fora do padrão de celular: DDD válido + número de 9 dígitos começando com 9. Corrija para salvar.', 6000);
+    return null;
+  }
   return `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}`;
 }
 /** Localiza no banco um cliente por telefone ou CPF (usado pra evitar duplicar cadastro).
@@ -2022,8 +2033,8 @@ function mountPagamentos(container, holder, getLojaVendaId){
     if(r.cred && cred>0.009){ const v = Math.min(cred, Math.max(0, CondPag.r2(totalPag() - outros()))); if(v>0.009) holder.pagamentos.splice(holder.pagamentos.indexOf(pg), 0, { formaId:'__credito', valor:CondPag.r2(v), data:'' }); }
     holder.pagamentos.forEach(p=>{ if(!p.data) delete p.data; });
     const falta = Math.max(0, CondPag.r2(totalPag() - outros()));
-    pg.valor = falta>0.009 ? (CondPag.ehPrazo(pg.formaId, config) ? CondPag.parcelado(falta) : falta) : '';
-    pg._auto = CondPag.ehPrazo(pg.formaId, config);
+    pg.valor = falta>0.009 ? (CondPag.ehPrazo(pg.formaId, config, pg) ? CondPag.parcelado(falta) : falta) : '';
+    pg._auto = CondPag.ehPrazo(pg.formaId, config, pg);
     drawRows();
   }
 
@@ -2153,7 +2164,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(String(pt.nome||'').toUpperCase())}</option>`).join('')}${(window.__credCli.valor>0 || p.formaId==='__credito') ? `<option value="__credito" ${p.formaId==='__credito'?'selected':''}>CRÉDITO CLIENTE${window.__credCli.valor>0?' (disp. '+fmtMoeda(window.__credCli.valor)+')':''}</option>` : ''}${cbOpcaoHtml(p.formaId)}<option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>FIADO</option></select>
-        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config, p) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ic('check',14)} Adicionar</button>
         ${btnIcone('lixeira','Remover esta forma de pagamento',`data-pagdel="${i}"`,true)}
@@ -2168,11 +2179,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehPrazo(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehPrazo(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão/Fiado: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor
-        const ehCart = CondPag.ehPrazo(pg.formaId, config);
+        const ehCart = CondPag.ehPrazo(pg.formaId, config, pg);
         if(ehCart !== eraCartao || pg.valor==='' || pg.valor==null){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = ehCart; } }
-        if(CondPag.ehCartao(pg.formaId, config) && !pg.parcelas) pg.parcelas = 1;
+        if(CondPag.ehCartao(pg.formaId, config, pg) && !pg.parcelas) pg.parcelas = 1;
         drawRows(); oferecerAbatimento(pg); });
     });
     wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{

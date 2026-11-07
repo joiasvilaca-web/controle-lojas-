@@ -1188,9 +1188,13 @@ async function carregarFila(){
   const grupos = {}; pend.forEach(p=>{ const k = p.campanha || TIPO_ROT[p.tipo] || p.tipo; (grupos[k] = grupos[k] || { qtd:0, tipos:new Set() }).qtd++; grupos[k].tipos.add(p.tipo); });
   const selo = (st)=>{ const x = STATUS_ROT[st] || [st,'']; return `<span class="selo ${x[1]}">${escapeHtml(x[0])}</span>`; };
   const dh = s=> s ? new Date(s).toLocaleString('pt-BR',{ day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+  const pausa = r.estado && r.estado.pausado_motivo;
+  const lim = r.limite || null;
   box.innerHTML = `
+    ${pausa ? `<div class="card" style="border-left:4px solid var(--danger,#B3261E);"><b>Fila pausada automaticamente</b><div class="muted" style="margin:4px 0 8px;">${escapeHtml(pausa)}. Nada está sendo enviado. Confira se o número de disparo está conectado e sem restrição antes de retomar.</div><button class="btn btn-accent btn-sm" id="filaRetomar" type="button">Retomar envios</button></div>` : ''}
     <div class="card">
       <div style="display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;">
+        ${lim ? `<span class="muted">mala direta/pós-venda hoje: ${lim.enviados} de ${lim.cap} (aquecimento do número)</span>` : ''}
         <span>${r.dentroDoHorario ? '<span class="selo ok">Enviando agora (9h–18h)</span>' : '<span class="selo pend">Fora do horário: volta às 9h</span>'}</span>
         <span><b>${pend.length}</b> na fila</span>
         <span><b>${enviadosHoje}</b> enviadas hoje</span>
@@ -1211,6 +1215,8 @@ async function carregarFila(){
         ${rec.map(x=>`<tr><td class="principal">${escapeHtml(x.cliente_nome||'—')}<div class="muted" style="font-size:12px;">${escapeHtml(telFmt(x.telefone))}${x.campanha?' · '+escapeHtml(x.campanha):''}</div></td><td data-label="Tipo">${escapeHtml(TIPO_ROT[x.tipo]||x.tipo)}</td><td data-label="Situação">${selo(x.status)}${x.erro && x.status!=='enviado'?`<div class="muted" style="font-size:12px;">${escapeHtml(x.erro)}</div>`:''}</td><td data-label="Quando" class="nw">${dh(x.enviado_em||x.atualizado_em)}</td></tr>`).join('')}
       </tbody></table></div>` : estadoHtml('mensagem','Nada nos últimos 3 dias','')}
     </div>`;
+  const fr = document.getElementById('filaRetomar');
+  if(fr) fr.onclick = async ()=>{ if(!confirm('Retomar os envios agora? Só faça isso se o número de disparo estiver conectado e sem restrição.')) return; const x = await chamarDisparo({ op:'retomar' }); showToast(x&&x.ok ? 'Envios retomados.' : 'Não foi possível retomar.'); carregarFila(); };
   const ct = document.getElementById('filaCancelarTudo');
   if(ct) ct.onclick = async ()=>{ if(!confirm('Cancelar TODAS as mensagens que ainda estão na fila?')) return; const x = await chamarDisparo({ op:'cancelar', todos:true }); showToast(x&&x.ok ? `${x.qtd} cancelada(s).` : 'Não foi possível cancelar.'); carregarFila(); };
   box.querySelectorAll('[data-cancelcamp]').forEach(b=> b.onclick = async ()=>{
@@ -1319,23 +1325,27 @@ async function confirmarEnvioMalaDireta(){
   let avisoWa = '';
   if(viaWa){
     const comTel = lista.filter(c=>c.telefone);
-    const ruins = comTel.filter(c=>!celularPadrao(c.telefone)).length;
     const filtroAtual = document.querySelector('input[name="mdFiltro"]:checked')?.value || 'todos';
     const ehAniv = filtroAtual==='aniversariantes';
+    const tipoPrev = ehAniv ? 'aniversario' : filtroAtual==='posVenda' ? 'posVenda' : 'campanha';
     const semTel = lista.length - comTel.length;
     const partes = [];
-    if(ehAniv){
-      const pl = await chamarDisparo({ op:'planejar', itens: comTel.map(c=>({ tipo:'aniversario', nome:c.nome, telefone:c.telefone, texto:texto })) });
-      if(pl && pl.ok){
-        const p = pl.plano || {};
+    const pl = await chamarDisparo({ op:'planejar', itens: comTel.map(c=>({ tipo:tipoPrev, nome:c.nome, telefone:c.telefone, texto:texto })) });
+    if(pl && pl.ok){
+      const p = pl.plano || {};
+      if(ehAniv){
         if(p.passou) partes.push(`<b>Já passou das 18h</b>: aniversário só vale no dia, então nenhuma mensagem será enviada.`);
         else if(p.agendados) partes.push(`O WhatsApp vai sair sozinho pelo número de disparo: <b>${p.agendados} mensagem(ns)</b> espalhadas entre <b>${hhmm(p.de)}</b> e <b>18h</b>, com intervalos variados (em média 1 a cada ${p.intervaloMedioS>=90 ? Math.round(p.intervaloMedioS/60)+' min' : p.intervaloMedioS+' s'}). Pode fechar o app.`);
         if(p.naoCouberam && !p.passou) partes.push(`<b>${p.naoCouberam}</b> não cabem no tempo que resta hoje e serão canceladas.`);
+      } else if(pl.ativos>0){
+        const lim = pl.limite || {}; const cap = lim.cap||20, ja = lim.enviados||0;
+        const livre = Math.max(0, cap-ja), dias = livre>=pl.ativos ? 1 : 1 + Math.ceil((pl.ativos-livre)/cap);
+        partes.push(`O WhatsApp entra na <b>fila de envios</b> e sai sozinho pelo número de disparo, das 9h às 18h, com intervalos variados. Para proteger o número, o limite de mala direta/pós-venda hoje é de <b>${cap} por dia</b> (${ja} já enviadas hoje): <b>${pl.ativos} mensagem(ns)</b> vão levar cerca de <b>${dias} dia(s)</b>. Pode fechar o app.`);
       }
-    } else if(comTel.length-ruins>0){
-      partes.push(`O WhatsApp entra na <b>fila de envios</b> e sai sozinho pelo número de disparo: 1 a cada 30 s, das 9h às 18h (${comTel.length-ruins} com telefone válido; mais ou menos ${tempoEstimado(comTel.length-ruins)}). Pode fechar o app.`);
+      if(pl.invalidos) partes.push(`<b style="color:var(--danger,#B3261E)">${pl.invalidos} telefone(s) fora do padrão de celular</b> (DDD + 9 + 8 dígitos): essas mensagens serão <b>canceladas</b> e ficam registradas na Fila de envios.`);
+      if(pl.repetidos) partes.push(`<b>${pl.repetidos}</b> serão canceladas por repetição (telefone repetido neste envio ou campanha já enviada ao cliente nos últimos 30 dias).`);
+      partes.push(`Toda mensagem leva o aviso "responda SAIR para não receber mais". Quem responder SAIR entra na tag MARKETING OFF sozinho.`);
     }
-    if(ruins) partes.push(`<b style="color:var(--danger,#B3261E)">${ruins} telefone(s) fora do padrão de celular</b> (DDD + 9 + 8 dígitos): essas mensagens serão <b>canceladas</b> e ficam registradas na Fila de envios.`);
     if(semTel) partes.push(`${semTel} cliente(s) sem telefone ficam só no e-mail, se marcado.`);
     avisoWa = partes.map(x=>`<p style="margin:8px 0 0;">${x}</p>`).join('');
   }
@@ -1371,6 +1381,7 @@ async function executarEnvioMalaDireta(lista, texto, viaWa, viaEmail){
         let msg = `${r.qtd} mensagem(ns) de WhatsApp na fila.`;
         if(tipo==='aniversario' && pl.agendados) msg = `${pl.agendados} aniversário(s) agendados entre ${hhmm(pl.de)} e 18h.`;
         if(r.invalidos) msg += ` ${r.invalidos} cancelada(s) por telefone fora do padrão.`;
+        if(r.repetidos) msg += ` ${r.repetidos} cancelada(s) por repetição.`;
         if(pl.naoCouberam) msg += ` ${pl.naoCouberam} não couberam no horário de hoje e foram canceladas.`;
         if(r.foraDoHorario && tipo!=='aniversario') msg += ' Agora está fora do horário (9h–18h): começam no próximo horário permitido.';
         showToast(msg, 8000);
