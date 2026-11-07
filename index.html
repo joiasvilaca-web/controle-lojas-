@@ -3,6 +3,7 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="leitor-codigo.js"></script>
 <script src="maiusculas.js"></script>
 <script src="icones.js"></script>
 <script src="cupom.js"></script>
@@ -1662,6 +1663,7 @@ async function finalizarLogin(r){
   await loadConfig();
   salvarSessao();
   enterShell();
+  try{ mostrarAvisosPopup(); }catch(e){ console.error(e); }   // 07/11: avisos em vermelho (Configurações › Avisos aos usuários)
 }
 
 /* Ao abrir/atualizar a página: se houver uma sessão válida salva, reentra sozinho
@@ -2403,6 +2405,7 @@ const CFG_CARDS = {
   resumoCaixa:    { icone:'wallet',  desc:'Resumo do fechamento enviado à diretoria pelo WhatsApp' },
   backup:         { icone:'package', desc:'Cópias de segurança dos dados do app' },
   termos:         { icone:'file',    desc:'Texto do Termo de Uso aceito no login' },
+  avisosPopup:    { icone:'tag',     desc:'Mensagens em vermelho que aparecem para os usuários ao entrar, por 2 dias' },
 };
 const GRUPOS_COM_CARDS = ['caixa','dashboard','config'];
 let cadastroAberto = false; // Administração › Cadastro: false = cartões dos cadastros; true = um cadastro aberto
@@ -2773,6 +2776,8 @@ function initScannerGlobal(){
       if(codigo.length >= 3) navegarParaCodigoVia(codigo);
     }
   });
+  // 07/11: leitor que não manda Enter no fim também abre a via sozinho
+  if(window.Leitor) Leitor.ligar(scanEl, (cod)=>{ scanEl.value = ''; buf = ''; clearTimeout(bufTimer); navegarParaCodigoVia(String(cod).trim().toUpperCase()); }, { espera: 120 });
 }
 
 async function navegarParaCodigoVia(codigo){
@@ -3021,6 +3026,7 @@ function abrirLeitorCodigo(){
   document.getElementById('lc_parar_camera').addEventListener('click', pararCamera);
   document.getElementById('lc_buscar').addEventListener('click', ()=>buscar());
   inp.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); buscar(); } });
+  if(window.Leitor) Leitor.ligar(inp, ()=>buscar());   // 07/11: leitor de código abre a via sozinho, sem confirmar
 
   // Limpar câmera ao fechar modal
   const observer = new MutationObserver(()=>{
@@ -3405,6 +3411,7 @@ const CFG_TABS = [
   { id:'resumoCaixa', label:'Resumo do caixa' },
   { id:'backup', label:'Backup' },
   { id:'termos', label:'Termo de uso' },
+  { id:'avisosPopup', label:'Avisos aos usuários' },
 ];
 let currentCfgTab = 'clientes';
 
@@ -3422,9 +3429,9 @@ function abrirSubtelaProduto(main, id){
 function abasConfigPermitidas(){
   const permMod = currentPermissoes && currentPermissoes.config;
   const diretoria = currentUser && currentUser.nivel==='diretoria';
-  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa' && t.id!=='termos') || diretoria);
+  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa' && t.id!=='termos' && t.id!=='avisosPopup') || diretoria);
   // "Status e Mensagens" reúne as antigas abas statusOrcamento e mensagens: aparece se qualquer uma estiver liberada
-  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa' || t.id==='termos') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
+  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa' || t.id==='termos' || t.id==='avisosPopup') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
 }
 let statusMsgSub = 'status';
 function renderStatusMensagensTab(body){
@@ -3459,6 +3466,7 @@ function renderCfgTab(tab){
   if(tab==='reserva') return renderReservaCfgTab(body);
   if(tab==='backup') return renderBackupCfgTab(body);
   if(tab==='termos') return renderTermosCfgTab(body);
+  if(tab==='avisosPopup') return renderAvisosPopupCfgTab(body);
   if(tab==='resumoCaixa') return renderResumoCaixaCfgTab(body);
 }
 /* ---------- RESUMO DO CAIXA (WhatsApp para a diretoria ao fechar o caixa) ---------- */
@@ -3494,6 +3502,100 @@ function renderResumoCaixaCfgTab(main){
   });
 }
 /* ---------- TERMO DE USO (editor da diretoria) ---------- */
+/* ---------- AVISOS AOS USUÁRIOS (07/11): mensagem em vermelho ao entrar, por 2 dias, até a pessoa tocar em "Ciente" ----------
+ * config.avisosPopup = [{ id, texto, niveis:['diretoria','gerente','vendedora','oficina'], criadoEm, editadoEm, disparadoEm (ms) }]
+ * Ativo por 48 h depois de "Enviar". "Enviar" de novo reinicia o ciclo. Aparece em todo login (uma vez por sessão), um popup depois do outro. */
+const AVISO_DURACAO_MS = 48 * 3600 * 1000;
+const AVISO_NIVEIS = [['diretoria','Diretoria'],['gerente','Gerente'],['vendedora','Vendedora'],['oficina','Oficina']];
+function avisoAtivo(a){ return !!(a && a.disparadoEm && Date.now() < Number(a.disparadoEm) + AVISO_DURACAO_MS); }
+function avisoDh(ms){ return new Date(ms).toLocaleString('pt-BR',{ day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }); }
+function avisosPopupParaMim(){
+  const lista = Array.isArray(config.avisosPopup) ? config.avisosPopup : [];
+  const nivel = currentUser && currentUser.nivel;
+  return lista.filter(a => avisoAtivo(a) && String(a.texto||'').trim() && (!Array.isArray(a.niveis) || !a.niveis.length || a.niveis.includes(nivel)))
+    .sort((a,b)=> Number(a.disparadoEm) - Number(b.disparadoEm));
+}
+async function mostrarAvisosPopup(){
+  if(!currentUser) return;
+  const lista = avisosPopupParaMim();
+  if(!lista.length) return;
+  for(let i = 0; i < lista.length; i++){
+    const a = lista[i];
+    await new Promise(resolve=>{
+      const ov = document.createElement('div');
+      ov.className = 'aviso-popup-overlay';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+      ov.innerHTML = `<div role="alertdialog" aria-modal="true" aria-label="Aviso" style="background:var(--surface,#fff);color:var(--ink,#1b1f24);border:3px solid var(--danger,#B3261E);border-radius:14px;max-width:520px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.35);overflow:hidden;">
+        <div style="background:var(--danger,#B3261E);color:#fff;padding:12px 18px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;display:flex;justify-content:space-between;gap:10px;"><span>Aviso importante</span>${lista.length>1?`<span style="font-weight:600;opacity:.9;">${i+1} de ${lista.length}</span>`:''}</div>
+        <div style="padding:18px 20px;font-size:16px;line-height:1.5;color:var(--danger,#B3261E);font-weight:700;white-space:pre-wrap;max-height:60vh;overflow:auto;">${escapeHtml(a.texto)}</div>
+        <div style="padding:12px 18px 16px;display:flex;justify-content:flex-end;"><button type="button" class="btn btn-accent" data-ciente style="min-width:120px;">Ciente</button></div>
+      </div>`;
+      document.body.appendChild(ov);
+      const b = ov.querySelector('[data-ciente]');
+      b.addEventListener('click', ()=>{ ov.remove(); resolve(); });
+      setTimeout(()=>{ try{ b.focus(); }catch(e){} }, 50);
+    });
+  }
+}
+function renderAvisosPopupCfgTab(main){
+  if(!Array.isArray(config.avisosPopup)) config.avisosPopup = [];
+  const lista = config.avisosPopup;
+  const chkNiveis = (marc, pref) => AVISO_NIVEIS.map(([id,nome])=>`<label style="display:inline-flex;gap:6px;align-items:center;margin-right:14px;cursor:pointer;"><input type="checkbox" data-nv="${pref}" value="${id}" ${(marc||[]).includes(id)?'checked':''}> ${nome}</label>`).join('');
+  const lerNiveis = (pref, raiz) => [...(raiz||document).querySelectorAll(`input[data-nv="${pref}"]:checked`)].map(x=>x.value);
+  const estado = a => avisoAtivo(a)
+    ? `<span class="selo ok">Ativo até ${avisoDh(Number(a.disparadoEm)+AVISO_DURACAO_MS)}</span>`
+    : (a.disparadoEm ? `<span class="selo pend">Encerrado em ${avisoDh(Number(a.disparadoEm)+AVISO_DURACAO_MS)}</span>` : `<span class="selo">Ainda não enviado</span>`);
+  main.innerHTML = `
+    <div class="cad-head"><div><h2>Avisos aos usuários</h2><p>Escreva uma mensagem e salve. Ao tocar em <b>Enviar</b>, ela aparece em vermelho para os usuários escolhidos <b>sempre que entrarem no app, por 2 dias</b>, até tocarem em "Ciente". Depois de 2 dias ela se desativa; é só enviar de novo para repetir o ciclo. Se houver mais de um aviso ativo, um popup aparece depois do outro.</p></div></div>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:700;margin-bottom:8px;">Novo aviso</div>
+      <textarea class="inp" id="avNovoTxt" rows="4" style="width:100%" placeholder="Digite a mensagem do aviso…" data-minusculo></textarea>
+      <div style="margin:10px 0 4px;font-weight:600;">Quem recebe (tipo de login)</div>
+      <div id="avNovoNiveis">${chkNiveis(AVISO_NIVEIS.map(x=>x[0]), 'novo')}</div>
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;"><button class="btn btn-accent" id="avSalvar" type="button">Salvar aviso</button></div>
+    </div>
+    <div class="card"><div class="card-head"><h3 style="margin:0;">Avisos salvos <span class="muted">(${lista.length})</span></h3></div>
+      <div id="avLista">${lista.length ? '' : '<div class="muted" style="padding:10px 0;">Nenhum aviso salvo ainda.</div>'}</div>
+    </div>`;
+  const box = document.getElementById('avLista');
+  lista.slice().sort((a,b)=> Number(b.criadoEm||0) - Number(a.criadoEm||0)).forEach(a=>{
+    const el = document.createElement('div');
+    el.style.cssText = 'border:1px solid var(--line,#e3e8ee);border-radius:10px;padding:12px;margin-top:10px;';
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">${estado(a)}<span class="muted" style="font-size:12px;">${(a.niveis&&a.niveis.length?a.niveis:AVISO_NIVEIS.map(x=>x[0])).map(id=>(AVISO_NIVEIS.find(x=>x[0]===id)||[id,id])[1]).join(' · ')}</span></div>
+      <div data-vis style="white-space:pre-wrap;font-weight:600;color:var(--danger,#B3261E);">${escapeHtml(a.texto)}</div>
+      <div data-edit style="display:none;"><textarea class="inp" rows="4" style="width:100%" data-minusculo>${escapeHtml(a.texto)}</textarea><div style="margin:8px 0;">${chkNiveis(a.niveis&&a.niveis.length?a.niveis:AVISO_NIVEIS.map(x=>x[0]), a.id)}</div></div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-accent btn-sm" data-enviar type="button">${a.disparadoEm ? 'Enviar de novo' : 'Enviar'}</button>
+        <button class="btn btn-ghost btn-sm" data-editar type="button">Editar</button>
+        <button class="btn btn-accent btn-sm" data-gravar type="button" style="display:none;">Salvar alterações</button>
+        ${avisoAtivo(a) ? '<button class="btn btn-ghost btn-sm" data-parar type="button">Parar agora</button>' : ''}
+        <button class="btn btn-ghost btn-sm perigo" data-excluir type="button">Excluir</button>
+      </div>`;
+    box.appendChild(el);
+    const item = () => config.avisosPopup.find(x=>x.id===a.id);
+    const salvar = async (msg) => { if(await configSave()){ showToast(msg); renderAvisosPopupCfgTab(main); } else renderAvisosPopupCfgTab(main); };
+    el.querySelector('[data-editar]').onclick = ()=>{ el.querySelector('[data-vis]').style.display='none'; el.querySelector('[data-edit]').style.display=''; el.querySelector('[data-editar]').style.display='none'; el.querySelector('[data-gravar]').style.display=''; };
+    el.querySelector('[data-gravar]').onclick = async ()=>{
+      const t = el.querySelector('[data-edit] textarea').value.trim(); if(!t){ showToast('Escreva a mensagem.'); return; }
+      const nv = lerNiveis(a.id, el); if(!nv.length){ showToast('Escolha pelo menos um tipo de login.'); return; }
+      const it = item(); if(!it) return; it.texto = t; it.niveis = nv; it.editadoEm = Date.now();
+      await salvar('Aviso atualizado.');
+    };
+    el.querySelector('[data-enviar]').onclick = async ()=>{
+      const it = item(); if(!it) return;
+      if(!confirm('Enviar este aviso agora? Ele aparece em vermelho para os usuários escolhidos, em todo login, pelos próximos 2 dias.')) return;
+      it.disparadoEm = Date.now(); await salvar('Aviso enviado: ativo pelos próximos 2 dias.');
+    };
+    const bp = el.querySelector('[data-parar]'); if(bp) bp.onclick = async ()=>{ const it = item(); if(!it) return; it.disparadoEm = null; await salvar('Aviso desativado.'); };
+    el.querySelector('[data-excluir]').onclick = async ()=>{ if(!confirm('Excluir este aviso?')) return; config.avisosPopup = config.avisosPopup.filter(x=>x.id!==a.id); await salvar('Aviso excluído.'); };
+  });
+  document.getElementById('avSalvar').onclick = async ()=>{
+    const t = document.getElementById('avNovoTxt').value.trim(); if(!t){ showToast('Escreva a mensagem do aviso.'); return; }
+    const nv = lerNiveis('novo'); if(!nv.length){ showToast('Escolha pelo menos um tipo de login.'); return; }
+    config.avisosPopup.push({ id: uid('aviso'), texto: t, niveis: nv, criadoEm: Date.now(), editadoEm: Date.now(), disparadoEm: null });
+    if(await configSave()){ showToast('Aviso salvo. Toque em Enviar quando quiser publicar.'); renderAvisosPopupCfgTab(main); }
+  };
+}
 async function renderTermosCfgTab(main){
   main.innerHTML = `<div class="cad-head"><div><h2>Termo de uso</h2><p>Todo usuário precisa aceitar no próximo acesso. Ao publicar uma nova versão, todos precisam aceitar de novo e cada aceite fica salvo com data, hora e versão.</p></div></div><div class="card"><div class="muted">Carregando…</div></div>`;
   const r = await termosCall({ op:'aceites' });
