@@ -3,6 +3,8 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="maiusculas.js"></script>
+<script src="busca.js"></script>
 <script src="usuario-confirma.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -66,20 +68,27 @@
   var FATOR = 1.2, MAX_PARC = 12;
   function r2(n){ return Math.round((Number(n)||0)*100)/100; }
   function formas(config){ return ((config && config.formasPagamento) || []).concat((config && config.paymentTypes) || []); }
-  function ehCartao(formaId, config){
+  /* 07/11 (Felipe): DÉBITO deixa de ter os 20% do cartão — fica igual ao Pix — para pagamentos de 08/11/2026 em diante.
+     Pagamento antigo (data anterior ao corte) continua como cartão, para não mexer em vias já lançadas. */
+  var CORTE_DEBITO = '2026-11-08';
+  function hojeLocal(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function ehDebito(f){ var n = (f && f.nome) || ''; return /d[eé]bito/i.test(n) && !/cr[eé]dito|link\s*eco/i.test(n); }
+  function ehCartao(formaId, config, p){
     if(!formaId || String(formaId).indexOf('__')===0) return false;
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
-    return !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));   // LINK ECO = cartão (04/11)
+    var cart = !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));   // LINK ECO = cartão (04/11)
+    if(cart && ehDebito(f)){ var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
+    return cart;
   }
   /* Formas "a prazo": cartão e, quando o módulo liga CondPag.fiadoPrazo, o Fiado (Felipe, 02/nov). */
-  function ehPrazo(formaId, config){
-    return ehCartao(formaId, config) || (formaId==='__fiado' && !!(window.CondPag && window.CondPag.fiadoPrazo));
+  function ehPrazo(formaId, config, p){
+    return ehCartao(formaId, config, p) || (formaId==='__fiado' && !!(window.CondPag && window.CondPag.fiadoPrazo));
   }
   /* Quanto do valor à vista este pagamento quita. */
   function base(p, config){
     var v = Number(p && p.valor) || 0;
     if(p && p.noTotal) return v;   // venda concluída: o valor da maquininha já está dentro do valorTotal
-    return ehPrazo(p && p.formaId, config) ? r2(v / FATOR) : v;
+    return ehPrazo(p && p.formaId, config, p) ? r2(v / FATOR) : v;
   }
   function somaBase(pags, config, filtro){
     return (pags||[]).filter(filtro || function(){ return true; }).reduce(function(a,p){ return a + base(p, config); }, 0);
@@ -89,7 +98,7 @@
      acréscimo, item), o valor da maquininha é refeito = (à vista que falta) × 1,2. Valor digitado à mão não muda. */
   function ajustarAuto(pags, totalVista, config){
     (pags||[]).forEach(function(p){
-      if(!p || !p._auto || !ehPrazo(p.formaId, config)) return;
+      if(!p || !p._auto || !ehPrazo(p.formaId, config, p)) return;
       var outros = somaBase((pags||[]).filter(function(q){ return q!==p && q._modo!=='editar'; }), config);
       var falta = Math.max(0, r2((Number(totalVista)||0) - outros));
       p.valor = falta > 0.009 ? parcelado(falta) : p.valor;
@@ -99,10 +108,10 @@
   function carimbar(pags, config){
     (pags||[]).forEach(function(p){
       delete p._auto;
-      if(ehCartao(p.formaId, config)){
+      if(ehCartao(p.formaId, config, p)){
         p.parcelas = Math.min(MAX_PARC, Math.max(1, parseInt(p.parcelas,10) || 1));
         p.valorBase = base(p, config);
-      } else if(ehPrazo(p.formaId, config)){ delete p.parcelas; p.valorBase = base(p, config); }
+      } else if(ehPrazo(p.formaId, config, p)){ delete p.parcelas; p.valorBase = base(p, config); }
       else { delete p.parcelas; delete p.valorBase; }
     });
     return pags;
@@ -113,7 +122,7 @@
     if(!via) return via;
     var acr = 0;
     (via.pagamentos||[]).forEach(function(p){
-      if(!p || p.noTotal || !ehPrazo(p.formaId, config)) return;
+      if(!p || p.noTotal || !ehPrazo(p.formaId, config, p)) return;
       var v = Number(p.valor)||0;
       acr += r2(v - r2(v / FATOR));
       p.valorBase = v; p.noTotal = true;
@@ -140,7 +149,7 @@
   }
   function rotuloPag(p, nomeForma, config, fmt){
     nomeForma = String(nomeForma||'').toUpperCase();   // forma de pagamento sempre em maiúsculas (Felipe, 02/nov)
-    if(ehCartao(p.formaId, config)){
+    if(ehCartao(p.formaId, config, p)){
       var n = Math.max(1, parseInt(p.parcelas,10) || 1);
       return nomeForma + ' ' + n + 'x de ' + fmt(r2((Number(p.valor)||0)/n));
     }
@@ -688,6 +697,7 @@ let __gatewaySenha = null;
 
 async function gatewayCall(body){
   try{
+    if(body && body.op==='searchClients' && window.Busca){ const _bc = await Busca.clientes(GATEWAY_URL, SUPABASE_ANON_KEY, __gatewaySenha, body); if(_bc) return _bc; }   // busca de cliente única (buscar-clientes); se falhar, usa o gateway
     const res = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
@@ -756,17 +766,8 @@ function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.rando
 /** Busca de produto nos autocompletes: ignora acento e maiúscula, aceita palavras em qualquer ordem
  *  (ex.: "alianca 9 f0,3"), procura também no código interno e mostra primeiro quem começa com o texto digitado. */
 function filtrarProdutosBusca(lista, texto){
-  const norm = s=>String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[;.]/g,',');   // ponto, vírgula e ponto e vírgula valem o mesmo
-  const q = norm(texto).trim();
-  const toks = q.split(/\s+/).filter(Boolean);
-  if(!toks.length) return [];
-  const achados = (lista||[]).filter(p=>{
-    const alvo = norm([p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor].filter(x=>x!=null&&x!=='').join(' '));
-    return toks.every(t=>alvo.includes(t));
-  });
-  achados.sort((a,b)=>{ const na=norm(a.nome), nb=norm(b.nome);
-    return ((nb===q)-(na===q)) || ((nb.startsWith(q))-(na.startsWith(q))) || na.localeCompare(nb,'pt-BR',{numeric:true}); });
-  return achados.slice(0,40);
+  // busca única do app (busca.js): por qualquer parte, palavras em qualquer ordem, vírgula = ponto; vem na ordem do que foi digitado
+  return Busca.filtrar(lista, texto, p=>[p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor], {limite:40});
 }
 function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }   // data LOCAL (toISOString viraria o dia depois das 21h)
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
@@ -1177,6 +1178,10 @@ function combinarTelefoneValidado(prefix){
   if(!ddd && !numero) return '';
   if(ddd.length!==2 || numero.length!==9){
     showToast('Telefone incompleto — preencha o DDD (2 dígitos) e o número (9 dígitos), ou deixe os dois em branco.');
+    return null;
+  }
+  if(Number(ddd) < 11 || numero.charAt(0) !== '9'){   // 07/11: só celular no padrão
+    showToast('Telefone fora do padrão de celular: DDD válido + número de 9 dígitos começando com 9. Corrija para salvar.', 6000);
     return null;
   }
   return `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}`;
@@ -1745,10 +1750,13 @@ function vendedoraIdPorNome(nome){
 }
 /** Carimba a data (AAAA-MM-DD) em cada pagamento que ainda não tem. Se a data da venda foi corrigida,
  *  o pagamento que tinha a data antiga acompanha a nova. Base do regime de caixa no DP. */
-function carimbarPagamentos(pags, dataVenda, dataAntiga){
+/* dataNovos (06/11): data dos pagamentos NOVOS. Na edição de uma venda que tinha saldo a receber ("pagar depois"),
+   o pagamento novo é dinheiro entrando HOJE: antes ele recebia a data da venda e ia para o caixa de um dia antigo. */
+function carimbarPagamentos(pags, dataVenda, dataAntiga, dataNovos){
   return (pags||[]).map(p=>{
     const q = { ...p };
-    if(!q.data || (dataAntiga && q.data===dataAntiga && dataAntiga!==dataVenda)) q.data = dataVenda;
+    if(!q.data) q.data = dataNovos || dataVenda;
+    else if(dataAntiga && q.data===dataAntiga && dataAntiga!==dataVenda) q.data = dataVenda;
     if(window.CondPag) CondPag.carimbar([q], config);
     return q;
   });
@@ -2025,8 +2033,8 @@ function mountPagamentos(container, holder, getLojaVendaId){
     if(r.cred && cred>0.009){ const v = Math.min(cred, Math.max(0, CondPag.r2(totalPag() - outros()))); if(v>0.009) holder.pagamentos.splice(holder.pagamentos.indexOf(pg), 0, { formaId:'__credito', valor:CondPag.r2(v), data:'' }); }
     holder.pagamentos.forEach(p=>{ if(!p.data) delete p.data; });
     const falta = Math.max(0, CondPag.r2(totalPag() - outros()));
-    pg.valor = falta>0.009 ? (CondPag.ehPrazo(pg.formaId, config) ? CondPag.parcelado(falta) : falta) : '';
-    pg._auto = CondPag.ehPrazo(pg.formaId, config);
+    pg.valor = falta>0.009 ? (CondPag.ehPrazo(pg.formaId, config, pg) ? CondPag.parcelado(falta) : falta) : '';
+    pg._auto = CondPag.ehPrazo(pg.formaId, config, pg);
     drawRows();
   }
 
@@ -2156,7 +2164,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${(config.formasPagamento||[]).map(pt=>`<option value="${pt.id}" ${p.formaId===pt.id?'selected':''}>${escapeHtml(String(pt.nome||'').toUpperCase())}</option>`).join('')}${(window.__credCli.valor>0 || p.formaId==='__credito') ? `<option value="__credito" ${p.formaId==='__credito'?'selected':''}>CRÉDITO CLIENTE${window.__credCli.valor>0?' (disp. '+fmtMoeda(window.__credCli.valor)+')':''}</option>` : ''}${cbOpcaoHtml(p.formaId)}<option value="__fiado" ${p.formaId==='__fiado'?'selected':''}>FIADO</option></select>
-        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config, p) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ic('check',14)} Adicionar</button>
         ${btnIcone('lixeira','Remover esta forma de pagamento',`data-pagdel="${i}"`,true)}
@@ -2171,11 +2179,11 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehPrazo(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehPrazo(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão/Fiado: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor
-        const ehCart = CondPag.ehPrazo(pg.formaId, config);
+        const ehCart = CondPag.ehPrazo(pg.formaId, config, pg);
         if(ehCart !== eraCartao || pg.valor==='' || pg.valor==null){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = ehCart; } }
-        if(CondPag.ehCartao(pg.formaId, config) && !pg.parcelas) pg.parcelas = 1;
+        if(CondPag.ehCartao(pg.formaId, config, pg) && !pg.parcelas) pg.parcelas = 1;
         drawRows(); oferecerAbatimento(pg); });
     });
     wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{
@@ -3594,13 +3602,19 @@ function abrirEnvioReserva(r, titulo){
       <button class="btn btn-ghost" id="resMsgFechar" type="button">Fechar</button>
       <button class="btn btn-ghost" id="resMsgImprimir" type="button">${ic('impressora',14)} Imprimir</button>
       <button class="btn btn-ghost" id="resMsgCopiar" type="button">${ic('copiar',14)} Copiar mensagem</button>
-      ${r.telefone ? `<a class="btn btn-accent" id="resMsgWa" target="_blank" rel="noopener" href="${escapeHtml(waLinkReserva(r))}">${ic('whatsapp',14)} Enviar ao cliente</a>` : ''}
+      ${r.telefone ? `<button class="btn btn-accent" id="resMsgWa" type="button">${ic('whatsapp',14)} Enviar ao cliente</button>` : ''}
     </div>`);
   document.getElementById('resMsgFechar').addEventListener('click', closeModal);
   document.getElementById('resMsgImprimir').addEventListener('click', ()=> printReserva(r));
   document.getElementById('resMsgCopiar').addEventListener('click', ()=>{ const t=document.getElementById('resMsg').value; try{ navigator.clipboard.writeText(t); showToast('Mensagem copiada.'); }catch(e){} });
   const wa = document.getElementById('resMsgWa');
-  if(wa) wa.addEventListener('click', ()=>{ const t=document.getElementById('resMsg').value; let tel=String(r.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel='55'+tel; wa.href='https://wa.me/'+tel+'?text='+encodeURIComponent(t); });
+  if(wa) wa.addEventListener('click', async ()=>{
+    const t=document.getElementById('resMsg').value;
+    if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:r.telefone, nome:r.cliente }))) return;
+    if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:r.telefone, texto:t, lojaId:r.lojaId||'', senha:__gatewaySenha, tipo:'reserva', registroId:r.id||'', via:r.codigoVia||'' }); return; }
+    let tel=String(r.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel='55'+tel;
+    window.open('https://wa.me/'+tel+'?text='+encodeURIComponent(t), '_blank', 'noopener');
+  });
 }
 async function salvarReservaDoForm(tempItensHolder){
   const lojaId = document.getElementById('v_loja').value;
@@ -3693,11 +3707,11 @@ function renderReservas(main){
   document.getElementById('btnNovaReserva').addEventListener('click', ()=>{ __reservaEditando = null; modoNovaVenda = true; renderView(); });
   const fB = document.getElementById('resBusca'), fS = document.getElementById('resStatus');
   function desenhar(){
-    const q = fB.value.trim().toLowerCase(), st = fS.value;
+    const q = fB.value.trim(), st = fS.value;
     const lojaAtual = window.__lojaAtual && window.__lojaAtual.id;
     let lista = reservas.slice();
     if(st) lista = lista.filter(r=> situacaoReserva(r)===st);
-    if(q) lista = lista.filter(r=> [r.cliente, r.codigoVia, r.vendedora, ...(r.itens||[]).map(i=>i.produto)].join(' ').toLowerCase().includes(q));
+    if(q) lista = Busca.filtrar(lista, q, r=> [r.cliente, r.codigoVia, r.vendedora, ...(r.itens||[]).map(i=>i.produto)]);
     const wrap = document.getElementById('resTabela');
     if(!lista.length){ wrap.innerHTML = `<div class="estado-vazio">${ic('etiqueta',32)}<b>Nenhuma reserva</b>Clique em “Nova reserva” para reservar uma joia.</div>`; return; }
     wrap.innerHTML = `<table class="tabela-cartoes"><thead><tr><th>Data</th><th>Loja</th><th>Cliente</th><th>Vendedora</th><th>Joias</th><th class="num">Valor</th><th>Vence em</th><th>Situação</th><th class="acoes"><span class="so-leitor">Ações</span></th></tr></thead><tbody>
@@ -4735,11 +4749,12 @@ function renderVendas(main){
     if(fLoja.value) list = list.filter(v=>v.lojaId===fLoja.value);
     if(fData.value) list = list.filter(v=>v.data===fData.value);
     if(fBusca.value.trim()){
-      const q = fBusca.value.trim().toLowerCase();
-      list = list.filter(v=> (v.cliente||'').toLowerCase().includes(q) || (v.vendedora||'').toLowerCase().includes(q));
+      const q = fBusca.value.trim();
+      list = list.filter(v=> Busca.testa([v.cliente, v.vendedora, v.codigoVia, v.codigo].join(' '), q));
     }
     if(fSemPagamento.checked) list = list.filter(v=>semPagamentoLancado(v));
     list.sort((a,b)=> b.criadoEm - a.criadoEm);
+    if(fBusca.value.trim()) list = Busca.filtrar(list, fBusca.value.trim(), v=>[v.cliente, v.vendedora, v.codigoVia, v.codigo]);   // mais parecido com o digitado primeiro
 
     const totalRecebido = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorRecebidoDe(v), 0);
     const totalAReceber = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorAReceberDe(v), 0);
@@ -5217,7 +5232,8 @@ function abrirFormularioEdicaoCompleta(v){
     v.itens = itensValidos;
     v.valorTotal = pagHolder.valorTotal;
     v.descTotalTipo = pagHolder.descTotalTipo||'nenhum'; v.descTotalModo = pagHolder.descTotalModo||'percentual'; v.descTotalPerc = pagHolder.descTotalPerc||''; v.descTotalR = pagHolder.descTotalR||'';
-    v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV);
+    const tinhaSaldo = valorAReceberDe(v) > 0.009;   // v.pagamentos ainda são os de antes da edição
+    v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV, tinhaSaldo ? hoje() : null);
     OuroPag.liquidar(v.pagamentos, creditoGeradoEd, config);
     delete v.valorAVista; delete v.acrescimoCartao; CondPag.fecharTotal(v, config);
     v.momentoPagamento = pagHolder.momentoPagamento;
@@ -5384,6 +5400,83 @@ function printVenda(v){
   ['click','keydown','mousemove','touchstart','scroll','wheel'].forEach(function(ev){
     document.addEventListener(ev, avisar, { passive:true, capture:true });
   });
+})();
+</script>
+<script>
+/* ===== Ordenar listas (crescente/decrescente) — clique no título da coluna ou use "Ordenar por" ===== */
+(function(){
+  var CSS = '.ord-bar{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:12.5px;color:var(--ink-faint,#6b7280);flex-wrap:wrap}'+
+    '.ord-bar select{height:32px;border:1px solid var(--line,#d1d5db);border-radius:8px;padding:0 8px;background:var(--surface,#fff);color:inherit;font:inherit}'+
+    '.ord-bar button{height:32px;min-width:36px;border:1px solid var(--line,#d1d5db);border-radius:8px;background:var(--surface,#fff);color:inherit;cursor:pointer;font:inherit}'+
+    'th.ord-th{cursor:pointer;user-select:none}th.ord-th .ord-seta{opacity:.35;margin-left:4px}th.ord-th.ord-on .ord-seta{opacity:1}';
+  var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
+  function txt(td){ return (td ? td.textContent : '').replace(/\s+/g,' ').trim(); }
+  function parseVal(t){
+    if(!t || t==='—' || t==='-') return {v:null};
+    var d = t.match(/(\d{2})\/(\d{2})\/(\d{4})(?:\D{0,3}(\d{1,2}):(\d{2}))?/); if(d) return {v:+(d[3]+d[2]+d[1])*10000 + (d[4]?(+d[4])*100+(+d[5]):0), k:'d'};
+    var m = t.match(/^([+\-−]?)\s*R\$\s*([+\-−]?)\s*([\d.]+(?:,\d+)?)/);
+    if(m){ var n=parseFloat(m[3].replace(/\./g,'').replace(',','.')); if(/[-−]/.test(m[1]+m[2])) n=-n; return {v:n,k:'n'}; }
+    if(/^[+\-−]?\d+([.,]\d+)?$/.test(t)) return {v:parseFloat(t.replace('−','-').replace(',','.')),k:'n'};
+    return {v:t.toLowerCase(), k:'t'};
+  }
+  function ordenar(table, col, dir){
+    var tb = table.tBodies[0]; if(!tb) return;
+    var rows = Array.prototype.slice.call(tb.rows);
+    var itens = rows.map(function(r,i){ return {r:r, i:i, p:parseVal(txt(r.cells[col]))}; });
+    var tipos = itens.map(function(x){return x.p.k;}).filter(Boolean);
+    var tipo = tipos.length && tipos.every(function(k){return k===tipos[0];}) ? tipos[0] : 't';
+    itens.forEach(function(x){ if(x.p.v!==null && x.p.k!==tipo) x.p = {v:String(txt(x.r.cells[col])).toLowerCase(), k:'t'}; });
+    itens.sort(function(a,b){
+      if(a.p.v===null && b.p.v===null) return a.i-b.i;
+      if(a.p.v===null) return 1; if(b.p.v===null) return -1;
+      var c = tipo==='t' ? String(a.p.v).localeCompare(String(b.p.v),'pt-BR',{numeric:true}) : (a.p.v-b.p.v);
+      return (dir==='desc' ? -c : c) || (a.i-b.i);
+    });
+    itens.forEach(function(x){ tb.appendChild(x.r); });
+  }
+  function marcar(table, col, dir){
+    var ths = table.querySelectorAll('thead th');
+    Array.prototype.forEach.call(ths, function(th,i){
+      th.classList.toggle('ord-on', i===col);
+      var s = th.querySelector('.ord-seta'); if(s) s.textContent = i===col ? (dir==='desc'?'▼':'▲') : '↕';
+    });
+    var bar = table.__ordBar;
+    if(bar){ bar.querySelector('select').value = String(col); bar.querySelector('button').textContent = dir==='desc'?'▼':'▲'; bar.querySelector('button').title = dir==='desc'?'Decrescente':'Crescente'; }
+  }
+  function ativar(table){
+    if(table.dataset.ord || table.hasAttribute('data-nosort')) return;
+    var ths = table.querySelectorAll('thead th'); var tb = table.tBodies[0];
+    if(!ths.length || !tb || tb.rows.length<2) return;
+    if(table.classList.contains('tabela-kv') || table.closest('#modalOverlay,#modalBox,.modal,.modal-overlay,[role="dialog"]') || table.querySelector('tbody input,tbody select,tbody textarea')) return;
+    for(var k=0;k<tb.rows.length;k++){ if(tb.rows[k].cells.length!==ths.length || tb.rows[k].querySelector('[colspan]')) return; }
+    table.dataset.ord = '1';
+    var estado = {col:-1, dir:'asc'};
+    function aplicar(col, dir){ estado.col=col; estado.dir=dir; ordenar(table,col,dir); marcar(table,col,dir); }
+    var opts = '';
+    Array.prototype.forEach.call(ths, function(th,i){
+      var nome = th.textContent.trim(); if(!nome) return;
+      th.classList.add('ord-th'); th.setAttribute('title','Clique para ordenar');
+      var s = document.createElement('span'); s.className='ord-seta'; s.textContent='↕'; th.appendChild(s);
+      th.addEventListener('click', function(){ aplicar(i, (estado.col===i && estado.dir==='asc') ? 'desc' : 'asc'); });
+      opts += '<option value="'+i+'">'+nome.replace(/</g,'&lt;')+'</option>';
+    });
+    var bar = document.createElement('div'); bar.className='ord-bar';
+    bar.innerHTML = '<span>Ordenar por</span><select aria-label="Ordenar por">'+opts+'</select><button type="button" aria-label="Inverter ordem" title="Crescente">▲</button>';
+    bar.querySelector('select').value = '-1';
+    bar.querySelector('select').selectedIndex = -1;
+    bar.querySelector('select').addEventListener('change', function(e){ aplicar(+e.target.value, estado.dir); });
+    bar.querySelector('button').addEventListener('click', function(){
+      if(estado.col<0){ var sel=bar.querySelector('select'); estado.col = +(sel.options[0] && sel.options[0].value) || 0; }
+      aplicar(estado.col, estado.dir==='asc'?'desc':'asc');
+    });
+    table.__ordBar = bar;
+    var alvo = table.parentNode && table.parentNode.style && table.parentNode.style.overflowX ? table.parentNode : table;
+    alvo.parentNode.insertBefore(bar, alvo);
+  }
+  var agendado = false;
+  function varrer(){ agendado=false; Array.prototype.forEach.call(document.querySelectorAll('table'), ativar); }
+  new MutationObserver(function(){ if(!agendado){ agendado=true; setTimeout(varrer, 80); } }).observe(document.body, {childList:true, subtree:true});
+  varrer();
 })();
 </script>
 <script src="modal-x.js"></script>

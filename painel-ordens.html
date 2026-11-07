@@ -3,6 +3,9 @@
 <head>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
+<script src="leitor-codigo.js"></script>
+<script src="maiusculas.js"></script>
+<script src="busca.js"></script>
 <script src="usuario-confirma.js"></script>
 <script src="icones.js"></script>
 <script src="foto-produto.js"></script>
@@ -803,17 +806,8 @@ function uid(prefix){ return prefix + '_' + Date.now().toString(36) + Math.rando
 /** Busca de produto nos autocompletes: ignora acento e maiúscula, aceita palavras em qualquer ordem
  *  (ex.: "alianca 9 f0,3"), procura também no código interno e mostra primeiro quem começa com o texto digitado. */
 function filtrarProdutosBusca(lista, texto){
-  const norm = s=>String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[;.]/g,',');   // ponto, vírgula e ponto e vírgula valem o mesmo
-  const q = norm(texto).trim();
-  const toks = q.split(/\s+/).filter(Boolean);
-  if(!toks.length) return [];
-  const achados = (lista||[]).filter(p=>{
-    const alvo = norm([p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor].filter(x=>x!=null&&x!=='').join(' '));
-    return toks.every(t=>alvo.includes(t));
-  });
-  achados.sort((a,b)=>{ const na=norm(a.nome), nb=norm(b.nome);
-    return ((nb===q)-(na===q)) || ((nb.startsWith(q))-(na.startsWith(q))) || na.localeCompare(nb,'pt-BR',{numeric:true}); });
-  return achados.slice(0,40);
+  // busca única do app (busca.js): por qualquer parte, palavras em qualquer ordem, vírgula = ponto; vem na ordem do que foi digitado
+  return Busca.filtrar(lista, texto, p=>[p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor], {limite:40});
 }
 function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
 function fmtDate(s){
@@ -868,6 +862,10 @@ function combinarTelefoneValidado(prefix){
   if(!ddd && !numero) return '';
   if(ddd.length!==2 || numero.length!==9){
     showToast('Telefone incompleto — preencha o DDD (2 dígitos) e o número (9 dígitos), ou deixe os dois em branco.');
+    return null;
+  }
+  if(Number(ddd) < 11 || numero.charAt(0) !== '9'){   // 07/11: só celular no padrão
+    showToast('Telefone fora do padrão de celular: DDD válido + número de 9 dígitos começando com 9. Corrija para salvar.', 6000);
     return null;
   }
   return `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}`;
@@ -991,6 +989,7 @@ const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_A
 let __gatewaySenha = null;
 async function gatewayCall(body){
   try{
+    if(body && body.op==='searchClients' && window.Busca){ const _bc = await Busca.clientes(GATEWAY_URL, SUPABASE_ANON_KEY, __gatewaySenha, body); if(_bc) return _bc; }   // busca de cliente única (buscar-clientes); se falhar, usa o gateway
     const res = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
@@ -1359,6 +1358,12 @@ async function bumpCodigoVia(tipo, lojaId){
     console.error('erro ao gerar código de via', r && r.error);
     return null;
   }catch(e){ console.error('erro ao gerar código de via', e); return null; }
+}
+/** 06/11: pedido que nasceu como RASCUNHO não tem código de via; ao deixar de ser rascunho (pela edição ou pela troca de status na lista) o código tem que ser gerado. */
+async function garantirCodigoVia(ord, lojaId){
+  if(!ord || ord.codigoVia || ord.status==='cancelado') return;
+  const cod = await bumpCodigoVia('pedido', lojaId || ord.lojaId || '');
+  if(cod) ord.codigoVia = cod;
 }
 /** Evita lançar o mesmo pedido 2-3 vezes com cliques repetidos (gerava vias duplicadas). */
 function travarCliqueDuplo(fn){
@@ -2518,12 +2523,17 @@ function mountPagamentos(container, holder, getLojaVendaId){
     return Math.max(0,holder.descTotalTipo==='desconto'?subtotal-delta:subtotal+delta);
   }
 
+  /* 06/11: cartão/débito/link cobram +20% — o que o cliente PAGOU (à vista + acréscimo) é o valor que a via mostra. */
+  function acrescPag(){
+    return (holder.pagamentos||[]).filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config, p))
+      .reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
+  }
   function ajusteLinhaHtml(sub,fin){
     if(holder.descTotalTipo==='nenhum') return '';
     const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return '';
     const d=holder.descTotalTipo==='desconto';
     const pct=holder.descTotalModo==='percentual'&&holder.descTotalPerc?' ('+String(holder.descTotalPerc).replace('.',',')+'%)':'';
-    return `<div style="display:flex;flex-direction:column;gap:8px;width:100%;margin-top:4px;"><div style="display:flex;justify-content:space-between;gap:8px;font-weight:700;font-variant-numeric:tabular-nums;color:${d?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};"><span>${d?'Desconto':'Acréscimo'}${pct}</span><span>${d?'−':'+'}${fmtMoeda(delta)}</span></div><div class="pag-saldo"><span>Saldo a pagar</span><strong>${fmtMoeda(fin)}</strong></div></div>`;
+    return `<div style="display:flex;flex-direction:column;gap:8px;width:100%;margin-top:4px;"><div style="display:flex;justify-content:space-between;gap:8px;font-weight:700;font-variant-numeric:tabular-nums;color:${d?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};"><span>${d?'Desconto':'Acréscimo'}${pct}</span><span>${d?'−':'+'}${fmtMoeda(delta)}</span></div><div class="pag-saldo"><span>Saldo a pagar</span><strong>${fmtMoeda(fin+acrescPag())}</strong></div></div>`;
   }
 
   function draw(){
@@ -2557,7 +2567,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
         <!-- Valor total -->
         <div class="pag-info-cel" style="flex:1 1 auto;min-width:120px;">
           <div class="pag-info-cel-label">Valor total</div>
-          <div class="pag-info-cel-val" id="pagValorTotalDisplay">${fmtMoeda(totalFinal>0?totalFinal:0)}</div>
+          <div class="pag-info-cel-val" id="pagValorTotalDisplay">${fmtMoeda((totalFinal>0?totalFinal:0)+acrescPag())}</div>
           <input type="hidden" id="pagValorTotal" value="${totalFinal>0?totalFinal.toFixed(2):''}">
         </div>
         <!-- Momento do pagamento -->
@@ -2620,7 +2630,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
       const sub=calcTotalItens(), fin=calcTotalFinal(sub);
       const el=container.querySelector('#pagSubtotal'); if(el) el.textContent=fmtMoeda(sub);
       const ln=container.querySelector('#pagAjusteLinha'); if(ln) ln.innerHTML=ajusteLinhaHtml(sub,fin);
-      const dsp=container.querySelector('#pagValorTotalDisplay'); if(dsp) dsp.textContent=fmtMoeda(fin>0?fin:0);
+      const dsp=container.querySelector('#pagValorTotalDisplay'); if(dsp) dsp.textContent=fmtMoeda((fin>0?fin:0)+acrescPag());
       const inpT=container.querySelector('#pagValorTotal'); if(inpT) inpT.value=fin>0?fin.toFixed(2):'';
       holder.valorTotal = fin>0 ? fin : null;
       drawRows();
@@ -2671,7 +2681,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config, p) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
@@ -2686,9 +2696,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
-        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        const ehCart = CondPag.ehCartao(pg.formaId, config, pg);
         if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = true; } if(ehCart && !pg.parcelas) pg.parcelas = 1; }
         drawRows(); });
     });
@@ -2736,6 +2746,9 @@ function mountPagamentos(container, holder, getLojaVendaId){
     const total = temSemCusto ? 0 : (Number(holder.valorTotal)||calcTotalItens());
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
+    { const _ac = temSemCusto ? 0 : acrescPag(), _d = container.querySelector('#pagValorTotalDisplay'), _s = container.querySelector('.pag-saldo strong');
+      if(_d) _d.textContent = fmtMoeda(total + _ac);
+      if(_s) _s.textContent = fmtMoeda(total + _ac); }
     { let neEl = container.querySelector('#pagNotaEntrada'); if(!neEl){ neEl = document.createElement('div'); neEl.id = 'pagNotaEntrada'; hint.parentNode.insertBefore(neEl, hint.nextSibling); } OuroPag.renderNota(neEl, holder, config, currentUser && currentUser.nome); }
     const exOuro = (saldo < -0.009) ? OuroPag.excesso(holder.pagamentos, total, config) : null;
     if(exOuro && exOuro.ok){
@@ -2747,7 +2760,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso-linha excede">${ico('alerta')}<span>Os pagamentos passam do total em ${fmtMoeda(Math.abs(saldo))}. Confira os valores.</span></div>`;
     } else {
-      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total)}</span></div>`;
+      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + (temSemCusto ? 0 : acrescPag()))}</span></div>`;
     }
   }
 
@@ -2843,7 +2856,7 @@ function mountPagamentosEdicao(container, holder){
     const editHtml = holder.pagamentos.map((p,i)=> p._modo!=='editar' ? '' : `
       <div class="pag-linha pag-edit">
         <select data-pagform="${i}" aria-label="Forma de pagamento"><option value="" ${p.formaId?'':'selected'}>Escolher…</option>${opcoesFormaPagamentoHtml(p.formaId, holder.permitirCredito)}</select>
-        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
+        ${pessoaPixHtml(p,i)}${CondPag.ehCartao(p.formaId, config, p) ? CondPag.selectParcelasHtml(p, i, fmtMoeda) : ''}
         <input type="number" step="0.01" min="0" data-pagvalor="${i}" placeholder="0,00" aria-label="Valor" value="${p.valor!==undefined && p.valor!==null && p.valor!=='' ? p.valor : ''}">
         <button type="button" class="btn btn-accent btn-sm" data-pagok="${i}">${ico('check',14)} Adicionar</button>
         <button type="button" class="icon-btn perigo" data-pagdel="${i}" title="Remover forma de pagamento" aria-label="Remover forma de pagamento">${ico('lixeira')}</button>
@@ -2858,9 +2871,9 @@ function mountPagamentosEdicao(container, holder){
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
-      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
+      sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehCartao(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor da maquininha
-        const ehCart = CondPag.ehCartao(pg.formaId, config);
+        const ehCart = CondPag.ehCartao(pg.formaId, config, pg);
         if(ehCart !== eraCartao){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = true; } if(ehCart && !pg.parcelas) pg.parcelas = 1; }
         drawRows(); });
     });
@@ -2911,7 +2924,8 @@ function mountPagamentosEdicao(container, holder){
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso-linha excede">${ico('alerta')}<span>Os pagamentos passam do total em ${fmtMoeda(Math.abs(saldo))}. Confira os valores.</span></div>`;
     } else {
-      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total)}</span></div>`;
+      const _ac = holder.pagamentos.filter(p=>p._modo!=='editar' && CondPag.ehCartao(p.formaId, config, p)).reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - CondPag.base(p, config)), 0);
+      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + _ac)}</span></div>`;
     }
   }
 
@@ -3479,8 +3493,10 @@ function nomeLojaOrder(o){
   }
   return o.loja||'';
 }
+/** 07/11: tipos de serviço em ORDEM ALFABÉTICA nas listas/seletores/legenda da agenda (a ordem gravada e as cores não mudam). */
+function tiposServicoOrdenados(){ return (config.serviceTypes||[]).slice().sort((a,b)=> String(a.nome||'').localeCompare(String(b.nome||''), 'pt-BR', { sensitivity:'base', numeric:true })); }
 function servicoOptionsHtml(selected){
-  return config.serviceTypes.map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
+  return tiposServicoOrdenados().map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
 }
 /** Cargos de um funcionário do cadastro central, sempre como array (aceita registros antigos com 'area'). */
 function cargosDoFuncionario(f){
@@ -3659,7 +3675,7 @@ function printOrder(order){
     linhas.push(`<div class="assinatura"></div>`);
     linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
   }
-  if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, order.valorTotal, fmtMoeda));
+  if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, (order.valorAVista != null ? order.valorAVista : order.valorTotal), fmtMoeda));
 
   abrirImpressaoBobina('Ordem de Serviço', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(order, escapeHtml) : ''), larguraMm, order.codigoVia);
 }
@@ -5161,18 +5177,19 @@ function renderNovaOrdem(main){
       criadoEm: Date.now()
     };
     OuroPag.liquidar(novaOrdem.pagamentos, creditoGeradoOS, config);
+    CondPag.fecharTotal(novaOrdem, config);   // 06/11: lançada com pagamento: o total passa a ser o que o cliente PAGOU (cartão/débito com os 20%); o à vista fica em valorAVista
     if(planoNova.itens.length) novaOrdem.reservaLojaId = planoNova.lojaId;
     if(orcamentoOrigem){ novaOrdem.orcamentoOrigemId = orcamentoOrigem.id; novaOrdem.orcamentoId = orcamentoOrigem.id; }
     // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
     // (rascunho não gera código — só quando vira uma O.S. de verdade).
     novaOrdem.codigoVia = await bumpCodigoVia('pedido', novaOrdem.lojaId||'');
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de lançar
-    const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
+    const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', (novaOrdem.valorAVista ?? novaOrdem.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
     if(!cbValO.ok){ showToast(cbValO.erro); return; }
     if(cbValO.resumo) novaOrdem.cashback = cbValO.resumo;
     // Forma "Sem custo": zera o valorTotal e pula validações de Fiado/Crédito
     const temSemCustoNova = (tempPagHolder.pagamentos||[]).some(p=>p.formaId==='__sem_custo');
-    if(temSemCustoNova){ novaOrdem.valorTotal = 0; }
+    if(temSemCustoNova){ novaOrdem.valorTotal = 0; delete novaOrdem.valorAVista; delete novaOrdem.acrescimoCartao; }
     if(!temSemCustoNova && (pagsCreditoOS.length>0 || pagsFiadoOS.length>0 || creditoGeradoOS>0)){
       const telD = onlyDigits(novaOrdem.telefone||'');
       // Clientes não ficam em memória (22k+) — busca pelo telefone ou nome
@@ -5396,7 +5413,7 @@ function openEditModalCompleto(order, opts){
   // ── PAGAMENTO COMPLETO (com desconto/acréscimo e nota fiscal) ──
   const editPagHolder = {
     // pagamento antigo sem data fica com a data de criação da ordem (não vira "hoje" só porque a ordem foi editada)
-    valorTotal: order.valorTotal, pagamentos: (order.pagamentos||[]).map(p=>({...p, data: p.data || dataLocalDeMs(order.criadoEm)})),
+    valorTotal: (order.valorAVista != null ? order.valorAVista : order.valorTotal), pagamentos: (order.pagamentos||[]).map(p=>{ const q = {...p, data: p.data || dataLocalDeMs(order.criadoEm)}; if(q.noTotal){ delete q.noTotal; q.valorBase = CondPag.r2((Number(q.valor)||0) / CondPag.FATOR); } return q; }),
     momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'', numeroNota: order.numeroNota||'',
     notaEntrada: order.notaEntrada ? { ...order.notaEntrada } : undefined,
     permitirPagarDepois: true,   // 04/11: incluir pagamento numa via "Pagar depois"
@@ -5673,6 +5690,7 @@ function openEditModalCompleto(order, opts){
       }
     }
     const st = config.serviceTypes.find(s=>s.id===sid);
+    if(status !== 'rascunho' && status !== 'cancelado') await garantirCodigoVia(order, loja);   // rascunho que virou pedido de verdade: gera o código da via
     const _snapCb = JSON.parse(JSON.stringify(order));
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
@@ -5698,8 +5716,10 @@ function openEditModalCompleto(order, opts){
       descTotalR: editPagHolder ? editPagHolder.descTotalR : order.descTotalR,
     });
     if(_credNovoEd > 0.009) OuroPag.liquidar(order.pagamentos, _credNovoEd, config);
+    delete order.valorAVista; delete order.acrescimoCartao;
+    if(status !== 'rascunho' && status !== 'cancelado') CondPag.fecharTotal(order, config);   // 06/11: total = o que o cliente pagou (cartão/débito com os 20%)
     const _cbAntO = order.cashback || null;
-    const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', order.valorTotal, 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
+    const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
     if(!_cbEO.ok){ Object.keys(order).forEach(k=>delete order[k]); Object.assign(order, _snapCb); showToast(_cbEO.erro); return; }
     if(_cbEO.resumo) order.cashback = _cbEO.resumo;
     // Estoque: entregue → baixa; demais → (re)reserva os itens atuais. Nunca bloqueia.
@@ -5714,7 +5734,7 @@ function openEditModalCompleto(order, opts){
     }
     await saveOrders();
     await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado });
-    if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', order.valorTotal, 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }
+    if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }
     closeModal();
     showToast('Pedido atualizado.');
     if(sincronizarDepois) await sincronizarReservasOrdem(order, planoEdit);
@@ -5726,7 +5746,7 @@ function openEditModalCompleto(order, opts){
    PAINEL
    ============================================================ */
 function renderPainel(main){
-  const st = config.serviceTypes;
+  const st = tiposServicoOrdenados();
   main.innerHTML = `
     <div class="page-head">
       <div>
@@ -5824,6 +5844,7 @@ function renderPainel(main){
     const previous = ord.status;
     if(novo===previous) return;
     if(!podeColocarStatus(novo)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(novo) + '.'); desfazer(); return; }
+    if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
       if(bloqueioSaldoEntrega(ord)){ desfazer(); return; }
       promptRecebidoPor(async (nome)=>{
@@ -5870,8 +5891,8 @@ function renderPainel(main){
     if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()){
-      const q = fBusca.value.trim().toLowerCase(), qDig = onlyDigits(q);
-      list = list.filter(o=> (o.cliente||'').toLowerCase().includes(q) || String(o.via||'').toLowerCase().includes(q) || String(o.codigoVia||'').toLowerCase().includes(q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
+      const q = fBusca.value.trim(), qDig = onlyDigits(q);
+      list = list.filter(o=> Busca.testa([o.cliente,o.via,o.codigoVia].join(' '), q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
     }
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     const fimRecente = o=> { const t = Number(o.recebidoEm || o.canceladoEm || o.atualizadoEm || o.criadoEm || 0); return t >= limite; };
@@ -5951,15 +5972,15 @@ function renderPainel(main){
     if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()) {
-      const q = fBusca.value.trim().toLowerCase();
+      const q = fBusca.value.trim();
       const qDig = onlyDigits(q);
-      list = list.filter(o=> (o.cliente||'').toLowerCase().includes(q)
-        || String(o.via||'').toLowerCase().includes(q) || String(o.codigoVia||'').toLowerCase().includes(q)
+      list = list.filter(o=> Busca.testa([o.cliente,o.via,o.codigoVia].join(' '), q)
         || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
     }
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     if(fStatus.value==='todos' || fHoje.checked) list.sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0));   // mais recentes primeiro
     else list.sort((a,b)=> a.data.localeCompare(b.data) || b.criadoEm-a.criadoEm );
+    if(fBusca.value.trim()) list = list.map((o,i)=>({o,i,p:Busca.pontua([o.cliente,o.via,o.codigoVia].join(' '), fBusca.value.trim())})).sort((x,y)=>((x.p<0?9e9:x.p)-(y.p<0?9e9:y.p))||(x.i-y.i)).map(x=>x.o);   // mais parecido com o digitado primeiro
 
     const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
     const totalAReceber = list.reduce((acc,o)=> acc + valorAReceberDe(o), 0);
@@ -6211,6 +6232,7 @@ function abrirReceberDaFabrica(aoConcluir){
     linha.style.background = 'var(--ok-soft)';
     setTimeout(()=>{ linha.style.background = ''; }, 900);
   });
+  if(window.Leitor) Leitor.ligar(leitor, ()=> leitor.dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', cancelable:true })));   // 07/11: marca a via sozinha ao ler
   setTimeout(()=>{ try{ leitor.focus(); }catch(e){} }, 80);
   document.getElementById('rfCancel').addEventListener('click', closeModal);
   document.getElementById('rfReceber').addEventListener('click', async ()=>{
@@ -6259,7 +6281,7 @@ function renderAgenda(main){
     </div>
   `;
 
-  document.getElementById('agLegend').innerHTML = (config.serviceTypes.length ? '' : '<span class="muted">Nenhum tipo de serviço cadastrado. Cadastre em CONFIGURAÇÕES › Cadastro › Produto › Tipos de ordem.</span>') + config.serviceTypes.map(s=>`
+  document.getElementById('agLegend').innerHTML = (config.serviceTypes.length ? '' : '<span class="muted">Nenhum tipo de serviço cadastrado. Cadastre em CONFIGURAÇÕES › Cadastro › Produto › Tipos de ordem.</span>') + tiposServicoOrdenados().map(s=>`
     <span class="legend-item"><span class="legend-dot" style="background:${serviceColor(s.id)}"></span>${escapeHtml(s.nome)}</span>
   `).join('');
 
@@ -6330,7 +6352,7 @@ function renderAgenda(main){
 
 function openDayModal(iso){
   const dayOrders = orders.filter(o=>o.data===iso && o.status!=='entregue').sort((a,b)=>a.serviceTypeName.localeCompare(b.serviceTypeName));
-  const capacityRows = config.serviceTypes.map(s=>{
+  const capacityRows = tiposServicoOrdenados().map(s=>{
     const res = checkSlot(s.id, iso, null);
     return `<div class="legend-item" style="font-size:13px;">
       <span class="legend-dot" style="background:${serviceColor(s.id)}"></span>
@@ -6534,6 +6556,83 @@ function renderGerarCodigo(main){
   ['click','keydown','mousemove','touchstart','scroll','wheel'].forEach(function(ev){
     document.addEventListener(ev, avisar, { passive:true, capture:true });
   });
+})();
+</script>
+<script>
+/* ===== Ordenar listas (crescente/decrescente) — clique no título da coluna ou use "Ordenar por" ===== */
+(function(){
+  var CSS = '.ord-bar{display:flex;align-items:center;gap:8px;margin:0 0 8px;font-size:12.5px;color:var(--ink-faint,#6b7280);flex-wrap:wrap}'+
+    '.ord-bar select{height:32px;border:1px solid var(--line,#d1d5db);border-radius:8px;padding:0 8px;background:var(--surface,#fff);color:inherit;font:inherit}'+
+    '.ord-bar button{height:32px;min-width:36px;border:1px solid var(--line,#d1d5db);border-radius:8px;background:var(--surface,#fff);color:inherit;cursor:pointer;font:inherit}'+
+    'th.ord-th{cursor:pointer;user-select:none}th.ord-th .ord-seta{opacity:.35;margin-left:4px}th.ord-th.ord-on .ord-seta{opacity:1}';
+  var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
+  function txt(td){ return (td ? td.textContent : '').replace(/\s+/g,' ').trim(); }
+  function parseVal(t){
+    if(!t || t==='—' || t==='-') return {v:null};
+    var d = t.match(/(\d{2})\/(\d{2})\/(\d{4})(?:\D{0,3}(\d{1,2}):(\d{2}))?/); if(d) return {v:+(d[3]+d[2]+d[1])*10000 + (d[4]?(+d[4])*100+(+d[5]):0), k:'d'};
+    var m = t.match(/^([+\-−]?)\s*R\$\s*([+\-−]?)\s*([\d.]+(?:,\d+)?)/);
+    if(m){ var n=parseFloat(m[3].replace(/\./g,'').replace(',','.')); if(/[-−]/.test(m[1]+m[2])) n=-n; return {v:n,k:'n'}; }
+    if(/^[+\-−]?\d+([.,]\d+)?$/.test(t)) return {v:parseFloat(t.replace('−','-').replace(',','.')),k:'n'};
+    return {v:t.toLowerCase(), k:'t'};
+  }
+  function ordenar(table, col, dir){
+    var tb = table.tBodies[0]; if(!tb) return;
+    var rows = Array.prototype.slice.call(tb.rows);
+    var itens = rows.map(function(r,i){ return {r:r, i:i, p:parseVal(txt(r.cells[col]))}; });
+    var tipos = itens.map(function(x){return x.p.k;}).filter(Boolean);
+    var tipo = tipos.length && tipos.every(function(k){return k===tipos[0];}) ? tipos[0] : 't';
+    itens.forEach(function(x){ if(x.p.v!==null && x.p.k!==tipo) x.p = {v:String(txt(x.r.cells[col])).toLowerCase(), k:'t'}; });
+    itens.sort(function(a,b){
+      if(a.p.v===null && b.p.v===null) return a.i-b.i;
+      if(a.p.v===null) return 1; if(b.p.v===null) return -1;
+      var c = tipo==='t' ? String(a.p.v).localeCompare(String(b.p.v),'pt-BR',{numeric:true}) : (a.p.v-b.p.v);
+      return (dir==='desc' ? -c : c) || (a.i-b.i);
+    });
+    itens.forEach(function(x){ tb.appendChild(x.r); });
+  }
+  function marcar(table, col, dir){
+    var ths = table.querySelectorAll('thead th');
+    Array.prototype.forEach.call(ths, function(th,i){
+      th.classList.toggle('ord-on', i===col);
+      var s = th.querySelector('.ord-seta'); if(s) s.textContent = i===col ? (dir==='desc'?'▼':'▲') : '↕';
+    });
+    var bar = table.__ordBar;
+    if(bar){ bar.querySelector('select').value = String(col); bar.querySelector('button').textContent = dir==='desc'?'▼':'▲'; bar.querySelector('button').title = dir==='desc'?'Decrescente':'Crescente'; }
+  }
+  function ativar(table){
+    if(table.dataset.ord || table.hasAttribute('data-nosort')) return;
+    var ths = table.querySelectorAll('thead th'); var tb = table.tBodies[0];
+    if(!ths.length || !tb || tb.rows.length<2) return;
+    if(table.classList.contains('tabela-kv') || table.closest('#modalOverlay,#modalBox,.modal,.modal-overlay,[role="dialog"]') || table.querySelector('tbody input,tbody select,tbody textarea')) return;
+    for(var k=0;k<tb.rows.length;k++){ if(tb.rows[k].cells.length!==ths.length || tb.rows[k].querySelector('[colspan]')) return; }
+    table.dataset.ord = '1';
+    var estado = {col:-1, dir:'asc'};
+    function aplicar(col, dir){ estado.col=col; estado.dir=dir; ordenar(table,col,dir); marcar(table,col,dir); }
+    var opts = '';
+    Array.prototype.forEach.call(ths, function(th,i){
+      var nome = th.textContent.trim(); if(!nome) return;
+      th.classList.add('ord-th'); th.setAttribute('title','Clique para ordenar');
+      var s = document.createElement('span'); s.className='ord-seta'; s.textContent='↕'; th.appendChild(s);
+      th.addEventListener('click', function(){ aplicar(i, (estado.col===i && estado.dir==='asc') ? 'desc' : 'asc'); });
+      opts += '<option value="'+i+'">'+nome.replace(/</g,'&lt;')+'</option>';
+    });
+    var bar = document.createElement('div'); bar.className='ord-bar';
+    bar.innerHTML = '<span>Ordenar por</span><select aria-label="Ordenar por">'+opts+'</select><button type="button" aria-label="Inverter ordem" title="Crescente">▲</button>';
+    bar.querySelector('select').value = '-1';
+    bar.querySelector('select').selectedIndex = -1;
+    bar.querySelector('select').addEventListener('change', function(e){ aplicar(+e.target.value, estado.dir); });
+    bar.querySelector('button').addEventListener('click', function(){
+      if(estado.col<0){ var sel=bar.querySelector('select'); estado.col = +(sel.options[0] && sel.options[0].value) || 0; }
+      aplicar(estado.col, estado.dir==='asc'?'desc':'asc');
+    });
+    table.__ordBar = bar;
+    var alvo = table.parentNode && table.parentNode.style && table.parentNode.style.overflowX ? table.parentNode : table;
+    alvo.parentNode.insertBefore(bar, alvo);
+  }
+  var agendado = false;
+  function varrer(){ agendado=false; Array.prototype.forEach.call(document.querySelectorAll('table'), ativar); }
+  new MutationObserver(function(){ if(!agendado){ agendado=true; setTimeout(varrer, 80); } }).observe(document.body, {childList:true, subtree:true});
+  varrer();
 })();
 </script>
 <script src="modal-x.js"></script>
