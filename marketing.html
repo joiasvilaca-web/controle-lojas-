@@ -1167,8 +1167,15 @@ function tempoEstimado(n){
   let s = 0; for(let i=1;i<=n;i++){ const f = Math.pow(1.1, Math.floor((i-1)/30)); s += (i%30===0 ? 120 : 30) * f; }
   const min = Math.round(s/60); return min < 60 ? `${Math.max(1,min)} min de envio` : `${Math.floor(min/60)} h ${min%60} min de envio`;
 }
+/** 07/11: só celular no padrão (DDD + 9 + 8 dígitos). Mesma regra do servidor (marketing-disparo). */
+function celularPadrao(t){
+  let d = String(t||'').replace(/\D/g,'');
+  if(d.length===13 && d.startsWith('55')) d = d.slice(2);
+  return d.length===11 && Number(d.slice(0,2))>=11 && d[2]==='9';
+}
+const hhmm = iso => new Date(iso).toLocaleTimeString('pt-BR',{ hour:'2-digit', minute:'2-digit' });
 const TIPO_ROT = { aniversario:'Aniversário', posVenda:'Pós-venda', campanha:'Mala direta', chamar:'Chamar cliente' };
-const STATUS_ROT = { pendente:['Na fila','info'], enviado:['Enviado','ok'], falhou:['Erro','erro'], expirado:['Aniversário cancelado (fora do horário)','pend'], cancelado:['Cancelado',''] };
+const STATUS_ROT = { pendente:['Na fila','info'], enviado:['Enviado','ok'], falhou:['Erro','erro'], expirado:['Aniversário cancelado (fora do horário)','pend'], cancelado:['Cancelado','erro'] };
 async function carregarFila(){
   const box = document.getElementById('filaConteudo');
   box.innerHTML = '<div class="card"><div class="carregando">Buscando a fila…</div></div>';
@@ -1187,6 +1194,7 @@ async function carregarFila(){
         <span>${r.dentroDoHorario ? '<span class="selo ok">Enviando agora (9h–18h)</span>' : '<span class="selo pend">Fora do horário: volta às 9h</span>'}</span>
         <span><b>${pend.length}</b> na fila</span>
         <span><b>${enviadosHoje}</b> enviadas hoje</span>
+        ${(()=>{ const ag = pend.filter(p=>p.agendado_para).map(p=>new Date(p.agendado_para).getTime()).sort((a,b)=>a-b); return ag.length ? `<span class="muted">aniversário: próxima ${hhmm(ag[0])}, última ${hhmm(ag[ag.length-1])}</span>` : ''; })()}
         ${pend.length && prox && r.dentroDoHorario ? `<span class="muted">próxima por volta de ${prox.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>` : ''}
         ${pend.length ? `<span class="muted">tempo para esvaziar: ${tempoEstimado(pend.length)}</span>` : ''}
       </div>
@@ -1253,6 +1261,7 @@ async function abrirChamarCliente(){
     const txt = document.getElementById('ccTexto').value.trim();
     if(!escolhido){ showToast('Escolha o cliente na lista.'); return; }
     if(!txt){ showToast('Escreva a mensagem.'); return; }
+    if(!celularPadrao(escolhido.telefone)){ showToast('Telefone fora do padrão de celular (DDD + 9 + 8 dígitos). Corrija o cadastro do cliente antes de enviar.', 6000); return; }
     if(!(await MarketingOff.permitir({ telefone:escolhido.telefone, nome:escolhido.nome, tags:escolhido.tags||[] }))) return;
     const b = document.getElementById('ccEnviar'); b.disabled = true;
     // 06/11: "Chamar cliente" NÃO entra na fila: passa na frente e vai agora pelo número de disparo (instância vilaca; sem lojaId = vilaca)
@@ -1306,9 +1315,34 @@ async function confirmarEnvioMalaDireta(){
   if(lista.length===0){ showToast('Nenhum cliente nesse grupo. Escolha outro grupo em Para quem enviar.'); return; }
   if(!viaWa && !viaEmail){ showToast('Marque WhatsApp, e-mail ou os dois.'); return; }
 
+  // 07/11: prévia do WhatsApp — telefones fora do padrão são cancelados; aniversário é distribuído ao longo do dia (até 18h)
+  let avisoWa = '';
+  if(viaWa){
+    const comTel = lista.filter(c=>c.telefone);
+    const ruins = comTel.filter(c=>!celularPadrao(c.telefone)).length;
+    const filtroAtual = document.querySelector('input[name="mdFiltro"]:checked')?.value || 'todos';
+    const ehAniv = filtroAtual==='aniversariantes';
+    const semTel = lista.length - comTel.length;
+    const partes = [];
+    if(ehAniv){
+      const pl = await chamarDisparo({ op:'planejar', itens: comTel.map(c=>({ tipo:'aniversario', nome:c.nome, telefone:c.telefone, texto:texto })) });
+      if(pl && pl.ok){
+        const p = pl.plano || {};
+        if(p.passou) partes.push(`<b>Já passou das 18h</b>: aniversário só vale no dia, então nenhuma mensagem será enviada.`);
+        else if(p.agendados) partes.push(`O WhatsApp vai sair sozinho pelo número de disparo: <b>${p.agendados} mensagem(ns)</b> espalhadas entre <b>${hhmm(p.de)}</b> e <b>18h</b>, com intervalos variados (em média 1 a cada ${p.intervaloMedioS>=90 ? Math.round(p.intervaloMedioS/60)+' min' : p.intervaloMedioS+' s'}). Pode fechar o app.`);
+        if(p.naoCouberam && !p.passou) partes.push(`<b>${p.naoCouberam}</b> não cabem no tempo que resta hoje e serão canceladas.`);
+      }
+    } else if(comTel.length-ruins>0){
+      partes.push(`O WhatsApp entra na <b>fila de envios</b> e sai sozinho pelo número de disparo: 1 a cada 30 s, das 9h às 18h (${comTel.length-ruins} com telefone válido; mais ou menos ${tempoEstimado(comTel.length-ruins)}). Pode fechar o app.`);
+    }
+    if(ruins) partes.push(`<b style="color:var(--danger,#B3261E)">${ruins} telefone(s) fora do padrão de celular</b> (DDD + 9 + 8 dígitos): essas mensagens serão <b>canceladas</b> e ficam registradas na Fila de envios.`);
+    if(semTel) partes.push(`${semTel} cliente(s) sem telefone ficam só no e-mail, se marcado.`);
+    avisoWa = partes.map(x=>`<p style="margin:8px 0 0;">${x}</p>`).join('');
+  }
   openModal(`
     <h3>Confirmar envio</h3>
-    <p>Esta mensagem vai para <b>${lista.length} cliente(s)</b> por ${[viaWa?'WhatsApp':'',viaEmail?'e-mail':''].filter(Boolean).join(' e ')}.${viaWa?` O WhatsApp entra na <b>fila de envios</b> e sai sozinho pelo número de disparo: 1 a cada 30 s, das 9h às 18h (${lista.filter(c=>c.telefone).length} com telefone; mais ou menos ${tempoEstimado(lista.filter(c=>c.telefone).length)}). Pode fechar o app.`:''}</p>
+    <p>Esta mensagem vai para <b>${lista.length} cliente(s)</b> por ${[viaWa?'WhatsApp':'',viaEmail?'e-mail':''].filter(Boolean).join(' e ')}.</p>
+    ${avisoWa}
     <div class="previa-msg">${escapeHtml(texto).replace(/\n/g,'<br>')}</div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -1333,8 +1367,14 @@ async function executarEnvioMalaDireta(lista, texto, viaWa, viaEmail){
     if(itens.length){
       const r = await chamarDisparo({ op:'enfileirar', itens });
       if(r && r.ok){
-        showToast(`${r.qtd} mensagem(ns) de WhatsApp na fila.${r.foraDoHorario?' Agora está fora do horário (9h–18h): começam no próximo horário permitido.':''}`, 6000);
-        if(tipo==='aniversario') for(const c of lista){ if(c.id && !String(c.id).startsWith('via:')){ try{ await marcarAniversarioEnviado(c.id); }catch(e){} } }
+        const pl = r.plano || {};
+        let msg = `${r.qtd} mensagem(ns) de WhatsApp na fila.`;
+        if(tipo==='aniversario' && pl.agendados) msg = `${pl.agendados} aniversário(s) agendados entre ${hhmm(pl.de)} e 18h.`;
+        if(r.invalidos) msg += ` ${r.invalidos} cancelada(s) por telefone fora do padrão.`;
+        if(pl.naoCouberam) msg += ` ${pl.naoCouberam} não couberam no horário de hoje e foram canceladas.`;
+        if(r.foraDoHorario && tipo!=='aniversario') msg += ' Agora está fora do horário (9h–18h): começam no próximo horário permitido.';
+        showToast(msg, 8000);
+        if(tipo==='aniversario') for(const c of lista){ if(c.id && !String(c.id).startsWith('via:') && celularPadrao(c.telefone)){ try{ await marcarAniversarioEnviado(c.id); }catch(e){} } }
       } else { showToast('Não foi possível colocar na fila: ' + ((r && r.error) || 'erro desconhecido'), 6000); }
     }
   }

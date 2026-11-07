@@ -1,3 +1,6 @@
+// marketing-disparo v3 (07/11/2026) — ANIVERSÁRIO AGENDADO: ao apertar enviar, o servidor conta quantas mensagens são, vê o tempo que sobra até as 18h
+//   (a partir de agora, ou das 9h) e distribui os envios nesse período, com intervalos variados (coluna agendado_para). Os outros tipos (mala direta, pós-venda)
+//   seguem o ritmo antigo (30 s...). TELEFONE: só celular no padrão (DDD + 9 + 8 dígitos); fora disso a mensagem nasce CANCELADA (e nunca é enviada). Op nova: planejar (prévia).
 // marketing-disparo v2 (06/11/2026) — v2: op processar aceita ignorarHorario (teste manual, só com a chave do agendamento).
 // marketing-disparo v1 (06/11/2026) — fila de WhatsApp do módulo MARKETING (número de disparo "vilaca").
 // App (com sessão): enfileirar / fila / cancelar.  pg_cron (todo minuto, header x-cron-token): processar.
@@ -33,12 +36,32 @@ function podeMarketing(u: any) {
   const p = u.permissoes && u.permissoes.marketing;
   return !(p && p.ativo === false);
 }
+/** 07/11: só celular no padrão — DDD (11 a 99) + 9 + 8 dígitos (11 dígitos; aceita o 55 na frente). Qualquer outra coisa é inválida e NÃO é corrigida aqui. */
 function normalizaTelefone(t: string): string | null {
   let d = String(t || "").replace(/\D/g, "");
-  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
-  if (d.length === 10) d = d.slice(0, 2) + "9" + d.slice(2);
+  if (d.length === 13 && d.startsWith("55")) d = d.slice(2);
   if (d.length !== 11) return null;
+  if (Number(d.slice(0, 2)) < 11 || d[2] !== "9") return null;
   return "55" + d;
+}
+const ERRO_FONE = "Telefone fora do padrão de celular (DDD + 9 + 8 dígitos): não enviado";
+const PISO_SEG_MS = 60000;   // cada mensagem do aniversário ocupa no mínimo 1 min da janela (intervalo real nunca menor que ~18 s)
+/** Janela de hoje (Brasília): de agora (ou das 9h) até as 18h. Devolve null se já passou. */
+function janelaHoje(agoraMs = Date.now(), aposMs = 0) {
+  const b = agoraBR(agoraMs);
+  const ini = Date.parse(`${b.dia}T${String(HORA_INI).padStart(2, "0")}:00:00-03:00`);
+  const fim = Date.parse(`${b.dia}T${String(HORA_FIM).padStart(2, "0")}:00:00-03:00`);
+  const de = Math.max(agoraMs + 30000, ini, aposMs);
+  if (de >= fim - 60000) return null;
+  return { de, ate: fim };
+}
+/** Distribui n envios na janela: a janela é cortada em n partes iguais e cada mensagem sai num ponto sorteado dentro da sua parte (intervalos variados). */
+function distribuir(n: number, jan: { de: number; ate: number }) {
+  const cabem = Math.min(n, Math.floor((jan.ate - jan.de) / PISO_SEG_MS));
+  const seg = cabem > 0 ? (jan.ate - jan.de) / cabem : 0;
+  const horas: number[] = [];
+  for (let i = 0; i < cabem; i++) horas.push(Math.round(jan.de + seg * (i + 0.15 + Math.random() * 0.7)));
+  return { cabem, seg, horas };
 }
 /** Data (AAAA-MM-DD) e hora em Brasília. */
 function agoraBR(ms = Date.now()) {
@@ -77,30 +100,52 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
   const H = { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY };
   let conectado: boolean | null = null, enviados = 0;
   try {
+    const garantirConexao = async () => {
+      if (conectado !== null) return conectado;
+      try {
+        const rs = await fetch(`${seg.EVOLUTION_URL}/instance/connectionState/${INSTANCIA}`, { headers: H, signal: AbortSignal.timeout(8000) });
+        const js = await rs.json().catch(() => ({}));
+        conectado = String((js && js.instance && js.instance.state) || "") === "open";
+      } catch (_) { conectado = false; }
+      return conectado;
+    };
     while (Date.now() - inicio < LIMITE) {
       if (!dentroDoHorario()) break;
-      const prox = new Date(est.proximo_em || 0).getTime();
-      if (Date.now() < prox) { const w = prox - Date.now(); if (Date.now() - inicio + w > LIMITE) break; await espera(w); continue; }
-      // próximo item: tipos embaralhados, evitando repetir o último tipo
-      const { data: pend } = await admin.from("marketing_fila").select("id, tipo").eq("status", "pendente").order("id", { ascending: true }).limit(500);
-      if (!pend || !pend.length) { est.proximo_em = new Date().toISOString(); break; }
-      const tipos = [...new Set(pend.map((p: any) => p.tipo))];
-      const candidatos = tipos.length > 1 ? tipos.filter((t) => t !== est.ultimo_tipo) : tipos;
-      const tipo = candidatos[Math.floor(Math.random() * candidatos.length)];
-      const alvo = pend.find((p: any) => p.tipo === tipo);
-      const { data: item } = await admin.from("marketing_fila").select("*").eq("id", alvo.id).eq("status", "pendente").maybeSingle();
-      if (!item) continue;
-      if (conectado === null) {
-        try {
-          const rs = await fetch(`${seg.EVOLUTION_URL}/instance/connectionState/${INSTANCIA}`, { headers: H, signal: AbortSignal.timeout(8000) });
-          const js = await rs.json().catch(() => ({}));
-          conectado = String((js && js.instance && js.instance.state) || "") === "open";
-        } catch (_) { conectado = false; }
-        if (!conectado) break;   // WhatsApp de disparo fora do ar: tudo fica pendente
+      const agoraIso = new Date().toISOString();
+      // 1) aniversário AGENDADO que já chegou na hora (não obedece ao ritmo geral: cada um tem o seu horário)
+      let item: any = null, agendado = false;
+      {
+        const { data: due } = await admin.from("marketing_fila").select("*").eq("status", "pendente").eq("tipo", "aniversario").not("agendado_para", "is", null).lte("agendado_para", agoraIso).order("agendado_para", { ascending: true }).limit(1);
+        if (due && due[0]) { item = due[0]; agendado = true; }
       }
+      // 2) demais tipos (e aniversário antigo, sem horário): ritmo geral
+      if (!item) {
+        const prox = new Date(est.proximo_em || 0).getTime();
+        const { data: pend } = await admin.from("marketing_fila").select("id, tipo").eq("status", "pendente").or("tipo.neq.aniversario,agendado_para.is.null").order("id", { ascending: true }).limit(500);
+        const temGeral = !!(pend && pend.length);
+        if (temGeral && Date.now() >= prox) {
+          const tipos = [...new Set(pend!.map((p: any) => p.tipo))];
+          const candidatos = tipos.length > 1 ? tipos.filter((t) => t !== est.ultimo_tipo) : tipos;
+          const tipo = candidatos[Math.floor(Math.random() * candidatos.length)];
+          const alvo = pend!.find((p: any) => p.tipo === tipo);
+          const { data: it } = await admin.from("marketing_fila").select("*").eq("id", alvo.id).eq("status", "pendente").maybeSingle();
+          if (!it) continue;
+          item = it;
+        } else {
+          // nada para agora: espera o próximo horário (se couber nesta execução) ou encerra
+          let proximoMs = temGeral ? prox : Infinity;
+          const { data: fut } = await admin.from("marketing_fila").select("agendado_para").eq("status", "pendente").eq("tipo", "aniversario").not("agendado_para", "is", null).order("agendado_para", { ascending: true }).limit(1);
+          if (fut && fut[0]) proximoMs = Math.min(proximoMs, new Date(fut[0].agendado_para).getTime());
+          if (!isFinite(proximoMs)) { est.proximo_em = est.proximo_em || new Date().toISOString(); break; }
+          const w = proximoMs - Date.now();
+          if (w > 0) { if (Date.now() - inicio + w > LIMITE) break; await espera(w); }
+          continue;
+        }
+      }
+      if (!(await garantirConexao())) break;   // WhatsApp de disparo fora do ar: tudo fica pendente
       const numero = normalizaTelefone(item.telefone);
       let ok = false, erro = "";
-      if (!numero) erro = "Telefone inválido";
+      if (!numero) erro = ERRO_FONE;
       else {
         try {
           const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${INSTANCIA}`, { method: "POST", headers: H, body: JSON.stringify({ number: numero, text: item.texto }), signal: AbortSignal.timeout(20000) });
@@ -110,16 +155,21 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
         } catch (e) { erro = "Falha de conexão"; }
       }
       const tent = Number(item.tentativas || 0) + 1;
-      await admin.from("marketing_fila").update(ok
+      const falhaFinal = !numero || tent >= 3;
+      const upd: any = ok
         ? { status: "enviado", enviado_em: new Date().toISOString(), tentativas: tent, erro: null, atualizado_em: new Date().toISOString() }
-        : { status: (!numero || tent >= 3) ? "falhou" : "pendente", tentativas: tent, erro, atualizado_em: new Date().toISOString() }).eq("id", item.id);
+        : { status: !numero ? "cancelado" : falhaFinal ? "falhou" : "pendente", tentativas: tent, erro, atualizado_em: new Date().toISOString() };
+      if (!ok && !falhaFinal && agendado) upd.agendado_para = new Date(Date.now() + 5 * 60000).toISOString();   // tenta de novo daqui a 5 min
+      await admin.from("marketing_fila").update(upd).eq("id", item.id);
       if (!numero) continue;   // não gastou envio
-      // tempo até a próxima: 30 s (2 min a cada 30), +10% por ciclo de 30 no dia
-      est.enviados_dia = Number(est.enviados_dia || 0) + 1; est.ultimo_tipo = item.tipo; enviados++;
-      const ciclo = Math.floor((est.enviados_dia - 1) / POR_CICLO);
-      const fator = Math.pow(AUMENTO, ciclo);
-      const seg_ = (est.enviados_dia % POR_CICLO === 0 ? PAUSA_S : INTERVALO_S) * fator;
-      est.proximo_em = new Date(Date.now() + seg_ * 1000).toISOString();
+      est.enviados_dia = Number(est.enviados_dia || 0) + 1; est.ultimo_tipo = agendado ? est.ultimo_tipo : item.tipo; enviados++;
+      if (!agendado) {
+        // tempo até a próxima (ritmo geral): 30 s (2 min a cada 30), +10% por ciclo de 30 no dia
+        const ciclo = Math.floor((est.enviados_dia - 1) / POR_CICLO);
+        const fator = Math.pow(AUMENTO, ciclo);
+        const seg_ = (est.enviados_dia % POR_CICLO === 0 ? PAUSA_S : INTERVALO_S) * fator;
+        est.proximo_em = new Date(Date.now() + seg_ * 1000).toISOString();
+      }
       await admin.from("marketing_disparo_estado").update({ dia: est.dia, enviados_dia: est.enviados_dia, proximo_em: est.proximo_em, ultimo_tipo: est.ultimo_tipo }).eq("id", 1);
     }
   } finally {
@@ -144,24 +194,54 @@ Deno.serve(async (req: Request) => {
     if (!user) return json({ error: "Sessão expirada. Entre de novo." }, 401);
     if (!podeMarketing(user)) return json({ error: "Sem permissão para o Marketing." }, 403);
 
-    if (op === "enfileirar") {
-      const itens = Array.isArray(body.itens) ? body.itens.slice(0, 5000) : [];
+    /** Linhas prontas (sem telefone válido já saem canceladas) + plano de horários do aniversário. */
+    const montarLinhas = async (itens: any[], user: any) => {
       const hoje = agoraBR().dia;
-      const linhas = itens.map((x: any) => ({
+      const base = itens.map((x: any) => ({
         tipo: TIPOS.includes(x.tipo) ? x.tipo : "campanha", campanha: String(x.campanha || "").slice(0, 120),
         cliente_nome: String(x.nome || "").slice(0, 160), telefone: String(x.telefone || "").slice(0, 40),
         texto: String(x.texto || "").slice(0, 3000), loja_id: x.lojaId ? String(x.lojaId) : null, cliente_id: x.clienteId ? String(x.clienteId) : null,
-        criado_por: user.apelido || user.nome || "", dia_criacao: hoje, status: "pendente",
+        criado_por: (user && (user.apelido || user.nome)) || "", dia_criacao: hoje, status: "pendente" as string, erro: null as string | null, agendado_para: null as string | null,
       })).filter((l: any) => l.texto.trim() && l.telefone);
+      const invalidos: any[] = [], validos: any[] = [];
+      for (const l of base) (normalizaTelefone(l.telefone) ? validos : invalidos).push(l);
+      for (const l of invalidos) { l.status = "cancelado"; l.erro = ERRO_FONE; }
+      const aniv = validos.filter((l: any) => l.tipo === "aniversario");
+      let plano: any = { aniversario: aniv.length, agendados: 0, naoCouberam: 0, passou: false };
+      if (aniv.length) {
+        // novo lote começa depois do último horário já reservado (um segundo clique no mesmo dia não amontoa mensagens)
+        const { data: ult } = await admin.from("marketing_fila").select("agendado_para").eq("status", "pendente").eq("tipo", "aniversario").not("agendado_para", "is", null).order("agendado_para", { ascending: false }).limit(1);
+        const apos = ult && ult[0] ? new Date(ult[0].agendado_para).getTime() + 30000 : 0;
+        const jan = janelaHoje(Date.now(), apos);
+        if (!jan) { plano.passou = true; for (const l of aniv) { l.status = "cancelado"; l.erro = "Sem tempo hoje: aniversário só vale no dia, entre 9h e 18h"; } plano.naoCouberam = aniv.length; }
+        else {
+          const d = distribuir(aniv.length, jan);
+          aniv.forEach((l: any, i: number) => { if (i < d.cabem) l.agendado_para = new Date(d.horas[i]).toISOString(); else { l.status = "cancelado"; l.erro = "Não coube no horário de hoje (até 18h)"; } });
+          plano = { ...plano, agendados: d.cabem, naoCouberam: aniv.length - d.cabem, de: new Date(jan.de).toISOString(), ate: new Date(jan.ate).toISOString(), intervaloMedioS: d.cabem ? Math.round(d.seg / 1000) : 0 };
+        }
+      }
+      return { linhas: base, invalidos: invalidos.length, plano };
+    };
+
+    if (op === "planejar") {
+      const itens = Array.isArray(body.itens) ? body.itens.slice(0, 5000) : [];
+      const { linhas, invalidos, plano } = await montarLinhas(itens, user);
+      const ativos = linhas.filter((l: any) => l.status === "pendente").length;
+      return json({ ok: true, total: linhas.length, validos: linhas.length - invalidos, invalidos, ativos, plano, dentroDoHorario: dentroDoHorario(agoraBR()) });
+    }
+    if (op === "enfileirar") {
+      const itens = Array.isArray(body.itens) ? body.itens.slice(0, 5000) : [];
+      const { linhas, invalidos, plano } = await montarLinhas(itens, user);
       if (!linhas.length) return json({ error: "Nada para enviar (sem telefone ou sem texto)." }, 400);
       for (let i = 0; i < linhas.length; i += 500) { const { error } = await admin.from("marketing_fila").insert(linhas.slice(i, i + 500)); if (error) throw error; }
-      try { await admin.from("auditoria_log").insert({ usuario_id: user.id || null, usuario_nome: user.nome || null, nivel: user.nivel || null, acao: "marketing_enfileirar", modulo: "Marketing", tabela: "marketing_fila", resumo: `Colocou ${linhas.length} mensagem(ns) na fila de WhatsApp (${[...new Set(linhas.map((l: any) => l.tipo))].join(", ")})`, detalhe: { campanha: linhas[0].campanha } }); } catch (_) {}
+      try { await admin.from("auditoria_log").insert({ usuario_id: user.id || null, usuario_nome: user.nome || null, nivel: user.nivel || null, acao: "marketing_enfileirar", modulo: "Marketing", tabela: "marketing_fila", resumo: `Colocou ${linhas.length - invalidos} mensagem(ns) na fila de WhatsApp (${[...new Set(linhas.map((l: any) => l.tipo))].join(", ")})${invalidos ? `; ${invalidos} cancelada(s) por telefone fora do padrão` : ""}`, detalhe: { campanha: linhas[0].campanha, plano } }); } catch (_) {}
       const b = agoraBR();
-      return json({ ok: true, qtd: linhas.length, foraDoHorario: !dentroDoHorario(b) });
+      const ativos = linhas.filter((l: any) => l.status === "pendente").length;
+      return json({ ok: true, qtd: ativos, invalidos, plano, foraDoHorario: !dentroDoHorario(b) });
     }
     if (op === "fila") {
       const desde = new Date(Date.now() - 3 * 86400000).toISOString();
-      const { data: pend } = await admin.from("marketing_fila").select("id, tipo, campanha, cliente_nome, telefone, status, criado_em, criado_por, dia_criacao").eq("status", "pendente").order("id").limit(1000);
+      const { data: pend } = await admin.from("marketing_fila").select("id, tipo, campanha, cliente_nome, telefone, status, criado_em, criado_por, dia_criacao, agendado_para").eq("status", "pendente").order("id").limit(1000);
       const { data: rec } = await admin.from("marketing_fila").select("id, tipo, campanha, cliente_nome, telefone, status, criado_em, enviado_em, erro, criado_por, atualizado_em").neq("status", "pendente").gte("atualizado_em", desde).order("atualizado_em", { ascending: false }).limit(300);
       const { data: est } = await admin.from("marketing_disparo_estado").select("dia, enviados_dia, proximo_em").eq("id", 1).maybeSingle();
       const b = agoraBR();
