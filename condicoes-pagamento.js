@@ -15,7 +15,7 @@
   function formas(config){ return ((config && config.formasPagamento) || []).concat((config && config.paymentTypes) || []); }
   /* 07/11 (Felipe): DÉBITO deixa de ter os 20% do cartão — fica igual ao Pix — para pagamentos de 08/11/2026 em diante.
      Pagamento antigo (data anterior ao corte) continua como cartão, para não mexer em vias já lançadas. */
-  var CORTE_DEBITO = '2026-11-08';
+  var CORTE_DEBITO = '2026-11-07';   // antecipado a pedido (07/11): pagamento de débito de 07/11 em diante sem acréscimo; os 4 de 07/11 já lançados com 20% levam debitoAntigo:true
   function hojeLocal(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function ehDebito(f){ var n = (f && f.nome) || ''; return /d[eé]bito/i.test(n) && !/cr[eé]dito|link\s*eco/i.test(n); }
   function ehCartao(formaId, config, p){
@@ -23,7 +23,7 @@
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
     /* "Funciona como cartão" marcado na forma (ex.: LINK ECO: +20%, até 12x) ou nome de cartão */
     var cart = !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));
-    if(cart && ehDebito(f)){ var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
+    if(cart && ehDebito(f)){ if(p && p.debitoAntigo) return true; var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
     return cart;
   }
   /* Quanto do valor à vista este pagamento quita. */
