@@ -1406,7 +1406,7 @@ async function aplicarEscolhaLoja(escolhida){
   if(eraForcado){
     const perm = SIDEBAR_MODULES.filter(podeVerModulo);
     let alvo = null;
-    if(currentUser.nivel==='vendedora') alvo = perm.find(m=>m.id==='caixa');
+    if(currentUser.nivel==='vendedora') alvo = perm.find(m=>m.id==='pdvg') || perm.find(m=>m.id==='caixa');
     if(!alvo && currentUser.nivel==='gerente'){ alvo = perm.find(m=>m.id==='dashboard'); try{ localStorage.setItem('vilaca_dash_aba','geral'); }catch(e){} }
     if(!alvo) alvo = perm.find(m=>m.id==='dashboard') || perm.find(m=>m.id!=='config' && m.id!=='loja') || perm[0];
     if(alvo) selecionarModulo(alvo.id);
@@ -1468,7 +1468,9 @@ const SIDEBAR_MODULES = [
   { id:'dashboard', label:'PAINEL', icon:'📊', src:null },
   // CAIXA: antigo CUPOM (Vendas, Pedido, Orçamento, Transferências, Gravações) + Caixa
   // (Resumo, Gastos, Conciliação) + Reforma + Aniversário (que era do Marketing).
-  { id:'caixa', label:'CAIXA', icon:'💰', src:null },
+  // 08/11: PDV (Venda, Pedido, Orçamento, Resumo do caixa, Reservar, Buscar via) é o balcão; o antigo CAIXA virou ADM (id interno continua 'caixa').
+  { id:'pdvg', label:'PDV', icon:'🛒', src:null },
+  { id:'caixa', label:'ADM', icon:'💰', src:null },
   { id:'atendimento', label:'CHAT', icon:'💬', src:'atendimento.html' },
   { id:'lancamentos', label:'LANÇAMENTOS', icon:'🧮', src:'lancamentos.html' }, // módulo temporário (diretoria/gerente)
   { id:'site', label:'SITE', icon:'🌐', src:'site.html' },
@@ -1478,15 +1480,21 @@ const SIDEBAR_MODULES = [
 // Módulo CAIXA: tela de cartões com todas as sub-telas, cada uma em seu iframe
 // próprio. As permissões continuam sendo as de cada módulo antigo (vendas, os,
 // orcamentos, transferencias, gravacoes, caixa, gastos, conciliacao, reforma, marketing).
-const CAIXA_SUBMODULOS = {
-  pdv:    { label:'Vendas', icon:'🛒', src:'vendas.html', permModulo:'vendas' },
-  reserva:{ label:'Reservar', icon:'🔖', src:'vendas.html?modo=reserva', permModulo:'reserva' },
-  cancel: { label:'Cancelamento', icon:'↩️', src:'vendas.html?modo=cancelamento', permModulo:'cancelamento' },   // buscar e cancelar vias (venda/pedido) + devoluções   // reserva de joias (código 9): sem caixa; permissão = a de Vendas
+// PDV (id interno 'pdvg'): o balcão. Cada cartão abre o mesmo módulo de antes; os iframes continuam com a chave 'caixa_<sub>' (chaveIframeSub).
+const PDV_SUBMODULOS = {
+  pdv:    { label:'Venda', icon:'🛒', src:'vendas.html', permModulo:'vendas' },
   os:     { label:'Pedido', icon:'🧾', src:'painel-ordens.html', permModulo:'os' },
   orc:    { label:'Orçamento', icon:'📝', src:'orcamentos.html', permModulo:'orcamentos' },
+  resumo: { label:'Resumo do caixa', icon:'💰', src:'caixa.html', permModulo:'caixa' },
+  reserva:{ label:'Reservar', icon:'🔖', src:'vendas.html?modo=reserva', permModulo:'reserva' },
+  buscarvia:{ label:'Buscar via', icon:'🔍', src:null, permModulo:'buscarvia' },   // ação (abre a busca de via), não é iframe
+};
+const chaveIframeSub = (grupo, sub)=> (grupo==='pdvg' ? 'caixa' : grupo) + '_' + sub;
+let pdvSubAtual = null;
+const CAIXA_SUBMODULOS = {
+  cancel: { label:'Cancelamento', icon:'↩️', src:'vendas.html?modo=cancelamento', permModulo:'cancelamento' },   // buscar e cancelar vias (venda/pedido) + devoluções   // reserva de joias (código 9): sem caixa; permissão = a de Vendas
   transf: { label:'Transferências', icon:'🔁', src:'transferencias-reposicoes.html', permModulo:'transferencias' },
   grav:   { label:'Gravações', icon:'✍️', src:'gravacoes.html', permModulo:'gravacoes' },
-  resumo: { label:'Resumo do caixa', icon:'💰', src:'caixa.html', permModulo:'caixa' },
   gastos: { label:'Gastos', icon:'💸', src:'gastos.html', permModulo:'gastos' },
   conciliacao: { label:'Conciliação', icon:'🔄', src:'conciliacao.html', permModulo:'conciliacao' },
   reforma:{ label:'Reforma', icon:'💍', src:'reforma-admin.html', permModulo:'reforma' },
@@ -1508,10 +1516,23 @@ function subVendasPermitidos(){
   if(currentPermissoes['gravacoes'] && currentPermissoes['gravacoes'].ativo) out.push('grav');
   return out;
 }
+/* PDV: Venda, Reservar, Pedido, Orçamento, Resumo do caixa e Buscar via. A Oficina só tem o Buscar via (abre a via no cartão OFICINA). */
+function podeBuscarVia(){ return subVendasPermitidos().length>0; }
+function subPdvPermitidos(){
+  const ativo = k=> !!(currentPermissoes[k] && currentPermissoes[k].ativo);
+  if(currentUser && currentUser.nivel==='oficina') return podeBuscarVia() ? ['buscarvia'] : [];
+  const out = [];
+  if(ativo('vendas')) out.push('pdv');
+  if(ativo('os')) out.push('os');
+  if(ativo('orcamentos')) out.push('orc');
+  if(ativo('caixa')) out.push('resumo');
+  if(podeBuscarVia()) out.push('buscarvia');
+  if(ativo('vendas')) out.push('reserva');
+  return out;
+}
 function subCaixaPermitidos(){
-  const out = subVendasPermitidos();
+  const out = subVendasPermitidos().filter(x=>!['pdv','reserva','os','orc'].includes(x));
   if(['vendas','os','orcamentos','caixa'].some(k=>currentPermissoes[k] && currentPermissoes[k].ativo)) out.push('preco');
-  if(currentPermissoes['caixa'] && currentPermissoes['caixa'].ativo) out.push('resumo');
   if(currentPermissoes['gastos'] && currentPermissoes['gastos'].ativo) out.push('gastos');
   if(currentPermissoes['conciliacao'] && currentPermissoes['conciliacao'].ativo) out.push('conciliacao');
   if(currentPermissoes['reforma'] && currentPermissoes['reforma'].ativo) out.push('reforma');
@@ -1575,6 +1596,7 @@ function subInicialDashboard(){ return subDashboardPermitidos()[0] || 'avisos'; 
 function podeVerModulo(m){
   // Ajuda é liberada pra todo mundo, sempre
   if(m.id==='ajuda') return true;
+  if(m.id==='pdvg') return subPdvPermitidos().length>0;
   if(m.id==='caixa') return subCaixaPermitidos().length>0;
   // PAINEL: 04/11 — vendedora = gerente, então vê o Painel também (nas lojas dela)
   if(m.id==='config') return !!currentUser;   // todos: pelo menos 'Meus dados'
@@ -2179,6 +2201,7 @@ function preaquecerModulos(){
     if(lento || celular) return;
     __prefetchFeito = true;
     const srcs = new Set();
+    subPdvPermitidos().forEach(id=>{ const s = PDV_SUBMODULOS[id]; if(s && s.src) srcs.add(s.src); });
     subCaixaPermitidos().forEach(id=>{ const s = CAIXA_SUBMODULOS[id]; if(s && s.src) srcs.add(s.src); });
     subDashboardPermitidos().forEach(id=>{ const s = DASHBOARD_SUBMODULOS[id]; if(s && s.src) srcs.add(s.src); });
     Object.values(CONFIG_SUBMODULOS).forEach(s=>{ if(s.src && currentPermissoes[s.permModulo] && currentPermissoes[s.permModulo].ativo) srcs.add(s.src); });
@@ -2237,7 +2260,8 @@ function enterShell(moduloInicial){
   try{ recarga = sessionStorage.getItem('vilaca_aba_viva') === '1'; sessionStorage.setItem('vilaca_aba_viva','1'); }catch(e){}
   if(!recarga || !moduloInicial){   // login novo também segue a regra
     const nv = currentUser && currentUser.nivel;
-    if(nv === 'vendedora' && permitidos.some(m=>m.id==='caixa')) moduloInicial = 'caixa';
+    if(nv === 'vendedora' && permitidos.some(m=>m.id==='pdvg')) moduloInicial = 'pdvg';
+    else if(nv === 'vendedora' && permitidos.some(m=>m.id==='caixa')) moduloInicial = 'caixa';
     else if((nv === 'gerente' || nv === 'diretoria') && permitidos.some(m=>m.id==='dashboard')){
       moduloInicial = 'dashboard';
       try{ localStorage.setItem('vilaca_dash_aba','geral'); }catch(e){}
@@ -2359,23 +2383,26 @@ function iconeSvg(nome, emojiReserva){
   if(!p) return emojiReserva ? `<span class="ico-emoji">${emojiReserva}</span>` : '';
   return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 }
-const ICONE_MODULO = { dashboard:'chart', vendas:'cart', atendimento:'chat', caixa:'wallet', marketing:'megaphone', reforma:'gem', lancamentos:'calc', site:'globe', config:'sliders', ajuda:'help' };
+const ICONE_MODULO = { dashboard:'chart', pdvg:'cart', vendas:'cart', atendimento:'chat', caixa:'wallet', marketing:'megaphone', reforma:'gem', lancamentos:'calc', site:'globe', config:'sliders', ajuda:'help' };
 
 /* Cartões da tela inicial de cada grupo (um por sub-tela liberada pra pessoa). */
 const GRUPO_CARDS = {
-  caixa: { titulo:'CAIXA', sub:'Vendas, pedidos, orçamentos, caixa, reforma e relacionamento com o cliente.', itens:{
-    pdv:   { icone:'cart',      titulo:'VENDAS',         desc:'Registrar e consultar vendas do PDV' },
-    reserva:{ icone:'bookmark', titulo:'RESERVAR',       desc:'Reservar joias (código 9) por um prazo, sem caixa; depois vira venda' },
-    cancel:{ icone:'undo',      titulo:'CANCELAMENTO',   desc:'Buscar a via (cliente, código ou data) e cancelar · devoluções' },
+  pdvg: { titulo:'PDV', sub:'Balcão: venda, pedido, orçamento, resumo do caixa, reserva e busca de via.', itens:{
+    pdv:   { icone:'cart',      titulo:'VENDA',          desc:'Registrar e consultar vendas' },
     os:    { icone:'clipboard', titulo:'PEDIDO',         desc:'Abrir e acompanhar ordens de serviço' },
     orc:   { icone:'file',      titulo:'ORÇAMENTO',      desc:'Montar orçamentos e acompanhar os atrasados' },
+    resumo:{ icone:'wallet',    titulo:'RESUMO DO CAIXA', desc:'Entradas, saídas e fechamento do caixa por loja e período' },
+    buscarvia:{ icone:'scan',   titulo:'BUSCAR VIA',     desc:'Digite ou leia o código de barras de uma via' },
+    reserva:{ icone:'bookmark', titulo:'RESERVAR',       desc:'Reservar joias (código 9) por um prazo, sem caixa; depois vira venda' },
+  }},
+  caixa: { titulo:'ADM', sub:'Transferências, gravações, gastos, conciliação, reforma, oficina, marketing e demais rotinas da administração.', itens:{
+    cancel:{ icone:'undo',      titulo:'CANCELAMENTO',   desc:'Buscar a via (cliente, código ou data) e cancelar · devoluções' },
     transf:{ icone:'repeat',    titulo:'TRANSFERÊNCIAS', desc:'Transferências e reposições entre lojas' },
     grav:  { icone:'pen',       titulo:'GRAVAÇÕES',      desc:'Gravações e personalizações (Up Case)' },
-    resumo:     { icone:'wallet',  titulo:'RESUMO DO CAIXA', desc:'Entradas, saídas e fechamento do caixa por loja e período' },
     gastos:     { icone:'receipt', titulo:'GASTOS',          desc:'Contas a pagar, vencimentos e despesas lançadas' },
     conciliacao:{ icone:'check',   titulo:'CONCILIAÇÃO',     desc:'Confere cartões e PIX recebidos com o que foi vendido' },
     reforma:    { icone:'gem',     titulo:'REFORMA',         desc:'Pedidos de reforma: orçamento, custódia e O.S.' },
-    horas:      { icone:'relogio', titulo:'CONTROLE DE HORAS', desc:'Registrar entrada, almoço, café e saída pelo celular da loja; pedir correção de horário' },
+    horas:      { icone:'relogio', titulo:'CONTROLE DE HORAS', desc:'Registrar entrada, almoço e saída pelo celular da loja; pedir correção de horário' },
     insumos:    { icone:'package', titulo:'OFICINA',         desc:'Vias de todas as lojas (leitor de código), status Oficina pronto, material usado e insumos' },
     preco:      { icone:'tag',     titulo:'CONSULTA PREÇO',  desc:'Leia o código da etiqueta ou digite parte do nome e veja o preço na hora' },
     inventario: { icone:'scan',    titulo:'INVENTÁRIO',      desc:'Relatório de estoque por loja e contagem das peças com leitor de código' },
@@ -2410,7 +2437,7 @@ const CFG_CARDS = {
   termos:         { icone:'file',    desc:'Texto do Termo de Uso aceito no login' },
   avisosPopup:    { icone:'tag',     desc:'Mensagens em vermelho que aparecem para os usuários ao entrar, por 2 dias' },
 };
-const GRUPOS_COM_CARDS = ['caixa','dashboard','config'];
+const GRUPOS_COM_CARDS = ['pdvg','caixa','dashboard','config'];
 let cadastroAberto = false; // Administração › Cadastro: false = cartões dos cadastros; true = um cadastro aberto
 let __badgeCodigo = 0;      // solicitações de autorização de pedido fora do padrão aguardando a Oficina
 let __timerAutorizacoes = null;
@@ -2438,24 +2465,27 @@ function iniciarVigiaAutorizacoes(){
 let __badgeGastos = 0;      // contas vencidas/vencendo hoje (preenchido por verificarAlertaGastos)
 
 function subsPermitidosDoGrupo(g){
+  if(g==='pdvg') return subPdvPermitidos();
   if(g==='caixa') return subCaixaPermitidos();
   if(g==='dashboard') return subDashboardPermitidos();
   if(g==='config') return subConfigPermitidos();
   return [];
 }
 function subAtualDoGrupo(g){
+  if(g==='pdvg') return pdvSubAtual;
   if(g==='caixa') return caixaSubAtual;
   if(g==='dashboard') return dashboardSubAtual;
   if(g==='config') return configSubAtual;
   return null;
 }
 function definirSubDoGrupo(g, v){
-  if(g==='caixa') caixaSubAtual = v;
+  if(g==='pdvg') pdvSubAtual = v;
+  else if(g==='caixa') caixaSubAtual = v;
   else if(g==='dashboard') dashboardSubAtual = v;
   else if(g==='config') configSubAtual = v;
 }
 function subModuloDoGrupo(g, s){
-  const mapa = g==='caixa'?CAIXA_SUBMODULOS : g==='dashboard'?DASHBOARD_SUBMODULOS : g==='config'?CONFIG_SUBMODULOS : null;
+  const mapa = g==='pdvg'?PDV_SUBMODULOS : g==='caixa'?CAIXA_SUBMODULOS : g==='dashboard'?DASHBOARD_SUBMODULOS : g==='config'?CONFIG_SUBMODULOS : null;
   return (mapa && s) ? mapa[s] : null;
 }
 /* Clique no menu lateral: grupos sempre abrem na tela de cartões (ou direto na
@@ -2470,12 +2500,13 @@ function abrirGrupoDireto(g){
   const perm = subsPermitidosDoGrupo(g);
   const atual = subAtualDoGrupo(g);
   // CAIXA sem sub-tela escolhida: atalho genérico pro grupo abre o Resumo (ou os cartões)
-  if(!atual || !perm.includes(atual)) definirSubDoGrupo(g, g==='caixa' ? (perm.includes('resumo') ? 'resumo' : null) : (perm[0] || null));
+  if(!atual || !perm.includes(atual)) definirSubDoGrupo(g, g==='pdvg' ? (perm.includes('resumo') ? 'resumo' : null) : g==='caixa' ? null : (perm[0] || null));   // atalho genérico pro PDV abre o Resumo do caixa (era o do CAIXA)
   if(g==='config') cadastroAberto = true;
   selecionarModulo(g);
 }
 function abrirSubDoGrupo(g, s){
   if(g==='caixa' && s==='outraloja'){ abrirOutraLoja(); return; }
+  if(g==='pdvg' && s==='buscarvia'){ abrirLeitorCodigo(); return; }
   definirSubDoGrupo(g, s);
   if(g==='config' && s==='cadastro') cadastroAberto = false;
   selecionarModulo(g);
@@ -2534,7 +2565,7 @@ function renderShellTabs(moduloId, tabs, active){
 // sessão salva antes da fusão, ou do leitor de código. Sem essa tradução, o shell
 // escondia todos os iframes e quebrava ao não achar o módulo — tela em branco.
 const MODULOS_ABSORVIDOS = {
-  vendas:['caixa','pdv'], pdv:['caixa','pdv'], os:['caixa','os'], orcamentos:['caixa','orc'],
+  vendas:['pdvg','pdv'], pdv:['pdvg','pdv'], os:['pdvg','os'], orcamentos:['pdvg','orc'],
   transferencias:['caixa','transf'], gravacoes:['caixa','grav'],
   gastos:['caixa','gastos'], conciliacao:['caixa','conciliacao'],
   reforma:['caixa','reforma'], marketing:['caixa','aniv'], insumos:['caixa','insumos'], horas:['caixa','horas'],
@@ -2565,6 +2596,7 @@ function selecionarModulo(moduloId, subVendas){
   const absorvido = MODULOS_ABSORVIDOS[moduloId];
   if(absorvido){
     const [grupo, sub] = absorvido;
+    if(grupo==='pdvg' && subPdvPermitidos().includes(sub)) pdvSubAtual = sub;
     if(grupo==='caixa' && subCaixaPermitidos().includes(sub)) caixaSubAtual = sub;
     if(grupo==='dashboard' && subDashboardPermitidos().includes(sub)) dashboardSubAtual = sub;
     if(grupo==='config' && subConfigPermitidos().includes(sub)) configSubAtual = sub;
@@ -2574,7 +2606,7 @@ function selecionarModulo(moduloId, subVendas){
   }
   // Vendedora não tem PAINEL: qualquer ida pra lá (tela inicial, Voltar, atalho) cai no CAIXA.
   if(moduloId==='dashboard' && !podeVerModulo({id:'dashboard'})){
-    const alt = SIDEBAR_MODULES.filter(podeVerModulo).find(m=>m.id==='caixa') || SIDEBAR_MODULES.find(m=>m.id!=='dashboard' && podeVerModulo(m));
+    const alt = SIDEBAR_MODULES.filter(podeVerModulo).find(m=>m.id==='pdvg') || SIDEBAR_MODULES.filter(podeVerModulo).find(m=>m.id==='caixa') || SIDEBAR_MODULES.find(m=>m.id!=='dashboard' && podeVerModulo(m));
     if(alt) return selecionarModulo(alt.id);
   }
   if(!SIDEBAR_MODULES.find(m=>m.id===moduloId)){
@@ -2604,7 +2636,7 @@ function selecionarModulo(moduloId, subVendas){
     if(atual && !perm.includes(atual)){ definirSubDoGrupo(moduloId, null); atual = null; }
     // Só uma sub-tela liberada (ex.: login da Up Case, que só tem Gravações): não
     // faz sentido mostrar uma tela de cartões com um cartão só — abre direto nela.
-    if(!atual && perm.length===1){ definirSubDoGrupo(moduloId, perm[0]); atual = perm[0]; }
+    if(!atual && perm.length===1 && perm[0]!=='buscarvia'){ definirSubDoGrupo(moduloId, perm[0]); atual = perm[0]; }
     // PAINEL nunca mostra tela de cartões: sem aba escolhida, abre a aba principal (Dashboard; Avisos para quem não tem Dashboard).
     if(!atual && moduloId==='dashboard'){ atual = subInicialDashboard(); definirSubDoGrupo(moduloId, atual); }
     if(!atual){ mostrarGrupoHome(moduloId); return; }
@@ -2621,8 +2653,8 @@ function selecionarModulo(moduloId, subVendas){
       renderConfigTabs();
       return;
     }
-    const jaAberto = iframesCriados[moduloId+'_'+atual];
-    const iframeSub = mostrarIframeSub(moduloId+'_'+atual, sub);
+    const jaAberto = iframesCriados[chaveIframeSub(moduloId, atual)];
+    const iframeSub = mostrarIframeSub(chaveIframeSub(moduloId, atual), sub);
     // Avisos: ao voltar pra ele, recalcula (algo pode ter sido resolvido em outro módulo)
     if(atual==='avisos' && jaAberto && iframeSub.contentWindow){ try{ iframeSub.contentWindow.postMessage({ type:'recarregarAvisos' }, '*'); }catch(e){} }
     atualizarCabecalho();
@@ -2713,7 +2745,7 @@ function mostrarGrupoHome(grupo){
   }).join('');
   wrap.querySelectorAll('[data-sub]').forEach(b=> b.addEventListener('click', ()=> abrirSubDoGrupo(grupo, b.dataset.sub)));
   ativarArrastarCartoes(wrap, grupo, 'data-sub');
-  renderLeitorBar(grupo==='caixa' && subVendasPermitidos().length>0);
+  renderLeitorBar(false);   // 08/11: o leitor virou o cartão BUSCAR VIA do PDV
   document.getElementById('vendasHome').style.display = 'block';
   atualizarCabecalho();
 }
@@ -2815,9 +2847,10 @@ function abrirRegistroEncontrado(tipo, registro){
   else if(tipo==='pedido')   { subAlvo='os';    permModuloAlvo='os'; }
   else if(tipo==='orcamento'){ subAlvo='orc';   permModuloAlvo='orcamentos'; }
   else if(tipo==='transferencia'){ subAlvo='transf'; permModuloAlvo='transferencias'; }
-  const chaveIframe = subAlvo ? 'caixa_'+subAlvo : tipo;
+  const grupoAlvo = subAlvo==='transf' ? 'caixa' : 'pdvg';
+  const chaveIframe = subAlvo ? chaveIframeSub(grupoAlvo, subAlvo) : tipo;
   const jaExistia = !!iframesCriados[chaveIframe];
-  selecionarModulo('caixa', subAlvo);
+  selecionarModulo(grupoAlvo, subAlvo);
   const iframe = iframesCriados[chaveIframe];
   if(jaExistia && iframe && iframe.contentWindow){
     iframe.contentWindow.postMessage({ type:'abrirRegistro', id: registro.id }, '*');
@@ -2936,7 +2969,7 @@ function abrirLeitorCodigo(){
     ? '<button class="btn" id="lc_camera" style="display:flex;align-items:center;gap:6px;"><span style="font-size:18px;">&#x1F4F7;</span> C\u00e2mera</button>'
     : '';
   openModal(
-    '<h3>&#x1F50D; Leitor de c\u00f3digo</h3>' +
+    '<h3>&#x1F50D; Buscar via</h3>' +
     '<p class="muted">Use a c\u00e2mera do celular ou digite o c\u00f3digo manualmente.</p>' +
     '<div id="lc_video_wrap" style="display:none;position:relative;margin-bottom:10px;">' +
       '<video id="lc_video" autoplay playsinline muted style="width:100%;max-height:260px;border-radius:10px;background:#000;display:block;"></video>' +
@@ -3257,6 +3290,10 @@ window.addEventListener('message', (ev)=>{
   // Esse módulo está sendo exibido agora? (considerando a sub-tela de vendas/caixa/dashboard)
   function estaVisivel(mod){
     if(mod===moduloAtual) return true;
+    if(moduloAtual==='pdvg' && pdvSubAtual){
+      const sub = PDV_SUBMODULOS[pdvSubAtual];
+      return sub && sub.permModulo===mod;
+    }
     if(moduloAtual==='caixa' && caixaSubAtual){
       const sub = CAIXA_SUBMODULOS[caixaSubAtual];
       return sub && sub.permModulo===mod;
@@ -3273,6 +3310,7 @@ window.addEventListener('message', (ev)=>{
   }
   if(d.type === 'irParaModulo'){
     if(!d.alvo) return;
+    if(d.alvo==='caixa') d.alvo = 'pdvg';   // 08/11: atalho antigo "abrir o Caixa" = Resumo do caixa, que agora fica no PDV
     // Se veio registroId/tab, entrega a instrução ao módulo de destino: direto (se o
     // iframe já existe e está autenticado) ou assim que ele mandar 'ready'.
     const jaExistia = !!acharIframe(d.alvo);
@@ -7939,44 +7977,44 @@ function levelLabel(n){ return n==='diretoria'?'Diretoria':n==='gerente'?'Gerent
 
 /** Estrutura de módulos/abas usada tanto pelos perfis de acesso quanto pela futura tela única. */
 const MODULOS_APP = {
-  transferencias: { nome:'CAIXA › Transferências e reposições', abas:[
+  transferencias: { nome:'ADM › Transferências e reposições', abas:[
     { id:'transferencias', label:'Transferências' },
     { id:'reposicao', label:'Reposição' },
   ]},
-  os: { nome:'CAIXA › Pedido', abas:[
+  os: { nome:'PDV › Pedido', abas:[
     { id:'painel', label:'Lançados' },
     { id:'agenda', label:'Agenda' },
     { id:'clientes', label:'Clientes' },
     { id:'codigo', label:'Código' },
   ]},
-  vendas: { nome:'CAIXA › Vendas (PDV)', abas:[
+  vendas: { nome:'PDV › Venda', abas:[
     { id:'vendas', label:'Lançadas' },
   ]},
-  caixa: { nome:'CAIXA › Resumo do caixa', abas:[] },
-  gravacoes: { nome:'CAIXA › Gravações', abas:[] },
-  orcamentos: { nome:'CAIXA › Orçamento', abas:[
+  caixa: { nome:'PDV › Resumo do caixa', abas:[] },
+  gravacoes: { nome:'ADM › Gravações', abas:[] },
+  orcamentos: { nome:'PDV › Orçamento', abas:[
     { id:'novo', label:'Novo orçamento' },
     { id:'lista', label:'Lançados' },
     { id:'followup', label:'Follow-up (atrasados)' },
   ]},
-  conciliacao: { nome:'CAIXA › Conciliação de cartão', abas:[
+  conciliacao: { nome:'ADM › Conciliação de cartão', abas:[
     { id:'conciliar', label:'Conciliar' },
     { id:'taxas', label:'Taxas e prazos' },
   ]},
   dp: { nome:'CONFIGURAÇÕES › Departamento pessoal', abas:[] },
   atendimento: { nome:'CHAT (WhatsApp/Instagram/Interno)', abas:[] },
   ia: { nome:'PAINEL › IA', abas:[] },
-  gastos: { nome:'CAIXA › Gastos', abas:[
+  gastos: { nome:'ADM › Gastos', abas:[
     { id:'lancamentos', label:'Lançamentos' },
     { id:'agenda', label:'Agenda' },
   ]},
-  marketing: { nome:'CAIXA › Marketing', abas:[
+  marketing: { nome:'ADM › Marketing', abas:[
     { id:'aniversario', label:'Aniversário' },
     { id:'maladire', label:'Mala direta' },
   ]},
-  reforma: { nome:'CAIXA › Reforma (cliente → O.S.)', abas:[] },
-  horas: { nome:'CAIXA › Controle de horas', abas:[] },
-  insumos: { nome:'CAIXA › Oficina (vias e insumos)', abas:[
+  reforma: { nome:'ADM › Reforma (cliente → O.S.)', abas:[] },
+  horas: { nome:'ADM › Controle de horas', abas:[] },
+  insumos: { nome:'ADM › Oficina (vias e insumos)', abas:[
     { id:'vias', label:'Vias (status, material e avisos para a loja)' },
     { id:'saldos', label:'Saldos de insumos' },
     { id:'movimentos', label:'Lançar compras, envios e ajustes' },
