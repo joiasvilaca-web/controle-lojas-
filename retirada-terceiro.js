@@ -66,9 +66,9 @@
          +'<div class="rt-sub">'+esc(o.via?('Via '+o.via+' · '):'')+esc(o.cliente||r.cliente||'')+'</div>'
          +(usado
             ? '<div class="rt-estado"><b>Retirada concluída</b><span>Recebida por <b style="display:inline">'+esc(ret.recebidoPor||'—')+'</b> em '+dh(ret.usadoEm)+' · '+esc(METODO[ret.metodo]||ret.metodo||'')+(ret.usadoPor?' · liberada por '+esc(ret.usadoPor):'')+'</span></div>'
-            : '<p style="margin:0 0 8px;">Peça ao cliente o <b>código que aparece agora no link da via</b> (6 dígitos, muda a cada minuto) — ou o código de terceiro, se outra pessoa estiver retirando.</p>'
+            : '<p style="margin:0 0 8px;">Peça o <b>código de 6 dígitos</b>: o que aparece agora no link da via (muda a cada minuto) ou o código de terceiro que o cliente enviou à pessoa que vai retirar.</p>'
              +(ret.status==='ativo' && ret.portador?'<div class="rt-estado"><b>Cliente autorizou: '+esc(ret.portador)+'</b><span>Código de terceiro gerado em '+dh(ret.geradoEm)+' (vale 24 horas)'+'</span></div>':'')
-             +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="6" autocomplete="off" inputmode="text" spellcheck="false" placeholder="______" aria-label="Código de retirada" style="width:190px;"><button class="rt-btn pri" data-conf>Conferir código</button></div>'
+             +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="6" autocomplete="off" inputmode="numeric" pattern="[0-9]*" spellcheck="false" placeholder="000000" aria-label="Código de retirada" style="width:210px;"><button class="rt-btn pri" data-conf>Conferir código</button></div>'
              +'<div data-fluxo></div>'
              +'<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link ao cliente</button>':'')+'</div>')
          +(msg?'<div class="rt-msg '+(cls||'')+'">'+esc(msg)+'</div>':'')
@@ -83,7 +83,7 @@
         };
         if(usado) return;
         var inp=box.querySelector('.rt-cod');
-        inp.addEventListener('input',function(){ inp.value=inp.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6); });
+        inp.addEventListener('input',function(){ inp.value=inp.value.replace(/\D/g,'').slice(0,6); });
         inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ var c=box.querySelector('[data-conf]'); if(c && !c.disabled) c.click(); } });
         setTimeout(function(){ inp.focus(); },50);
 
@@ -112,7 +112,7 @@
           if(inv) inv.onclick=async function(){ if(!confirm('Invalidar o código? O cliente será avisado e precisará gerar outro.')) return; var y=await chamar(Object.assign({acao:'invalidar',codigo:codigo,motivo:'Saldo não foi pago na retirada'},base)); desenhar(y.error||'Código invalidado.', y.error?'err':'ok'); };
         }
         box.querySelector('[data-conf]').onclick=async function(){
-          var cod=inp.value.trim(); if(cod.length<4){ inp.focus(); return; }
+          var cod=inp.value.trim(); if(cod.length!==6){ inp.focus(); return; }
           this.disabled=true;
           var v=await chamar(Object.assign({acao:'validar',codigo:cod},base));
           this.disabled=false;

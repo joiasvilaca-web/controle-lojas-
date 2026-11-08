@@ -22,6 +22,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
 <script src="icones.js"></script>
 <script src="formato.js"></script>
 <script src="retirada-publica.js"></script>
+<script src="ciente-via.js"></script>
 <style>
   /* Página pública do cliente. Cores só pelos tokens do tema.css (claro e escuro). */
   :root{ --delivered:var(--t-info); --delivered-soft:var(--t-info-soft); }
@@ -93,6 +94,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   <div class="card" id="card" aria-live="polite">
     <div class="loading" id="loading">Carregando a sua ordem de serviço…</div>
   </div>
+  <div id="cienteBox" style="width:100%;max-width:440px;"></div>
   <div id="retiradaBox" style="width:100%;max-width:440px;"></div>
 
 <script>
@@ -139,7 +141,6 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
 
   function render(o){
     const isFinal = o.status === "entregue" || o.status === "cancelado";
-    registrarLeitura(o);
     document.getElementById("card").innerHTML = `
       ${marcaHtml()}
       <h1>Olá, ${escapeHtml(o.cliente)}!</h1>
@@ -159,17 +160,6 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
     `;
   }
 
-  // A loja sabe que o cliente viu a etapa atual: registra uma vez por etapa, sem pedir clique.
-  let leituraRegistrada = "";
-  function registrarLeitura(o){
-    if(o.confirmadoStatusAtual || leituraRegistrada === o.status) return;
-    leituraRegistrada = o.status;
-    setTimeout(()=>{
-      if(document.visibilityState === "hidden"){ leituraRegistrada = ""; return; }
-      supabaseClient.functions.invoke("confirmar-leitura-os", { body: { id: getOrderId(), status: o.status } }).catch(e=>console.error("Falha ao registrar leitura:", e));
-    }, 1500);
-  }
-
   async function loadStatus(){
     const id = getOrderId();
     if(!id){
@@ -180,6 +170,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
       const { data, error } = await supabaseClient.functions.invoke("get-order-status", { body: { id } });
       if(error) throw error;
       if(!data || data.error) throw new Error((data && data.error) || "Ordem não encontrada.");
+      if(!window.__cvMontado && window.CienteVia){ window.__cvMontado = true; CienteVia.montar(document.getElementById("cienteBox"), { tipo:"os", id, client: supabaseClient }); }
       if(!window.__rtMontado && window.RetiradaPublica){ window.__rtMontado = true; RetiradaPublica.montar(document.getElementById("retiradaBox"), { tipo:"os", id, client: supabaseClient }); }
       render(data);
     }catch(e){

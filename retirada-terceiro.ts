@@ -27,16 +27,23 @@ const PERIODO = 60;            // segundos que cada código rotativo dura
 const MAX_ERROS_ROT = 8;       // erros seguidos do código rotativo antes de travar
 const TRAVA_MIN = 10;          // minutos de trava
 const VALIDADE_TERCEIRO_MS = 24 * 60 * 60 * 1000;   // o código de terceiro vale 24 horas; depois o cliente gera outro
-const TABELA: Record<string, string> = { os: "ordens_servico", venda: "vendas_pdv", orc: "orcamentos" };
+const TABELA: Record<string, string> = { os: "ordens_servico", venda: "vendas_pdv", orc: "orcamentos", res: "reservas" };
 
 async function hmac(txt: string) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SERVICE_ROLE_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(txt));
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-function novoCodigo() {
-  const r = crypto.getRandomValues(new Uint32Array(4));
-  return Array.from(r).map((n) => ALFA[n % ALFA.length]).join("");
+// Código de terceiro: 6 dígitos DERIVADOS (via + momento em que foi gerado), assim o cliente pode ver de novo enquanto valer.
+async function codigoTerceiro(tipo: string, id: string, geradoMs: number) {
+  const h = await hmac("terc:" + tipo + ":" + id + ":" + geradoMs);
+  return String(parseInt(h.slice(0, 8), 16) % 1000000).padStart(6, "0");
+}
+async function terceiroAtual(tipo: string, id: string, reg: any) {
+  if (!reg || reg.status !== "ativo" || reg.code_hash !== "derivado" || !reg.gerado_em) return null;
+  const t = new Date(reg.gerado_em).getTime();
+  if (Date.now() - t > VALIDADE_TERCEIRO_MS) return null;
+  return await codigoTerceiro(tipo, id, t);
 }
 const norm = (c: unknown) => String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 const janelaAtual = () => Math.floor(Date.now() / 1000 / PERIODO);
@@ -112,6 +119,13 @@ function resumoVia(tipo: string, v: any, loja: string | null) {
     observacao: v.observacaoGeral || v.descricao || null, validade: v.validade || null,
   };
 }
+// "Ciente": comprovante de que o cliente viu a via NESTE status (e de novo quando o status muda ou a via é retirada).
+const cienteChave = (via: any, reg: any) => String(via.status || "ativa") + (reg && reg.status === "usado" ? "|retirada" : "");
+function cienteInfo(via: any, reg: any) {
+  const chave = cienteChave(via, reg);
+  const l = (Array.isArray(via.leituras) ? via.leituras : []).find((x: any) => x && x.status === chave && x.ciente);
+  return { chave, feito: !!l, em: l ? l.confirmadoEm : null };
+}
 const encerrada = (tipo: string, via: any, reg: any) =>
   (reg && reg.status === "usado") || (tipo === "os" && (via.status === "entregue" || via.status === "cancelado")) || via.status === "cancelado" || via.status === "cancelada";
 
@@ -129,7 +143,7 @@ Deno.serve(async (req) => {
     // ---------- públicas (cliente) ----------
     if (acao === "estado") {
       const reg = await lerReg(tipo, id);
-      const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg) };
+      const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg), codigoTerceiro: encerrada(tipo, via, reg) ? null : await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg) };
       if (b.resumo) out.via = resumoVia(tipo, via, await lojaNome(via.lojaId));
       return json(out);
     }
@@ -138,7 +152,19 @@ Deno.serve(async (req) => {
       if (encerrada(tipo, via, reg)) return json({ encerrada: true, retirada: publico(reg) });
       const j = janelaAtual();
       const restante = (j + 1) * PERIODO - Math.floor(Date.now() / 1000);
-      return json({ codigo: await codigoRotativo(tipo, id, j), restante, periodo: PERIODO, retirada: publico(reg) });
+      return json({ codigo: await codigoRotativo(tipo, id, j), restante, periodo: PERIODO, retirada: publico(reg), codigoTerceiro: await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg) });
+    }
+    if (acao === "ciente") {
+      const reg = await lerReg(tipo, id);
+      const chave = cienteChave(via, reg);
+      const leituras = Array.isArray(via.leituras) ? via.leituras : [];
+      if (!leituras.some((l: any) => l && l.status === chave && l.ciente)) {
+        leituras.push({ status: chave, confirmadoEm: new Date().toISOString(), ciente: true, ua: String(req.headers.get("user-agent") || "").slice(0, 160), ip: String(req.headers.get("x-forwarded-for") || "").split(",")[0].trim() });
+        via.leituras = leituras;
+        const { error } = await admin.from(TABELA[tipo]).update({ payload: via, updated_at: new Date().toISOString() }).eq("id", id);
+        if (error) throw error;
+      }
+      return json({ ok: true, ciente: cienteInfo(via, reg) });
     }
     if (acao === "cancelar") {
       const reg = await lerReg(tipo, id);
@@ -151,8 +177,9 @@ Deno.serve(async (req) => {
       if (encerrada(tipo, via, reg)) return json({ error: "Esta via já foi retirada ou encerrada." });
       const nome = String(b.nome || "").trim().toUpperCase().slice(0, 80);
       if (nome.length < 3) return json({ error: "Informe o nome de quem vai buscar." });
-      const codigo = novoCodigo();
-      await gravar(tipo, id, { habilitada: true, code_hash: await hmac(tipo + ":" + id + ":" + codigo), status: "ativo", tentativas: 0, motivo: null, gerado_em: new Date().toISOString(), portador_nome: nome },
+      const agora = Date.now();
+      const codigo = await codigoTerceiro(tipo, id, agora);
+      await gravar(tipo, id, { habilitada: true, code_hash: "derivado", status: "ativo", tentativas: 0, motivo: null, gerado_em: new Date(agora).toISOString(), portador_nome: nome },
         { acao: (reg?.status === "ativo" ? "novo código de terceiro gerado (o anterior deixou de valer)" : "código de terceiro gerado pelo cliente") + " — portador: " + nome });
       return json({ codigo, retirada: publico(await lerReg(tipo, id)) });
     }
@@ -198,6 +225,17 @@ Deno.serve(async (req) => {
         if (reg?.bloq_ate && new Date(reg.bloq_ate).getTime() > Date.now()) return { erro: json({ error: "Muitos códigos errados. Aguarde alguns minutos e tente de novo." }) };
         const j = janelaAtual();
         const ok = cod === await codigoRotativo(tipo, id, j) || cod === await codigoRotativo(tipo, id, j - 1);
+        if (!ok && reg && reg.gerado_em && reg.portador_nome) {
+          const der = await codigoTerceiro(tipo, id, new Date(reg.gerado_em).getTime());
+          if (cod === der) {
+            if (reg.status === "cancelado") return { erro: json({ error: "O cliente cancelou o código de terceiro. Peça o código que aparece agora no link da via." }) };
+            if (reg.status === "invalidado") return { erro: json({ error: "Este código foi invalidado (" + (reg.motivo || "—") + "). O cliente precisa gerar um novo." }) };
+            if (reg.status !== "ativo") return { erro: json({ error: "Código de terceiro indisponível. Peça ao cliente o código que aparece agora no link." }) };
+            if (Date.now() - new Date(reg.gerado_em).getTime() > VALIDADE_TERCEIRO_MS) return { erro: json({ error: "O código de terceiro venceu (vale 24 horas). O cliente precisa gerar outro no link." }) };
+            if (reg.tent_rot) await gravar(tipo, id, { tent_rot: 0, bloq_ate: null });
+            return { metodo: "terceiro" };
+          }
+        }
         if (!ok) {
           const t = (reg?.tent_rot || 0) + 1;
           const trava = t >= MAX_ERROS_ROT;
