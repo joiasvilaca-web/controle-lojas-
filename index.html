@@ -9,6 +9,7 @@
 <script src="cupom.js"></script>
 <script src="formato.js"></script>
 <script src="busca.js"></script>
+<script src="marketing-off.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>VILAÇA APP</title>
@@ -474,6 +475,14 @@
   .vendas-home-leitor-bar .vh-label{ font-size:15px; font-weight:700; }
   .vendas-home-leitor-bar .vh-sub{ font-size:12.5px; color:var(--muted); }
   #vendasHomeLeitorBar:empty{display:none;}
+  /* 08/11: BUSCAR VIA / PREÇO (mais curta) + botão Chamar cliente lado a lado */
+  .leitor-linha{display:flex; gap:10px; align-items:stretch; flex-wrap:wrap; margin:0 0 16px;}
+  .leitor-linha .vendas-home-leitor-bar{flex:1 1 260px; width:auto; margin:0; min-width:0;}
+  .vendas-home-chamar{display:flex; align-items:center; gap:12px; flex:0 0 auto; background:var(--surface); border:1px dashed #C5D0DA; border-radius:12px; padding:14px 18px; cursor:pointer; transition:all .14s; color:var(--ink); font-family:inherit; text-align:left;}
+  .vendas-home-chamar:hover{ border-color:var(--primary); border-style:solid; box-shadow:0 8px 22px -14px rgba(15,42,61,.3); }
+  .vendas-home-chamar .gc-icon{width:40px; height:40px; background:#E3F4EA; color:#1B7A43;}
+  .vendas-home-chamar .vh-label{ font-size:15px; font-weight:700; white-space:nowrap; }
+  @media (max-width:560px){ .vendas-home-chamar{flex:1 1 100%;} }
 
   @media (max-width:900px){
     #shellView{position:relative; height:100vh; overflow:hidden;}
@@ -2742,7 +2751,7 @@ function mostrarGrupoHome(grupo){
   }).join('');
   wrap.querySelectorAll('[data-sub]').forEach(b=> b.addEventListener('click', ()=> abrirSubDoGrupo(grupo, b.dataset.sub)));
   ativarArrastarCartoes(wrap, grupo, 'data-sub');
-  renderLeitorBar(podeBuscarVia() && (grupo==='pdvg' || (grupo==='caixa' && currentUser && currentUser.nivel==='oficina')));   // BUSCAR VIA: barra no topo do PDV (Oficina: no ADM)
+  renderLeitorBar(podeBuscarVia() && (grupo==='pdvg' ? true : (grupo==='caixa' && currentUser && currentUser.nivel==='oficina') ? 'semChamar' : false));   // BUSCAR VIA: barra no topo do PDV (Oficina: no ADM)
   document.getElementById('vendasHome').style.display = 'block';
   atualizarCabecalho();
 }
@@ -2771,17 +2780,24 @@ function mostrarCadastroHome(){
 /* BUSCAR VIA (antigo Leitor de código + Consulta preço): barra à parte, ACIMA dos cartões do PDV. */
 function renderLeitorBar(mostrar){
   const leitorWrap = document.getElementById('vendasHomeLeitorBar');
-  leitorWrap.innerHTML = mostrar ? `
+  const comChamar = !!mostrar && mostrar!=='semChamar' && anivPermitido();   // Chamar cliente: só no PDV, para quem tem o Marketing
+  leitorWrap.innerHTML = mostrar ? `<div class="leitor-linha">
     <button type="button" class="vendas-home-leitor-bar" id="btnLeitorCodigo">
       <span class="gc-icon">${iconeSvg('scan')}</span>
       <span style="flex:1;">
         <span class="vh-label" style="display:block;">BUSCAR VIA / PREÇO</span>
-        <span class="vh-sub">Digite ou leia o código de uma via — ou de uma peça, para ver o preço</span>
+        <span class="vh-sub">Código de uma via ou de uma peça</span>
       </span>
     </button>
-  ` : '';
+    ${comChamar ? `<button type="button" class="vendas-home-chamar" id="btnChamarClienteShell">
+      <span class="gc-icon">${iconeSvg('chat')}</span>
+      <span class="vh-label">Chamar cliente</span>
+    </button>` : ''}
+  </div>` : '';
   const btnLeitor = document.getElementById('btnLeitorCodigo');
   if(btnLeitor) btnLeitor.addEventListener('click', abrirLeitorCodigo);
+  const btnCh = document.getElementById('btnChamarClienteShell');
+  if(btnCh) btnCh.addEventListener('click', abrirChamarClienteShell);
 }
 
 /** Registro pendente de abertura: setado quando a pessoa clica num resultado do
@@ -2960,6 +2976,69 @@ function abrirAjudaSobre(assunto){
 }
 window.abrirAjudaSobre = abrirAjudaSobre;
 
+/* ===== CHAMAR CLIENTE no PDV (clone do botão do Marketing): mensagem livre pelo número de disparo + rodapé fixo ===== */
+const NUMERO_ATENDIMENTO = '(32) 98830-7617', NUMERO_ATENDIMENTO_LINK = 'https://wa.me/5532988307617';
+function celularPadraoChamar(t){
+  let d = String(t||'').replace(/\D/g,'');
+  if(d.length===13 && d.startsWith('55')) d = d.slice(2);
+  return d.length===11 && Number(d.slice(0,2))>=11 && d[2]==='9';
+}
+function rodapeChamarShell(){
+  const vend = (currentUser && (currentUser.apelido || currentUser.nome)) || '';
+  const id = lojaAtual || (currentUser && Array.isArray(currentUser.lojas) ? currentUser.lojas[0] : '');
+  const l = ((config && config.lojas) || []).find(x=>x.id===id);
+  const loja = l ? (l.nomeFantasia || l.nome) : 'Vilaça Joias';   // nome fantasia: o cliente não vê "LTDA"
+  return `\n\n—\n${vend ? vend + ' · ' : ''}${loja}\nPara continuar a conversa, chame a gente no WhatsApp ${NUMERO_ATENDIMENTO}: ${NUMERO_ATENDIMENTO_LINK}`;
+}
+function abrirChamarClienteShell(){
+  const fmtTel = t=> (window.Fmt && Fmt.tel) ? Fmt.tel(t) : String(t||'');
+  openModal(`<h3>Chamar cliente</h3>
+    <p class="muted" style="margin-top:-6px;">A mensagem sai na hora, pelo número de disparo, com o rodapé abaixo, pedindo para o cliente continuar no número de atendimento.</p>
+    <div class="field"><label for="ccBusca">Cliente</label><input id="ccBusca" autocomplete="off" placeholder="Digite o nome ou o telefone"></div>
+    <div id="ccLista" style="max-height:220px;overflow:auto;"></div>
+    <div id="ccEscolhido" style="display:none;margin:8px 0;padding:10px 12px;border-radius:10px;background:var(--t-surface-2,var(--surface-2));"></div>
+    <div class="field"><label for="ccTexto">Mensagem</label><textarea id="ccTexto" style="min-height:110px;" placeholder="Escreva a mensagem para o cliente"></textarea></div>
+    <div class="field"><label>Rodapé (vai junto, automático)</label><div style="font-size:13px;color:var(--muted);">${escapeHtml(rodapeChamarShell().trim()).replace(/\n/g,'<br>')}</div></div>
+    <div class="modal-actions"><button class="btn btn-ghost" type="button" id="ccCancelar">Cancelar</button><button class="btn btn-accent" id="ccEnviar" type="button">Enviar</button></div>`);
+  let escolhido = null, timer = null, seq = 0;
+  const lista = document.getElementById('ccLista'), busca = document.getElementById('ccBusca');
+  document.getElementById('ccCancelar').addEventListener('click', closeModal);
+  lista.innerHTML = '<div class="muted" style="padding:6px 2px;">Digite para procurar no cadastro.</div>';
+  const procurar = async ()=>{
+    const q = busca.value.trim(); const meu = ++seq;
+    if(q.length < 2){ lista.innerHTML = '<div class="muted" style="padding:6px 2px;">Digite para procurar no cadastro.</div>'; return; }
+    lista.innerHTML = '<div class="muted" style="padding:6px 2px;">Procurando…</div>';
+    let r = null; try{ r = await gatewayCall({ op:'searchClients', params:{ termo:q } }); }catch(e){}
+    if(meu !== seq) return;
+    const achados = ((r && r.data) || []).slice(0, 30);
+    lista.innerHTML = achados.length ? achados.map(c=>`<button type="button" data-cc="${escapeHtml(c.id)}" style="width:100%;text-align:left;cursor:pointer;background:none;border:0;border-bottom:1px solid var(--line);padding:8px 2px;font-family:inherit;color:inherit;"><b>${escapeHtml(c.nome||'')}</b><div class="muted" style="font-size:12.5px;">${c.telefone ? escapeHtml(fmtTel(c.telefone)) : 'sem telefone'}</div></button>`).join('') : '<div class="muted" style="padding:6px 2px;">Ninguém encontrado.</div>';
+    lista.querySelectorAll('[data-cc]').forEach(b=> b.addEventListener('click', ()=>{
+      const c = achados.find(x=>String(x.id)===b.dataset.cc); if(!c) return;
+      if(!c.telefone){ showToast('Este cliente não tem telefone no cadastro.'); return; }
+      escolhido = c; lista.innerHTML = ''; busca.value = c.nome || '';
+      const e = document.getElementById('ccEscolhido'); e.style.display = 'block'; e.innerHTML = `<b>${escapeHtml(c.nome||'')}</b> · ${escapeHtml(fmtTel(c.telefone))}`;
+    }));
+  };
+  busca.addEventListener('input', ()=>{ escolhido = null; document.getElementById('ccEscolhido').style.display = 'none'; clearTimeout(timer); timer = setTimeout(procurar, 250); });
+  document.getElementById('ccEnviar').addEventListener('click', async ()=>{
+    const txt = document.getElementById('ccTexto').value.trim();
+    if(!escolhido){ showToast('Escolha o cliente na lista.'); return; }
+    if(!txt){ showToast('Escreva a mensagem.'); return; }
+    if(!celularPadraoChamar(escolhido.telefone)){ showToast('Telefone fora do padrão de celular (DDD + 9 + 8 dígitos). Corrija o cadastro do cliente antes de enviar.', 6000); return; }
+    if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:escolhido.telefone, nome:escolhido.nome, tags:escolhido.tags||[] }))) return;   // tag MARKETING OFF
+    const b = document.getElementById('ccEnviar'); b.disabled = true;
+    let r = null;   // não entra na fila: vai agora pela instância "vilaca" (mesma regra do botão do Marketing)
+    try{
+      const res = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY },
+        body: JSON.stringify({ senha:__gatewaySenha, telefone:escolhido.telefone, texto: txt + rodapeChamarShell(), tipo:'chamar_cliente', registroId:escolhido.id, via:'CHAMAR CLIENTE' }) });
+      r = await res.json().catch(()=>({}));
+    }catch(e){ r = { erro:'Sem conexão.' }; }
+    b.disabled = false;
+    if(r && r.ok){ closeModal(); showToast('Mensagem enviada ✓', 4000); return; }
+    showToast('Não enviou: ' + ((r && (r.erro||r.error)) || 'erro desconhecido') + ' Tente de novo.', 6000);
+  });
+  setTimeout(()=>{ try{ busca.focus(); }catch(e){} }, 50);
+}
 /* Abre a Consulta de preço (tela do PDV sem cartão) já buscando o termo digitado/lido na barra BUSCAR VIA. */
 function abrirConsultaPreco(termo){
   const jaExistia = !!iframesCriados['caixa_preco'];
