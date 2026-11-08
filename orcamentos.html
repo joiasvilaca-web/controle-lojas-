@@ -164,6 +164,7 @@ textarea{border:1px solid var(--line-strong); border-radius:8px; background:var(
 .filters .busca-campo .ico{position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--muted); pointer-events:none;}
 .filters .busca-campo input{width:100%; padding-left:32px;}
 .filters .check-filtro{display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--ink-soft); cursor:pointer; white-space:nowrap;}
+.filters input[type=date]{padding:6px 8px; border:1px solid var(--line-strong); border-radius:8px; background:var(--surface); color:var(--ink); font-size:13px; min-height:38px;}
 .filters .contagem{margin-left:auto; font-size:12.5px; color:var(--muted); white-space:nowrap;}
 
 /* ── Tabelas ────────────────────────────────────────────────── */
@@ -533,7 +534,7 @@ function filtrarProdutosBusca(lista, texto){
   // busca única do app (busca.js): por qualquer parte, palavras em qualquer ordem, vírgula = ponto; vem na ordem do que foi digitado
   return Busca.filtrar(lista, texto, p=>[p.nome,p.codigo,p.codigoInterno,p.codigoBarras,p.fator,p.fornecedor], {limite:40});
 }
-function todayStr(){ const d=new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
+function todayStr(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function fmtDate(s){ if(!s) return '—'; const p=(s||'').split('-'); return p.length===3 ? `${p[2]}/${p[1]}/${p[0]}` : s; }
 function fmtMoeda(v){ return (window.Fmt ? Fmt.brl(v) : 'R$ ' + (Number(v)||0).toFixed(2).replace('.', ',')); }
 /* Apresentação: ícone do sistema (icones.js) com segurança se o script não carregar. */
@@ -2058,6 +2059,8 @@ function renderFollowup(main){
   atualizar();
 }
 
+let filtrosOrc = { busca:'', loja:null, status:'', vendedora:'', hoje:true, de:'', ate:'' };   // lembra os filtros ao mudar status/voltar à lista
+function restringirLoja(){ return !!(currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='oficina') && window.__lojaAtual && window.__lojaAtual.id); }
 function renderLista(main){
   const avisos = orcamentosParaAvisar();
   const abertos5dias = orcamentosAbertosMaisDe5Dias();
@@ -2088,7 +2091,7 @@ function renderLista(main){
       </div>
     ` : ''}
     <div class="filters" role="search">
-      <div class="busca-campo">${ic('busca')}<input type="text" id="fBusca" placeholder="Buscar cliente" aria-label="Buscar cliente"></div>
+      <div class="busca-campo">${ic('busca')}<input type="text" id="fBusca" placeholder="Buscar cliente ou código da via" aria-label="Buscar cliente ou código da via" value="${escapeHtml(filtrosOrc.busca)}"></div>
       <select id="fLoja" aria-label="Loja"><option value="">Todas as lojas</option>${(config.lojas||[]).map(l=>`<option value="${l.id}">${escapeHtml(l.nome)}</option>`).join('')}</select>
       <select id="fStatus" aria-label="Status">
         <option value="">Todos os status</option>
@@ -2097,9 +2100,12 @@ function renderLista(main){
       </select>
       <select id="fVendedora" aria-label="Vendedora">
         <option value="">Todas as vendedoras</option>
-        ${[...new Set(orcamentos.map(o=>o.vendedora).filter(Boolean))].sort().map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+        ${[...new Set(orcamentos.map(o=>o.vendedora).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR')).map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
       </select>
-      <label class="check-filtro"><input type="checkbox" id="fHoje" checked> Só gerados hoje</label>
+      <label class="check-filtro" title="Período em que o orçamento foi gerado">De <input type="date" id="fDe" value="${filtrosOrc.de}" aria-label="Gerados a partir de"></label>
+      <label class="check-filtro">até <input type="date" id="fAte" value="${filtrosOrc.ate}" aria-label="Gerados até"></label>
+      <label class="check-filtro"><input type="checkbox" id="fHoje" ${filtrosOrc.hoje?'checked':''}> Só gerados hoje</label>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnLimparFiltrosOrc">Limpar filtros</button>
       <span class="contagem" id="contagemOrc" aria-live="polite"></span>
     </div>
     <div class="card card-tabela">
@@ -2122,6 +2128,7 @@ function renderLista(main){
       document.getElementById('fVendedora').value = b.dataset.filtrovend;
       document.getElementById('fStatus').value = '';
       document.getElementById('fHoje').checked = false;
+      document.getElementById('fDe').value = ''; document.getElementById('fAte').value = '';
       draw();
       document.getElementById('tabelaOrc').scrollIntoView({ behavior:'smooth', block:'center' });
     });
@@ -2131,27 +2138,31 @@ function renderLista(main){
     const statusFiltro = document.getElementById('fStatus').value;
     const vendedoraFiltro = document.getElementById('fVendedora').value;
     const busca = document.getElementById('fBusca').value.trim().toLowerCase();
-    // Ao abrir: só o que foi gerado hoje (data local de criação)
+    const de = document.getElementById('fDe').value, ate = document.getElementById('fAte').value;
+    // Período escolhido manda mais que "só hoje": o campo de hoje é desmarcado sozinho
+    if((de||ate) && document.getElementById('fHoje').checked) document.getElementById('fHoje').checked = false;
     const soHoje = document.getElementById('fHoje').checked;
-    const _d = new Date(), hojeLocal = _d.getFullYear()+'-'+String(_d.getMonth()+1).padStart(2,'0')+'-'+String(_d.getDate()).padStart(2,'0');
+    filtrosOrc = { busca:document.getElementById('fBusca').value, loja:lojaFiltro, status:statusFiltro, vendedora:vendedoraFiltro, hoje:soHoje, de, ate };
+    const hojeLocal = todayStr();
     const diaCriacao = o=>{ if(o.criadoEm){ const d=new Date(o.criadoEm); if(!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); } return o.data||''; };
     let lista = orcamentos.filter(o=>{
       if(soHoje && diaCriacao(o)!==hojeLocal) return false;
+      if(de || ate){ const dia = diaCriacao(o); if(!dia || (de && dia<de) || (ate && dia>ate)) return false; }
       if(lojaFiltro && o.lojaId!==lojaFiltro) return false;
       if(statusFiltro==='__vencido__' && !estaVencido(o)) return false;
       if(statusFiltro && statusFiltro!=='__vencido__' && o.status!==statusFiltro) return false;
       if(vendedoraFiltro && o.vendedora!==vendedoraFiltro) return false;
       if(busca && !Busca.testa([o.cliente,o.codigoVia].join(' '), busca)) return false;
       return true;
-    }).slice().reverse();
+    }).slice().sort((a,b)=> (diaCriacao(b)+String(b.criadoEm||'')).localeCompare(diaCriacao(a)+String(a.criadoEm||'')) );   // mais novo primeiro
     if(busca) lista = Busca.filtrar(lista, busca, o=>[o.cliente,o.codigoVia]);   // mais parecido com o digitado primeiro
     const tbody = document.getElementById('tbodyOrc');
     const cont = document.getElementById('contagemOrc');
-    if(cont) cont.textContent = (lista.length===1 ? '1 orçamento' : lista.length + ' orçamentos') + (soHoje ? ' gerados hoje' : '');
+    if(cont) cont.textContent = (lista.length===1 ? '1 orçamento' : lista.length + ' orçamentos') + (soHoje ? ' gerados hoje' : (de||ate) ? ' no período' : '');
     if(lista.length===0){
       tbody.innerHTML = orcamentos.length===0
         ? `<tr class="tr-vazio"><td colspan="8" class="td-vazio"><div class="estado">${ic('documento',28)}<b>Nenhum orçamento lançado ainda</b>${podeCriarOrcamento()?'Clique em "Novo orçamento" para criar o primeiro.':'Os orçamentos criados pelas lojas aparecem aqui.'}</div></td></tr>`
-        : `<tr class="tr-vazio"><td colspan="8" class="td-vazio"><div class="estado">${ic('filtro',28)}<b>${soHoje ? 'Nenhum orçamento gerado hoje' : 'Nenhum orçamento com esses filtros'}</b>${soHoje ? 'Desmarque “Só gerados hoje” para ver os demais.' : 'Mude a loja, o status ou a vendedora, ou apague a busca.'}</div></td></tr>`;
+        : `<tr class="tr-vazio"><td colspan="8" class="td-vazio"><div class="estado">${ic('filtro',28)}<b>${soHoje ? 'Nenhum orçamento gerado hoje' : 'Nenhum orçamento com esses filtros'}</b>${soHoje ? 'Desmarque “Só gerados hoje” ou escolha um período para ver os demais.' : 'Mude o período, a loja, o status ou a vendedora, ou apague a busca.'}</div></td></tr>`;
       return;
     }
     // Aplica o encerramento automático (prazo final) antes de desenhar, se algum já bateu o prazo.
@@ -2243,19 +2254,25 @@ function renderLista(main){
       b.addEventListener('click', ()=> confirmarExcluirOrcamento(b.dataset.excluir) );
     });
   }
+  const lojaSalva = filtrosOrc.loja;
+  if(lojaSalva!==null) document.getElementById('fLoja').value = lojaSalva;
+  else if(restringirLoja()){ const fL = document.getElementById('fLoja'); fL.value = window.__lojaAtual.id; fL.title = 'Filtrando pela loja ativa — selecione outra loja ou "Todas as lojas" pra ver as demais.'; }
+  document.getElementById('fStatus').value = filtrosOrc.status;
+  document.getElementById('fVendedora').value = filtrosOrc.vendedora;
   draw();
+  document.getElementById('fDe').addEventListener('change', draw);
+  document.getElementById('fAte').addEventListener('change', draw);
+  document.getElementById('btnLimparFiltrosOrc').addEventListener('click', ()=>{
+    ['fBusca','fStatus','fVendedora','fDe','fAte'].forEach(i=>document.getElementById(i).value='');
+    document.getElementById('fHoje').checked = false;
+    document.getElementById('fLoja').value = restringirLoja() ? window.__lojaAtual.id : '';
+    draw();
+  });
   document.getElementById('fLoja').addEventListener('change', draw);
   document.getElementById('fStatus').addEventListener('change', draw);
   document.getElementById('fVendedora').addEventListener('change', draw);
   document.getElementById('fBusca').addEventListener('input', draw);
   document.getElementById('fHoje').addEventListener('change', draw);
-  const restringirPorLojaAtiva = currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='oficina');
-  if(restringirPorLojaAtiva && window.__lojaAtual && window.__lojaAtual.id){
-    const fLoja = document.getElementById('fLoja');
-    fLoja.value = window.__lojaAtual.id;
-    fLoja.title = 'Filtrando pela loja ativa — selecione outra loja ou "Todas as lojas" pra ver as demais.';
-    draw();
-  }
 }
 
 /* Ações rápidas direto na linha da lista (mesmo padrão usado no módulo Marketing):
