@@ -1,7 +1,9 @@
-/* Retirada por terceiros — painel da EQUIPE (Pedido, Venda e Orçamento).
- * A loja libera a retirada por terceiros na via; o CLIENTE gera o código (4 caracteres) no link
- * e repassa ao portador. A loja nunca vê o código: só confere o que o portador falar.
- * Uso: RetiradaTerceiro.abrir({ tipo:'os'|'venda'|'orc', id, via, cliente, telefone, senha, usuario, lojaId, aoConcluir })
+/* Retirada na loja — painel da EQUIPE (Pedido, Venda e Orçamento), 09/11.
+ * A entrega só sai com o CÓDIGO que o cliente mostra no link da via (6 dígitos, muda a cada minuto)
+ * ou com o código de TERCEIRO (o cliente informa o nome de quem busca e gera o código no link).
+ * A loja nunca vê o código gerado: só confere o que a pessoa mostrar, e registra QUEM RECEBEU.
+ * Uso: const r = await RetiradaTerceiro.abrir({ tipo:'os'|'venda'|'orc', id, via, cliente, telefone, senha, usuario, nivel, lojaId, aoConcluir })
+ *      r = { retirada:{recebidoPor, metodo, portador, usadoEm, usadoPor…} } ao concluir, ou null se fechar sem concluir.
  */
 (function(){
   var URL_FN = (window.SUPABASE_URL || 'https://wxiokmqnjtgbejgoepch.supabase.co') + '/functions/v1/retirada-terceiro';
@@ -36,96 +38,108 @@
    +'.rt-hist{margin-top:14px;border-top:1px solid var(--t-line,#dde);padding-top:10px;font-size:12.5px;color:var(--t-ink-soft,#445);max-height:180px;overflow:auto;}'
    +'.rt-hist div{padding:3px 0;}';
   function css(){ if(document.getElementById('rtCss')) return; var s=document.createElement('style'); s.id='rtCss'; s.textContent=CSS; document.head.appendChild(s); }
-  var ROT = { sem_codigo:'Liberada — o cliente ainda não gerou o código', ativo:'Código gerado pelo cliente', usado:'Retirada concluída pelo portador', invalidado:'Código invalidado', bloqueado:'Código bloqueado por tentativas erradas' };
+  var METODO = { rotativo:'código do cliente (rotativo)', terceiro:'código de terceiro', sem_codigo:'SEM código (liberado pela gerência)' };
+  function norm(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z ]/g,' ').split(/\s+/).filter(Boolean).sort().join(' '); }
 
-  async function abrir(o){
-    css();
-    var ov=document.createElement('div'); ov.className='rt-ov'; ov.innerHTML='<div class="rt-box" role="dialog" aria-modal="true" aria-label="Retirada por terceiros"><div class="rt-sub">Carregando…</div></div>';
-    document.body.appendChild(ov);
-    var box=ov.firstChild;
-    function fechar(){ ov.remove(); document.removeEventListener('keydown',esc_); }
-    function esc_(e){ if(e.key==='Escape') fechar(); }
-    document.addEventListener('keydown',esc_);
-    ov.addEventListener('click',function(e){ if(e.target===ov) fechar(); });
-    var base={ tipo:o.tipo, id:o.id, senha:o.senha, por:o.usuario };
-    var link=linkCliente(o.tipo,o.id);
-    var codigoOk='';
+  function abrir(o){
+    return new Promise(function(resolve){
+      css();
+      var ov=document.createElement('div'); ov.className='rt-ov'; ov.innerHTML='<div class="rt-box" role="dialog" aria-modal="true" aria-label="Retirada na loja"><div class="rt-sub">Carregando…</div></div>';
+      document.body.appendChild(ov);
+      var box=ov.firstChild, resultado=null;
+      function fechar(){ ov.remove(); document.removeEventListener('keydown',esc_); resolve(resultado); }
+      function esc_(e){ if(e.key==='Escape') fechar(); }
+      document.addEventListener('keydown',esc_);
+      var base={ tipo:o.tipo, id:o.id, senha:o.senha, por:o.usuario, saldoConferido:!!o.saldoConferido };
+      var link=linkCliente(o.tipo,o.id);
+      var podeSem = /^(diretoria|gerente)$/i.test(String(o.nivel||''));
 
-    async function desenhar(msg, cls){
-      var r=await chamar(Object.assign({acao:'historico'},base));
-      if(r.error && !r.retirada){ box.innerHTML='<h3>'+ic('usuario',18)+' Retirada por terceiros</h3><div class="rt-msg err">'+esc(r.error)+'</div><div class="rt-row"><button class="rt-btn" data-x>Fechar</button></div>'; box.querySelector('[data-x]').onclick=fechar; return; }
-      var ret=r.retirada||{}, hab=!!ret.habilitada, st=ret.status||'sem_codigo';
-      var tel=String(o.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel='55'+tel;
-      var txt='Olá'+(o.cliente?', '+String(o.cliente).split(' ')[0]:'')+'! Acompanhe sua via na Vilaça Joias'+(hab?' e, se outra pessoa for retirar, gere o código de retirada por terceiros':'')+': '+link;
-      var estadoTxt = !hab ? (st==='usado' ? ROT.usado : 'Desligada — só o próprio cliente retira.') : (ROT[st]||st);
-      var det = st==='ativo' ? 'Gerado em '+dh(ret.geradoEm)+(r.tentativas?' · '+r.tentativas+' tentativa(s) errada(s)':'')
-             : st==='usado' ? 'Em '+dh(ret.usadoEm)+(ret.usadoPor?' · liberado por '+esc(ret.usadoPor):'')+(ret.loja?' · '+esc(ret.loja):'')
-             : (st==='invalidado'||st==='bloqueado') ? esc(ret.motivo||'')+' — o cliente pode gerar um novo código no link.' : '';
-      var podeConferir = hab && st==='ativo';
-      box.innerHTML =
-        '<h3>'+ic('usuario',18)+' Retirada por terceiros</h3>'
-       +'<div class="rt-sub">'+esc(o.via?('Via '+o.via+' · '):'')+esc(o.cliente||'')+'</div>'
-       +'<div class="rt-estado"><b>'+esc(estadoTxt)+'</b>'+(det?'<span>'+det+'</span>':'')+'</div>'
-       +(st==='usado' ? '' : (!hab
-          ? '<p style="margin:0 0 6px;">Libere quando o cliente pedir para outra pessoa retirar. No mesmo link da via que ele já recebeu aparece o botão para gerar o código, e ele repassa ao portador.</p><div class="rt-row"><button class="rt-btn pri" data-hab>'+ic('check',15)+' Liberar retirada por terceiros</button></div>'
-          : '<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link (se o cliente não tiver)</button>':'')+'<button class="rt-btn" data-copy>Copiar link</button></div>'
-           +'<div style="margin-top:12px;font-weight:700;">Recebido com código</div>'
-           +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="4" autocomplete="off" spellcheck="false" placeholder="____" '+(podeConferir?'':'disabled')+' aria-label="Código do portador"><button class="rt-btn pri" data-conf '+(podeConferir?'':'disabled')+'>Conferir código</button></div>'
-           +(podeConferir?'':'<div class="rt-sub" style="margin:0;">'+(st==='sem_codigo'?'Aguardando o cliente gerar o código no link.':'Peça ao cliente para gerar um novo código no link.')+'</div>')
-           +'<div data-fluxo></div>'
-         ))
-       +(msg?'<div class="rt-msg '+(cls||'')+'">'+esc(msg)+'</div>':'')
-       +'<div class="rt-row" style="justify-content:space-between;margin-top:14px;">'+(hab&&st!=='usado'?'<button class="rt-btn perigo" data-deslig>Desligar retirada por terceiros</button>':'<span></span>')+'<button class="rt-btn" data-x>Fechar</button></div>'
-       +((r.historico||[]).length?'<div class="rt-hist"><b>Registro</b>'+r.historico.slice().reverse().map(function(h){ return '<div>'+dh(h.em)+' — '+esc(h.acao)+(h.por?' · '+esc(h.por):'')+'</div>'; }).join('')+'</div>':'');
-      box.querySelector('[data-x]').onclick=fechar;
-      var b;
-      if((b=box.querySelector('[data-hab]'))) b.onclick=async function(){ this.disabled=true; var x=await chamar(Object.assign({acao:'habilitar',on:true},base)); desenhar(x.error||'Retirada por terceiros liberada. O link da via que o cliente já tem atualiza sozinho (até 20 segundos) e mostra o botão para gerar o código. Não precisa enviar de novo.', x.error?'err':'ok'); };
-      if((b=box.querySelector('[data-deslig]'))) b.onclick=async function(){ if(!confirm('Desligar a retirada por terceiros? O código atual deixa de valer.')) return; var x=await chamar(Object.assign({acao:'habilitar',on:false},base)); desenhar(x.error||'Retirada por terceiros desligada.', x.error?'err':'ok'); };
-      if((b=box.querySelector('[data-wa]'))) b.onclick=async function(){
-        if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
-        if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
-        var a=document.createElement('a'); a.href='https://wa.me/'+tel+'?text='+encodeURIComponent(txt); a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      };
-      if((b=box.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(link); this.textContent='Link copiado'; }catch(e){ prompt('Copie o link:',link); } };
-      var inp=box.querySelector('.rt-cod');
-      if(inp){ inp.addEventListener('input',function(){ inp.value=inp.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,4); }); inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ var c=box.querySelector('[data-conf]'); if(c && !c.disabled) c.click(); } }); if(podeConferir) setTimeout(function(){ inp.focus(); },50); }
-      if((b=box.querySelector('[data-conf]'))) b.onclick=async function(){
-        var cod=inp.value.trim(); if(cod.length!==4){ inp.focus(); return; }
-        this.disabled=true;
-        var x=await chamar(Object.assign({acao:'validar',codigo:cod},base));
-        if(x.error){ desenhar(x.error,'err'); return; }
-        codigoOk=cod;
-        var fl=box.querySelector('[data-fluxo]');
-        if(x.saldo>0.009){
-          fl.innerHTML='<div class="rt-saldo"><b>Código correto, mas há saldo de '+brl(x.saldo)+'.</b><br>O portador precisa pagar o saldo. Lance o pagamento na via e depois clique em liberar. Se não pagar, invalide o código (o cliente é avisado no link).</div>'
-            +'<div class="rt-row"><button class="rt-btn pri" data-lib>Saldo pago — liberar retirada</button><button class="rt-btn perigo" data-inv>Não pagou — invalidar código</button></div>';
-        } else {
-          fl.innerHTML='<div class="rt-msg ok">Código correto. Confira a mercadoria e confirme a entrega ao portador.</div><div class="rt-row"><button class="rt-btn pri" data-lib>'+ic('check',15)+' Confirmar retirada pelo portador</button></div>';
-        }
-        fl.querySelector('[data-lib]').onclick=async function(){
-          this.disabled=true;
-          var y=await chamar(Object.assign({acao:'concluir',codigo:codigoOk,lojaId:o.lojaId},base));
-          if(y.error){ fl.insertAdjacentHTML('beforeend','<div class="rt-msg err">'+esc(y.error)+'</div>'); this.disabled=false; return; }
-          try{ if(typeof o.aoConcluir==='function') await o.aoConcluir(y.retirada); }catch(e){ console.error(e); }
-          desenhar('Retirada registrada. O cliente vê no link que o portador retirou.','ok');
+      async function desenhar(msg, cls){
+        var r=await chamar(Object.assign({acao:'historico'},base));
+        if(r.error && !r.retirada){ box.innerHTML='<h3>'+ic('usuario',18)+' Retirada na loja</h3><div class="rt-msg err">'+esc(r.error)+'</div><div class="rt-row"><button class="rt-btn" data-x>Fechar</button></div>'; box.querySelector('[data-x]').onclick=fechar; return; }
+        var ret=r.retirada||{}, usado=ret.status==='usado';
+        if(usado && !resultado && o.retomar) resultado={ retirada:ret };   // código já conferido antes: o pedido ainda pode ser finalizado
+        var tel=String(o.telefone||'').replace(/\D/g,''); if(tel && tel.length<=11) tel='55'+tel;
+        var txt='Olá'+(o.cliente?', '+String(o.cliente).split(' ')[0]:'')+'! Acompanhe sua via na Vilaça Joias e veja o código para retirar na loja: '+link;
+        box.innerHTML =
+          '<h3>'+ic('usuario',18)+' Retirada na loja</h3>'
+         +'<div class="rt-sub">'+esc(o.via?('Via '+o.via+' · '):'')+esc(o.cliente||r.cliente||'')+'</div>'
+         +(usado
+            ? '<div class="rt-estado"><b>Retirada concluída</b><span>Recebida por <b style="display:inline">'+esc(ret.recebidoPor||'—')+'</b> em '+dh(ret.usadoEm)+' · '+esc(METODO[ret.metodo]||ret.metodo||'')+(ret.usadoPor?' · liberada por '+esc(ret.usadoPor):'')+'</span></div>'
+            : '<p style="margin:0 0 8px;">Peça ao cliente o <b>código que aparece agora no link da via</b> (6 dígitos, muda a cada minuto) — ou o código de terceiro, se outra pessoa estiver retirando.</p>'
+             +(ret.status==='ativo' && ret.portador?'<div class="rt-estado"><b>Cliente autorizou: '+esc(ret.portador)+'</b><span>Código de terceiro gerado em '+dh(ret.geradoEm)+'</span></div>':'')
+             +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="6" autocomplete="off" inputmode="text" spellcheck="false" placeholder="______" aria-label="Código de retirada" style="width:190px;"><button class="rt-btn pri" data-conf>Conferir código</button></div>'
+             +'<div data-fluxo></div>'
+             +'<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link ao cliente</button>':'')+'<button class="rt-btn" data-copy>Copiar link</button></div>')
+         +(msg?'<div class="rt-msg '+(cls||'')+'">'+esc(msg)+'</div>':'')
+         +'<div class="rt-row" style="justify-content:space-between;margin-top:14px;">'+(!usado&&podeSem?'<button class="rt-btn perigo" data-sem>Entregar sem código…</button>':'<span></span>')+'<button class="rt-btn" data-x>Fechar</button></div>'
+         +((r.historico||[]).length?'<div class="rt-hist"><b>Registro</b>'+r.historico.slice().reverse().map(function(h){ return '<div>'+dh(h.em)+' — '+esc(h.acao)+(h.por?' · '+esc(h.por):'')+'</div>'; }).join('')+'</div>':'');
+        box.querySelector('[data-x]').onclick=fechar;
+        var b;
+        if((b=box.querySelector('[data-wa]'))) b.onclick=async function(){
+          if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
+          if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
+          var a=document.createElement('a'); a.href='https://wa.me/'+tel+'?text='+encodeURIComponent(txt); a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
         };
-        var inv=fl.querySelector('[data-inv]');
-        if(inv) inv.onclick=async function(){ if(!confirm('Invalidar o código? O cliente será avisado e precisará gerar outro.')) return; var y=await chamar(Object.assign({acao:'invalidar',codigo:codigoOk,motivo:'Saldo não foi pago na retirada'},base)); desenhar(y.error||'Código invalidado. O cliente vê o aviso no link.', y.error?'err':'ok'); };
-      };
-    }
-    desenhar();
+        if((b=box.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(link); this.textContent='Link copiado'; }catch(e){ prompt('Copie o link:',link); } };
+        if(usado) return;
+        var inp=box.querySelector('.rt-cod');
+        inp.addEventListener('input',function(){ inp.value=inp.value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6); });
+        inp.addEventListener('keydown',function(e){ if(e.key==='Enter'){ var c=box.querySelector('[data-conf]'); if(c && !c.disabled) c.click(); } });
+        setTimeout(function(){ inp.focus(); },50);
+
+        function pedirNome(fl, v, codigo){
+          var terc = v.metodo==='terceiro';
+          var sugestao = terc ? '' : (v.cliente||o.cliente||'');
+          var saldoHtml = v.saldo>0.009 ? '<div class="rt-saldo"><b>Há saldo de '+brl(v.saldo)+'.</b><br>Lance o pagamento na via e depois confirme a entrega. Se a pessoa não pagar, não entregue.</div>' : '';
+          fl.innerHTML = '<div class="rt-msg ok">Código correto ('+esc(METODO[v.metodo]||'')+').'+(terc&&v.portador?' O cliente autorizou: <b>'+esc(v.portador)+'</b>.':'')+'</div>'+saldoHtml
+            +'<div style="margin-top:10px;font-weight:700;">Quem está recebendo?</div>'
+            +'<div class="rt-row"><input class="rt-nome" maxlength="80" value="'+esc(sugestao)+'" placeholder="Nome de quem recebeu" aria-label="Nome de quem recebeu" style="flex:1;min-height:38px;padding:0 10px;border-radius:8px;border:1px solid var(--t-line-strong,#bcc);background:var(--t-field,#fff);color:inherit;font:inherit;text-transform:uppercase;"></div>'
+            +(terc?'':'<div class="rt-sub" style="margin:0;">O código é do cliente: o nome dele já vem preenchido. Corrija se outra pessoa estiver recebendo.</div>')
+            +'<div class="rt-row"><button class="rt-btn pri" data-lib>'+ic('check',15)+' Confirmar entrega</button>'+(terc&&v.saldo>0.009?'<button class="rt-btn perigo" data-inv>Não pagou — invalidar código</button>':'')+'</div>';
+          var nm=fl.querySelector('.rt-nome'); if(!sugestao) setTimeout(function(){ nm.focus(); },30);
+          fl.querySelector('[data-lib]').onclick=async function(){
+            var nome=nm.value.trim();
+            if(nome.length<3){ nm.focus(); return; }
+            if(terc && v.portador && norm(v.portador)!==norm(nome) && !confirm('O cliente autorizou "'+v.portador+'", mas você digitou "'+nome+'". Confirmar mesmo assim?')) return;
+            this.disabled=true;
+            var y=await chamar(Object.assign({acao:'concluir',codigo:codigo,lojaId:o.lojaId,recebidoPor:nome},base));
+            if(y.error){ fl.insertAdjacentHTML('beforeend','<div class="rt-msg err">'+esc(y.error)+'</div>'); this.disabled=false; return; }
+            resultado={ retirada:y.retirada };
+            try{ if(typeof o.aoConcluir==='function') await o.aoConcluir(y.retirada); }catch(e){ console.error(e); }
+            desenhar('Retirada registrada.','ok');
+          };
+          var inv=fl.querySelector('[data-inv]');
+          if(inv) inv.onclick=async function(){ if(!confirm('Invalidar o código? O cliente será avisado e precisará gerar outro.')) return; var y=await chamar(Object.assign({acao:'invalidar',codigo:codigo,motivo:'Saldo não foi pago na retirada'},base)); desenhar(y.error||'Código invalidado.', y.error?'err':'ok'); };
+        }
+        box.querySelector('[data-conf]').onclick=async function(){
+          var cod=inp.value.trim(); if(cod.length<4){ inp.focus(); return; }
+          this.disabled=true;
+          var v=await chamar(Object.assign({acao:'validar',codigo:cod},base));
+          this.disabled=false;
+          var fl=box.querySelector('[data-fluxo]');
+          if(v.error){ fl.innerHTML='<div class="rt-msg err">'+esc(v.error)+'</div>'; inp.select(); return; }
+          inp.disabled=true; this.style.display='none';
+          pedirNome(fl, v, cod);
+        };
+        if((b=box.querySelector('[data-sem]'))) b.onclick=async function(){
+          var motivo=(prompt('Entregar SEM o código — explique o motivo (fica registrado no pedido):')||'').trim();
+          if(motivo.length<5){ return; }
+          var nome=(prompt('Nome de quem está recebendo:')||'').trim();
+          if(nome.length<3) return;
+          var y=await chamar(Object.assign({acao:'semcodigo',motivo:motivo,recebidoPor:nome,lojaId:o.lojaId},base));
+          if(y.error){ desenhar(y.error,'err'); return; }
+          resultado={ retirada:y.retirada };
+          try{ if(typeof o.aoConcluir==='function') await o.aoConcluir(y.retirada); }catch(e){ console.error(e); }
+          desenhar('Entrega registrada sem código.','ok');
+        };
+      }
+      desenhar();
+    });
   }
-  /* Caixa "Retirada por terceiros" no formulário da via: marcada, libera o gerador de código no link do cliente ao salvar. */
-  function checkboxHtml(marcado){
-    return '<label style="display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;cursor:pointer;margin-top:12px;padding:8px 12px;border:1px solid var(--t-line-strong,#bcc);border-radius:8px;">'
-      + '<input type="checkbox" id="chkRetiradaTerceiro" style="width:auto;margin:0;"'+(marcado?' checked':'')+'> <span>Retirada por terceiros <span style="font-weight:400;color:var(--t-ink-faint,#667);">— o cliente gera o código no link</span></span></label>';
-  }
-  async function habilitarSeMarcado(o){
-    var c = document.getElementById('chkRetiradaTerceiro');
-    if(!c || !c.checked) return null;
-    var r = await chamar({ acao:'habilitar', on:true, tipo:o.tipo, id:o.id, senha:o.senha, por:o.usuario });
-    if(r && r.error) console.error('retirada por terceiros', r.error);
-    return r;
-  }
+  /* Antes havia uma caixa na via para liberar a retirada por terceiros. Agora o código rotativo vale sempre
+   * e o cliente gera o código de terceiro direto no link: as duas funções ficam só por compatibilidade. */
+  function checkboxHtml(){ return ''; }
+  async function habilitarSeMarcado(){ return null; }
   window.RetiradaTerceiro = { abrir: abrir, linkCliente: linkCliente, checkboxHtml: checkboxHtml, habilitarSeMarcado: habilitarSeMarcado };
 })();

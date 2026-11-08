@@ -150,5 +150,34 @@
     h += `<div style="font-size:.85em;margin-top:4px;">${esc(REGRAS)}</div>`;
     return h;
   }
-  window.Cashback = { PERC, DIAS, MAX_USO, hoje, somaDias, fmtData, ehDinheiro, disponivel, aLiberar, info, maxUso, planejar, aplicar, estornar, estornarRegistro, buscarCliente, gravar, avisoPagamentoHtml, cupomHtml, REGRAS };
+  /** Linha com o saldo de cashback logo abaixo do nome do cliente escolhido (só aparece se houver saldo ou algo a liberar).
+   *  wrap = área do seletor de cliente; cli = cliente escolhido; gatewayCall = para ler o saldo atualizado no cadastro. */
+  async function montarLinha(wrap, cli, gatewayCall){
+    if(!wrap || !cli) return;
+    const alvo = wrap.querySelector('.cli-ac-selecionado'); if(!alvo) return;
+    let box = wrap.querySelector('.cb-linha');
+    if(!box){ box = document.createElement('div'); box.className = 'cb-linha'; alvo.insertAdjacentElement('afterend', box); }
+    const pinta = c=>{
+      if(!box.isConnected) return;
+      const d = hoje(), disp = disponivel(c, d), lib = aLiberar(c, d);
+      if(!(disp > 0) && !(lib > 0)){ box.style.display = 'none'; box.innerHTML = ''; return; }
+      const ativos = lotes(c).filter(l=>ativo(l,d)).sort((a,b)=>a.expiraEm.localeCompare(b.expiraEm));
+      box.style.cssText = 'margin:6px 0 0;font-size:13px;font-weight:600;color:var(--ok,#0f6b40);';
+      box.innerHTML = 'Cashback: ' + (disp > 0 ? `<b>${fmtR(disp)}</b> disponível${ativos.length?` · vence em ${fmtData(ativos[0].expiraEm)}`:''}` : '') + (lib > 0 ? `${disp>0?' · ':''}${fmtR(lib)} a liberar amanhã` : '');
+    };
+    pinta(cli);
+    if(cli.id && gatewayCall){
+      try{ const fresco = await buscarCliente(gatewayCall, cli.id); if(fresco) pinta(fresco); }catch(e){}
+    }
+  }
+  /** Resumo de TODOS os clientes (para o Cadastro): total e individual. */
+  function resumoGeral(clientes){
+    const d = hoje(); let totalDisp = 0, totalLib = 0; const linhas = [];
+    (clientes||[]).forEach(c=>{
+      const disp = disponivel(c, d), lib = aLiberar(c, d);
+      if(disp > 0 || lib > 0){ totalDisp += disp; totalLib += lib; const ativos = lotes(c).filter(l=>ativo(l,d)).sort((a,b)=>a.expiraEm.localeCompare(b.expiraEm)); linhas.push({ id:c.id, nome:c.nome||'', telefone:c.telefone||'', disp, lib, vence: ativos.length ? ativos[0].expiraEm : '' }); }
+    });
+    return { totalDisp:r2(totalDisp), totalLib:r2(totalLib), linhas };
+  }
+  window.Cashback = { montarLinha, resumoGeral, PERC, DIAS, MAX_USO, hoje, somaDias, fmtData, ehDinheiro, disponivel, aLiberar, info, maxUso, planejar, aplicar, estornar, estornarRegistro, buscarCliente, gravar, avisoPagamentoHtml, cupomHtml, REGRAS };
 })();

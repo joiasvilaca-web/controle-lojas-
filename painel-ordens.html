@@ -1918,6 +1918,7 @@ function montarClienteAutocomplete(wrap, onSel, inicial){
       </div>
       ${avisoCreditoHtml(clienteSel)}
       <button type="button" class="btn-texto" id="cliAcCad_os" style="margin-top:6px;">${ico('mais',14)} Cadastrar cliente novo</button>`;
+      if(window.Cashback) Cashback.montarLinha(wrap, clienteSel, gatewayCall);
       wrap.querySelector('#cliAcClear_os').addEventListener('click',()=>{clienteSel=null;onSel(null);renderWrap();});
       wrap.querySelector('#cliAcEdit_os').addEventListener('click',()=>{abrirSeletorCliente(c=>{clienteSel=c;onSel(c);renderWrap();},clienteSel);});
       wrap.querySelector('#cliAcCad_os').addEventListener('click',()=>{abrirSeletorCliente(c=>{clienteSel=c;onSel(c);renderWrap();});});
@@ -2993,6 +2994,20 @@ function promptCiente(callback){
  * onCancel fires if the modal is dismissed (Cancelar button OR clicking outside),
  * so callers can revert a <select> that already changed value visually.
  */
+/* 09/11: a entrega só sai com o CÓDIGO que o cliente mostra no link (rotativo) ou o de terceiro — ou liberada pela gerência com motivo.
+ * Devolve o registro da retirada ({recebidoPor, metodo, portador, usadoPor, usadoEm…}) ou null se não concluiu. */
+async function entregarComCodigo(ord, saldoConferido){
+  if(!window.RetiradaTerceiro){ showToast('Não foi possível abrir a conferência do código. Recarregue a página.'); return null; }
+  const r = await RetiradaTerceiro.abrir({ tipo:'os', id:ord.id, via:ord.via, cliente:ord.cliente, telefone:ord.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||ord.lojaId, retomar:true, saldoConferido:!!saldoConferido });
+  return r && r.retirada ? r.retirada : null;
+}
+/* Marca a O.S. como entregue e arquiva na própria via quem recebeu e como foi liberado. */
+function aplicarEntregaNaOrdem(ord, ret){
+  ord.status = 'entregue';
+  ord.recebidoPor = ret.recebidoPor || ord.recebidoPor || '';
+  ord.recebidoEm = Date.now();
+  ord.retirada = { metodo: ret.metodo || '', recebidoPor: ret.recebidoPor || '', portadorAutorizado: ret.portador || '', conferidoPor: ret.usadoPor || '', em: ret.usadoEm || new Date().toISOString(), loja: ret.loja || '', motivoSemCodigo: ret.metodo==='sem_codigo' ? (ret.motivo||'') : '' };
+}
 function promptRecebidoPor(onConfirm, onCancel){
   modalOnClose = onCancel || null;
   openModal(`
@@ -5361,7 +5376,9 @@ function openEditModalCompleto(order, opts){
     </div>
     <div class="field" id="e_recebidoWrap" style="display:none;">
       <label for="e_recebidoPor">Recebido por</label>
-      <input id="e_recebidoPor" placeholder="Nome de quem retirou a peça" value="${escapeHtml(order.recebidoPor||'')}">
+      <input id="e_recebidoPor" placeholder="Preenchido na conferência do código" value="${escapeHtml(order.recebidoPor||'')}" ${order.status==='entregue'?'':'readonly'}>
+      ${order.status==='entregue'?'':'<small class="muted">Ao salvar como Entregue, o sistema pede o código que o cliente mostra no link da via e registra quem recebeu.</small>'}
+      ${order.retirada ? `<small class="muted">Liberado por ${escapeHtml(order.retirada.conferidoPor||'—')} · ${order.retirada.metodo==='sem_codigo'?'SEM código ('+escapeHtml(order.retirada.motivoSemCodigo||'')+')':order.retirada.metodo==='terceiro'?'código de terceiro (autorizado: '+escapeHtml(order.retirada.portadorAutorizado||'—')+')':'código do cliente'}${order.retirada.em?' · '+new Date(order.retirada.em).toLocaleString('pt-BR'):''}</small>` : ''}
     </div>
     <div class="grid-2">
     <div class="field"><label for="e_servico">Tipo de serviço</label><select id="e_servico">${servicoOptionsHtml(order.serviceTypeId)}</select></div>
@@ -5620,12 +5637,15 @@ function openEditModalCompleto(order, opts){
     let recebidoEm = order.recebidoEm || null;
     if(status === 'entregue'){
       if(bloqueioSaldoEntrega({ valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal, pagamentos: editPagHolder ? editPagHolder.pagamentos : order.pagamentos })) return;
-      recebidoPor = maiusc(document.getElementById('e_recebidoPor').value);
-      if(!recebidoPor){
-        showToast('Informe quem recebeu o produto.');
-        return;
+      if(order.status !== 'entregue'){
+        const ret = await entregarComCodigo(order, true);
+        if(!ret){ showToast('Entrega não confirmada: falta conferir o código do cliente.'); return; }
+        recebidoPor = ret.recebidoPor;
+        recebidoEm = Date.now();
+        order.retirada = { metodo: ret.metodo || '', recebidoPor: ret.recebidoPor || '', portadorAutorizado: ret.portador || '', conferidoPor: ret.usadoPor || '', em: ret.usadoEm || new Date().toISOString(), loja: ret.loja || '', motivoSemCodigo: ret.metodo==='sem_codigo' ? (ret.motivo||'') : '' };
+      } else {
+        recebidoPor = maiusc(document.getElementById('e_recebidoPor').value) || order.recebidoPor || '';
       }
-      if(order.status !== 'entregue') recebidoEm = Date.now();
     }
     // Catálogo obrigatório + conferência de estoque (rascunho/cancelado não são validados)
     let planoEdit = null;
@@ -5852,15 +5872,13 @@ function renderPainel(main){
     if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
       if(bloqueioSaldoEntrega(ord)){ desfazer(); return; }
-      promptRecebidoPor(async (nome)=>{
-        ord.status = 'entregue';
-        ord.recebidoPor = nome;
-        ord.recebidoEm = Date.now();
-        await estoqueAoEntregar(ord);
-        await saveOrders();
-        showToast('Ordem marcada como entregue para ' + nome + '.');
-        renderTable();
-      }, ()=>{ desfazer(); });
+      const ret = await entregarComCodigo(ord);
+      if(!ret){ showToast('Entrega não confirmada: falta conferir o código do cliente.'); desfazer(); return; }
+      aplicarEntregaNaOrdem(ord, ret);
+      await estoqueAoEntregar(ord);
+      await saveOrders();
+      showToast('Ordem entregue para ' + ret.recebidoPor + '.');
+      renderTable();
       return;
     }
     if(novo === 'cancelado' && previous !== 'cancelado'){
@@ -6036,10 +6054,11 @@ function renderPainel(main){
     wrap.querySelectorAll('[data-retirada]').forEach(b=>{
       b.addEventListener('click', ()=>{
         const o = orders.find(x=>x.id===b.dataset.retirada); if(!o || !window.RetiradaTerceiro) return;
-        RetiradaTerceiro.abrir({ tipo:'os', id:o.id, via:o.via, cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId,
-          aoConcluir: async ()=>{
+        if(bloqueioSaldoEntrega(o)) return;
+        RetiradaTerceiro.abrir({ tipo:'os', id:o.id, via:o.via, cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId, retomar:true,
+          aoConcluir: async (ret)=>{
             if(o.status==='entregue') return;
-            o.status = 'entregue'; o.recebidoPor = 'PORTADOR (CÓDIGO DO CLIENTE)'; o.recebidoEm = Date.now();
+            aplicarEntregaNaOrdem(o, ret||{});
             try{ await estoqueAoEntregar(o); }catch(e){ console.error(e); }
             await saveOrders(); renderView();
           } });
@@ -6119,7 +6138,7 @@ function renderPainel(main){
             <div class="menu-mais-lista" role="menu">
               <button type="button" role="menuitem" data-view="${o.id}">${ico('olho')} Ver detalhes</button>
               <button type="button" role="menuitem" data-mail="${o.id}">${ico('email')} Enviar e-mail ao cliente</button>
-              <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada por terceiros</button>
+              <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada na loja (conferir código)</button>
               ${podeExcluirOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
             </div>
           </div>
