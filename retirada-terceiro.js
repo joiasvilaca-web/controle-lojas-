@@ -72,10 +72,11 @@
              +'<div data-fluxo></div>'
              +'<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link ao cliente</button>':'')+'</div>')
          +(msg?'<div class="rt-msg '+(cls||'')+'">'+esc(msg)+'</div>':'')
-         +'<div class="rt-row" style="justify-content:space-between;margin-top:14px;">'+(!usado&&podeSem?'<button class="rt-btn perigo" data-sem>Entregar sem código…</button>':'<span></span>')+'<button class="rt-btn" data-x>Fechar</button></div>'
+         +'<div class="rt-row" style="justify-content:space-between;margin-top:14px;">'+(!usado&&podeSem?'<button class="rt-btn perigo" data-sem>Entregar sem código…</button>':'<span></span>')+'<span style="display:inline-flex;gap:8px;"><button class="rt-btn" data-comp>Comprovante completo</button><button class="rt-btn" data-x>Fechar</button></span></div>'
          +((r.historico||[]).length?'<div class="rt-hist"><b>Registro</b>'+r.historico.slice().reverse().map(function(h){ return '<div>'+dh(h.em)+' — '+esc(h.acao)+(h.por?' · '+esc(h.por):'')+'</div>'; }).join('')+'</div>':'');
         box.querySelector('[data-x]').onclick=fechar;
         var b;
+        if((b=box.querySelector('[data-comp]'))) b.onclick=function(){ comprovante(o); };
         if((b=box.querySelector('[data-wa]'))) b.onclick=async function(){
           if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
           if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
@@ -136,9 +137,31 @@
       desenhar();
     });
   }
+  /* Comprovante completo da via: todos os passos (criação, alterações, cientes do cliente, códigos, retirada), com impressão/PDF. */
+  async function comprovante(o){
+    css();
+    var ov=document.createElement('div'); ov.className='rt-ov'; ov.style.zIndex=9100;
+    ov.innerHTML='<div class="rt-box" style="max-width:720px;" role="dialog" aria-modal="true" aria-label="Comprovante da via"><div class="rt-sub">Carregando o histórico da via…</div></div>';
+    document.body.appendChild(ov);
+    var box=ov.firstChild; function fechar(){ ov.remove(); }
+    var r=await chamar({ acao:'comprovante', tipo:o.tipo, id:o.id, senha:o.senha, por:o.usuario });
+    if(r.error){ box.innerHTML='<h3>Comprovante da via</h3><div class="rt-msg err">'+esc(r.error)+'</div><div class="rt-row"><button class="rt-btn" data-x>Fechar</button></div>'; box.querySelector('[data-x]').onclick=fechar; return; }
+    var v=r.via||{}, ev=r.eventos||[];
+    var corpo='<h3>'+ic('documento',18)+' Comprovante da via'+(v.via?' '+esc(v.via):'')+'</h3>'
+      +'<div class="rt-sub">'+esc(v.cliente||'')+(v.loja?' · '+esc(v.loja):'')+' · situação atual: <b>'+esc(v.status||'—')+'</b> · emitido em '+dh(r.geradoEm)+(r.por?' por '+esc(r.por):'')+'</div>'
+      +'<div class="rt-hist" style="max-height:none;border-top:0;padding-top:0;">'+(ev.length?ev.map(function(e){ return '<div style="padding:6px 0;border-bottom:1px solid var(--t-line,#dde);"><b>'+dh(e.em)+'</b> · <span style="text-transform:uppercase;font-size:11px;">'+esc(e.tipo)+'</span>'+(e.quem?' · '+esc(e.quem):'')+'<br>'+esc(e.texto)+'</div>'; }).join(''):'<div>Nenhum registro encontrado.</div>')+'</div>'
+      +'<div class="rt-row" style="justify-content:flex-end;margin-top:12px;"><button class="rt-btn" data-print>Imprimir / salvar em PDF</button><button class="rt-btn" data-x>Fechar</button></div>';
+    box.innerHTML=corpo;
+    box.querySelector('[data-x]').onclick=fechar;
+    box.querySelector('[data-print]').onclick=function(){
+      var w=window.open('','_blank'); if(!w){ alert('Libere pop-ups para imprimir.'); return; }
+      w.document.write('<html><head><meta charset="utf-8"><title>Comprovante da via '+esc(v.via||'')+'</title><style>body{font:13px Arial,sans-serif;margin:24px;color:#111}h1{font-size:18px}.e{padding:6px 0;border-bottom:1px solid #ccc}small{color:#555}</style></head><body><h1>Vilaça Joias — Comprovante da via '+esc(v.via||'')+'</h1><p>'+esc(v.cliente||'')+(v.loja?' · '+esc(v.loja):'')+'<br>Situação atual: '+esc(v.status||'—')+'<br><small>Emitido em '+dh(r.geradoEm)+(r.por?' por '+esc(r.por):'')+'</small></p>'+ev.map(function(e){ return '<div class="e"><b>'+dh(e.em)+'</b> · '+esc(e.tipo.toUpperCase())+(e.quem?' · '+esc(e.quem):'')+'<br>'+esc(e.texto)+'</div>'; }).join('')+'</body></html>');
+      w.document.close(); w.focus(); setTimeout(function(){ w.print(); },300);
+    };
+  }
   /* Antes havia uma caixa na via para liberar a retirada por terceiros. Agora o código rotativo vale sempre
    * e o cliente gera o código de terceiro direto no link: as duas funções ficam só por compatibilidade. */
   function checkboxHtml(){ return ''; }
   async function habilitarSeMarcado(){ return null; }
-  window.RetiradaTerceiro = { abrir: abrir, linkCliente: linkCliente, checkboxHtml: checkboxHtml, habilitarSeMarcado: habilitarSeMarcado };
+  window.RetiradaTerceiro = { abrir: abrir, comprovante: comprovante, linkCliente: linkCliente, checkboxHtml: checkboxHtml, habilitarSeMarcado: habilitarSeMarcado };
 })();

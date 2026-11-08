@@ -193,6 +193,22 @@ Deno.serve(async (req) => {
     if (acao === "historico") {
       return json({ retirada: publico(reg), historico: reg?.historico || [], tentativas: reg?.tentativas || 0, saldo: saldoDe(tipo, via), cliente: via.cliente || "", encerrada: encerrada(tipo, via, reg) });
     }
+    if (acao === "comprovante") {
+      // Linha do tempo COMPLETA da via (para provar o que aconteceu): criação, alterações/status (auditoria), cientes do cliente, códigos e retirada.
+      const ev: any[] = [];
+      const criado = via.criadoEm ? new Date(via.criadoEm).toISOString() : null;
+      if (criado) ev.push({ em: criado, tipo: "via", quem: via.criadoPor || via.vendedora || "", texto: "Via criada" + (via.codigoVia || via.via ? " (" + (via.codigoVia || via.via) + ")" : "") });
+      const { data: aud } = await admin.from("auditoria_log").select("em,usuario_nome,nivel,acao,resumo,em_outra_loja").eq("tabela", TABELA[tipo]).eq("registro_id", id).order("em", { ascending: true }).limit(300);
+      for (const a of (aud || [])) ev.push({ em: a.em, tipo: "sistema", quem: a.usuario_nome || "", texto: String(a.acao || "") + (a.resumo ? " — " + a.resumo : "") + (a.em_outra_loja ? " (em outra loja)" : "") });
+      for (const h of (reg?.historico || [])) ev.push({ em: h.em, tipo: "retirada", quem: h.por || "", texto: h.acao + (h.loja ? " · " + h.loja : "") });
+      for (const l of (Array.isArray(via.leituras) ? via.leituras : [])) {
+        if (!l) continue;
+        ev.push({ em: l.confirmadoEm, tipo: "cliente", quem: "CLIENTE", texto: (l.ciente ? "CIENTE registrado pelo cliente" : "Visualização registrada automaticamente") + " — situação: " + String(l.status || "").replace("|retirada", " (após retirada)") + (l.ip ? " · IP " + l.ip : "") + (l.ua ? " · aparelho: " + l.ua : "") });
+      }
+      if (reg?.status === "usado") ev.push({ em: reg.usado_em, tipo: "retirada", quem: reg.usado_por || "", texto: "RETIRADA: recebida por " + (reg.recebido_por || "—") + " · forma: " + (reg.metodo === "rotativo" ? "código do cliente" : reg.metodo === "terceiro" ? "código de terceiro (autorizado: " + (reg.portador_nome || "—") + ")" : "SEM código — motivo: " + (reg.motivo || "—")) + (reg.loja ? " · " + reg.loja : "") });
+      ev.sort((a, b2) => String(a.em || "").localeCompare(String(b2.em || "")));
+      return json({ ok: true, via: resumoVia(tipo, via, await lojaNome(via.lojaId)), retirada: publico(reg), eventos: ev, geradoEm: new Date().toISOString(), por });
+    }
     if (acao === "habilitar") {
       const on = !!b.on;
       if (!on && reg?.status === "usado") return json({ error: "A retirada já foi feita." });
