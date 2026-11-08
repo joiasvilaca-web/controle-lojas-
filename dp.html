@@ -6,6 +6,7 @@
 <script src="maiusculas.js"></script>
 <script src="icones.js"></script>
 <script src="formato.js"></script>
+<script src="avaliacoes-ui.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Departamento Pessoal · Vilaça Joias</title>
@@ -1499,13 +1500,14 @@ const TABS = [
   { id:'avisos', label:'Advertências', icon:'alerta' },
   { id:'atestados', label:'Atestados', icon:'documento' },
   { id:'enviarLink', label:'Enviar link de cadastro', icon:'enviar', restrito:true },
+  { id:'avaliacoes', label:'Avaliações dos clientes', icon:'estrela', soGerencia:true },
   { id:'acessos', label:'Funções', icon:'cadeado', soDiretoria:true },
 ];
 function abasVisiveisDP(){
   const ABAS_PROPRIAS = ['funcionarios','pagamentos','ferias','avisos','atestados'];
   return soProprioDP()
     ? TABS.filter(t=> ABAS_PROPRIAS.includes(t.id))
-    : TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : (!t.restrito || podeEditarDP()));
+    : TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : t.soGerencia ? (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente') : (!t.restrito || podeEditarDP()));
 }
 function buildTabs(){
   const abasVisiveis = abasVisiveisDP();
@@ -1543,10 +1545,17 @@ function renderView(){
   else if(currentTab==='ferias') renderRegistros(main, 'ferias');
   else if(currentTab==='avisos') renderRegistros(main, 'aviso');
   else if(currentTab==='atestados') renderRegistros(main, 'atestado');
+  else if(currentTab==='avaliacoes') renderAvaliacoesDP(main);
   else if(currentTab==='acessos') renderAcessosDP(main);
   else if(currentTab==='enviarLink') renderEnviarLinkDP(main);
 }
 
+/* Avaliações dos clientes (09/11): só gerente/diretoria; o atendente vê apenas a própria média na ficha. */
+function renderAvaliacoesDP(main){
+  const box = document.createElement('div'); main.appendChild(box);
+  if(!window.AvaliacoesUI){ box.innerHTML = '<div class="muted">Não foi possível carregar as avaliações. Recarregue a página.</div>'; return; }
+  AvaliacoesUI.render(box, { senha: __gatewaySenha, lojaNome: id => comNomeLoja(id) });
+}
 function nomeFuncionario(id){ const f = funcionarios.find(x=>x.funcionarioId===id || x.id===id); return f ? nomeExibicaoFuncionario(f) : '—'; }
 function funcionarioOptionsHtml(selected){
   return `<option value="">Selecione</option>` + funcionarios.filter(f=>f.status!=='desligado').map(f=>`<option value="${f.funcionarioId||f.id}" ${selected===(f.funcionarioId||f.id)?'selected':''}>${escapeHtml(nomeExibicaoFuncionario(f))}</option>`).join('');
@@ -2143,7 +2152,7 @@ function renderFuncionarios(main){
     } else {
       tbody.innerHTML = lista.map(f=>`
         <tr>
-          <td class="cel-titulo"><span class="nome-func">${escapeHtml(f.nome)}</span>${(f.apelido||'').trim()?` <span class="apelido">(${escapeHtml(f.apelido)})</span>`:''}${f.semFicha?` <span class="badge badge-wait" title="Cadastrado só com nome e função: abra para preencher a ficha">Ficha em branco</span>`:''}</td>
+          <td class="cel-titulo"><span class="nome-func">${escapeHtml(f.nome)}</span>${(f.apelido||'').trim()?` <span class="apelido">(${escapeHtml(f.apelido)})</span>`:''} <span class="aval-media" data-avnome="${escapeHtml(f.nome)}" data-avapelido="${escapeHtml(f.apelido||'')}"></span>${f.semFicha?` <span class="badge badge-wait" title="Cadastrado só com nome e função: abra para preencher a ficha">Ficha em branco</span>`:''}</td>
           <td data-label="Cargo">${escapeHtml(f.cargo||'—')}</td>
           <td data-label="Loja">${escapeHtml(f.loja||'—')}</td>
           <td data-label="Admissão">${admissaoHtml(f)}</td>
@@ -2152,6 +2161,7 @@ function renderFuncionarios(main){
             ${podeEditar ? `<button class="btn btn-ghost btn-sm perigo" data-inativar="${f.id}" title="Inativar funcionário">${ic('cadeado', 14)} Inativar</button>` : ''}
           </div></td>
         </tr>`).join('');
+      if(window.AvaliacoesUI) AvaliacoesUI.preencherMedias(tbody, __gatewaySenha);
       tbody.querySelectorAll('[data-inativar]').forEach(b=>{
         b.addEventListener('click', ()=>{
           const func = funcionarios.find(f=>f.id===b.dataset.inativar);

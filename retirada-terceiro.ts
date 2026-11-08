@@ -78,13 +78,36 @@ function saldoDe(tipo: string, v: any) {
     .reduce((a: number, p: any) => a + (Number(p.valor) || 0), 0);
   return Math.max(0, Math.round((total - pago) * 100) / 100);
 }
-async function lojaNome(lojaId: string) {
-  if (!lojaId) return null;
+async function lojaInfo(lojaId: string) {
+  if (!lojaId) return { nome: null as string | null, google: null as string | null };
   try {
     const { data: cfg } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
     const l = ((cfg && cfg.payload && cfg.payload.lojas) || []).find((x: any) => x && x.id === lojaId);
-    return l ? (l.nomeFantasia || l.nome) : null;
-  } catch (_e) { return null; }
+    return l ? { nome: l.nomePublico || l.nomeFantasia || l.nome || null, google: l.googleReviewUrl || null } : { nome: null, google: null };
+  } catch (_e) { return { nome: null, google: null }; }
+}
+const lojaNome = async (lojaId: string) => (await lojaInfo(lojaId)).nome;
+
+// ---------- AVALIAÇÃO DO ATENDIMENTO (09/11) ----------
+const AVAL_DESDE = Date.parse("2026-11-09T00:00:00-03:00");   // só vias criadas a partir daqui perguntam
+const semAcento = (t: unknown) => String(t || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+const nivelDe = (u: any) => String(u && u.nivel || "").toLowerCase();
+const gerencia = (u: any) => nivelDe(u) === "diretoria" || nivelDe(u) === "gerente";
+async function lerAval(tipo: string, id: string) {
+  const { data } = await admin.from("avaliacoes_cliente").select("*").eq("id", tipo + ":" + id).maybeSingle();
+  return data;
+}
+async function avalInfo(tipo: string, id: string, via: any) {
+  const a = await lerAval(tipo, id);
+  const criado = Number(via.criadoEm) || 0;
+  const elegivel = criado >= AVAL_DESDE || (!criado && String(via.data || "") >= "2026-11-09");
+  const li = await lojaInfo(via.lojaId);
+  return {
+    pendente: !a && elegivel && via.status !== "cancelado" && via.status !== "cancelada",
+    feita: !!a, estrelas: a ? a.estrelas : null,
+    resposta: a && a.resposta ? { texto: a.resposta.texto, em: a.resposta.em } : null,
+    google: li.google, loja: li.nome, atendente: via.vendedora || via.criadoPor || "",
+  };
 }
 async function lerReg(tipo: string, id: string) {
   const { data } = await admin.from("retiradas_terceiro").select("*").eq("id", tipo + ":" + id).maybeSingle();
@@ -136,6 +159,54 @@ Deno.serve(async (req) => {
     const acao = String(b.acao || "");
     const tipo = String(b.tipo || "");
     const id = String(b.id || "");
+    // ----- ações da EQUIPE sobre avaliações (não dependem de uma via) -----
+    if (["avaliacoesLista", "avaliacoesMedias", "avaliacaoResponder", "avaliacaoCorrigir", "avaliacaoLida"].includes(acao)) {
+      const u = await staff(String(b.senha || ""));
+      if (!u) return json({ error: "Acesso não autorizado." });
+      if (acao === "avaliacoesMedias") {
+        const { data } = await admin.from("avaliacoes_cliente").select("atendente,estrelas").not("estrelas", "is", null).limit(20000);
+        const mapa: Record<string, { soma: number; n: number; nome: string }> = {};
+        for (const r of (data || [])) { const k = semAcento(r.atendente); if (!k) continue; (mapa[k] = mapa[k] || { soma: 0, n: 0, nome: r.atendente }); mapa[k].soma += r.estrelas; mapa[k].n++; }
+        const todos = Object.entries(mapa).map(([k, v]) => ({ chave: k, nome: v.nome, media: Math.round(v.soma / v.n * 100) / 100, total: v.n }));
+        if (gerencia(u)) return json({ ok: true, medias: todos });
+        const meus = [semAcento(u.nome), semAcento(u.apelido)].filter(Boolean);
+        return json({ ok: true, medias: todos.filter((x) => meus.includes(x.chave)) });   // o próprio atendente vê só a média, nunca as avaliações individuais
+      }
+      if (!gerencia(u)) return json({ error: "Só gerente ou diretoria vê as avaliações." });
+      if (acao === "avaliacoesLista") {
+        let q = admin.from("avaliacoes_cliente").select("*").order("criado_em", { ascending: false }).limit(500);
+        if (b.baixas) q = q.lte("estrelas", 3);
+        const { data } = await q;
+        let lista = (data || []).filter((r: any) => !r.pulou);
+        if (b.semResposta) lista = lista.filter((r: any) => !r.resposta);
+        if (b.atendente) lista = lista.filter((r: any) => semAcento(r.atendente) === semAcento(b.atendente));
+        return json({ ok: true, lista });
+      }
+      if (acao === "avaliacaoLida") { await admin.from("avaliacoes_cliente").update({ lida: true }).eq("id", String(b.avId || "")); return json({ ok: true }); }
+      if (acao === "avaliacaoCorrigir") {
+        const texto = String(b.texto || "").trim().slice(0, 1500);
+        if (texto.length < 3) return json({ error: "Escreva a resposta primeiro." });
+        const key = Deno.env.get("GEMINI_API_KEY");
+        if (!key) return json({ error: "A correção por IA não está disponível neste ambiente. Revise o texto e envie." });
+        const prompt = "Corrija ortografia, pontuação e clareza do texto abaixo, em português do Brasil, mantendo o mesmo sentido, tom educado e acolhedor de uma joalheria, sem acrescentar fatos nem promessas. Devolva SOMENTE o texto corrigido.\n\nTexto:\n" + texto;
+        try {
+          const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + (Deno.env.get("GEMINI_TEXT_MODEL") || "gemini-flash-latest") + ":generateContent", { method: "POST", headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+          const j = await r.json();
+          const out = j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts && j.candidates[0].content.parts.map((p: any) => p.text || "").join("").trim();
+          if (!out) return json({ error: "A IA não conseguiu corrigir agora. Revise o texto e envie." });
+          return json({ ok: true, texto: out });
+        } catch (_e) { return json({ error: "A IA não respondeu. Revise o texto e envie." }); }
+      }
+      if (acao === "avaliacaoResponder") {
+        const texto = String(b.texto || "").trim().slice(0, 1500);
+        if (texto.length < 3) return json({ error: "Escreva a resposta." });
+        const avId = String(b.avId || "");
+        const { data: a } = await admin.from("avaliacoes_cliente").select("id").eq("id", avId).maybeSingle();
+        if (!a) return json({ error: "Avaliação não encontrada." });
+        await admin.from("avaliacoes_cliente").update({ lida: true, resposta: { texto, por: String(u.nome || ""), em: new Date().toISOString(), original: String(b.original || "").slice(0, 1500) } }).eq("id", avId);
+        return json({ ok: true });
+      }
+    }
     if (!TABELA[tipo] || !id) return json({ error: "Via inválida." });
     const via = await lerVia(tipo, id);
     if (!via || via.status === "rascunho") return json({ error: "Via não encontrada." });
@@ -143,7 +214,7 @@ Deno.serve(async (req) => {
     // ---------- públicas (cliente) ----------
     if (acao === "estado") {
       const reg = await lerReg(tipo, id);
-      const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg), codigoTerceiro: encerrada(tipo, via, reg) ? null : await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg) };
+      const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg), codigoTerceiro: encerrada(tipo, via, reg) ? null : await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) };
       if (b.resumo) out.via = resumoVia(tipo, via, await lojaNome(via.lojaId));
       return json(out);
     }
@@ -152,7 +223,18 @@ Deno.serve(async (req) => {
       if (encerrada(tipo, via, reg)) return json({ encerrada: true, retirada: publico(reg) });
       const j = janelaAtual();
       const restante = (j + 1) * PERIODO - Math.floor(Date.now() / 1000);
-      return json({ codigo: await codigoRotativo(tipo, id, j), restante, periodo: PERIODO, retirada: publico(reg), codigoTerceiro: await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg) });
+      return json({ codigo: await codigoRotativo(tipo, id, j), restante, periodo: PERIODO, retirada: publico(reg), codigoTerceiro: await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) });
+    }
+    if (acao === "avaliar") {
+      const info = await avalInfo(tipo, id, via);
+      if (!info.pendente) return json({ ok: true, jaFeita: true, avaliacao: info });
+      const pulou = !!b.pulou;
+      const est = Math.round(Number(b.estrelas));
+      if (!pulou && !(est >= 1 && est <= 5)) return json({ error: "Escolha de 1 a 5 estrelas." });
+      const comentario = pulou ? "" : String(b.comentario || "").trim().slice(0, 1500);
+      const { error } = await admin.from("avaliacoes_cliente").insert({ id: tipo + ":" + id, tipo, via_id: id, via_codigo: via.codigoVia || via.via || via.numero || null, loja_id: via.lojaId || null, atendente: info.atendente || null, cliente: via.cliente || null, estrelas: pulou ? null : est, comentario: comentario || null, pulou });
+      if (error && !String(error.message || "").includes("duplicate")) throw error;
+      return json({ ok: true, avaliacao: await avalInfo(tipo, id, via) });
     }
     if (acao === "ciente") {
       const reg = await lerReg(tipo, id);
@@ -204,6 +286,11 @@ Deno.serve(async (req) => {
       for (const l of (Array.isArray(via.leituras) ? via.leituras : [])) {
         if (!l) continue;
         ev.push({ em: l.confirmadoEm, tipo: "cliente", quem: "CLIENTE", texto: (l.ciente ? "CIENTE registrado pelo cliente" : "Visualização registrada automaticamente") + " — situação: " + String(l.status || "").replace("|retirada", " (após retirada)") + (l.ip ? " · IP " + l.ip : "") + (l.ua ? " · aparelho: " + l.ua : "") });
+      }
+      const av = await lerAval(tipo, id);
+      if (av) {
+        ev.push({ em: av.criado_em, tipo: "cliente", quem: "CLIENTE", texto: av.pulou ? "Pulou a avaliação do atendimento" : "AVALIOU o atendimento de " + (av.atendente || "—") + ": " + av.estrelas + " estrela(s)" + (av.comentario ? " — \"" + av.comentario + "\"" : "") });
+        if (av.resposta) ev.push({ em: av.resposta.em, tipo: "retirada", quem: av.resposta.por || "", texto: "Resposta da loja ao cliente: \"" + av.resposta.texto + "\"" });
       }
       if (reg?.status === "usado") ev.push({ em: reg.usado_em, tipo: "retirada", quem: reg.usado_por || "", texto: "RETIRADA: recebida por " + (reg.recebido_por || "—") + " · forma: " + (reg.metodo === "rotativo" ? "código do cliente" : reg.metodo === "terceiro" ? "código de terceiro (autorizado: " + (reg.portador_nome || "—") + ")" : "SEM código — motivo: " + (reg.motivo || "—")) + (reg.loja ? " · " + reg.loja : "") });
       ev.sort((a, b2) => String(a.em || "").localeCompare(String(b2.em || "")));

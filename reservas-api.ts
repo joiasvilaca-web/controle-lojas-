@@ -21,7 +21,7 @@ function sessaoValida(u: any, senha: string): boolean {
 }
 const ehGestao = (u: any) => u && (u.nivel === "diretoria" || u.nivel === "gerente");
 const dig = (s: unknown) => String(s || "").replace(/\D/g, "");
-const normNome = (s: unknown) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+const normNome = (s: unknown) => String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/\s+/g, " ").trim();
 function chaveCliente(r: any) {
   const cpf = dig(r.cpf); if (cpf.length === 11) return "cpf:" + cpf;
   const tel = dig(r.telefone); if (tel.length >= 8) return "tel:" + tel.slice(-8);
@@ -71,7 +71,7 @@ Deno.serve(async (req: Request) => {
   try {
     const config = await lerConfig();
     const lojas = Array.isArray(config.lojas) ? config.lojas : [];
-    const nomeLoja = (id: string) => { const l = lojas.find((x: any) => x && x.id === id); return l ? (l.nomeFantasia || l.nome) : null; };
+    const nomeLoja = (id: string) => { const l = lojas.find((x: any) => x && x.id === id); return l ? (l.nomePublico || l.nomeFantasia || l.nome) : null; };
 
     if (b.op === "publico") {
       const r = await lerReserva(String(b.id || ""));
