@@ -79,7 +79,7 @@
         if((b=box.querySelector('[data-wa]'))) b.onclick=async function(){
           if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
           if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
-          var a=document.createElement('a'); a.href='https://wa.me/'+tel+'?text='+encodeURIComponent(txt); a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          try{ showToast('Envio automático indisponível. Recarregue a página e tente de novo.'); }catch(e){ alert('Envio automático indisponível. Recarregue a página e tente de novo.'); }
         };
         if(usado) return;
         var inp=box.querySelector('.rt-cod');

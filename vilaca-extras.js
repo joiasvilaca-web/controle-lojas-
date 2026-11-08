@@ -94,14 +94,9 @@
 })();
 
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
-   Se o WhatsApp da loja não estiver conectado, cai no jeito antigo (abre o wa.me com a mensagem pronta). ===== */
+   Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11). ===== */
 (function(){
   var emAndamento = false;
-  function abrirManual(telefone, texto){
-    var d = String(telefone||'').replace(/\D/g,''); if(d.length<=11) d = '55'+d;
-    var a = document.createElement('a'); a.href = 'https://wa.me/'+d+'?text='+encodeURIComponent(texto); a.target='_blank'; a.rel='noopener noreferrer';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  }
   function aviso(m){ try{ if(typeof showToast==='function') showToast(m); }catch(e){} }
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
@@ -116,12 +111,11 @@
       });
       var j = await r.json().catch(function(){ return {}; });
       if(j && j.ok){ aviso('Enviado pelo WhatsApp da loja ✓'); return; }
-      if(j && j.fallback){ aviso((j.erro||'WhatsApp da loja indisponível')+' Abrindo o WhatsApp manual.'); abrirManual(opts.telefone, opts.texto); return; }
+      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return; }
       aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');
     }catch(e){
       console.error('WhatsAuto:', e);
-      aviso('Sem conexão com o envio automático. Abrindo o WhatsApp manual.');
-      abrirManual(opts.telefone, opts.texto);
+      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.');
     }finally{ emAndamento = false; }
   }
   window.WhatsAuto = { enviar: enviar };
