@@ -101,6 +101,7 @@
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
     if(emAndamento) return;
+    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return; }
     emAndamento = true;
     aviso('Enviando pelo WhatsApp da loja…');
     try{
