@@ -5,9 +5,9 @@
  * Uso: CienteVia.montar(elemento, { tipo:'os'|'venda'|'orc'|'res', id, client: supabaseClient })  (o elemento não é mais usado)
  */
 (function(){
-  var CSS='.cv-ov{position:fixed;inset:0;z-index:10001;background:var(--t-bg,#f4f6f8);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}'
+  var CSS='.cv-ov{position:fixed;inset:0;z-index:10001;background:rgba(12,24,34,.82);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}'
    +'.cv-ov .av-box p{margin:0 0 16px;}'
-   +'.cv-btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:50px;border-radius:10px;border:1px solid var(--t-primary-strong,#1f5f7a);background:var(--t-primary-strong,#1f5f7a);color:#fff;font:inherit;font-weight:800;font-size:17px;cursor:pointer;}'
+   +'.cv-btn{display:flex;align-items:center;justify-content:center;width:100%;min-height:50px;border-radius:10px;border:1px solid #1f5f7a;background:#1f5f7a;color:#fff;font:inherit;font-weight:800;font-size:17px;cursor:pointer;}'
    +'.cv-btn:disabled{opacity:.6;cursor:default;}';
   function css(){
     if(!document.getElementById('cvCss')){ var s=document.createElement('style'); s.id='cvCss'; s.textContent=CSS; document.head.appendChild(s); }

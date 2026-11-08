@@ -6,16 +6,16 @@
  */
 (function(){
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
-  var CSS='.av-ov{position:fixed;inset:0;z-index:10000;background:var(--t-bg,#f4f6f8);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}'
-   +'.av-box{width:100%;max-width:420px;background:var(--t-surface,#fff);color:var(--t-ink,#111);border:1px solid var(--t-line,#dde);border-radius:16px;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.15);text-align:center;}'
-   +'.av-box h2{font-size:19px;margin:0 0 6px;} .av-box p{margin:0 0 14px;font-size:14px;color:var(--t-ink-soft,#445);line-height:1.45;}'
+  var CSS='.av-ov{position:fixed;inset:0;z-index:10000;background:rgba(12,24,34,.82);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;}'
+   +'.av-box{width:100%;max-width:420px;background:#fff;color:#14202b;border:2px solid #1f5f7a;border-radius:16px;padding:22px;box-shadow:0 18px 60px rgba(0,0,0,.5);text-align:center;}'
+   +'.av-box h2{font-size:19px;margin:0 0 6px;} .av-box p{margin:0 0 14px;font-size:14px;color:#33424f;line-height:1.45;}'
    +'.av-stars{display:flex;justify-content:center;gap:6px;margin:6px 0 14px;}'
-   +'.av-star{font-size:44px;line-height:1;background:none;border:0;cursor:pointer;padding:2px;color:var(--t-line-strong,#c9cfd6);}'
+   +'.av-star{font-size:44px;line-height:1;background:none;border:0;cursor:pointer;padding:2px;color:#c3cbd3;}'
    +'.av-star.on{color:#f5b301;}'
-   +'.av-txt{width:100%;box-sizing:border-box;min-height:90px;padding:10px 12px;border-radius:10px;border:1px solid var(--t-line-strong,#bcc);background:var(--t-field,#fff);color:inherit;font:inherit;resize:vertical;}'
+   +'.av-txt{width:100%;box-sizing:border-box;min-height:90px;padding:10px 12px;border-radius:10px;border:1px solid #8a98a5;background:#fff;color:#14202b;font:inherit;resize:vertical;}'
    +'.av-row{display:flex;gap:8px;margin-top:14px;} .av-row>*{flex:1;}'
-   +'.av-btn{min-height:46px;border-radius:10px;border:1px solid var(--t-primary-strong,#1f5f7a);background:var(--t-primary-strong,#1f5f7a);color:#fff;font:inherit;font-weight:800;cursor:pointer;}'
-   +'.av-btn.sec{background:transparent;color:var(--t-primary-strong,#1f5f7a);} .av-btn:disabled{opacity:.6;}'
+   +'.av-btn{min-height:46px;border-radius:10px;border:1px solid #1f5f7a;background:#1f5f7a;color:#fff;font:inherit;font-weight:800;cursor:pointer;}'
+   +'.av-btn.sec{background:#fff;color:#1f5f7a;} .av-btn:disabled{opacity:.6;}'
    +'.av-resp{margin-top:14px;padding:14px 16px;border-radius:14px;border:1px solid var(--t-line,#dde);background:var(--t-surface-2,#f4f6f8);text-align:left;max-width:440px;width:100%;box-sizing:border-box;}'
    +'.av-resp b{display:block;margin-bottom:4px;} .av-resp p{margin:0;white-space:pre-wrap;font-size:14px;line-height:1.45;}';
   function css(){ if(document.getElementById('avCss')) return; var s=document.createElement('style'); s.id='avCss'; s.textContent=CSS; document.head.appendChild(s); }
@@ -57,20 +57,30 @@
     ov.querySelector('[data-env]').onclick=function(){ enviar(false); };
   }
 
-  /* Só o quadro "Resposta da loja" (a avaliação em si agora vem depois do Ciente — ver ciente-via.js) */
+  /* "Resposta da loja": aparece UMA vez, em destaque, depois do Ciente (guarda no aparelho que já foi vista). */
   function montar(o){
     css();
-    var boxResp=document.getElementById('avaliacaoResposta');
-    if(!boxResp){ boxResp=document.createElement('div'); boxResp.id='avaliacaoResposta'; var ref=document.getElementById('cienteBox')||document.getElementById('retiradaBox'); if(ref&&ref.parentNode) ref.parentNode.insertBefore(boxResp,ref); else document.body.appendChild(boxResp); }
+    var mostrando=false;
+    function chave(a){ return 'avResp:'+o.tipo+':'+o.id+':'+((a.resposta&&a.resposta.em)||''); }
+    function jaVista(a){ try{ return localStorage.getItem(chave(a))==='1'; }catch(e){ return false; } }
+    function marcar(a){ try{ localStorage.setItem(chave(a),'1'); }catch(e){} }
+    function mostrar(a){
+      if(mostrando) return;
+      if(document.querySelector('.cv-ov')){ setTimeout(function(){ mostrar(a); },500); return; }   // espera o Ciente/avaliação terminarem
+      mostrando=true;
+      var ov=document.createElement('div'); ov.className='av-ov';
+      ov.innerHTML='<div class="av-box" style="border-color:#c9922b;"><h2>Resposta da '+esc2(a.loja||'Vilaça')+'</h2><p style="white-space:pre-wrap;color:#14202b;font-size:15px;text-align:left;background:#fff8e6;border:1px solid #e6c36a;border-radius:10px;padding:12px;">'+esc2(a.resposta.texto)+'</p><button class="av-btn" data-ok style="width:100%;">Entendi</button></div>';
+      document.body.appendChild(ov); document.body.style.overflow='hidden';
+      ov.querySelector('[data-ok]').onclick=function(){ marcar(a); ov.remove(); document.body.style.overflow=''; };
+    }
     async function checar(){
       try{
         var r=await o.client.functions.invoke('retirada-terceiro',{ body:{tipo:o.tipo,id:o.id,acao:'estado'} });
-        var a=r.data&&r.data.avaliacao; if(!a) return;
-        boxResp.innerHTML=(a.resposta&&a.resposta.texto)?'<div class="av-resp"><b>Resposta da '+esc2(a.loja||'Vilaça')+'</b><p>'+esc2(a.resposta.texto)+'</p></div>':'';
+        var a=r.data&&r.data.avaliacao;
+        if(a && a.resposta && a.resposta.texto && !jaVista(a)) mostrar(a);
       }catch(e){}
     }
-    checar();
-    setInterval(checar, 45000);
+    setTimeout(checar,1500);
   }
   window.AvaliacaoVia = { montar: montar, etapas: etapas, css: css };
 })();
