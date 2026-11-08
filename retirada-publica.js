@@ -67,17 +67,20 @@
     function desenharTerc(){
       if(encerrada) return;
       var st=ret&&ret.status;
-      var aviso = st==='invalidado' ? '<p class="rp-err">O código anterior foi invalidado'+(ret.motivo?': '+esc(ret.motivo):'')+'. Gere um novo.</p>'
+      if(st==='ativo' && ret.expiraEm && new Date(ret.expiraEm).getTime()<Date.now()) st='vencido';
+      var ate = ret&&ret.expiraEm ? new Date(ret.expiraEm).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '';
+      var aviso = st==='vencido' ? '<p class="rp-err">O código anterior venceu (vale 1 hora). Gere um novo.</p>' : '';
+      aviso += st==='invalidado' ? '<p class="rp-err">O código anterior foi invalidado'+(ret.motivo?': '+esc(ret.motivo):'')+'. Gere um novo.</p>'
                 : st==='bloqueado' ? '<p class="rp-err">O código anterior foi bloqueado por tentativas erradas. Gere um novo.</p>' : '';
       var corpo;
       if(codigoNovo){
-        var msg='Código para retirar a via na Vilaça Joias'+(o.via?' (via '+o.via+')':'')+': '+codigoNovo+'. Retira: '+(ret&&ret.portador||'')+'. Apresente este código e um documento na loja.';
+        var msg='Código para retirar a via na Vilaça Joias'+(o.via?' (via '+o.via+')':'')+': '+codigoNovo+'. Retira: '+(ret&&ret.portador||'')+'. Este código vale por 1 hora'+(ate?' (até '+ate+')':'')+'; depois será preciso pedir outro ao cliente. Apresente o código e um documento na loja.';
         corpo='<p>Envie este código para <b>'+esc(ret&&ret.portador||'')+'</b>. Ela informa o código na loja.</p><div class="rp-cod" aria-label="Código do portador">'+esc(codigoNovo)+'</div>'
-          +'<p style="font-size:12.5px;">Por segurança, este código só aparece agora. Se perder, gere outro (o anterior deixa de valer).</p>'
+          +'<p class="rp-err" style="margin-top:0;">Atenção: este código vale por 1 HORA'+(ate?' (até '+ate+')':'')+'. Depois disso será necessário gerar outro.</p><p style="font-size:12.5px;">Compartilhe apenas o código, nunca o link da via. Ele só aparece agora; se perder, gere outro.</p>'
           +'<div class="rp-row"><a class="rp-btn" target="_blank" rel="noopener" href="https://wa.me/?text='+encodeURIComponent(msg)+'">Enviar pelo WhatsApp</a>'
           +(navigator.share?'<button class="rp-btn sec" data-share>Compartilhar</button>':'')+'<button class="rp-btn sec" data-copy>Copiar código</button></div>';
       } else if(st==='ativo'){
-        corpo='<p>Retirada autorizada para <b>'+esc(ret.portador||'—')+'</b> (código gerado em '+esc(dh(ret.geradoEm))+'). Vale até ser usado na loja.</p><div class="rp-row"><button class="rp-btn sec" data-novo>Trocar a pessoa / gerar novo código</button></div><div data-form style="display:none"></div>';
+        corpo='<p>Retirada autorizada para <b>'+esc(ret.portador||'—')+'</b> (código gerado em '+esc(dh(ret.geradoEm))+', vale até '+esc(ate)+').</p><div class="rp-row"><button class="rp-btn sec" data-novo>Trocar a pessoa / gerar novo código</button></div><div data-form style="display:none"></div>';
       } else {
         corpo='<p>Outra pessoa vai buscar? Informe o nome dela e gere um código para repassar. Sem isso, só você retira, mostrando o código acima.</p><div data-form></div>';
       }
@@ -90,14 +93,14 @@
       function lig(){ var g=boxTerc.querySelector('[data-gerar]'); if(!g) return; g.onclick=async function(){
         var nome=(boxTerc.querySelector('[data-nome]').value||'').trim();
         if(nome.length<3){ erro='Informe o nome de quem vai buscar.'; desenharTerc(); return; }
-        if(st==='ativo' && !confirm('Gerar um novo código? O anterior deixa de valer.')) return;
+        if((st==='ativo'||st==='vencido') && !confirm('Gerar um novo código? O anterior deixa de valer.')) return;
         this.disabled=true; this.textContent='Gerando…';
         var r=await chamar({acao:'gerar',nome:nome});
         erro=r.error||''; codigoNovo=r.codigo||''; if(r.retirada) ret=r.retirada; desenharTerc();
       }; }
       lig();
       if((b=boxTerc.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(codigoNovo); this.textContent='Copiado'; }catch(e){} };
-      if((b=boxTerc.querySelector('[data-share]'))) b.onclick=function(){ navigator.share({ text:'Código para retirar a via na Vilaça Joias: '+codigoNovo }).catch(function(){}); };
+      if((b=boxTerc.querySelector('[data-share]'))) b.onclick=function(){ navigator.share({ text:'Código para retirar a via na Vilaça Joias: '+codigoNovo+'. Vale por 1 hora; depois será preciso gerar outro.' }).catch(function(){}); };
     }
     boxRot.innerHTML='<h2>Código de retirada</h2><p>Gerando o código…</p>';
     buscarRot();

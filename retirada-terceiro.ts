@@ -5,7 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * Retirada da via na loja (v4, 09/11).
  * - CÓDIGO ROTATIVO (6 dígitos, muda a cada 60 s): o cliente vê no link da via; a loja só entrega com ele.
  *   Não é gravado: sai de um HMAC (chave do servidor + via + janela de tempo). Vale a janela atual e a anterior.
- * - TERCEIRO: o cliente informa o NOME de quem vai buscar e gera um código fixo (4 caracteres) no link.
+ * - TERCEIRO: o cliente informa o NOME de quem vai buscar e gera um código (4 caracteres) que vale 1 HORA; depois gera outro.
  * - Cliente (link público): `estado`, `rotativo`, `gerar` (com nome do portador).
  * - Equipe (sessão do app): `historico`, `validar`, `concluir` (grava quem recebeu), `semcodigo` (só gerente/diretoria, com motivo),
  *   `invalidar`, `habilitar` (mantido por compatibilidade).
@@ -26,6 +26,7 @@ const MAX_TENTATIVAS = 5;
 const PERIODO = 60;            // segundos que cada código rotativo dura
 const MAX_ERROS_ROT = 8;       // erros seguidos do código rotativo antes de travar
 const TRAVA_MIN = 10;          // minutos de trava
+const VALIDADE_TERCEIRO_MS = 60 * 60 * 1000;   // o código de terceiro vale 1 hora; depois o cliente gera outro
 const TABELA: Record<string, string> = { os: "ordens_servico", venda: "vendas_pdv", orc: "orcamentos" };
 
 async function hmac(txt: string) {
@@ -95,6 +96,7 @@ function publico(reg: any) {
   if (!reg) return { habilitada: true, status: "sem_codigo" };
   return {
     habilitada: true, status: reg.status, geradoEm: reg.gerado_em, usadoEm: reg.usado_em, usadoPor: reg.usado_por, loja: reg.loja, motivo: reg.motivo,
+    expiraEm: reg.gerado_em && reg.status === "ativo" ? new Date(new Date(reg.gerado_em).getTime() + VALIDADE_TERCEIRO_MS).toISOString() : null,
     portador: reg.portador_nome || null, recebidoPor: reg.recebido_por || null, metodo: reg.metodo || null,
   };
 }
@@ -204,6 +206,7 @@ Deno.serve(async (req) => {
       if (reg?.status === "bloqueado") return { erro: json({ error: "Código bloqueado por tentativas erradas. O cliente precisa gerar um novo no link." }) };
       if (reg?.status === "invalidado") return { erro: json({ error: "Este código foi invalidado (" + (reg.motivo || "—") + "). O cliente precisa gerar um novo." }) };
       if (!reg || reg.status !== "ativo" || !reg.code_hash) return { erro: json({ error: "Código não confere. Peça ao cliente o código que aparece agora no link da via." }) };
+      if (reg.gerado_em && Date.now() - new Date(reg.gerado_em).getTime() > VALIDADE_TERCEIRO_MS) return { erro: json({ error: "O código de terceiro venceu (vale 1 hora). O cliente precisa gerar outro no link." }) };
       const ok = (await hmac(tipo + ":" + id + ":" + cod)) === reg.code_hash;
       if (!ok) {
         const t = (reg.tentativas || 0) + 1;
