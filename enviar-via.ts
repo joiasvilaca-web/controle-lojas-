@@ -1,4 +1,4 @@
-// v5 (08/11): `padrao` {cliente, atendente, link} monta a mensagem sem dados da via. v4 (08/11): op `consultar` (marcas "já enviado") + botao/rotulo no log. v3: wa.me primeiro (botão Iniciar conversa).
+// v6 (08/11): o servidor monta a mensagem padrão sozinho para os/venda/orcamento. v5 (08/11): `padrao` {cliente, atendente, link} monta a mensagem sem dados da via. v4 (08/11): op `consultar` (marcas "já enviado") + botao/rotulo no log. v3: wa.me primeiro (botão Iniciar conversa).
 // enviar-via v2 (05/11/2026) — v2: loja opcional (sem loja ou loja desconhecida = instância "vilaca"); usado também por Gravações, Reserva, Site e Retirada.
 // enviar-via v1 (05/11/2026) — dispara a via (link) ao cliente pelo WhatsApp da loja, sem abrir o WhatsApp Web.
 // Loja Reforma → instância "reformajoias"; demais lojas → instância "vilaca". Se a instância não estiver conectada, devolve fallback:true
@@ -99,8 +99,20 @@ Deno.serve(async (req: Request) => {
     const config: any = (data && data.payload) || {};
     const user: any = (Array.isArray(config.users) ? config.users : []).find((u: any) => sessaoValida(u, senha));
     if (!user) return json({ error: "não autorizado" }, 401);
+    // Mensagem padrão (sem dados da via): vale para Pedido, Venda e Orçamento mesmo que a tela mande o texto antigo (cache) — o servidor monta a partir da própria via.
+    const PAD: Record<string, [string, string]> = { os: ["ordens_servico", "/acompanhar.html?id="], venda: ["vendas_pdv", "/via.html?t=venda&id="], orcamento: ["orcamentos", "/via.html?t=orc&id="] };
+    let lojaPad = lojaId;
+    if ((!body.padrao || !/^https?:\/\//.test(String(body.padrao.link || ""))) && PAD[String(body.tipo || "")] && body.registroId) {
+      const [tb, path] = PAD[String(body.tipo)];
+      const { data: row } = await admin.from(tb).select("payload").eq("id", String(body.registroId)).maybeSingle();
+      const pl: any = row && row.payload;
+      if (pl) {
+        body.padrao = { cliente: pl.cliente || "", atendente: pl.vendedora || pl.criadoPor || "", link: "https://vilaca.app" + path + encodeURIComponent(String(body.registroId)) };
+        if (!lojaPad) lojaPad = String(pl.lojaId || "");
+      }
+    }
     if (body.padrao && /^https?:\/\//.test(String(body.padrao.link || ""))) {
-      const lj = lojaId ? (Array.isArray(config.lojas) ? config.lojas : []).find((l: any) => l && l.id === lojaId) : null;
+      const lj = lojaPad ? (Array.isArray(config.lojas) ? config.lojas : []).find((l: any) => l && l.id === lojaPad) : null;
       texto = mensagemPadrao(body.padrao, lj ? (lj.nomePublico || lj.nomeFantasia || lj.nome || null) : null);
     }
     if (!texto || texto.length > 3000) return json({ error: "mensagem vazia ou longa demais" }, 400);
