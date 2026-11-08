@@ -98,7 +98,7 @@
    08/11: botão que já enviou ganha o "risquinho" duplo ✓✓ (como no WhatsApp) e a dica "já enviado em …" — o envio continua liberado.
    A marca vem do servidor (auditoria_log), então vale para qualquer aparelho/usuário. ===== */
 (function(){
-  var emAndamento = false;
+  var emAndamento = 0;        // hora em que o envio atual começou (0 = livre)
   var ultimo = { el:null, t:0 };
   var marcas = {};            // 'registroId|botao' -> { em, por, rotulo }
   var pedidos = {};           // chaves de registro já consultadas
@@ -164,19 +164,22 @@
 
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
-    if(emAndamento) return;
+    if(emAndamento && Date.now()-emAndamento < 35000){ aviso('Já tem um envio em andamento — aguarde alguns segundos.'); return; }
     if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return; }
-    emAndamento = true;
+    emAndamento = Date.now();
     var clicado = (ultimo.el && Date.now()-ultimo.t < 15000) ? ultimo.el : null;
     var botao = botaoId(clicado);
     var m0 = /Status atual:\s*\**([^\n*]+)/i.exec(opts.texto||'');
     aviso('Enviando pelo WhatsApp da loja…');
     try{
+      var ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+      var tmo = ctl ? setTimeout(function(){ ctl.abort(); }, 30000) : null;
       var r = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', {
-        method:'POST',
+        method:'POST', signal: ctl ? ctl.signal : undefined,
         headers:{ 'Content-Type':'application/json', 'apikey':window.SUPABASE_ANON_KEY, 'Authorization':'Bearer '+window.SUPABASE_ANON_KEY },
         body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, padrao:opts.padrao||null, botao:botao, rotulo:m0?m0[1].trim():'' })
       });
+      if(tmo) clearTimeout(tmo);
       var j = await r.json().catch(function(){ return {}; });
       if(j && j.ok){
         aviso('Enviado pelo WhatsApp da loja ✓');
@@ -190,7 +193,7 @@
     }catch(e){
       console.error('WhatsAuto:', e);
       aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.');
-    }finally{ emAndamento = false; }
+    }finally{ emAndamento = 0; }
   }
   /* Mensagem padrão ao cliente (08/11): sem dados da via — só quem atendeu, a loja e o link com tudo. O texto é montado no servidor (enviar-via). */
   function padrao(tipo, reg){
