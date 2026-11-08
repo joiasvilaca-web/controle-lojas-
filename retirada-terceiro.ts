@@ -89,7 +89,7 @@ async function lojaInfo(lojaId: string) {
 const lojaNome = async (lojaId: string) => (await lojaInfo(lojaId)).nome;
 
 // ---------- AVALIAÇÃO DO ATENDIMENTO (09/11) ----------
-const AVAL_DESDE = Date.parse("2026-11-09T00:00:00-03:00");   // só vias criadas a partir daqui perguntam
+const AVAL_DESDE = Date.parse("2026-11-08T00:00:00-03:00");   // só vias criadas a partir daqui perguntam
 const semAcento = (t: unknown) => String(t || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean).join(" ");
 const nivelDe = (u: any) => String(u && u.nivel || "").toLowerCase();
 const gerencia = (u: any) => nivelDe(u) === "diretoria" || nivelDe(u) === "gerente";
@@ -100,7 +100,7 @@ async function lerAval(tipo: string, id: string) {
 async function avalInfo(tipo: string, id: string, via: any) {
   const a = await lerAval(tipo, id);
   const criado = Number(via.criadoEm) || 0;
-  const elegivel = criado >= AVAL_DESDE || (!criado && String(via.data || "") >= "2026-11-09");
+  const elegivel = criado >= AVAL_DESDE || (!criado && String(via.data || "") >= "2026-11-08");
   const li = await lojaInfo(via.lojaId);
   return {
     pendente: !a && elegivel && via.status !== "cancelado" && via.status !== "cancelada",
@@ -240,13 +240,11 @@ Deno.serve(async (req) => {
       const reg = await lerReg(tipo, id);
       const chave = cienteChave(via, reg);
       const leituras = Array.isArray(via.leituras) ? via.leituras : [];
-      if (!leituras.some((l: any) => l && l.status === chave && l.ciente)) {
-        leituras.push({ status: chave, confirmadoEm: new Date().toISOString(), ciente: true, ua: String(req.headers.get("user-agent") || "").slice(0, 160), ip: String(req.headers.get("x-forwarded-for") || "").split(",")[0].trim() });
-        via.leituras = leituras;
-        const { error } = await admin.from(TABELA[tipo]).update({ payload: via, updated_at: new Date().toISOString() }).eq("id", id);
-        if (error) throw error;
-      }
-      return json({ ok: true, ciente: cienteInfo(via, reg) });
+      // todo acesso gera um registro (log de acesso): não deduplica
+      leituras.push({ status: chave, confirmadoEm: new Date().toISOString(), ciente: true, ua: String(req.headers.get("user-agent") || "").slice(0, 160), ip: String(req.headers.get("x-forwarded-for") || "").split(",")[0].trim() });
+      via.leituras = leituras.slice(-300);
+      { const { error } = await admin.from(TABELA[tipo]).update({ payload: via, updated_at: new Date().toISOString() }).eq("id", id); if (error) throw error; }
+      return json({ ok: true, ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) });
     }
     if (acao === "cancelar") {
       const reg = await lerReg(tipo, id);

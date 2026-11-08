@@ -28,7 +28,7 @@
     css();
     el.innerHTML='<div class="rp" data-rot></div><div class="rp" data-terc style="display:none"></div>';
     var boxRot=el.querySelector('[data-rot]'), boxTerc=el.querySelector('[data-terc]');
-    var rot=null, expira=0, periodo=60, ret=null, codTerc='', encerrada=false, erro='', aviso2='', buscando=false, tIntervalo=null, tComp=0, assinatura='';
+    var rot=null, expira=0, periodo=60, ret=null, codTerc='', encerrada=false, erro='', aviso2='', buscando=false, abertoTerc=false, tIntervalo=null, tComp=0, assinatura='';
     async function chamar(body){
       try{ var r=await o.client.functions.invoke('retirada-terceiro',{ body: Object.assign({tipo:o.tipo,id:o.id},body) }); return r.data || { error:'Não foi possível falar com a loja agora.' }; }
       catch(e){ return { error:'Não foi possível falar com a loja agora.' }; }
@@ -59,7 +59,7 @@
     async function atualizarEstado(){
       var r=await chamar({acao:'estado'}); if(!r.retirada) return;
       var antes=encerrada; aplicar(r);
-      if(encerrada && !antes) desenhar(); else desenharTerc();
+      if(encerrada && !antes) desenhar(); else { desenharTerc(); mostrarTerc(); }
     }
     function desenhar(){
       if(encerrada){
@@ -71,9 +71,20 @@
         return;
       }
       boxRot.innerHTML='<h2>Seu código de retirada</h2><p>Para retirar na loja, mostre este código. Ele muda sozinho a cada minuto.</p>'
-        +(rot?'<div class="rp-rot" aria-label="Código de retirada" aria-live="off">'+esc(agrupar(rot))+'</div><div class="rp-barra"><i data-barra></i></div><div class="rp-seg" data-seg></div>':'<p>Gerando o código…</p>');
-      boxTerc.style.display='';
-      desenharTerc(); tick();
+        +(rot?'<div class="rp-rot" aria-label="Código de retirada" aria-live="off">'+esc(agrupar(rot))+'</div><div class="rp-barra"><i data-barra></i></div><div class="rp-seg" data-seg></div>':'<p>Gerando o código…</p>')
+        +'<div class="rp-row" style="justify-content:center;"><button class="rp-btn sec" data-btnterc></button></div>';
+      var bt=boxRot.querySelector('[data-btnterc]');
+      bt.onclick=function(){ abertoTerc=!abertoTerc; mostrarTerc(); };
+      desenharTerc(); mostrarTerc(); tick();
+    }
+    // a seção de terceiro só aparece pelo botão (ou sozinha, se já existe um código de terceiro ativo)
+    function mostrarTerc(){
+      if(encerrada){ boxTerc.style.display='none'; return; }
+      var ativo=ret&&ret.status==='ativo'&&codTerc;
+      var aberta=abertoTerc||!!ativo;
+      boxTerc.style.display=aberta?'':'none';
+      var bt=boxRot.querySelector('[data-btnterc]');
+      if(bt){ bt.textContent=aberta?'Ocultar retirada por terceiro':'Retirada por terceiro'; bt.disabled=!!ativo; }
     }
     function desenharTerc(){
       if(encerrada) return;
@@ -99,7 +110,7 @@
           +'<div class="rp-row"><button class="rp-btn" data-copy>Copiar código</button><a class="rp-btn sec" target="_blank" rel="noopener" href="https://wa.me/?text='+encodeURIComponent(msg)+'">Enviar pelo WhatsApp</a></div>'
           +'<div class="rp-row"><button class="rp-btn sec" data-novo>Trocar a pessoa / gerar novo código</button><button class="rp-btn perigo" data-cancelar>Cancelar este código</button></div><div data-form style="display:none"></div>';
       } else {
-        corpo='<p>Outra pessoa vai buscar? Informe o nome dela e gere um código para repassar. Sem isso, só você retira, mostrando o código acima.</p><div data-form></div>';
+        corpo='<p>Informe o nome de quem vai buscar e gere um código para repassar a essa pessoa.</p><div data-form></div>';
       }
       boxTerc.innerHTML='<h2>Outra pessoa vai retirar?</h2>'+avisos+corpo+(erro?'<div class="rp-err">'+esc(erro)+'</div>':'');
       var f=boxTerc.querySelector('[data-form]');
@@ -110,7 +121,7 @@
         if(st==='ativo' && !confirm('Gerar um novo código? O anterior deixa de valer.')) return;
         this.disabled=true; this.textContent='Gerando…';
         var r=await chamar({acao:'gerar',nome:nome});
-        erro=r.error||''; aviso2=''; if(r.retirada) ret=r.retirada; if(r.codigo) codTerc=r.codigo; desenharTerc();
+        erro=r.error||''; aviso2=''; if(r.retirada) ret=r.retirada; if(r.codigo) codTerc=r.codigo; desenharTerc(); mostrarTerc();
       }; }
       if(f && f.style.display!=='none'){ f.innerHTML=formHtml(); }
       var b;
@@ -121,7 +132,7 @@
         if(!confirm('Cancelar o código? A pessoa não poderá mais retirar com ele.')) return;
         this.disabled=true;
         var r=await chamar({acao:'cancelar'});
-        erro=r.error||''; aviso2=r.error?'':'Código cancelado. Ninguém mais consegue retirar com ele.'; if(r.retirada) ret=r.retirada; codTerc=''; desenharTerc();
+        erro=r.error||''; aviso2=r.error?'':'Código cancelado. Ninguém mais consegue retirar com ele.'; if(r.retirada) ret=r.retirada; codTerc=''; desenharTerc(); mostrarTerc();
       };
     }
     boxRot.innerHTML='<h2>Seu código de retirada</h2><p>Gerando o código…</p>';
