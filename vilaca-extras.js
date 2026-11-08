@@ -108,7 +108,7 @@
     if(document.getElementById('waEnvCss')) return;
     var st=document.createElement('style'); st.id='waEnvCss';
     st.textContent='.wa-enviado{position:relative !important;}'
-      +'.wa-enviado::after{content:"\\2713\\2713";position:absolute;top:-7px;right:-7px;z-index:2;font:800 9px/14px system-ui,sans-serif;letter-spacing:-2px;padding:0 4px 0 2px;min-width:14px;text-align:center;border-radius:8px;background:#fff;color:#1e9d55;border:1px solid #1e9d55;pointer-events:none;}';
+      +'.wa-enviado::after{content:"\\2713\\2713";position:absolute;bottom:2px;right:2px;z-index:2;font:800 9px/14px system-ui,sans-serif;letter-spacing:-2px;padding:0 4px 0 2px;min-width:14px;text-align:center;border-radius:8px;background:#fff;color:#1e9d55;border:1px solid #1e9d55;pointer-events:none;}';
     document.head.appendChild(st);
   }
   document.addEventListener('click', function(e){ var b=e.target&&e.target.closest&&e.target.closest('button,a,[role=button]'); if(b){ ultimo={ el:b, t:Date.now() }; } }, true);
