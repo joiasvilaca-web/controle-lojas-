@@ -70,14 +70,14 @@
   function formas(config){ return ((config && config.formasPagamento) || []).concat((config && config.paymentTypes) || []); }
   /* 07/11 (Felipe): DÉBITO deixa de ter os 20% do cartão — fica igual ao Pix — para pagamentos de 08/11/2026 em diante.
      Pagamento antigo (data anterior ao corte) continua como cartão, para não mexer em vias já lançadas. */
-  var CORTE_DEBITO = '2026-11-08';
+  var CORTE_DEBITO = '2026-11-07';   // antecipado a pedido (07/11): pagamento de débito de 07/11 em diante sem acréscimo; os 4 de 07/11 já lançados com 20% levam debitoAntigo:true
   function hojeLocal(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function ehDebito(f){ var n = (f && f.nome) || ''; return /d[eé]bito/i.test(n) && !/cr[eé]dito|link\s*eco/i.test(n); }
   function ehCartao(formaId, config, p){
     if(!formaId || String(formaId).indexOf('__')===0) return false;
     var f = formas(config).filter(function(x){ return x.id===formaId; })[0];
     var cart = !!(f && (f.cartao===true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(f.nome||'')));   // LINK ECO = cartão (04/11)
-    if(cart && ehDebito(f)){ var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
+    if(cart && ehDebito(f)){ if(p && p.debitoAntigo) return true; var d = String((p && p.data) || '').slice(0,10) || hojeLocal(); if(d >= CORTE_DEBITO) return false; }
     return cart;
   }
   /* Formas "a prazo": cartão e, quando o módulo liga CondPag.fiadoPrazo, o Fiado (Felipe, 02/nov). */
@@ -831,6 +831,29 @@ function openModal(html){
   document.getElementById('modalBox').innerHTML = html;
   document.getElementById('modalOverlay').classList.add('show');
   history.pushState({ modalAberto:true }, '');
+}
+/* 07/11: pergunta POR CIMA da via em edição (Pix PF/loja, abater crédito/cashback, nº da nota): guarda o conteúdo da via, mostra a pergunta e,
+   ao fechar, devolve a via intacta. Antes essas perguntas usavam openModal, que trocava o conteúdo da via e o closeModal fechava tudo (a edição era perdida). */
+const _subStack = [];
+function openSubModal(html){
+  const box = document.getElementById('modalBox'), ov = document.getElementById('modalOverlay');
+  const wasShown = ov.classList.contains('show');
+  const frag = document.createDocumentFragment();
+  while(box.firstChild) frag.appendChild(box.firstChild);
+  _subStack.push({ frag, wasShown, wasTela: ov.classList.contains('tela-cheia'), wasLargo: box.classList.contains('modal-largo') });
+  box.innerHTML = html;
+  ov.classList.remove('tela-cheia'); box.classList.remove('modal-largo'); ov.classList.add('show');
+  if(!wasShown) history.pushState({ modalAberto:true }, '');
+}
+function closeSubModal(){
+  const s = _subStack.pop();
+  if(!s){ closeModal(); return; }
+  const box = document.getElementById('modalBox'), ov = document.getElementById('modalOverlay');
+  box.innerHTML = '';
+  if(!s.wasShown){ closeModal(); return; }
+  box.appendChild(s.frag);
+  if(s.wasTela) ov.classList.add('tela-cheia');
+  if(s.wasLargo) box.classList.add('modal-largo');
 }
 window.addEventListener('popstate', ()=>{
   const overlay = document.getElementById('modalOverlay');
@@ -1800,7 +1823,7 @@ function numeroNotaBtnHtml(holder){
   return `<button type="button" class="btn btn-ghost btn-sm" data-numnota style="margin-top:6px;" title="Informar o número da nota fiscal (marca Nota fiscal: Sim)">${n ? 'Nota nº ' + esc(n) : 'Número da nota'}</button>`;
 }
 function abrirNumeroNota(holder, aoSalvar){
-  openModal(`
+  openSubModal(`
     <h3>Número da nota fiscal</h3>
     <p class="muted">Ao informar o número, a venda/pedido fica como <b>com nota</b>.</p>
     <div class="field" style="margin-top:12px;"><label for="nn_numero">Número da nota</label><input id="nn_numero" autocomplete="off" placeholder="Ex.: 12345" value="${(holder.numeroNota||'').replace(/"/g,'&quot;')}"></div>
@@ -1808,12 +1831,12 @@ function abrirNumeroNota(holder, aoSalvar){
       <button class="btn btn-ghost" id="nn_cancel" type="button">Cancelar</button>
       <button class="btn btn-accent" id="nn_ok" type="button">Confirmar</button>
     </div>`);
-  document.getElementById('nn_cancel').addEventListener('click', closeModal);
+  document.getElementById('nn_cancel').addEventListener('click', closeSubModal);
   const ok = ()=>{
     const n = document.getElementById('nn_numero').value.trim();
     if(!n){ showToast('Digite o número da nota fiscal.'); return; }
     holder.emissaoNota = 'sim'; holder.numeroNota = n;
-    closeModal(); if(aoSalvar) aoSalvar();
+    closeSubModal(); if(aoSalvar) aoSalvar();
   };
   document.getElementById('nn_ok').addEventListener('click', ok);
   document.getElementById('nn_numero').addEventListener('keydown', e=>{ if(e.key==='Enter') ok(); });
@@ -1916,14 +1939,14 @@ function regraNotaPix(container, holder){
 /* Pergunta de onde veio o Pix: da loja (PJ) ou de pessoa física (PF). */
 function perguntarPixTipo(){
   return new Promise(resolve=>{
-    openModal(`
+    openSubModal(`
       <h3>Pix recebido em…</h3>
       <p class="muted">O Pix foi para a conta da loja ou para uma pessoa física?</p>
       <div class="modal-actions" style="flex-wrap:wrap;gap:10px;margin-top:14px;">
         <button class="btn btn-accent" type="button" data-pixtipo="PJ">Pix loja</button>
         <button class="btn btn-ghost" type="button" data-pixtipo="PF">Pix pessoa física</button>
       </div>`);
-    document.querySelectorAll('[data-pixtipo]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); resolve(b.dataset.pixtipo); }));
+    document.querySelectorAll('[data-pixtipo]').forEach(b=> b.addEventListener('click', ()=>{ closeSubModal(); resolve(b.dataset.pixtipo); }));
   });
 }
 
@@ -2003,7 +2026,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   /* Crédito do cliente / cashback: depois de escolher a forma, pergunta se abate. */
   function perguntarAbatimento(cred, cb){
     return new Promise(resolve=>{
-      openModal(`
+      openSubModal(`
         <h3>Abater no valor?</h3>
         <p class="muted">Este cliente tem saldo para usar nesta venda.</p>
         ${cred>0.009?`<label style="display:flex;gap:8px;align-items:center;margin:8px 0;"><input type="checkbox" id="abatCred" checked> Crédito do cliente: <b>${fmtMoeda(cred)}</b></label>`:''}
@@ -2012,8 +2035,8 @@ function mountPagamentos(container, holder, getLojaVendaId){
           <button class="btn btn-ghost" type="button" id="abatNao">Não abater</button>
           <button class="btn btn-accent" type="button" id="abatSim">Abater</button>
         </div>`);
-      document.getElementById('abatNao').addEventListener('click', ()=>{ closeModal(); resolve(null); });
-      document.getElementById('abatSim').addEventListener('click', ()=>{ const r={ cred: !!document.getElementById('abatCred')?.checked, cb: !!document.getElementById('abatCb')?.checked }; closeModal(); resolve(r); });
+      document.getElementById('abatNao').addEventListener('click', ()=>{ closeSubModal(); resolve(null); });
+      document.getElementById('abatSim').addEventListener('click', ()=>{ const r={ cred: !!document.getElementById('abatCred')?.checked, cb: !!document.getElementById('abatCb')?.checked }; closeSubModal(); resolve(r); });
     });
   }
   async function oferecerAbatimento(pg){
@@ -5410,7 +5433,7 @@ function printVenda(v){
     '.ord-bar button{height:32px;min-width:36px;border:1px solid var(--line,#d1d5db);border-radius:8px;background:var(--surface,#fff);color:inherit;cursor:pointer;font:inherit}'+
     'th.ord-th{cursor:pointer;user-select:none}th.ord-th .ord-seta{opacity:.35;margin-left:4px}th.ord-th.ord-on .ord-seta{opacity:1}';
   var st = document.createElement('style'); st.textContent = CSS; document.head.appendChild(st);
-  function txt(td){ return (td ? td.textContent : '').replace(/\s+/g,' ').trim(); }
+  function txt(td){ if(!td) return ''; var sel=td.querySelector('select'); var s = sel ? (sel.selectedOptions[0]?sel.selectedOptions[0].textContent:'') : td.textContent; return s.replace(/\s+/g,' ').trim(); }
   function parseVal(t){
     if(!t || t==='—' || t==='-') return {v:null};
     var d = t.match(/(\d{2})\/(\d{2})\/(\d{4})(?:\D{0,3}(\d{1,2}):(\d{2}))?/); if(d) return {v:+(d[3]+d[2]+d[1])*10000 + (d[4]?(+d[4])*100+(+d[5]):0), k:'d'};
@@ -5447,14 +5470,14 @@ function printVenda(v){
     if(table.dataset.ord || table.hasAttribute('data-nosort')) return;
     var ths = table.querySelectorAll('thead th'); var tb = table.tBodies[0];
     if(!ths.length || !tb || tb.rows.length<2) return;
-    if(table.classList.contains('tabela-kv') || table.closest('#modalOverlay,#modalBox,.modal,.modal-overlay,[role="dialog"]') || table.querySelector('tbody input,tbody select,tbody textarea')) return;
+    if(table.classList.contains('tabela-kv') || table.closest('#modalOverlay,#modalBox,.modal,.modal-overlay,[role="dialog"]') || table.querySelector('tbody input,tbody textarea') || (table.querySelector('tbody select') && !table.classList.contains('tabela-os'))) return;
     for(var k=0;k<tb.rows.length;k++){ if(tb.rows[k].cells.length!==ths.length || tb.rows[k].querySelector('[colspan]')) return; }
     table.dataset.ord = '1';
     var estado = {col:-1, dir:'asc'};
     function aplicar(col, dir){ estado.col=col; estado.dir=dir; ordenar(table,col,dir); marcar(table,col,dir); }
     var opts = '';
     Array.prototype.forEach.call(ths, function(th,i){
-      var nome = th.textContent.trim(); if(!nome) return;
+      var nome = th.textContent.trim(); if(!nome || th.querySelector('.sr-only')) return;
       th.classList.add('ord-th'); th.setAttribute('title','Clique para ordenar');
       var s = document.createElement('span'); s.className='ord-seta'; s.textContent='↕'; th.appendChild(s);
       th.addEventListener('click', function(){ aplicar(i, (estado.col===i && estado.dir==='asc') ? 'desc' : 'asc'); });
