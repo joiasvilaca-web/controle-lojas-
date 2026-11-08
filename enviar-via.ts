@@ -1,3 +1,4 @@
+// v3 (08/11): wa.me primeiro (botão Iniciar conversa).
 // enviar-via v2 (05/11/2026) — v2: loja opcional (sem loja ou loja desconhecida = instância "vilaca"); usado também por Gravações, Reserva, Site e Retirada.
 // enviar-via v1 (05/11/2026) — dispara a via (link) ao cliente pelo WhatsApp da loja, sem abrir o WhatsApp Web.
 // Loja Reforma → instância "reformajoias"; demais lojas → instância "vilaca". Se a instância não estiver conectada, devolve fallback:true
@@ -40,6 +41,22 @@ function normalizaTelefone(t: string): string | null {
   return "55" + d;
 }
 
+// O WhatsApp monta o cartão/botão a partir do PRIMEIRO link. Quando a mensagem tem outros links e um parágrafo só com o wa.me,
+// esse parágrafo vai para o topo: aparece o botão "Iniciar conversa" (o link da via continua clicável no texto).
+function waMePrimeiro(t: string): string {
+  const links = t.match(/https?:\/\/\S+/g) || [];
+  if (links.length < 2 || /wa\.me\//.test(links[0])) return t;
+  const paras = t.split(/\n\s*\n/);
+  let i = -1;
+  for (let k = paras.length - 1; k >= 0; k--) {
+    const ls = paras[k].match(/https?:\/\/\S+/g) || [];
+    if (ls.length && ls.every((l) => /wa\.me\//.test(l))) { i = k; break; }
+  }
+  if (i <= 0) return t;
+  const p = paras.splice(i, 1)[0];
+  return [p, ...paras].join("\n\n");
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
@@ -68,7 +85,7 @@ Deno.serve(async (req: Request) => {
     } catch (_) { estado = ""; }
     if (estado !== "open") return json({ ok: false, fallback: true, erro: `WhatsApp da loja (${instancia}) não está conectado.` });
 
-    const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`, { method: "POST", headers: H, body: JSON.stringify({ number: numero, text: texto }), signal: AbortSignal.timeout(20000) });
+    const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`, { method: "POST", headers: H, body: JSON.stringify({ number: numero, text: waMePrimeiro(texto) }), signal: AbortSignal.timeout(20000) });
     const rj = await r.json().catch(() => ({}));
     const ok = r.ok && rj && rj.key;
     try {
