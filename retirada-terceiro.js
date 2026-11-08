@@ -67,7 +67,7 @@
          +(usado
             ? '<div class="rt-estado"><b>Retirada concluída</b><span>Recebida por <b style="display:inline">'+esc(ret.recebidoPor||'—')+'</b> em '+dh(ret.usadoEm)+' · '+esc(METODO[ret.metodo]||ret.metodo||'')+(ret.usadoPor?' · liberada por '+esc(ret.usadoPor):'')+'</span></div>'
             : '<p style="margin:0 0 8px;">Peça ao cliente o <b>código que aparece agora no link da via</b> (6 dígitos, muda a cada minuto) — ou o código de terceiro, se outra pessoa estiver retirando.</p>'
-             +(ret.status==='ativo' && ret.portador?'<div class="rt-estado"><b>Cliente autorizou: '+esc(ret.portador)+'</b><span>Código de terceiro gerado em '+dh(ret.geradoEm)+' (vale 1 hora)'+'</span></div>':'')
+             +(ret.status==='ativo' && ret.portador?'<div class="rt-estado"><b>Cliente autorizou: '+esc(ret.portador)+'</b><span>Código de terceiro gerado em '+dh(ret.geradoEm)+' (vale 24 horas)'+'</span></div>':'')
              +'<div class="rt-row" style="align-items:center;"><input class="rt-cod" maxlength="6" autocomplete="off" inputmode="text" spellcheck="false" placeholder="______" aria-label="Código de retirada" style="width:190px;"><button class="rt-btn pri" data-conf>Conferir código</button></div>'
              +'<div data-fluxo></div>'
              +'<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link ao cliente</button>':'')+'</div>')

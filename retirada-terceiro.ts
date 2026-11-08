@@ -5,7 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  * Retirada da via na loja (v4, 09/11).
  * - CÓDIGO ROTATIVO (6 dígitos, muda a cada 60 s): o cliente vê no link da via; a loja só entrega com ele.
  *   Não é gravado: sai de um HMAC (chave do servidor + via + janela de tempo). Vale a janela atual e a anterior.
- * - TERCEIRO: o cliente informa o NOME de quem vai buscar e gera um código (4 caracteres) que vale 1 HORA; depois gera outro.
+ * - TERCEIRO: o cliente informa o NOME de quem vai buscar e gera um código (4 caracteres) que vale 24 HORAS (ou até o cliente cancelar); depois gera outro.
  * - Cliente (link público): `estado`, `rotativo`, `gerar` (com nome do portador).
  * - Equipe (sessão do app): `historico`, `validar`, `concluir` (grava quem recebeu), `semcodigo` (só gerente/diretoria, com motivo),
  *   `invalidar`, `habilitar` (mantido por compatibilidade).
@@ -26,7 +26,7 @@ const MAX_TENTATIVAS = 5;
 const PERIODO = 60;            // segundos que cada código rotativo dura
 const MAX_ERROS_ROT = 8;       // erros seguidos do código rotativo antes de travar
 const TRAVA_MIN = 10;          // minutos de trava
-const VALIDADE_TERCEIRO_MS = 60 * 60 * 1000;   // o código de terceiro vale 1 hora; depois o cliente gera outro
+const VALIDADE_TERCEIRO_MS = 24 * 60 * 60 * 1000;   // o código de terceiro vale 24 horas; depois o cliente gera outro
 const TABELA: Record<string, string> = { os: "ordens_servico", venda: "vendas_pdv", orc: "orcamentos" };
 
 async function hmac(txt: string) {
@@ -140,6 +140,12 @@ Deno.serve(async (req) => {
       const restante = (j + 1) * PERIODO - Math.floor(Date.now() / 1000);
       return json({ codigo: await codigoRotativo(tipo, id, j), restante, periodo: PERIODO, retirada: publico(reg) });
     }
+    if (acao === "cancelar") {
+      const reg = await lerReg(tipo, id);
+      if (!reg || reg.status !== "ativo") return json({ error: "Não há código de terceiro ativo para cancelar." });
+      await gravar(tipo, id, { status: "cancelado", motivo: "cancelado pelo cliente", code_hash: null }, { acao: "código de terceiro CANCELADO pelo cliente antes de ser usado — portador: " + (reg.portador_nome || "—") });
+      return json({ ok: true, retirada: publico(await lerReg(tipo, id)) });
+    }
     if (acao === "gerar") {
       const reg = await lerReg(tipo, id);
       if (encerrada(tipo, via, reg)) return json({ error: "Esta via já foi retirada ou encerrada." });
@@ -204,9 +210,10 @@ Deno.serve(async (req) => {
       }
       // código fixo de terceiro
       if (reg?.status === "bloqueado") return { erro: json({ error: "Código bloqueado por tentativas erradas. O cliente precisa gerar um novo no link." }) };
+      if (reg?.status === "cancelado") return { erro: json({ error: "O cliente cancelou o código de terceiro. Peça o código que aparece agora no link da via." }) };
       if (reg?.status === "invalidado") return { erro: json({ error: "Este código foi invalidado (" + (reg.motivo || "—") + "). O cliente precisa gerar um novo." }) };
       if (!reg || reg.status !== "ativo" || !reg.code_hash) return { erro: json({ error: "Código não confere. Peça ao cliente o código que aparece agora no link da via." }) };
-      if (reg.gerado_em && Date.now() - new Date(reg.gerado_em).getTime() > VALIDADE_TERCEIRO_MS) return { erro: json({ error: "O código de terceiro venceu (vale 1 hora). O cliente precisa gerar outro no link." }) };
+      if (reg.gerado_em && Date.now() - new Date(reg.gerado_em).getTime() > VALIDADE_TERCEIRO_MS) return { erro: json({ error: "O código de terceiro venceu (vale 24 horas). O cliente precisa gerar outro no link." }) };
       const ok = (await hmac(tipo + ":" + id + ":" + cod)) === reg.code_hash;
       if (!ok) {
         const t = (reg.tentativas || 0) + 1;
