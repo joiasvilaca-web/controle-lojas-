@@ -108,7 +108,7 @@
     if(document.getElementById('waEnvCss')) return;
     var st=document.createElement('style'); st.id='waEnvCss';
     st.textContent='.wa-enviado{position:relative !important;}'
-      +'.wa-enviado::after{content:"\\2713";position:absolute;bottom:3px;right:4px;z-index:2;font:900 15px/1 system-ui,sans-serif;color:#1e9d55;text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 3px #fff;pointer-events:none;}';
+      +'.wa-enviado::after{content:"\\2713";position:absolute;top:50%;left:50%;transform:translate(-18%,-42%);z-index:2;font:900 14px/1 system-ui,sans-serif;color:#1e9d55;text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 3px #fff;pointer-events:none;}';
     document.head.appendChild(st);
   }
   document.addEventListener('click', function(e){ var b=e.target&&e.target.closest&&e.target.closest('button,a,[role=button]'); if(b){ ultimo={ el:b, t:Date.now() }; } }, true);
