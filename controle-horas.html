@@ -97,7 +97,8 @@
       <button class="btn btn-ghost" id="btnEditar" type="button"><span data-ico="lapis"></span>Editar dados</button>
       <button class="btn btn-ghost" id="btnFora" type="button"><span data-ico="relogio"></span>Registro fora do horário</button>
     </div>
-    <p class="muted small" style="margin:12px 0 0;">A hora registrada é a do servidor. O celular precisa estar dentro da loja, com a localização ligada.</p>
+    <p class="muted small" style="margin:12px 0 0;" id="regNota">A hora registrada é a do servidor. O celular precisa estar dentro da loja, com a localização ligada.</p>
+    <div style="margin-top:10px;"><button class="btn btn-ghost btn-sm" id="btnBioCad" type="button"><span data-ico="cadeado"></span>Cadastrar biometria neste celular</button></div>
   </div>
   <div class="card">
     <div class="sec-tit" style="padding:0 0 6px;border:0;"><span>Hoje</span></div>
@@ -162,11 +163,16 @@
 
 <!-- CONFIGURAÇÕES -->
 <div class="tab-content" id="tab-config">
-  <div class="page-head"><div><h1 class="page-title">Configurações</h1><p class="page-sub">Localização de cada loja, regras do café e do almoço, e jornada semanal com a data em que cada regra passa a valer.</p></div></div>
+  <div class="page-head"><div><h1 class="page-title">Configurações</h1><p class="page-sub">Localização de cada loja, regras do almoço e jornada semanal com a data em que cada regra passa a valer.</p></div></div>
   <div class="card">
     <div class="sec-tit" style="padding:0 0 8px;border:0;"><span>Localização das lojas</span></div>
     <p class="muted small" style="margin:0 0 12px;">O registro só é aceito se o celular estiver dentro do raio. Dica: abra esta tela no celular, dentro da loja, e toque em "Usar minha localização atual".</p>
     <div id="cfgLocais"></div>
+  </div>
+  <div class="card">
+    <div class="sec-tit" style="padding:0 0 8px;border:0;"><span>Biometrias cadastradas</span></div>
+    <p class="muted small" style="margin:0 0 10px;">Cada funcionário cadastra a biometria no celular da loja na primeira vez que for registrar. Se o celular for trocado, remova o cadastro antigo aqui e a pessoa cadastra de novo.</p>
+    <div id="cfgBio"><button class="btn btn-ghost btn-sm" type="button" id="btnBioLista">Mostrar cadastros</button></div>
   </div>
   <div class="card">
     <div class="sec-tit" style="padding:0 0 8px;border:0;"><span>Regras</span></div>
@@ -176,7 +182,7 @@
       <div class="field"><label for="cfPrec">Precisão máxima do GPS (m)</label><input id="cfPrec" inputmode="numeric"></div>
       <div class="field"><label for="cfRaio">Raio padrão (m)</label><input id="cfRaio" inputmode="numeric"></div>
     </div>
-    <label class="check-linha" style="margin-top:12px;"><input type="checkbox" id="cfCafe"> O café de 15 min conta como hora trabalhada</label>
+    <label class="check-linha" style="margin-top:12px;"><input type="checkbox" id="cfBio"> Biometria do celular obrigatória para registrar (impressão digital ou rosto)</label>
     <div class="sec-tit" style="padding:18px 0 6px;border:0;"><span>Jornada semanal (vigências)</span></div>
     <p class="muted small" style="margin:0 0 10px;">Cada linha vale a partir da data. Defina horas por semana e quantos dias se trabalha. As datas da EC 141 (42 h e 40 h) estão marcadas como "a confirmar" até conferir no Diário Oficial.</p>
     <div id="cfgVig"></div>
@@ -192,8 +198,8 @@ const SUPABASE_URL = window.SUPABASE_URL, SUPABASE_ANON_KEY = window.SUPABASE_AN
 const API_URL = SUPABASE_URL + "/functions/v1/horas-api";
 let __senha = null, currentUser = null, INIT = null, currentTab = null, aprAba = 'pend', lgUltimo = null;
 const TZ = 'America/Sao_Paulo';
-const ROT = { entrada:'Entrada', cafe_saida:'Saída para o café', cafe_volta:'Volta do café', almoco_saida:'Saída para o almoço', almoco_volta:'Volta do almoço', saida:'Saída' };
-const BTN_ROT = { entrada:'Registrar entrada', cafe_saida:'Sair para o café', cafe_volta:'Voltei do café', almoco_saida:'Sair para o almoço', almoco_volta:'Voltei do almoço', saida:'Registrar saída' };
+const ROT = { entrada:'Entrada', almoco_saida:'Saída para o almoço', almoco_volta:'Volta do almoço', saida:'Saída' };
+const BTN_ROT = { entrada:'Registrar entrada', almoco_saida:'Sair para o almoço', almoco_volta:'Voltei do almoço', saida:'Registrar saída' };
 
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function showToast(t, ms){ const el = document.getElementById('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(el._t); el._t = setTimeout(()=> el.style.display='none', ms||3000); }
@@ -231,6 +237,64 @@ setInterval(()=>{ const r = get('relogio'); if(!r) return; const d = new Date();
   r.textContent = new Intl.DateTimeFormat('pt-BR',{timeZone:TZ,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(d);
   get('relogioDia').textContent = new Intl.DateTimeFormat('pt-BR',{timeZone:TZ,weekday:'long',day:'2-digit',month:'long'}).format(d); }, 1000);
 
+/* ---------- BIOMETRIA DO CELULAR (WebAuthn): o app nunca vê a digital nem o rosto, só uma confirmação assinada pelo aparelho ---------- */
+const b64uBuf = s => { const p = String(s).replace(/-/g,'+').replace(/_/g,'/'); const b = atob(p + '='.repeat((4 - p.length % 4) % 4)); const u = new Uint8Array(b.length); for(let i=0;i<b.length;i++) u[i] = b.charCodeAt(i); return u.buffer; };
+const bufB64u = buf => { let s = ''; new Uint8Array(buf).forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
+const chaveLocal = () => 'horas_bio_' + (INIT && INIT.user ? INIT.user.id : '');
+function credLocal(){ try{ return localStorage.getItem(chaveLocal()) || ''; }catch(e){ return ''; } }
+function guardarCredLocal(id){ try{ localStorage.setItem(chaveLocal(), id); }catch(e){} }
+async function biometriaDisponivel(){
+  try{ return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }catch(e){ return false; }
+}
+function erroBio(e){
+  const n = e && e.name;
+  if(n === 'NotAllowedError') return new Error('A biometria foi cancelada ou não foi reconhecida. Tente de novo.');
+  if(n === 'InvalidStateError') return new Error('Este celular já tem a biometria cadastrada.');
+  if(n === 'SecurityError') return new Error('Este endereço do app não permite biometria. Abra o app pelo endereço oficial.');
+  return e instanceof Error ? e : new Error('Não foi possível usar a biometria.');
+}
+async function cadastrarBiometria(){
+  if(!(await biometriaDisponivel())) throw new Error('Este celular não oferece biometria (impressão digital ou rosto) ou o bloqueio de tela não está ligado. Ative nas configurações do celular.');
+  const d = await api('bioDesafio', { modo:'create' });
+  let cred;
+  try{
+    cred = await navigator.credentials.create({ publicKey:{ challenge: new TextEncoder().encode(d.challenge), rp:{ name:'Vilaça Joias', id: location.hostname },
+      user:{ id: b64uBuf(d.user.id), name: d.user.nome, displayName: d.user.nome }, pubKeyCredParams:[{ type:'public-key', alg:-7 }],
+      authenticatorSelection:{ authenticatorAttachment:'platform', userVerification:'required', residentKey:'preferred' },
+      excludeCredentials:[], attestation:'none', timeout:60000 } });
+  }catch(e){ throw erroBio(e); }
+  if(!cred) throw new Error('Cadastro da biometria cancelado.');
+  const r = await api('bioRegistrar', { credentialId: bufB64u(cred.rawId), clientDataJSON: bufB64u(cred.response.clientDataJSON), attestationObject: bufB64u(cred.response.attestationObject), aparelho: (navigator.userAgent || '').slice(0, 80) });
+  guardarCredLocal(bufB64u(cred.rawId));
+  INIT.bio.credenciais = r.credenciais;
+  return bufB64u(cred.rawId);
+}
+/** devolve a prova assinada, ou null se a biometria não for exigida e a pessoa ainda não cadastrou */
+async function provarBiometria(){
+  const exige = INIT.bio.obrigatoria, tem = (INIT.bio.credenciais || []).length > 0;
+  if(!exige && !tem) return null;
+  if(!(await biometriaDisponivel())) throw new Error('Este celular não oferece biometria (impressão digital ou rosto) ou o bloqueio de tela não está ligado. Ative nas configurações do celular.');
+  const local = credLocal();
+  if(!local || !INIT.bio.credenciais.some(c => c.id === local)){
+    abrirModal(`<h2>Biometria do celular</h2><p style="margin:8px 0 0;">Primeiro uso neste celular: vamos cadastrar a sua biometria. O celular vai pedir a impressão digital ou o rosto.</p><div class="form-acoes"><button class="btn btn-ghost" type="button" id="mBioNo">Cancelar</button><button class="btn btn-accent" type="button" id="mBioOk">Continuar</button></div>`);
+    const seguir = await new Promise(res => { get('mBioOk').addEventListener('click', ()=>res(true)); get('mBioNo').addEventListener('click', ()=>res(false)); }); fecharModal();
+    if(!seguir) throw new Error('Cadastro da biometria cancelado.');
+    await cadastrarBiometria();
+  }
+  const d = await api('bioDesafio', { modo:'get' });
+  let a;
+  try{
+    a = await navigator.credentials.get({ publicKey:{ challenge: new TextEncoder().encode(d.challenge), rpId: location.hostname,
+      allowCredentials:[{ type:'public-key', id: b64uBuf(credLocal()), transports:['internal'] }], userVerification:'required', timeout:60000 } });
+  }catch(e){ throw erroBio(e); }
+  return { credentialId: bufB64u(a.rawId), clientDataJSON: bufB64u(a.response.clientDataJSON), authenticatorData: bufB64u(a.response.authenticatorData), signature: bufB64u(a.response.signature) };
+}
+get('btnBioCad').addEventListener('click', async ()=>{
+  const b = get('btnBioCad'); b.disabled = true;
+  try{ await cadastrarBiometria(); showToast('Biometria cadastrada neste celular.'); renderRegistrar(); }
+  catch(e){ showToast(erroBio(e).message, 5000); } b.disabled = false;
+});
+
 /* ---------- REGISTRAR ---------- */
 function renderRegistrar(){
   get('regSub').textContent = `${INIT.user.nome} · ${INIT.lojaId ? lojaNome(INIT.lojaId) : 'sem loja definida'}`;
@@ -239,6 +303,7 @@ function renderRegistrar(){
   get('regAvisoLocal').innerHTML = !INIT.lojaId ? `<div class="aviso no">${ico('alerta')}<div class="corpo">Seu usuário não tem loja de trabalho. Peça à Diretoria (DP › Acesso › Loja de trabalho).</div></div>`
     : semLocal ? `<div class="aviso no">${ico('alerta')}<div class="corpo">A localização da loja ${esc(lojaNome(INIT.lojaId))} ainda não foi cadastrada. ${INIT.user.ehDir ? 'Cadastre em Configurações.' : 'Peça à Diretoria para cadastrar em Controle de horas › Configurações.'}</div></div>` : '';
   renderAvisos();
+  { const tem = credLocal() && (INIT.bio.credenciais||[]).some(c=>c.id===credLocal()); get('btnBioCad').style.display = (INIT.bio.obrigatoria || (INIT.bio.credenciais||[]).length) && !tem ? '' : 'none'; }
   const perm = INIT.permitidos || [];
   get('regAcoes').innerHTML = perm.length ? perm.map((t,i)=>`<button class="btn btn-reg ${i===0?'btn-accent':'btn-ghost'}" type="button" data-bater="${t}">${esc(BTN_ROT[t])}</button>`).join('')
     : `<div class="muted" style="grid-column:1/-1;">Sua jornada de hoje foi encerrada. Esqueceu algum registro? Use "Registro fora do horário".</div>`;
@@ -266,8 +331,10 @@ async function registrar(tipo, btn){
   const txtAnt = btn.textContent; btn.textContent = 'Verificando a localização…';
   try{
     const pos = await pegarPosicao();
+    btn.textContent = 'Confirme a biometria…';
+    const bio = await provarBiometria();
     btn.textContent = 'Registrando…';
-    const r = await api('bater', { tipo, lojaId: INIT.lojaId, lat:pos.lat, lng:pos.lng, precisao:pos.precisao });
+    const r = await api('bater', { tipo, lojaId: INIT.lojaId, lat:pos.lat, lng:pos.lng, precisao:pos.precisao, bio });
     INIT.hojeBatidas = r.hojeBatidas; INIT.permitidos = r.permitidos; INIT.resumoHoje = r.resumoHoje;
     renderRegistrar();
     mostrarConfirmacao(tipo, r);
@@ -360,7 +427,7 @@ get('btnEq').addEventListener('click', async ()=>{
   const box = get('eqBox'); box.innerHTML = '<div class="empty">Carregando…</div>';
   try{
     const r = await api('equipe', { dia:get('eqDia').value, lojaId:get('eqLoja').value || undefined });
-    box.innerHTML = r.linhas.length ? r.linhas.map(l=>`<div class="item-lista"><div class="item-cab"><b>${esc(l.nome)}</b>${l.ultimo ? `<span class="badge ${l.ultimo==='saida'?'':'b-ok'}">${l.ultimo==='saida'?'Saiu':l.ultimo.startsWith('almoco')&&l.ultimo.endsWith('saida')?'No almoço':l.ultimo==='cafe_saida'?'No café':'Trabalhando'}</span>` : '<span class="badge">Sem registro</span>'}</div>
+    box.innerHTML = r.linhas.length ? r.linhas.map(l=>`<div class="item-lista"><div class="item-cab"><b>${esc(l.nome)}</b>${l.ultimo ? `<span class="badge ${l.ultimo==='saida'?'':'b-ok'}">${l.ultimo==='saida'?'Saiu':l.ultimo==='almoco_saida'?'No almoço':'Trabalhando'}</span>` : '<span class="badge">Sem registro</span>'}</div>
       <div style="margin-top:4px;">${l.batidas.map(b=>`<span class="chip-h ${b.editada?'ed':''}">${esc(ROT[b.tipo])} ${hora(b.em)}</span>`).join('') || '<span class="muted small">—</span>'}</div>
       ${l.batidas.length?`<div class="muted small" style="margin-top:2px;">Trabalhado: ${hm(l.trabalhadoMin)}${l.alertas.length?' · '+esc(l.alertas.join(' · ')):''}</div>`:''}</div>`).join('') : vazio('usuarios','Ninguém','Nenhum funcionário nesta loja.');
   }catch(e){ box.innerHTML = erroBox(e.message); }
@@ -462,7 +529,7 @@ function renderConfig(){
     catch(e){ showToast(e.message, 4500); } b.disabled = false;
   }));
   const c = INIT.config;
-  get('cfAlmoco').value = c.almocoMinimoMin; get('cfTol').value = c.toleranciaMin; get('cfPrec').value = c.precisaoMaxM; get('cfRaio').value = c.raioPadraoM; get('cfCafe').checked = !!c.cafeConta;
+  get('cfAlmoco').value = c.almocoMinimoMin; get('cfTol').value = c.toleranciaMin; get('cfPrec').value = c.precisaoMaxM; get('cfRaio').value = c.raioPadraoM; get('cfBio').checked = c.biometria !== false;
   vigEdit = (c.vigencias||[]).map(v=>({...v})); renderVig();
 }
 function renderVig(){
@@ -474,10 +541,25 @@ function lerVig(){ vigEdit = Array.from(get('cfgVig').querySelectorAll('.vig-lin
 get('btnVigMais').addEventListener('click', ()=>{ lerVig(); vigEdit.push({ de:hojeISO(), horasSemana:40, dias:5, confirmado:false }); renderVig(); });
 get('btnCfgSalvar').addEventListener('click', async ()=>{
   lerVig(); const b = get('btnCfgSalvar'); b.disabled = true;
-  try{ await api('salvarConfig', { almocoMinimoMin:get('cfAlmoco').value, toleranciaMin:get('cfTol').value, precisaoMaxM:get('cfPrec').value, raioPadraoM:get('cfRaio').value, cafeConta:get('cfCafe').checked, vigencias:vigEdit });
+  try{ await api('salvarConfig', { almocoMinimoMin:get('cfAlmoco').value, toleranciaMin:get('cfTol').value, precisaoMaxM:get('cfPrec').value, raioPadraoM:get('cfRaio').value, biometria:get('cfBio').checked, vigencias:vigEdit });
     showToast('Regras salvas.'); await recarregarInit(); renderConfig(); }
   catch(e){ showToast(e.message, 4500); } b.disabled = false;
 });
+async function listarBios(){
+  const box = get('cfgBio'); box.innerHTML = '<div class="muted">Carregando…</div>';
+  try{
+    const r = await api('bioLista');
+    box.innerHTML = (r.itens.length ? r.itens.map(c=>`<div class="item-lista" style="padding-left:0;padding-right:0;"><div class="item-cab"><div><b>${esc(c.funcionario_nome)}</b><div class="muted small">${esc((c.aparelho||'').slice(0,70))} · cadastrada em ${dataHoraBR(c.criado_em)}${c.ultimo_uso?' · último uso '+dataHoraBR(c.ultimo_uso):''}</div></div><button class="btn btn-ghost btn-sm" type="button" data-bio-del="${esc(c.id)}">Remover</button></div></div>`).join('') : '<div class="muted">Ninguém cadastrou biometria ainda.</div>')
+      + '<div style="margin-top:8px;"><button class="btn btn-ghost btn-sm" type="button" id="btnBioLista">Atualizar lista</button></div>';
+    get('btnBioLista').addEventListener('click', listarBios);
+    box.querySelectorAll('[data-bio-del]').forEach(b=> b.addEventListener('click', ()=>{
+      abrirModal(`<h2>Remover biometria</h2><p style="margin:8px 0 0;">A pessoa terá de cadastrar a biometria de novo no celular. Remover?</p><div class="form-acoes"><button class="btn btn-ghost" type="button" id="mFechar">Cancelar</button><button class="btn btn-accent" type="button" id="mDel">Remover</button></div>`);
+      get('mFechar').addEventListener('click', fecharModal);
+      get('mDel').addEventListener('click', async ()=>{ try{ await api('bioRemover', { id:b.dataset.bioDel }); fecharModal(); showToast('Cadastro removido.'); listarBios(); }catch(e){ showToast(e.message, 4500); } });
+    }));
+  }catch(e){ box.innerHTML = erroBox(e.message); }
+}
+get('btnBioLista').addEventListener('click', listarBios);
 async function carregarLocais(){
   // a diretoria precisa ver os locais de todas as lojas: o init devolve só a da própria loja; busca via 'salvarLocal' não lista, então usa a lista no init (locaisTodos)
   try{ const r = await api('init', { todosLocais:true }); INIT.locaisTodos = r.locaisTodos || {}; renderConfig(); }catch(e){}

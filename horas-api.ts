@@ -1,10 +1,11 @@
-// horas-api v1 (07/11/2026) — módulo CONTROLE DE HORAS (registro de entrada, almoço, café e saída por celular da loja).
+// horas-api v2 (08/11/2026) — v2: sem café (só entrada, almoço e saída) e BIOMETRIA do celular (WebAuthn/passkey: o app guarda só a chave pública).
+// horas-api v1 (07/11/2026) — módulo CONTROLE DE HORAS (registro de entrada, almoço e saída por celular da loja).
 // Regras: o funcionário entra no app com a própria senha; o celular da loja precisa estar DENTRO do raio da loja (GPS) para aceitar o registro;
 // a hora é sempre a do SERVIDOR (fuso de Brasília). Toda batida é imutável (trigger no banco) e encadeada por hash.
 // Correção de horário ou registro fora do horário = SOLICITAÇÃO: só vale depois que a Diretoria aprova (a batida original continua guardada).
 // Diretoria vê e audita tudo (auditoria_log, módulo "Controle de horas"). Gerente só consulta as lojas dele. Aprovar/recusar: só Diretoria.
 // Sessão (sess_…) validada contra gestao_config, igual ao db-gateway. Tabelas: horas_batidas, horas_solicitacoes, horas_config (RLS, sem GRANT).
-// Ops: init, bater, solicitar, minhas, espelho, equipe, pendencias, decidir, historico, relatorio, logs, salvarLocal, salvarConfig
+// Ops: init, bater, solicitar, minhas, espelho, equipe, pendencias, decidir, historico, relatorio, logs, salvarLocal, salvarConfig, bioDesafio, bioRegistrar, bioLista, bioRemover
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -13,8 +14,8 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 const erro = (msg: string, status = 400) => Object.assign(new Error(msg), { status });
 
 const TZ = "America/Sao_Paulo";
-const TIPOS = ["entrada", "cafe_saida", "cafe_volta", "almoco_saida", "almoco_volta", "saida"];
-const ROTULO: Record<string, string> = { entrada: "Entrada", cafe_saida: "Saída para o café", cafe_volta: "Volta do café", almoco_saida: "Saída para o almoço", almoco_volta: "Volta do almoço", saida: "Saída" };
+const TIPOS = ["entrada", "almoco_saida", "almoco_volta", "saida"];
+const ROTULO: Record<string, string> = { entrada: "Entrada", almoco_saida: "Saída para o almoço", almoco_volta: "Volta do almoço", saida: "Saída" };
 
 function sessaoValida(u: any, senha: string): boolean {
   if (!u || !senha || typeof senha !== "string" || !senha.startsWith("sess_") || u.bloqueado) return false;
@@ -39,7 +40,7 @@ const metros = (a: number, b: number, c: number, d: number) => {
   return 2 * R * Math.asin(Math.sqrt(h));
 };
 
-const configPadrao = { cafeConta: true, cafeMinutos: 15, almocoMinimoMin: 60, raioPadraoM: 100, precisaoMaxM: 150, toleranciaMin: 10,
+const configPadrao = { biometria: true, almocoMinimoMin: 60, raioPadraoM: 100, precisaoMaxM: 150, toleranciaMin: 10,
   vigencias: [{ de: "2000-01-01", horasSemana: 44, dias: 6, confirmado: true }] };
 async function lerConfig() {
   const { data } = await admin.from("horas_config").select("id,payload").in("id", ["config", "locais"]);
@@ -73,7 +74,7 @@ async function efetivas(funcIds: string[] | null, de: string, ate: string, lojaI
     if (trocadas[b.id]) continue;   // trocada: aparece pelo ajuste
     const aj = porNova[b.id];
     out.push({ id: b.id, funcionarioId: b.funcionario_id, funcionarioNome: b.funcionario_nome, lojaId: b.loja_id, tipo: b.tipo, em: b.em, dia: b.dia, origem: b.origem,
-      distanciaM: b.distancia_m, precisao: b.precisao, editada: !!aj, original: aj ? aj.hora_original : null, aprovadoPor: aj ? aj.decidido_por : (b.origem === "ajuste" ? "?" : null), motivo: aj ? aj.motivo : null });
+      distanciaM: b.distancia_m, precisao: b.precisao, bio: !!b.bio, editada: !!aj, original: aj ? aj.hora_original : null, aprovadoPor: aj ? aj.decidido_por : (b.origem === "ajuste" ? "?" : null), motivo: aj ? aj.motivo : null });
   }
   return out;
 }
@@ -88,8 +89,6 @@ function calcularDia(bats: any[], cfg: any, dia: string) {
     const t = new Date(b.em).getTime();
     if (b.tipo === "entrada" || b.tipo === "almoco_volta") { if (b.tipo === "almoco_volta" && almocoIni != null) { almocoMin += Math.round((t - almocoIni) / 60000); almocoIni = null; } ini = t; }
     else if (b.tipo === "almoco_saida" || b.tipo === "saida") { if (ini != null) { trab += (t - ini) / 60000; ini = null; } if (b.tipo === "almoco_saida") almocoIni = t; }
-    else if (b.tipo === "cafe_saida" && !cfg.cafeConta) { if (ini != null) { trab += (t - ini) / 60000; ini = null; } }
-    else if (b.tipo === "cafe_volta" && !cfg.cafeConta) { ini = t; }
   }
   if (ini != null) aberto = true;
   trab = Math.round(trab);
@@ -113,10 +112,78 @@ function permitidos(bats: any[]): string[] {
   if (!s.length) return ["entrada"];
   const ult = s[s.length - 1].tipo;
   if (ult === "saida") return [];
-  if (ult === "cafe_saida") return ["cafe_volta"];
   if (ult === "almoco_saida") return ["almoco_volta"];
   const jaAlmoco = s.some((b) => b.tipo === "almoco_saida");
-  return jaAlmoco ? ["cafe_saida", "saida"] : ["cafe_saida", "almoco_saida", "saida"];
+  return jaAlmoco ? ["saida"] : ["almoco_saida", "saida"];
+}
+
+// ------------------------------------------------------------------ biometria (WebAuthn, ES256) — só chave pública fica guardada
+const enc = new TextEncoder();
+const b64u = (buf: ArrayBuffer | Uint8Array) => { const u = buf instanceof Uint8Array ? buf : new Uint8Array(buf); let s = ""; for (const c of u) s += String.fromCharCode(c); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+const fromB64u = (s: string) => { const p = String(s || "").replace(/-/g, "+").replace(/_/g, "/"); const b = atob(p + "=".repeat((4 - (p.length % 4)) % 4)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+const sha256 = async (d: Uint8Array | string) => new Uint8Array(await crypto.subtle.digest("SHA-256", typeof d === "string" ? enc.encode(d) : d));
+const iguais = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+const hmacHex = async (txt: string) => {
+  const k = await crypto.subtle.importKey("raw", enc.encode("horas:" + Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", k, enc.encode(txt)))).map((x) => x.toString(16).padStart(2, "0")).join("");
+};
+/** desafio sem estado: ts.aleatório.assinatura (amarrado a pessoa e ao uso; vale 2 min) */
+const novoDesafio = async (uid: string, modo: string) => { const ts = Date.now(), rnd = b64u(crypto.getRandomValues(new Uint8Array(16))); return `${ts}.${rnd}.${await hmacHex(`${uid}|${modo}|${ts}|${rnd}`)}`; };
+const desafioValido = async (ch: string, uid: string, modo: string) => { const [ts, rnd, mac] = String(ch || "").split("."); if (!ts || !rnd || !mac || Math.abs(Date.now() - Number(ts)) > 120000) return false; return (await hmacHex(`${uid}|${modo}|${ts}|${rnd}`)) === mac; };
+const HOSTS_OK = ["vilaca.app", "www.vilaca.app", "teste.vilaca.app", "treino.vilaca.app", "vilaca-controle-lojas.vercel.app"];
+const ehProjetoTeste = String(Deno.env.get("SUPABASE_URL") || "").includes("mpgkvstzigeaimuynpxc");
+const hostDaOrigem = (o: string): string | null => { try { const u = new URL(o); if (u.protocol === "https:" && HOSTS_OK.includes(u.hostname)) return u.hostname; if (ehProjetoTeste && u.hostname === "localhost") return u.hostname; } catch { /* origem inválida */ } return null; };
+function cbor(b: Uint8Array, o = 0): [any, number] {
+  const ib = b[o++], mt = ib >> 5, ai = ib & 31; let n = ai;
+  if (ai === 24) n = b[o++]; else if (ai === 25) { n = (b[o] << 8) | b[o + 1]; o += 2; } else if (ai === 26) { n = ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0; o += 4; } else if (ai > 26) throw new Error("cbor");
+  if (mt === 0) return [n, o]; if (mt === 1) return [-1 - n, o];
+  if (mt === 2) return [b.slice(o, o + n), o + n];
+  if (mt === 3) return [new TextDecoder().decode(b.slice(o, o + n)), o + n];
+  if (mt === 4) { const a: any[] = []; for (let i = 0; i < n; i++) { const [v, p] = cbor(b, o); a.push(v); o = p; } return [a, o]; }
+  if (mt === 5) { const m = new Map(); for (let i = 0; i < n; i++) { const [k, p] = cbor(b, o); const [v, q] = cbor(b, p); m.set(k, v); o = q; } return [m, o]; }
+  if (mt === 7) return [ai === 20 ? false : ai === 21 ? true : null, o];
+  throw new Error("cbor");
+}
+function derParaRaw(der: Uint8Array): Uint8Array {
+  let o = 2; if (der[1] & 0x80) o = 2 + (der[1] & 0x7f);
+  const ler = (): Uint8Array => { if (der[o++] !== 2) throw new Error("der"); const l = der[o++]; let v = der.slice(o, o + l); o += l; while (v.length > 32 && v[0] === 0) v = v.slice(1); const out = new Uint8Array(32); out.set(v, 32 - v.length); return out; };
+  const r = ler(), s = ler(); const raw = new Uint8Array(64); raw.set(r, 0); raw.set(s, 32); return raw;
+}
+const lerAuth = (ad: Uint8Array) => ({ rpIdHash: ad.slice(0, 32), flags: ad[32], counter: ((ad[33] << 24) | (ad[34] << 16) | (ad[35] << 8) | ad[36]) >>> 0 });
+/** confere o clientDataJSON (tipo, origem permitida, desafio nosso e desta pessoa) e devolve o host (rpId) */
+async function conferirCliente(clientB64: string, tipo: string, uid: string, modo: string): Promise<{ host: string; bytes: Uint8Array }> {
+  const bytes = fromB64u(clientB64); let cd: any; try { cd = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw erro("Resposta da biometria inválida."); }
+  if (cd.type !== tipo) throw erro("Resposta da biometria inválida.");
+  const host = hostDaOrigem(String(cd.origin || "")); if (!host) throw erro("Este endereço do app não está liberado para biometria.");
+  const ch = new TextDecoder().decode(fromB64u(String(cd.challenge || "")));
+  if (!(await desafioValido(ch, uid, modo))) throw erro("A biometria demorou demais ou já foi usada. Tente de novo.");
+  return { host, bytes };
+}
+async function verificarRegistro(p: any, uid: string) {
+  const { host } = await conferirCliente(p.clientDataJSON, "webauthn.create", uid, "create");
+  const [att] = cbor(fromB64u(p.attestationObject)); const ad: Uint8Array = att.get("authData");
+  const info = lerAuth(ad);
+  if (!iguais(info.rpIdHash, await sha256(host))) throw erro("Biometria de outro endereço.");
+  if (!(info.flags & 0x01) || !(info.flags & 0x04)) throw erro("O celular não confirmou a biometria (impressão digital ou rosto).");
+  if (!(info.flags & 0x40)) throw erro("Cadastro de biometria incompleto.");
+  const idLen = (ad[53] << 8) | ad[54]; const credId = ad.slice(55, 55 + idLen);
+  if (b64u(credId) !== String(p.credentialId)) throw erro("Cadastro de biometria inconsistente.");
+  const [cose] = cbor(ad, 55 + idLen);
+  if (cose.get(3) !== -7 || cose.get(-1) !== 1) throw erro("Este celular usou um tipo de chave não suportado.");
+  return { host, credId: b64u(credId), jwk: { kty: "EC", crv: "P-256", x: b64u(cose.get(-2)), y: b64u(cose.get(-3)), ext: true } };
+}
+async function verificarUso(p: any, uid: string, cred: any) {
+  const { host, bytes } = await conferirCliente(p.clientDataJSON, "webauthn.get", uid, "get");
+  const ad = fromB64u(p.authenticatorData); const info = lerAuth(ad);
+  if (!iguais(info.rpIdHash, await sha256(host))) throw erro("Biometria de outro endereço.");
+  if (!(info.flags & 0x01) || !(info.flags & 0x04)) throw erro("O celular não confirmou a biometria (impressão digital ou rosto).");
+  const dados = new Uint8Array(ad.length + 32); dados.set(ad, 0); dados.set(await sha256(bytes), ad.length);
+  const chave = await crypto.subtle.importKey("jwk", cred.public_key, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+  let ok = false; try { ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, chave, derParaRaw(fromB64u(p.signature)), dados); } catch { ok = false; }
+  if (!ok) throw erro("Biometria não conferiu. Tente de novo.", 401);
+  const antes = Number(cred.counter) || 0;
+  if ((info.counter !== 0 || antes !== 0) && info.counter <= antes) throw erro("Biometria rejeitada (possível cópia). Fale com a Diretoria.", 401);
+  return info.counter;
 }
 
 Deno.serve(async (req: Request) => {
@@ -190,8 +257,9 @@ Deno.serve(async (req: Request) => {
         user: { id: meuId, nome: meuNome, nivel, ehDir, ehGer },
         lojas: lojasCfg.filter((l) => lojasVisiveis.includes(l.id)), lojaId,
         local: lojaId ? (locais[lojaId] || null) : null, locaisConfigurados: Object.keys(locais), locaisTodos: ehDir ? locais : undefined,
-        config: { cafeConta: cfg.cafeConta, cafeMinutos: cfg.cafeMinutos, almocoMinimoMin: cfg.almocoMinimoMin, raioPadraoM: cfg.raioPadraoM, precisaoMaxM: cfg.precisaoMaxM, toleranciaMin: cfg.toleranciaMin, vigencias: cfg.vigencias },
+        config: { biometria: cfg.biometria !== false, almocoMinimoMin: cfg.almocoMinimoMin, raioPadraoM: cfg.raioPadraoM, precisaoMaxM: cfg.precisaoMaxM, toleranciaMin: cfg.toleranciaMin, vigencias: cfg.vigencias },
         hojeBatidas: bats, permitidos: permitidos(bats), resumoHoje: dia, rotulos: ROTULO,
+        bio: { obrigatoria: cfg.biometria !== false, credenciais: ((await admin.from("horas_credenciais").select("id,aparelho,criado_em").eq("funcionario_id", meuId).eq("ativo", true)).data || []) },
         avisos: await avisosDe(meuId), pendentesDir: pendentes, pessoas: (ehDir || ehGer) ? pessoasVisiveis() : [] });
     }
 
@@ -221,10 +289,23 @@ Deno.serve(async (req: Request) => {
       if (!permitidos(doDia).includes(tipo)) throw erro(doDia.length && doDia[doDia.length - 1].tipo === "saida" ? "Sua jornada de hoje já foi encerrada. Para um registro extra, use \"Registro fora do horário\"." : `Agora não dá para registrar "${ROTULO[tipo]}" (sequência do dia).`);
       const { data: ult } = await admin.from("horas_batidas").select("em").eq("funcionario_id", meuId).order("id", { ascending: false }).limit(1);
       if (ult && ult[0] && Date.now() - new Date(ult[0].em).getTime() < 20000) throw erro("Aguarde alguns segundos antes de registrar de novo.");
+      // biometria do celular: quem já cadastrou sempre precisa confirmar; se a Diretoria exige, quem não cadastrou é barrado
+      const { data: creds } = await admin.from("horas_credenciais").select("*").eq("funcionario_id", meuId).eq("ativo", true);
+      let credUsada: any = null;
+      if ((creds && creds.length) || cfg.biometria !== false) {
+        if (!creds || !creds.length) throw erro("Cadastre a biometria deste celular antes de registrar (toque em \"Cadastrar biometria neste celular\").", 428);
+        const bio = p.bio;
+        if (!bio || !bio.credentialId) throw erro("Confirme com a biometria do celular (impressão digital ou rosto).", 428);
+        credUsada = creds.find((c: any) => c.id === String(bio.credentialId));
+        if (!credUsada) throw erro("Esta biometria não está cadastrada para você. Cadastre a biometria neste celular.", 428);
+        try { credUsada.novoContador = await verificarUso(bio, meuId, credUsada); }
+        catch (e: any) { await log("horas_bio_recusada", `Biometria recusada no registro de ${ROTULO[tipo]}: ${e.message}`, { tipo, lojaId }, undefined, lojaId); throw e; }
+      }
       const { data: ins, error } = await admin.from("horas_batidas").insert({ funcionario_id: meuId, funcionario_nome: meuNome, loja_id: lojaId, tipo, dia: hoje,
-        lat, lng, precisao, distancia_m: Math.round(dist * 10) / 10, origem: "app", agente: String(req.headers.get("user-agent") || "").slice(0, 160) }).select("*").single();
+        lat, lng, precisao, distancia_m: Math.round(dist * 10) / 10, origem: "app", bio: !!credUsada, credencial: credUsada ? String(credUsada.id).slice(0, 16) : null, agente: String(req.headers.get("user-agent") || "").slice(0, 160) }).select("*").single();
       if (error) throw error;
-      await log("horas_registro", `${meuNome}: ${ROTULO[tipo]} às ${hhmmDe(new Date(ins.em))} (${nomeLoja(lojaId)}, a ${Math.round(dist)} m)`, { tipo, lojaId, distanciaM: Math.round(dist), precisao: Math.round(precisao), lat, lng, hash: ins.hash }, String(ins.id), lojaId);
+      await log("horas_registro", `${meuNome}: ${ROTULO[tipo]} às ${hhmmDe(new Date(ins.em))} (${nomeLoja(lojaId)}, a ${Math.round(dist)} m)`, { tipo, lojaId, distanciaM: Math.round(dist), precisao: Math.round(precisao), lat, lng, hash: ins.hash, biometria: !!credUsada }, String(ins.id), lojaId);
+      if (credUsada) await admin.from("horas_credenciais").update({ counter: credUsada.novoContador, ultimo_uso: new Date().toISOString() }).eq("id", credUsada.id);
       const bats = await efetivas([meuId], hoje, hoje);
       const dia = calcularDia(bats, cfg, hoje);
       return json({ ok: true, batida: { id: ins.id, tipo, em: ins.em, comprovante: String(ins.hash || "").slice(0, 12).toUpperCase() }, hojeBatidas: bats, permitidos: permitidos(bats), resumoHoje: dia });
@@ -385,8 +466,9 @@ Deno.serve(async (req: Request) => {
       precisaDir();
       const { cfg } = await lerConfig();
       const novo: any = { ...cfg };
-      if (p.cafeConta !== undefined) novo.cafeConta = p.cafeConta === true;
-      for (const k of ["cafeMinutos", "almocoMinimoMin", "raioPadraoM", "precisaoMaxM", "toleranciaMin"]) if (p[k] !== undefined) { const n = Number(p[k]); if (!Number.isFinite(n) || n < 0 || n > 1000) throw erro(`Valor inválido em ${k}.`); novo[k] = n; }
+      if (p.biometria !== undefined) novo.biometria = p.biometria === true;
+      delete novo.cafeConta; delete novo.cafeMinutos;
+      for (const k of ["almocoMinimoMin", "raioPadraoM", "precisaoMaxM", "toleranciaMin"]) if (p[k] !== undefined) { const n = Number(p[k]); if (!Number.isFinite(n) || n < 0 || n > 1000) throw erro(`Valor inválido em ${k}.`); novo[k] = n; }
       if (Array.isArray(p.vigencias)) {
         const v = p.vigencias.map((x: any) => ({ de: String(x.de || ""), horasSemana: Number(x.horasSemana), dias: Number(x.dias), confirmado: x.confirmado === true }));
         if (!v.length || v.some((x: any) => !isoDia(x.de) || !(x.horasSemana > 0 && x.horasSemana <= 60) || !(x.dias >= 1 && x.dias <= 7))) throw erro("Jornada inválida (data, horas por semana e dias por semana).");
@@ -395,6 +477,38 @@ Deno.serve(async (req: Request) => {
       const { error } = await admin.from("horas_config").upsert({ id: "config", payload: novo, atualizado_em: new Date().toISOString() });
       if (error) throw error;
       await log("horas_config", "Alterou as configurações do Controle de horas", { antes: cfg, depois: novo });
+      return json({ ok: true });
+    }
+
+    // ---------------------------------------------------------------- biometria do celular
+    if (op === "bioDesafio") {
+      const modo = p.modo === "create" ? "create" : "get";
+      const { data: creds } = await admin.from("horas_credenciais").select("id").eq("funcionario_id", meuId).eq("ativo", true);
+      return json({ ok: true, challenge: await novoDesafio(meuId, modo), credenciais: (creds || []).map((c: any) => c.id),
+        user: { id: b64u(await sha256("horas:" + meuId)), nome: meuNome } });
+    }
+    if (op === "bioRegistrar") {
+      const r = await verificarRegistro(p, meuId);
+      const { data: dono } = await admin.from("horas_credenciais").select("funcionario_id").eq("id", r.credId).maybeSingle();
+      if (dono && dono.funcionario_id !== meuId) throw erro("Esta biometria já pertence a outra pessoa.", 409);
+      const { error } = await admin.from("horas_credenciais").upsert({ id: r.credId, funcionario_id: meuId, funcionario_nome: meuNome, public_key: r.jwk, counter: 0, rp_id: r.host,
+        aparelho: texto(p.aparelho, 80) || String(req.headers.get("user-agent") || "").slice(0, 120), ativo: true, criado_em: new Date().toISOString() });
+      if (error) throw error;
+      await log("horas_bio_cadastrada", `${meuNome} cadastrou a biometria de um celular (${r.host})`, { host: r.host, credencial: r.credId.slice(0, 16) });
+      const { data: creds } = await admin.from("horas_credenciais").select("id,aparelho,criado_em").eq("funcionario_id", meuId).eq("ativo", true);
+      return json({ ok: true, credenciais: creds || [] });
+    }
+    if (op === "bioLista") {
+      precisaDir();
+      const { data } = await admin.from("horas_credenciais").select("id,funcionario_id,funcionario_nome,aparelho,rp_id,criado_em,ultimo_uso").eq("ativo", true).order("criado_em", { ascending: false });
+      return json({ ok: true, itens: data || [] });
+    }
+    if (op === "bioRemover") {
+      precisaDir();
+      const { data: c } = await admin.from("horas_credenciais").select("id,funcionario_nome").eq("id", String(p.id || "")).maybeSingle();
+      if (!c) throw erro("Cadastro de biometria não encontrado.", 404);
+      await admin.from("horas_credenciais").update({ ativo: false }).eq("id", c.id);
+      await log("horas_bio_removida", `Removeu a biometria cadastrada de ${c.funcionario_nome}`, { credencial: String(c.id).slice(0, 16) });
       return json({ ok: true });
     }
 
