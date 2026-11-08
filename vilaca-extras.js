@@ -94,24 +94,97 @@
 })();
 
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
-   Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11). ===== */
+   Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11).
+   08/11: botão que já enviou ganha o "risquinho" duplo ✓✓ (como no WhatsApp) e a dica "já enviado em …" — o envio continua liberado.
+   A marca vem do servidor (auditoria_log), então vale para qualquer aparelho/usuário. ===== */
 (function(){
   var emAndamento = false;
+  var ultimo = { el:null, t:0 };
+  var marcas = {};            // 'registroId|botao' -> { em, por, rotulo }
+  var pedidos = {};           // chaves de registro já consultadas
   function aviso(m){ try{ if(typeof showToast==='function') showToast(m); }catch(e){} }
+  function senhaAtual(){ try{ return (typeof __gatewaySenha!=='undefined' && __gatewaySenha) || ''; }catch(e){ return ''; } }
+  function css(){
+    if(document.getElementById('waEnvCss')) return;
+    var st=document.createElement('style'); st.id='waEnvCss';
+    st.textContent='.wa-enviado{position:relative !important;}'
+      +'.wa-enviado::after{content:"\\2713\\2713";position:absolute;top:-7px;right:-7px;z-index:2;font:800 9px/14px system-ui,sans-serif;letter-spacing:-2px;padding:0 4px 0 2px;min-width:14px;text-align:center;border-radius:8px;background:#fff;color:#1e9d55;border:1px solid #1e9d55;pointer-events:none;}';
+    document.head.appendChild(st);
+  }
+  document.addEventListener('click', function(e){ var b=e.target&&e.target.closest&&e.target.closest('button,a,[role=button]'); if(b){ ultimo={ el:b, t:Date.now() }; } }, true);
+  function botaoId(el){
+    if(!el) return '';
+    var at=el.attributes||[];
+    for(var i=0;i<at.length;i++){ var n=at[i].name; if(n.indexOf('data-')===0 && /wa$/i.test(n) && at[i].value) return n.slice(5); }
+    return el.id||'';
+  }
+  function registroDe(el){
+    var at=(el&&el.attributes)||[];
+    for(var i=0;i<at.length;i++){ var n=at[i].name; if(n.indexOf('data-')===0 && /wa$/i.test(n) && at[i].value) return at[i].value; }
+    return '';
+  }
+  function dh(s){ var d=new Date(s); return isNaN(d)?'':d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+  function marcar(el, m){
+    if(!el) return; css();
+    el.classList.add('wa-enviado');
+    var base=(el.getAttribute('data-wa-titulo0')); if(base==null){ base=el.getAttribute('title')||''; el.setAttribute('data-wa-titulo0',base); }
+    el.setAttribute('title',(base?base+' — ':'')+'JÁ ENVIADO'+(m&&m.em?' em '+dh(m.em):'')+(m&&m.por?' por '+m.por:'')+(m&&m.rotulo?' ('+m.rotulo+')':'')+'. Você pode enviar de novo.');
+  }
+  function achar(reg, botao){ return marcas[reg+'|'+botao] || marcas[reg+'|'] || null; }
+  var agendado=null;
+  function varrer(){
+    agendado=null;
+    var els=document.querySelectorAll('button,a');
+    var novos=[];
+    els.forEach(function(el){
+      var reg=registroDe(el); if(!reg) return;
+      var m=achar(reg, botaoId(el));
+      if(m){ if(!el.classList.contains('wa-enviado')) marcar(el,m); return; }
+      if(!pedidos[reg]){ pedidos[reg]=1; novos.push(reg); }
+    });
+    if(!novos.length) return;
+    var senha=senhaAtual(); if(!senha || !window.SUPABASE_URL) { novos.forEach(function(r){ delete pedidos[r]; }); return; }
+    if(String(window.SUPABASE_URL).indexOf('mpgkvstzigeaimuynpxc')>=0) return;   // treino: sem função de envio
+    // em lotes de 150
+    for(var i=0;i<novos.length;i+=150){
+      (function(lote){
+        fetch(window.SUPABASE_URL+'/functions/v1/enviar-via',{ method:'POST', headers:{ 'Content-Type':'application/json','apikey':window.SUPABASE_ANON_KEY,'Authorization':'Bearer '+window.SUPABASE_ANON_KEY }, body:JSON.stringify({ op:'consultar', senha:senha, ids:lote }) })
+          .then(function(r){ return r.json(); }).then(function(j){
+            if(j && j.marcas){ Object.keys(j.marcas).forEach(function(k){ marcas[k]=j.marcas[k]; }); agendar(); }
+          }).catch(function(){ lote.forEach(function(r){ delete pedidos[r]; }); });
+      })(novos.slice(i,i+150));
+    }
+  }
+  function agendar(){ if(agendado) return; agendado=setTimeout(varrer,350); }
+  function iniciar(){
+    try{ new MutationObserver(agendar).observe(document.body,{ childList:true, subtree:true }); }catch(e){}
+    agendar();
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',iniciar); else iniciar();
+
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
     if(emAndamento) return;
     if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return; }
     emAndamento = true;
+    var clicado = (ultimo.el && Date.now()-ultimo.t < 15000) ? ultimo.el : null;
+    var botao = botaoId(clicado);
+    var m0 = /Status atual:\s*\**([^\n*]+)/i.exec(opts.texto||'');
     aviso('Enviando pelo WhatsApp da loja…');
     try{
       var r = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', {
         method:'POST',
         headers:{ 'Content-Type':'application/json', 'apikey':window.SUPABASE_ANON_KEY, 'Authorization':'Bearer '+window.SUPABASE_ANON_KEY },
-        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via })
+        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, botao:botao, rotulo:m0?m0[1].trim():'' })
       });
       var j = await r.json().catch(function(){ return {}; });
-      if(j && j.ok){ aviso('Enviado pelo WhatsApp da loja ✓'); return; }
+      if(j && j.ok){
+        aviso('Enviado pelo WhatsApp da loja ✓');
+        var m={ em:new Date().toISOString(), por:'', rotulo:m0?m0[1].trim():'' };
+        if(opts.registroId) marcas[opts.registroId+'|'+botao]=m;
+        marcar(clicado, m); agendar();
+        return;
+      }
       if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return; }
       aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');
     }catch(e){

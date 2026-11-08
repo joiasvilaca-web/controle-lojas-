@@ -1,4 +1,4 @@
-// v3 (08/11): wa.me primeiro (botão Iniciar conversa).
+// v4 (08/11): op `consultar` (marcas "já enviado") + botao/rotulo no log. v3: wa.me primeiro (botão Iniciar conversa).
 // enviar-via v2 (05/11/2026) — v2: loja opcional (sem loja ou loja desconhecida = instância "vilaca"); usado também por Gravações, Reserva, Site e Retirada.
 // enviar-via v1 (05/11/2026) — dispara a via (link) ao cliente pelo WhatsApp da loja, sem abrir o WhatsApp Web.
 // Loja Reforma → instância "reformajoias"; demais lojas → instância "vilaca". Se a instância não estiver conectada, devolve fallback:true
@@ -62,6 +62,23 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   try {
     const body = await req.json().catch(() => ({}));
+    // 08/11: consulta das marcas "já enviado" (botão com ✓✓). Só lê o log de envios.
+    if (body.op === "consultar") {
+      const sen = String(body.senha || "");
+      const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
+      const us = (Array.isArray(cf?.payload?.users) ? cf.payload.users : []).find((u: any) => sessaoValida(u, sen));
+      if (!us) return json({ error: "não autorizado" }, 401);
+      const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).filter(Boolean).slice(0, 200);
+      const marcas: Record<string, any> = {};
+      if (ids.length) {
+        const { data: logs } = await admin.from("auditoria_log").select("registro_id,em,usuario_nome,detalhe").eq("acao", "via_whatsapp_enviada").in("registro_id", ids).order("em", { ascending: false }).limit(2000);
+        for (const l of logs || []) {
+          const k = l.registro_id + "|" + String((l.detalhe && l.detalhe.botao) || "");
+          if (!marcas[k]) marcas[k] = { em: l.em, por: l.usuario_nome || "", rotulo: (l.detalhe && l.detalhe.rotulo) || "" };
+        }
+      }
+      return json({ ok: true, marcas });
+    }
     const senha = String(body.senha || ""), lojaId = String(body.lojaId || ""), texto = String(body.texto || "").trim();
     const { data } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
     const config: any = (data && data.payload) || {};
@@ -91,7 +108,7 @@ Deno.serve(async (req: Request) => {
     try {
       await admin.from("auditoria_log").insert({ usuario_id: user.id || null, usuario_nome: user.nome || null, nivel: user.nivel || null, loja_sessao: lojaId || null, em_outra_loja: !!lojaId && !(Array.isArray(user.lojas) ? user.lojas : []).includes(lojaId) && user.nivel !== "diretoria",
         acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Envio da via", tabela: String(body.tipo || ""), registro_id: String(body.registroId || ""),
-        resumo: `${ok ? "Enviou" : "Falhou ao enviar"} a via ${String(body.via || "")} por WhatsApp (${instancia}) para ${numero.slice(0, 4)}…${numero.slice(-4)}`, detalhe: { instancia, status: r.status }, agente: String(req.headers.get("user-agent") || "").slice(0, 160) });
+        resumo: `${ok ? "Enviou" : "Falhou ao enviar"} a via ${String(body.via || "")} por WhatsApp (${instancia}) para ${numero.slice(0, 4)}…${numero.slice(-4)}`, detalhe: { instancia, status: r.status, botao: String(body.botao || "").slice(0, 40), rotulo: String(body.rotulo || "").slice(0, 60) }, agente: String(req.headers.get("user-agent") || "").slice(0, 160) });
     } catch (e) { console.error("log enviar-via", e); }
     if (!ok) return json({ ok: false, fallback: true, erro: "O WhatsApp recusou o envio. Abrindo o WhatsApp manual." });
     return json({ ok: true, instancia });
