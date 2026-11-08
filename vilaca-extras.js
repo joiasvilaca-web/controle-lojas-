@@ -175,7 +175,7 @@
       var r = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', {
         method:'POST',
         headers:{ 'Content-Type':'application/json', 'apikey':window.SUPABASE_ANON_KEY, 'Authorization':'Bearer '+window.SUPABASE_ANON_KEY },
-        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, botao:botao, rotulo:m0?m0[1].trim():'' })
+        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, padrao:opts.padrao||null, botao:botao, rotulo:m0?m0[1].trim():'' })
       });
       var j = await r.json().catch(function(){ return {}; });
       if(j && j.ok){
@@ -192,5 +192,13 @@
       aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.');
     }finally{ emAndamento = false; }
   }
-  window.WhatsAuto = { enviar: enviar };
+  /* Mensagem padrão ao cliente (08/11): sem dados da via — só quem atendeu, a loja e o link com tudo. O texto é montado no servidor (enviar-via). */
+  function padrao(tipo, reg){
+    reg = reg || {};
+    var base = window.APP_URL || 'https://vilaca.app';
+    var link = tipo==='os' ? base+'/acompanhar.html?id='+encodeURIComponent(reg.id||'')
+      : base+'/via.html?t='+(tipo==='orcamento'?'orc':tipo==='reserva'?'res':'venda')+'&id='+encodeURIComponent(reg.id||'');
+    return { cliente: reg.cliente||'', atendente: reg.vendedora||reg.criadoPor||'', link: link };
+  }
+  window.WhatsAuto = { enviar: enviar, padrao: padrao };
 })();

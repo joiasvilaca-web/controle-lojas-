@@ -1,4 +1,4 @@
-// v4 (08/11): op `consultar` (marcas "já enviado") + botao/rotulo no log. v3: wa.me primeiro (botão Iniciar conversa).
+// v5 (08/11): `padrao` {cliente, atendente, link} monta a mensagem sem dados da via. v4 (08/11): op `consultar` (marcas "já enviado") + botao/rotulo no log. v3: wa.me primeiro (botão Iniciar conversa).
 // enviar-via v2 (05/11/2026) — v2: loja opcional (sem loja ou loja desconhecida = instância "vilaca"); usado também por Gravações, Reserva, Site e Retirada.
 // enviar-via v1 (05/11/2026) — dispara a via (link) ao cliente pelo WhatsApp da loja, sem abrir o WhatsApp Web.
 // Loja Reforma → instância "reformajoias"; demais lojas → instância "vilaca". Se a instância não estiver conectada, devolve fallback:true
@@ -57,6 +57,20 @@ function waMePrimeiro(t: string): string {
   return [p, ...paras].join("\n\n");
 }
 
+// Mensagem padrão (08/11): sem dados da via; só quem atendeu, a loja e o link onde tudo pode ser visto.
+function mensagemPadrao(pd: any, lojaNome: string | null): string {
+  const bonito = (t: string) => String(t || "").trim().toLowerCase().replace(/(^|\s)\S/g, (m) => m.toUpperCase());
+  const primeiro = bonito(String(pd.cliente || "").trim().split(/\s+/)[0] || "");
+  const atend = bonito(String(pd.atendente || "").trim().split(/\s+/).slice(0, 2).join(" "));
+  const loja = lojaNome ? String(lojaNome).trim() : "";
+  const link = String(pd.link || "").trim();
+  let l1 = "Olá" + (primeiro ? ", " + primeiro : "") + "!";
+  const quem = (atend ? atend : "") + (atend && loja ? " · " : "") + (loja ? loja : "");
+  return l1 + "\n\n" + (quem ? "Atendimento: " + quem + ".\n\n" : "")
+    + "Todas as informações da sua via podem ser visualizadas pelo link:\n" + link
+    + "\n\nNão responda esta mensagem. Caso precise falar conosco, clique no link:\nhttps://wa.me/5532988307617";
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
@@ -79,11 +93,16 @@ Deno.serve(async (req: Request) => {
       }
       return json({ ok: true, marcas });
     }
-    const senha = String(body.senha || ""), lojaId = String(body.lojaId || ""), texto = String(body.texto || "").trim();
+    const senha = String(body.senha || ""), lojaId = String(body.lojaId || "");
+    let texto = String(body.texto || "").trim();
     const { data } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
     const config: any = (data && data.payload) || {};
     const user: any = (Array.isArray(config.users) ? config.users : []).find((u: any) => sessaoValida(u, senha));
     if (!user) return json({ error: "não autorizado" }, 401);
+    if (body.padrao && /^https?:\/\//.test(String(body.padrao.link || ""))) {
+      const lj = lojaId ? (Array.isArray(config.lojas) ? config.lojas : []).find((l: any) => l && l.id === lojaId) : null;
+      texto = mensagemPadrao(body.padrao, lj ? (lj.nomePublico || lj.nomeFantasia || lj.nome || null) : null);
+    }
     if (!texto || texto.length > 3000) return json({ error: "mensagem vazia ou longa demais" }, 400);
     const numero = normalizaTelefone(body.telefone);
     if (!numero) return json({ ok: false, erro: "Telefone do cliente inválido (precisa de DDD + número).", fallback: false }, 200);
