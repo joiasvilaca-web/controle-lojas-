@@ -3,6 +3,7 @@
 <head>
 <script src="vilaca-extras.js"></script>
 <script src="caixa-calc.js"></script>
+<script src="cupom.js"></script>
 <script src="supabase-config.js"></script>
 <script src="tema.js"></script>
 <script src="maiusculas.js"></script>
@@ -721,6 +722,56 @@ function mensagemConfiavel(ev){
       el.addEventListener('click', ()=> showToast(el.dataset.tip));   // no celular (toque) mostra o valor
     });
   }
+  /* ===== RELATÓRIO IMPRESSO (cupom) — 09/11 =====
+   * modo 'conferencia': todas as vias que movimentaram valores (via, 1º nome do cliente, vendedora, forma, valor) + total por forma + total da loja.
+   * modo 'fechamento': só o total por forma + total geral (sai sozinho ao fechar o caixa do dia). */
+  function relatorioCaixaHtml(de, ate, lojaId, modo){
+    const d = dadosPainelCaixa(de, ate, lojaId);
+    const m = v=> fmtMoeda(v);
+    const periodo = de===ate ? fmtDate(de) : fmtDate(de)+' a '+fmtDate(ate);
+    const primeiro = n=> String(n||'').trim().split(/\s+/)[0] || '—';
+    const vend = x=> String((x.reg && x.reg.vendedora) || '').trim().split(/\s+/)[0] || '—';
+    const esc = escapeHtml;
+    const L = [];
+    L.push('<div class="titulo">'+(modo==='fechamento' ? 'FECHAMENTO DO CAIXA' : 'CONFERÊNCIA DO CAIXA')+'</div>');
+    L.push('<div class="sub">'+esc(lojaId ? (nomeLojaCaixa(lojaId)||'') : 'TODAS AS LOJAS')+' · '+esc(periodo)+'</div>');
+    L.push('<div class="sub">'+esc(new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}))+' · '+esc((currentUser&&currentUser.nome)||'')+'</div>');
+    L.push('<div class="linha"></div>');
+    const linhaVia = (x, sinal)=>{
+      const via = x.via || x.tipo || '—';
+      const sigla = !lojaId && x.lojaId ? ' · '+esc((((config.lojas||[]).find(l=>l.id===x.lojaId)||{}).abreviacao)||'') : '';
+      return '<div style="margin:3px 0;"><div style="display:flex;justify-content:space-between;gap:6px;"><span><b>'+esc(via)+'</b> '+esc(primeiro(x.cliente))+sigla+'</span><b>'+(sinal||'')+esc(m(x.valor))+'</b></div>'
+        +'<div class="sub" style="text-align:left;">'+esc(vend(x))+' · '+esc(x.forma||'')+'</div></div>';
+    };
+    if(modo!=='fechamento'){
+      const ordem = (a,b)=> String(a.dia||'').localeCompare(String(b.dia||'')) || String(a.via||'').localeCompare(String(b.via||''), 'pt-BR', {numeric:true});
+      const ent = d.mv.entradas.slice().sort(ordem), sai = d.mv.saidas.filter(x=>x.via).slice().sort(ordem), nd = d.mv.naoDinheiro.slice().sort(ordem);
+      L.push('<div><b>RECEBIMENTOS ('+ent.length+')</b></div>');
+      L.push(ent.length ? ent.map(x=>linhaVia(x)).join('') : '<div class="sub">Nenhum recebimento.</div>');
+      if(sai.length){ L.push('<div class="linha"></div><div><b>DEVOLUÇÕES ('+sai.length+')</b></div>'); L.push(sai.map(x=>linhaVia(x,'−')).join('')); }
+      if(nd.length){ L.push('<div class="linha"></div><div><b>SEM ENTRADA DE DINHEIRO ('+nd.length+')</b></div>'); L.push(nd.map(x=>linhaVia(x)).join('')); }
+      L.push('<div class="linha"></div>');
+    }
+    L.push('<div><b>TOTAL POR TIPO DE RECEBIMENTO</b></div>');
+    const formas = d.formasTodas;
+    L.push(formas.length ? formas.map(f=>'<div style="display:flex;justify-content:space-between;gap:6px;"><span>'+esc(f)+'</span><b>'+esc(m(d.totFormaTodas[f]))+'</b></div>').join('') : '<div class="sub">Nenhum recebimento.</div>');
+    L.push('<div class="linha"></div>');
+    if(!lojaId && d.lojas.length>1){
+      L.push('<div><b>TOTAL POR LOJA</b></div>');
+      L.push(d.lojas.map(l=>'<div style="display:flex;justify-content:space-between;gap:6px;"><span>'+esc(l.nome)+'</span><b>'+esc(m(l.total))+'</b></div>').join(''));
+      L.push('<div class="linha"></div>');
+    }
+    L.push('<div style="display:flex;justify-content:space-between;gap:6px;font-size:1.15em;"><b>TOTAL '+(lojaId?'DA LOJA':'GERAL')+'</b><b>'+esc(m(d.recebido))+'</b></div>');
+    if(d.saidasTot > 0){
+      L.push('<div style="display:flex;justify-content:space-between;gap:6px;"><span>Saídas (devoluções e contas)</span><b>−'+esc(m(d.saidasTot))+'</b></div>');
+      L.push('<div style="display:flex;justify-content:space-between;gap:6px;"><b>SALDO DO CAIXA</b><b>'+esc(m(d.saldo))+'</b></div>');
+    }
+    return L.join('');
+  }
+  function imprimirRelatorioCaixa(de, ate, lojaId, modo){
+    if(!window.Cupom){ showToast('Não foi possível carregar a impressão. Recarregue a página (Ctrl+F5).'); return; }
+    Cupom.imprimir(config, modo==='fechamento' ? 'Fechamento do caixa' : 'Conferência do caixa', relatorioCaixaHtml(de, ate, lojaId, modo), '', 'caixa');
+  }
   async function abrirFecharCaixa(de, ate, lojaId){
     const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente' || (currentUser.nivel==='vendedora' && (currentUser.lojas||[]).includes(lojaId)));
     const umDia = de && de===ate && !!lojaId;
@@ -761,18 +812,24 @@ function mensagemConfiavel(ev){
       ${cancelados.length ? `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);"><div style="font-weight:700;margin-bottom:4px;">Cancelamentos do período — ${cancelados.length} via(s) <span class="muted" style="font-weight:500;">(informativo)</span></div>${cancelados.map(c=>`<div style="padding:6px 0;border-bottom:1px solid var(--line);"><b>${escapeHtml(c.origem)} ${escapeHtml(c.via)}</b> · ${escapeHtml(c.reg.cliente||'')} · ${fmtMoeda(c.reg.valorTotal)}<div class="muted" style="font-size:12.5px;">${escapeHtml(destinoC(c.reg))} · por ${escapeHtml(c.reg.canceladoPor||'—')}${c.reg.motivoCancelamento?' · '+escapeHtml(c.reg.motivoCancelamento):''}</div></div>`).join('')}</div>` : ''}
       <div class="modal-actions">
         <button class="btn btn-ghost" id="fc_fechar" type="button" data-fechar>Voltar</button>
+        <button class="btn btn-ghost" id="fc_imprimir" type="button">${ic('impressora')} Imprimir conferência</button>
+        ${umDia && fechado ? `<button class="btn btn-ghost" id="fc_imprimir_fech" type="button">${ic('impressora')} Imprimir via do fechamento</button>` : ''}
         ${umDia && fechado ? `<button class="btn btn-danger" id="fc_reabrir" type="button">${gestao ? 'Reabrir caixa' : 'Reabrir caixa (senha da gerência)'}</button>` : ''}
         ${umDia && !fechado && tudoOk ? `<button class="btn btn-accent" id="fc_confirmar" type="button">Fechar caixa do dia</button>` : ''}
       </div>`);
     document.getElementById('modalBox').classList.add('largo'); ativarDicasPainel();
     document.getElementById('fc_fechar').addEventListener('click', closeModal);
+    document.getElementById('fc_imprimir').addEventListener('click', ()=> imprimirRelatorioCaixa(de, ate, lojaId, 'conferencia'));
+    { const bf = document.getElementById('fc_imprimir_fech'); if(bf) bf.addEventListener('click', ()=> imprimirRelatorioCaixa(de, ate, lojaId, 'fechamento')); }
     document.querySelectorAll('[data-fc]').forEach(b=> b.addEventListener('click', ()=>{ const [g,i]=b.dataset.fc.split(':'); const x=(g==='e'?emitir:g==='o'?faltaEntrada:faltaNum)[+i]; (g==='o'?abrirNotaEntrada:abrirNotaEmitida)(x, ()=> abrirFecharCaixa(de, ate, lojaId)); }));
     const bc = document.getElementById('fc_confirmar');
     if(bc) bc.addEventListener('click', async ()=>{
       bc.disabled = true;
       const r = await gravarFechamento(lojaId, de, { fechado:true, por:currentUser.nome, em:Date.now(), historico:[...((fech&&fech.historico)||[])] });
       if(r && r.error){ bc.disabled = false; showToast('Não consegui fechar o caixa: '+r.error); return; }
-      showToast('Caixa do dia fechado.'); abrirFecharCaixa(de, ate, lojaId);
+      showToast('Caixa do dia fechado.');
+      imprimirRelatorioCaixa(de, ate, lojaId, 'fechamento');   // sai sozinha a via do fechamento (totais por forma e total da loja)
+      abrirFecharCaixa(de, ate, lojaId);
       enviarResumoCaixa(lojaId, de);
     });
     const br = document.getElementById('fc_reabrir');
