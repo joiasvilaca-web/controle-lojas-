@@ -2829,8 +2829,38 @@ function initScannerGlobal(){
   if(window.Leitor) Leitor.ligar(scanEl, (cod)=>{ scanEl.value = ''; buf = ''; clearTimeout(bufTimer); navegarParaCodigoVia(String(cod).trim().toUpperCase()); }, { espera: 120 });
 }
 
+/* 08/11: código que o CLIENTE mostra (6 dígitos: rotativo ou de terceiro) também abre a via na busca.
+ * Devolve true se tratou (abriu a via ou mostrou a lista), false se não achou nada (aí a busca segue o caminho normal). */
+async function abrirViaPeloCodigoCliente(codigo){
+  const cod = String(codigo||'').replace(/\s+/g,'');
+  if(!/^\d{6}$/.test(cod)) return false;
+  let r = null;
+  try{
+    const resp = await fetch(SUPABASE_URL + '/functions/v1/retirada-terceiro', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ acao:'achar', codigo:cod, senha:__gatewaySenha }) });
+    r = await resp.json();
+  }catch(e){ return false; }
+  const lista = (r && r.achados) || [];
+  if(!lista.length) return false;
+  const MAPA = { os:'pedido', venda:'venda', orc:'orcamento' };
+  const ROT = { os:'Pedido', venda:'Venda', orc:'Orçamento', res:'Reserva' };
+  const abrir = (a)=>{
+    if(!MAPA[a.tipo]){ showToast('Reserva '+(a.via||'')+' — '+(a.cliente||'')+': abra pelo cartão RESERVAR.'); return; }
+    abrirRegistroEncontrado(MAPA[a.tipo], { id:a.id, codigoVia:a.via });
+  };
+  if(lista.length===1){ closeModal(); abrir(lista[0]); return true; }
+  window.__achadosCodigo = lista;
+  const esc = (t)=> String(t==null?'':t).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  openModal('<h3>Mais de uma via com este código</h3><p class="muted">O código é só de 6 dígitos e coincidiu com mais de uma via. Escolha a do cliente:</p>'
+    + lista.map((a,i)=>'<button type="button" class="btn btn-ghost" style="display:block;width:100%;text-align:left;margin:6px 0;" data-achado="'+i+'">'+esc(ROT[a.tipo]||a.tipo)+' '+esc(a.via||'')+' — '+esc(a.cliente||'sem nome')+(a.metodo==='terceiro'?' (retirada por '+esc(a.portador||'terceiro')+')':'')+'</button>').join('')
+    + '<div class="modal-actions"><button class="btn btn-ghost" id="achadoFechar" data-fechar>Fechar</button></div>');
+  document.getElementById('achadoFechar').addEventListener('click', closeModal);
+  document.querySelectorAll('[data-achado]').forEach(b=> b.addEventListener('click', ()=>{ const a=window.__achadosCodigo[Number(b.dataset.achado)]; closeModal(); abrir(a); }));
+  return true;
+}
+
 async function navegarParaCodigoVia(codigo){
   if(!codigo || !currentUser) return;
+  if(await abrirViaPeloCodigoCliente(codigo)) return;
   // 04/11: a Oficina lê a via de QUALQUER loja direto no card OFICINA (antes a busca filtrava pela loja do usuário e JV/MC "não liam")
   if(currentUser.nivel==='oficina'){ abrirRegistroEncontrado('pedido', { codigoVia: codigo }); return; }
   // Pede ao módulo ativo que salve rascunho antes de navegar
@@ -3135,6 +3165,8 @@ function abrirLeitorCodigo(){
     if(!codigo) return;
     const res = document.getElementById('lc_resultado');
     if(res) res.innerHTML = '<p class="muted">Buscando\u2026</p>';
+    // 0) c\u00f3digo de 6 d\u00edgitos que o cliente mostra (rotativo ou de terceiro) abre a via dele
+    if(/^\d{6}$/.test(codigo.replace(/\s+/g,''))){ if(await abrirViaPeloCodigoCliente(codigo)) return; }
     // 1) parece c\u00f3digo de via (MC1V, JN-34\u2026)? tenta a via primeiro
     if(/^[A-Z]{1,3}[-\s]?\d+[A-Z]?$/.test(codigo)){
       const r = await gatewayCall({ op:'buscarPorCodigoVia', params:{ codigo } });

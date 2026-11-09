@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 /**
- * Retirada da via na loja (v4, 09/11).
+ * Retirada da via na loja (v4, 09/11; 08/11: ação `achar` = busca a via pelo código do cliente).
  * - CÓDIGO ROTATIVO (6 dígitos, muda a cada 60 s): o cliente vê no link da via; a loja só entrega com ele.
  *   Não é gravado: sai de um HMAC (chave do servidor + via + janela de tempo). Vale a janela atual e a anterior.
  * - TERCEIRO: o cliente informa o NOME de quem vai buscar e gera um código (4 caracteres) que vale 24 HORAS (ou até o cliente cancelar); depois gera outro.
@@ -29,8 +29,9 @@ const TRAVA_MIN = 10;          // minutos de trava
 const VALIDADE_TERCEIRO_MS = 24 * 60 * 60 * 1000;   // o código de terceiro vale 24 horas; depois o cliente gera outro
 const TABELA: Record<string, string> = { os: "ordens_servico", venda: "vendas_pdv", orc: "orcamentos", res: "reservas" };
 
+let HMAC_KEY: CryptoKey | null = null;
 async function hmac(txt: string) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SERVICE_ROLE_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const key = HMAC_KEY || (HMAC_KEY = await crypto.subtle.importKey("raw", new TextEncoder().encode(SERVICE_ROLE_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]));
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(txt));
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -206,6 +207,45 @@ Deno.serve(async (req) => {
         await admin.from("avaliacoes_cliente").update({ lida: true, resposta: { texto, por: String(u.nome || ""), em: new Date().toISOString(), original: String(b.original || "").slice(0, 1500) } }).eq("id", avId);
         return json({ ok: true });
       }
+    }
+    // ----- ACHAR a via pelo CÓDIGO que o cliente mostra (rotativo de 60 s ou de terceiro) — só equipe (08/11) -----
+    if (acao === "achar") {
+      const u = await staff(String(b.senha || ""));
+      if (!u) return json({ error: "Acesso não autorizado." });
+      const cod = norm(b.codigo);
+      if (!/^\d{6}$/.test(cod)) return json({ ok: true, achados: [] });
+      const nv = nivelDe(u);
+      const todas = nv === "diretoria" || nv === "oficina";
+      const lojas = new Set<string>([...(Array.isArray(u.lojas) ? u.lojas : []).map(String), ...(u.lojaExtra && u.lojaExtra.id ? [String(u.lojaExtra.id)] : [])]);
+      const pode = (l: unknown) => todas || lojas.has(String(l || ""));
+      const j = janelaAtual();
+      const achados: any[] = [];
+      const vistos = new Set<string>();
+      const ENCERR = ["entregue", "cancelado", "cancelada", "rascunho"];
+      for (const t of ["os", "venda", "orc", "res"]) {
+        for (let from = 0; from < 20000; from += 1000) {
+          let q = admin.from(TABELA[t]).select("id, cliente:payload->>cliente, via:payload->>codigoVia, via2:payload->>via, loja:payload->>lojaId, status:payload->>status").range(from, from + 999);
+          if (t !== "os") q = q.gte("updated_at", new Date(Date.now() - 60 * 86400000).toISOString());
+          const { data } = await q;
+          for (const r of (data || [])) {
+            if (ENCERR.includes(String(r.status || "")) || !pode(r.loja)) continue;
+            if (cod === await codigoRotativo(t, r.id, j) || cod === await codigoRotativo(t, r.id, j - 1)) {
+              vistos.add(t + ":" + r.id);
+              achados.push({ tipo: t, id: r.id, cliente: r.cliente || "", via: r.via || r.via2 || "", loja: r.loja || "", metodo: "rotativo" });
+            }
+          }
+          if (!data || data.length < 1000) break;
+        }
+      }
+      const { data: regs } = await admin.from("retiradas_terceiro").select("tipo,ref_id,gerado_em,portador_nome").eq("status", "ativo").eq("code_hash", "derivado").gte("gerado_em", new Date(Date.now() - VALIDADE_TERCEIRO_MS).toISOString());
+      for (const r of (regs || [])) {
+        if (vistos.has(r.tipo + ":" + r.ref_id) || !TABELA[r.tipo]) continue;
+        if (cod !== await codigoTerceiro(r.tipo, r.ref_id, new Date(r.gerado_em).getTime())) continue;
+        const v = await lerVia(r.tipo, r.ref_id);
+        if (!v || ENCERR.includes(String(v.status || "")) || !pode(v.lojaId)) continue;
+        achados.push({ tipo: r.tipo, id: r.ref_id, cliente: v.cliente || "", via: v.codigoVia || v.via || "", loja: v.lojaId || "", metodo: "terceiro", portador: r.portador_nome || "" });
+      }
+      return json({ ok: true, achados });
     }
     if (!TABELA[tipo] || !id) return json({ error: "Via inválida." });
     const via = await lerVia(tipo, id);
