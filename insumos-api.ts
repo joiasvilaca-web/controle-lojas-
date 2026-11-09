@@ -1,4 +1,4 @@
-// insumos-api v11 (06/11: Envio Felipe) — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// insumos-api v12 (09/11: Envio Felipe com escolha das lojas, inclui Reforma Joias; 06/11: Envio Felipe) — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
 // v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
 // v5: quebra padrão (insumos._config.quebraPadraoPct, padrão 5%) e contagem real da Oficina (insumos_contagens):
@@ -247,14 +247,18 @@ Deno.serve(async (req: Request) => {
       const ins = await insumoExiste(texto(p.insumoId, 60));
       if (!ins) return json({ error: "Insumo não encontrado." }, 400);
       if (tipo === "ENVIO_FELIPE") {
-        // 06/11: a quantidade entra no crédito de Vilaça (loja_mc), JV (loja_jb) e Jardim Norte (loja_jn), dividida igualmente
+        // 06/11: a quantidade entra no crédito de Vilaça (loja_mc), JV (loja_jb) e Jardim Norte (loja_jn), dividida igualmente.
+        // 09/11: a Oficina pode marcar também a Reforma Joias (loja_rj): `p.lojas` = lojas que recebem (padrão: as 3 de sempre)
         let qt = num(p.quantidade);
         if (!(qt > 0)) return json({ error: "Informe uma quantidade maior que zero." }, 400);
         qt = Math.round(qt * 10000) / 10000;
-        const destinos = ["loja_mc", "loja_jb", "loja_jn"].filter(lojaValida);
-        if (destinos.length < 3) return json({ error: "Não achei as 3 lojas (Vilaça, JV e Jardim Norte) no cadastro." }, 400);
-        const cota = Math.floor((qt / 3) * 10000) / 10000;
-        const resto = Math.round((qt - cota * 3) * 10000) / 10000;   // sobra de arredondamento vai para a 1ª loja
+        const PERMITIDAS = ["loja_mc", "loja_jb", "loja_jn", "loja_rj"];
+        const pedidas: string[] = Array.isArray(p.lojas) && p.lojas.length ? p.lojas.map((x: unknown) => String(x)).filter((x: string) => PERMITIDAS.includes(x)) : ["loja_mc", "loja_jb", "loja_jn"];
+        const destinos = Array.from(new Set(pedidas)).filter(lojaValida);
+        if (!destinos.length) return json({ error: "Escolha pelo menos uma loja para receber o envio." }, 400);
+        const nDest = destinos.length;
+        const cota = Math.floor((qt / nDest) * 10000) / 10000;
+        const resto = Math.round((qt - cota * nDest) * 10000) / 10000;   // sobra de arredondamento vai para a 1ª loja
         const par = crypto.randomUUID();
         const localF = p.local === "loja" ? "loja" : "oficina";
         const r = await inserir(destinos.map((lj, i) => ({ insumo_id: ins.id, loja_id: lj, local: localF, tipo, quantidade: i === 0 ? Math.round((cota + resto) * 10000) / 10000 : cota,
