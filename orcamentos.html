@@ -714,39 +714,69 @@ function reiniciarAutoAposMudancaManual(o){
   o.autoMensagensEnviadas = 0;
   o.editadoManualmente = false;
 }
-/* Acompanhamento automático (local a este módulo — não escreve nos status configuráveis
- * de Cadastro, só sobrepõe o rótulo/cor enquanto o orçamento está em aberto):
- *  - Aberto → no prazo 1 (padrão 3 dias) fica vermelho, precisa mandar mensagem.
- *  - Ao enviar, vira "Ação de fixação" (verde) até o prazo 2 (padrão 6 dias), aí fica vermelho de novo.
- *  - Ao enviar, vira "Prorrogado à ação" (verde) até o prazo 3 (padrão 9 dias), vermelho de novo.
- *  - Ao enviar essa 3ª mensagem, fica verde e para por aí — não pede mais mensagem.
- * O contador (quantas mensagens automáticas já foram enviadas) fica em o.autoMensagensEnviadas. */
-function estagioAutoOrcamento(o){
-  if(o.rascunho) return null;
-  const info = statusInfoDe(o.status);
-  if(info && info.encerra) return null; // aprovado/recusado (manual ou automático): desativa
-  const prazos = prazosAutoMsg();
-  const dias = diasDesdeCriacao(o);
-  const N = o.autoMensagensEnviadas || 0;
-  const limites = [prazos.t1, prazos.t2, prazos.t3];
-  const nomes = ['Aberto', 'Ação de fixação', 'Prorrogado à ação'];
-  const nome = nomes[Math.min(N,2)];
-  const limiteAtual = N<3 ? limites[N] : null;
-  const precisaEnviar = limiteAtual!=null && dias>=limiteAtual;
-  const enviadoRecente = N>0 && !precisaEnviar;
-  const cor = precisaEnviar ? 'vermelho' : (enviadoRecente ? 'verde' : 'neutro');
-  return { nome, dias, N, limiteAtual, precisaEnviar, enviadoRecente, cor, prazoFinal: prazos.tFinal };
+/* ===== AÇÕES DE ORÇAMENTO (fixação) — 09/11 =====
+ * config.orcamentoAcoes = { auto, desde, passos:[{id,nome,dias,statusId,mensagem}], final:{ativo,dias,statusId} }
+ * Cada orçamento aberto passa pelos passos em ordem (o.autoMensagensEnviadas = quantos já foram). O passo N vence quando
+ * passaram `dias` desde a criação (ou desde a última mudança manual de status). Aparece no bloco do passo; ao enviar a ação
+ * (pelo bloco ou sozinho pelo servidor, função acompanhamento-auto) ele sai da lista e só volta no bloco do passo seguinte. */
+const RODAPE_WA = 'Caso precise falar conosco, clique no link:\nhttps://wa.me/5532988307617';
+const MSG_ACAO_PADRAO = [
+  'Olá, {cliente}! 😊\n\nAqui é da {loja}. Passando para saber se ficou alguma dúvida sobre o seu orçamento de {valor}. Se quiser, ajustamos o que for preciso para você fechar do jeito ideal.\n\nO orçamento vale até {validade}.\n\n'+RODAPE_WA,
+  'Oi, {cliente}! Tudo bem? 💛\n\nSeu orçamento de {valor} na {loja} continua reservado para você. Podemos seguir com o serviço? Se precisar de mais prazo ou de alguma condição, é só nos dizer.\n\n'+RODAPE_WA,
+  'Olá, {cliente}! Esta é a nossa última lembrança do seu orçamento de {valor} na {loja}. Se ainda tiver interesse, será um prazer atender você — é só responder pelo link abaixo.\n\n'+RODAPE_WA,
+];
+function passosOrc(){
+  const a = (config && config.orcamentoAcoes) || {};
+  if(Array.isArray(a.passos) && a.passos.length) return a.passos;
+  const abertos = statusList().filter(x=>!x.encerra);
+  const t = prazosAutoMsg();
+  return [
+    { id:'p1', nome:(abertos[1]||{}).nome||'Ação de fixação', dias:Number(t.t1)||3, statusId:(abertos[1]||{}).id||'', mensagem:'' },
+    { id:'p2', nome:(abertos[2]||{}).nome||'Prorrogado à ação', dias:Number(t.t2)||6, statusId:(abertos[2]||{}).id||'', mensagem:'' },
+    { id:'p3', nome:'Última ação', dias:Number(t.t3)||9, statusId:'', mensagem:'' },
+  ];
 }
-/* Se passou do prazo final (padrão 15 dias) sem edição/aprovação manual, encerra sozinho
- * como Recusado — esse é um status real (já existe na configuração), então grava de verdade. */
+function finalOrc(){
+  const a = (config && config.orcamentoAcoes) || {};
+  return a.final || { ativo:true, dias:Number(prazosAutoMsg().tFinal)||15, statusId:'recusado' };
+}
+function acoesAutoLigado(){ const a = config && config.orcamentoAcoes; return !!(a && a.auto); }
+function textoPassoOrc(p, idx){
+  if(p.mensagem && p.mensagem.trim()) return p.mensagem;
+  const st = statusList().find(x=>x.id===p.statusId);
+  if(st && st.mensagemWhatsapp && st.mensagemWhatsapp.trim()) return st.mensagemWhatsapp;
+  return MSG_ACAO_PADRAO[Math.min(idx, MSG_ACAO_PADRAO.length-1)];
+}
+function nomePrimeiro(t){ const p = String(t||'').trim().split(/\s+/)[0]||''; return p ? p.charAt(0).toUpperCase()+p.slice(1).toLowerCase() : 'cliente'; }
+function preencherMsgOrc(txt, o){
+  const lj = (config.lojas||[]).find(l=>l.id===o.lojaId);
+  const nomeLoja = (lj && (lj.nomePublico||lj.nomeFantasia||lj.nome)) || o.loja || 'Vilaça Joias';
+  return String(txt||'').replaceAll('{cliente}', nomePrimeiro(o.cliente)).replaceAll('{loja}', nomeLoja)
+    .replaceAll('{vendedora}', o.vendedora||'').replaceAll('{valor}', fmtMoeda(o.valorTotal)).replaceAll('{validade}', fmtDate(o.validade))
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
+/** Em que passo está o orçamento e se já venceu. null = fora do fluxo (rascunho, convertido ou encerrado). */
+function estagioAutoOrcamento(o){
+  if(o.rascunho || o.convertidoEm) return null;
+  const info = statusInfoDe(o.status);
+  if(info && info.encerra) return null;
+  const passos = passosOrc();
+  const N = o.autoMensagensEnviadas || 0;
+  const dias = diasDesdeCriacao(o);
+  if(N >= passos.length) return { passo:null, idx:N, N, dias, devido:false, atraso:0, concluido:true };
+  const lim = Number(passos[N].dias)||0;
+  return { passo:passos[N], idx:N, N, dias, limite:lim, devido: dias>=lim, atraso: Math.max(0, dias-lim), concluido:false };
+}
+/* Passou do prazo final (padrão 15 dias) sem edição/aprovação manual: encerra sozinho (Recusado = não convertido). */
 function aplicarPrazoFinalAutoSeNecessario(o){
-  if(o.rascunho) return false;
+  if(o.rascunho || o.convertidoEm) return false;
   const info = statusInfoDe(o.status);
   if(info && info.encerra) return false;
   if(o.editadoManualmente) return false;
-  const prazos = prazosAutoMsg();
-  if(diasDesdeCriacao(o) >= prazos.tFinal){
-    o.status = 'recusado';
+  const fin = finalOrc();
+  if(fin.ativo && diasDesdeCriacao(o) >= Number(fin.dias)){
+    o.status = fin.statusId || 'recusado';
+    o.statusAtualizadoEm = new Date().toISOString();
     orcamentoSalvar(o).catch(()=>{});
     return true;
   }
@@ -845,11 +875,26 @@ async function produtosEstoqueGet(){
     return linhas.map(row=>row.payload).filter(Boolean);
   }catch(e){ return []; }
 }
+/* Quem vê o quê (09/11): vendedora só os orçamentos dela; gerente os das lojas dele (+ loja extra liberada); diretoria todos. */
+function semAcentoOrc(t){ return String(t||'').normalize('NFD').replace(/\p{M}/gu,'').toLowerCase().trim(); }
+function filtrarVisiveisParaMim(lista){
+  const u = currentUser; if(!u || u.nivel==='diretoria') return lista;
+  if(u.nivel==='vendedora'){
+    const f = (config.funcionarios||[]).find(x=>u.funcionarioId && x.id===u.funcionarioId);
+    const nomes = [u.nome, u.apelido, f && f.nome, f && f.apelido].map(semAcentoOrc).filter(Boolean);
+    return lista.filter(o=> nomes.includes(semAcentoOrc(o.vendedora)));
+  }
+  if(u.nivel==='gerente'){
+    const lojas = (u.lojas||[]).slice(); if(u.lojaExtra && u.lojaExtra.id) lojas.push(u.lojaExtra.id);
+    return lojas.length ? lista.filter(o=> !o.lojaId || lojas.includes(o.lojaId)) : lista;
+  }
+  return lista;
+}
 async function loadAll(){
   config = await configGetUnificada();
   if(!config){ config = { lojas:[], formasPagamento:[], joiasProdutos:[], metais:[] }; }
   const [orcsR, prodsR] = await Promise.all([orcamentosGet(), produtosEstoqueGet()]);
-  orcamentos = orcsR; produtosEstoque = aplicarPrecoPedras(prodsR);
+  orcamentos = filtrarVisiveisParaMim(orcsR); produtosEstoque = aplicarPrecoPedras(prodsR);
   // Clientes NÃO são mais pré-carregados aqui (eram 22 mil+ registros, deixava o módulo
   // lento pra abrir). A busca de cliente agora consulta o banco sob demanda, ao digitar.
 }
@@ -1956,113 +2001,17 @@ function recalcularValorAjustado(it){
 /* ============================================================
    LISTA DE ORÇAMENTOS
    ============================================================ */
-/* ============================================================
-   FOLLOW-UP (veio do antigo Marketing › Orçamentos)
-   Só orçamentos em aberto (status que não encerram, os 3 primeiros). Regra de atraso:
-   2º status aberto parado há 2+ dias, 3º status aberto há 7+ dias.
-   ============================================================ */
-function followupStatusAbertos(){ return statusList().filter(x=>!x.encerra).slice(0,3); }
-function followupDias(o){
-  const ref = o.statusAtualizadoEm || o.criadoEm || o.data;
-  if(!ref) return 0;
-  return Math.max(0, Math.floor((Date.now() - new Date(ref).getTime()) / 86400000));
-}
-function followupLimite(o){
-  const pos = followupStatusAbertos().findIndex(s=>s.id===o.status);
-  return pos===1 ? 2 : pos>=2 ? 7 : null;
-}
-function followupAtrasado(o){ const lim = followupLimite(o); return lim!==null && followupDias(o) >= lim; }
-function followupAbertos(){
-  const ids = new Set(followupStatusAbertos().map(s=>s.id));
-  return (orcamentos||[]).filter(o=> ids.has(o.status));
-}
-function followupAtrasados(){ return followupAbertos().filter(followupAtrasado); }
 function nomeLojaOrc(o){
   const l = (config.lojas||[]).find(x=>x.id===o.lojaId);
   return l ? l.nome : (o.loja || '—');
 }
-function renderFollowup(main){
-  const abertos = followupStatusAbertos();
-  const atrasados = followupAtrasados();
-  main.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1 class="page-title">Follow-up</h1>
-        <p class="page-sub">Orçamentos em aberto e quem precisa de contato. Fica atrasado quando está em ${escapeHtml((abertos[1]||{}).nome||'2º status')} há 2 dias ou mais, ou em ${escapeHtml((abertos[2]||{}).nome||'3º status')} há 7 dias ou mais.</p>
-      </div>
-    </div>
-    ${atrasados.length>0
-      ? `<div class="aviso aviso-perigo" role="status">${ic('relogio',18)}<div class="aviso-corpo"><p class="aviso-titulo">${atrasados.length===1?'1 orçamento com contato atrasado':atrasados.length+' orçamentos com contato atrasado'}</p><p class="aviso-texto">Eles aparecem primeiro na lista, marcados como Atrasado. Chame o cliente pelo WhatsApp.</p></div></div>`
-      : `<div class="aviso aviso-ok" role="status">${ic('check',18)}<div class="aviso-corpo"><p class="aviso-titulo">Nenhum contato atrasado</p><p class="aviso-texto">Todos os orçamentos em aberto estão dentro do prazo.</p></div></div>`}
-    <div class="filters" role="search">
-      <div class="busca-campo">${ic('busca')}<input type="text" id="fuBusca" placeholder="Buscar cliente ou vendedora" aria-label="Buscar cliente ou vendedora"></div>
-      <select id="fuLoja" aria-label="Loja"><option value="">Todas as lojas</option>${(config.lojas||[]).map(l=>`<option value="${escapeHtml(l.id)}">${escapeHtml(l.nome)}</option>`).join('')}</select>
-      <select id="fuStatus" aria-label="Status"><option value="">Todos os status abertos</option>${abertos.map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.nome)}</option>`).join('')}</select>
-      <label class="check-filtro"><input type="checkbox" id="fuSoAtrasados"> Só atrasados</label>
-    </div>
-    <div class="card card-tabela"><div id="fuTabela"></div></div>
-  `;
-  function atualizar(){
-    const q = (document.getElementById('fuBusca').value||'').trim();
-    const loja = document.getElementById('fuLoja').value;
-    const st = document.getElementById('fuStatus').value;
-    const so = document.getElementById('fuSoAtrasados').checked;
-    let lista = followupAbertos().filter(o=>{
-      if(q && !Busca.testa([o.cliente,o.vendedora,o.codigoVia].join(' '), q)) return false;
-      if(loja && o.lojaId!==loja) return false;
-      if(st && o.status!==st) return false;
-      if(so && !followupAtrasado(o)) return false;
-      return true;
-    });
-    lista.sort((a,b)=> (followupAtrasado(b)-followupAtrasado(a)) || (followupDias(b)-followupDias(a)));
-    if(q) lista = Busca.filtrar(lista, q, o=>[o.cliente,o.vendedora,o.codigoVia]);   // mais parecido com o digitado primeiro
-    const el = document.getElementById('fuTabela');
-    if(lista.length===0){
-      el.innerHTML = followupAbertos().length===0
-        ? `<div class="estado">${ic('checkDuplo',28)}<b>Nenhum orçamento em aberto</b>Quando houver orçamentos esperando resposta do cliente, eles aparecem aqui.</div>`
-        : `<div class="estado">${ic('filtro',28)}<b>Nenhum orçamento com esses filtros</b>Mude a loja, o status ou apague a busca para ver os demais.</div>`;
-      return;
-    }
-    el.innerHTML = `<div class="tabela-rolagem"><table class="tabela-cartoes"><thead><tr>
-        <th>Cliente</th><th>Vendedora</th><th>Loja</th>
-        <th class="num">Valor</th><th>Status</th><th>Parado há</th><th class="num">Ações</th></tr></thead><tbody>
-      ${lista.map(o=>{
-        const atras = followupAtrasado(o);
-        const d = followupDias(o);
-        const diasTxt = d===1 ? '1 dia' : d+' dias';
-        return `<tr class="${atras?'linha-atrasada':''}">
-          <td class="td-cliente" data-label="Cliente"><b>${escapeHtml(o.cliente||'—')}</b>${o.codigoVia?`<span class="sub">${escapeHtml(o.codigoVia)}</span>`:''}</td>
-          <td class="td-meta" data-label="Vendedora">${escapeHtml(o.vendedora||'—')}</td>
-          <td class="td-meta" data-label="Loja">${escapeHtml(nomeLojaOrc(o))}</td>
-          <td class="num td-valor" data-label="Valor">${fmtMoeda(o.valorTotal)}</td>
-          <td class="td-status" data-label="Status"><span class="badge badge-pendente">${escapeHtml(statusInfoDe(o.status).nome)}</span></td>
-          <td class="nowrap td-meta" data-label="Parado há">${atras?`<span class="badge badge-vencido">${ic('relogio',12)} Atrasado · ${diasTxt}</span>`:diasTxt}</td>
-          <td class="num td-acoes"><div class="acoes-linha">
-            ${o.telefone?`<button type="button" class="btn-icone wa" data-fuwa="${escapeHtml(o.id)}" title="Chamar no WhatsApp" aria-label="Chamar no WhatsApp">${waIconSvg(17)}</button>`:''}
-            ${o.email?`<button type="button" class="btn-icone" data-fumail="${escapeHtml(o.id)}" title="Enviar e-mail" aria-label="Enviar e-mail">${ic('email')}</button>`:''}
-            <button type="button" class="btn btn-ghost btn-sm" data-fuabrir="${escapeHtml(o.id)}">${ic('olho',14)} Abrir</button>
-          </div></td>
-        </tr>`;
-      }).join('')}
-    </tbody></table></div>`;
-    el.querySelectorAll('[data-fuabrir]').forEach(b=> b.addEventListener('click', ()=>{ const o = orcamentos.find(x=>x.id===b.dataset.fuabrir); if(o) abrirDetalheOrcamento(o); }));
-    el.querySelectorAll('[data-fuwa]').forEach(b=> b.addEventListener('click', ()=> enviarWhatsAppOrcId(b.dataset.fuwa)));
-    el.querySelectorAll('[data-fumail]').forEach(b=> b.addEventListener('click', ()=> enviarEmailOrcId(b.dataset.fumail)));
-  }
-  ['fuBusca','fuLoja','fuStatus','fuSoAtrasados'].forEach(id=>{
-    const e = document.getElementById(id);
-    e.addEventListener(e.tagName==='INPUT' && e.type==='text' ? 'input' : 'change', atualizar);
-  });
-  atualizar();
-}
-
-let filtrosOrc = { busca:'', loja:null, status:'', vendedora:'', hoje:true, de:'', ate:'' };   // lembra os filtros ao mudar status/voltar à lista
+let filtrosOrc = { busca:'', loja:null, status:'', vendedora:'', hoje:true, de:'', ate:'', conv:false };   // lembra os filtros ao mudar status/voltar à lista
 function restringirLoja(){ return !!(currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='oficina') && window.__lojaAtual && window.__lojaAtual.id); }
 function renderLista(main){
   const avisos = orcamentosParaAvisar();
-  const abertos5dias = orcamentosAbertosMaisDe5Dias();
-  const porVendedora = agruparPorVendedora(abertos5dias);
-  const nAv = avisos.length, n5 = abertos5dias.length;
+  const atrasadasAcao = orcamentos.map(o=>({ o, e: estagioAutoOrcamento(o) })).filter(x=>x.e && x.e.devido && x.e.atraso>=1);   // passou do dia de enviar a ação
+  const nAv = avisos.length, n5 = atrasadasAcao.length;
+  const porPassoAtraso = {}; atrasadasAcao.forEach(x=>{ const k = x.e.passo.nome; porPassoAtraso[k] = (porPassoAtraso[k]||0)+1; });
   main.innerHTML = `
     <div class="page-head">
       <div>
@@ -2070,7 +2019,7 @@ function renderLista(main){
         <p class="page-sub">Acompanhe cada orçamento, chame o cliente no WhatsApp e converta em venda ou pedido. Clique no status para mudar.</p>
       </div>
       <div class="head-acoes">
-        <button type="button" class="btn btn-ghost" id="btnConfigMsgAuto" title="Prazos das mensagens de acompanhamento e validade padrão">${ic('engrenagem')} Prazos das mensagens</button>
+        ${ehGestaoLoja() ? `<button type="button" class="btn btn-ghost" id="btnConfigMsgAuto" title="Mensagens, prazos e envio automático das ações de acompanhamento">${ic('engrenagem')} Ações automáticas</button>` : ''}
         ${podeCriarOrcamento() ? `<button type="button" class="btn btn-accent" id="btnNovoOrcamento">${ic('mais')} Novo orçamento</button>` : ''}
       </div>
     </div>
@@ -2079,11 +2028,9 @@ function renderLista(main){
     ${n5>0 ? `
       <div class="aviso aviso-perigo" role="status">${ic('relogio',18)}
         <div class="aviso-corpo">
-          <p class="aviso-titulo">${n5===1?'1 orçamento aberto há mais de 5 dias sem resposta':n5+' orçamentos abertos há mais de 5 dias sem resposta'}</p>
-          <p class="aviso-texto">Clique numa vendedora para ver só os orçamentos dela.</p>
-          <div class="chips-vendedora">
-            ${Object.entries(porVendedora).map(([nome,lista])=>`<button type="button" class="chip-vendedora" data-filtrovend="${escapeHtml(nome)}">${escapeHtml(nome)} <span class="n">${lista.length}</span></button>`).join('')}
-          </div>
+          <p class="aviso-titulo">${n5===1?'1 ação de acompanhamento passou do dia de enviar':n5+' ações de acompanhamento passaram do dia de enviar'}</p>
+          <p class="aviso-texto">${Object.entries(porPassoAtraso).map(([k,n])=>escapeHtml(k)+': '+n).join(' · ')}. ${acoesAutoLigado() ? 'O envio automático está ligado: confira se o WhatsApp da loja está conectado ou envie agora pelos blocos abaixo.' : 'Envie agora pelos blocos abaixo (mude o status do orçamento).'}</p>
+          <div class="chips-vendedora"><button type="button" class="chip-vendedora" id="btnIrBlocos">Ver os blocos de ações</button></div>
         </div>
       </div>
     ` : ''}
@@ -2102,9 +2049,12 @@ function renderLista(main){
       <label class="check-filtro" title="Período em que o orçamento foi gerado">De <input type="date" id="fDe" value="${filtrosOrc.de}" aria-label="Gerados a partir de"></label>
       <label class="check-filtro">até <input type="date" id="fAte" value="${filtrosOrc.ate}" aria-label="Gerados até"></label>
       <label class="check-filtro"><input type="checkbox" id="fHoje" ${filtrosOrc.hoje?'checked':''}> Só gerados hoje</label>
+      <label class="check-filtro" title="Orçamentos já convertidos em venda ou pedido saem da lista (continuam nas estatísticas)"><input type="checkbox" id="fConv" ${filtrosOrc.conv?'checked':''}> Mostrar convertidos</label>
       <button type="button" class="btn btn-ghost btn-sm" id="btnLimparFiltrosOrc">Limpar filtros</button>
       <span class="contagem" id="contagemOrc" aria-live="polite"></span>
     </div>
+    <div id="statsOrc"></div>
+    <div id="blocosAcoes"></div>
     <div class="card card-tabela">
       <div class="tabela-rolagem">
       <table id="tabelaOrc" class="tabela-cartoes">
@@ -2119,17 +2069,8 @@ function renderLista(main){
   if(btnNovo){
     btnNovo.addEventListener('click', ()=>{ orcamentoEmEdicao = null; currentTab = 'novo'; renderTabs(); renderView(); });
   }
-  document.getElementById('btnConfigMsgAuto').addEventListener('click', abrirConfigMsgAuto);
-  document.querySelectorAll('[data-filtrovend]').forEach(b=>{
-    b.addEventListener('click', ()=>{
-      document.getElementById('fVendedora').value = b.dataset.filtrovend;
-      document.getElementById('fStatus').value = '';
-      document.getElementById('fHoje').checked = false;
-      document.getElementById('fDe').value = ''; document.getElementById('fAte').value = '';
-      draw();
-      document.getElementById('tabelaOrc').scrollIntoView({ behavior:'smooth', block:'center' });
-    });
-  });
+  { const bc = document.getElementById('btnConfigMsgAuto'); if(bc) bc.addEventListener('click', abrirConfigAcoes); }
+  { const bi = document.getElementById('btnIrBlocos'); if(bi) bi.addEventListener('click', ()=> document.getElementById('blocosAcoes').scrollIntoView({ behavior:'smooth', block:'start' })); }
   function draw(){
     const lojaFiltro = document.getElementById('fLoja').value;
     const statusFiltro = document.getElementById('fStatus').value;
@@ -2139,10 +2080,16 @@ function renderLista(main){
     // Período escolhido manda mais que "só hoje": o campo de hoje é desmarcado sozinho
     if((de||ate) && document.getElementById('fHoje').checked) document.getElementById('fHoje').checked = false;
     const soHoje = document.getElementById('fHoje').checked;
-    filtrosOrc = { busca:document.getElementById('fBusca').value, loja:lojaFiltro, status:statusFiltro, vendedora:vendedoraFiltro, hoje:soHoje, de, ate };
+    const mostrarConv = document.getElementById('fConv').checked;
+    filtrosOrc = { busca:document.getElementById('fBusca').value, loja:lojaFiltro, status:statusFiltro, vendedora:vendedoraFiltro, hoje:soHoje, de, ate, conv:mostrarConv };
+    // blocos de ações e estatísticas (não dependem de "só hoje" nem de período: o que venceu aparece sempre)
+    const passaBase = o=>{ if(lojaFiltro && o.lojaId!==lojaFiltro) return false; if(vendedoraFiltro && o.vendedora!==vendedoraFiltro) return false; if(busca && !Busca.testa([o.cliente,o.codigoVia].join(' '), busca)) return false; return true; };
+    drawBlocosAcoes(orcamentos.filter(o=> passaBase(o) && (!statusFiltro || statusFiltro==='__vencido__' || o.status===statusFiltro)));
+    drawEstatisticasOrc(orcamentos.filter(passaBase), de, ate);
     const hojeLocal = todayStr();
     const diaCriacao = o=>{ if(o.criadoEm){ const d=new Date(o.criadoEm); if(!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); } return o.data||''; };
     let lista = orcamentos.filter(o=>{
+      if(!mostrarConv && o.convertidoEm) return false;
       if(soHoje && diaCriacao(o)!==hojeLocal) return false;
       if(de || ate){ const dia = diaCriacao(o); if(!dia || (de && dia<de) || (ate && dia>ate)) return false; }
       if(lojaFiltro && o.lojaId!==lojaFiltro) return false;
@@ -2169,18 +2116,12 @@ function renderLista(main){
       const auto = estagioAutoOrcamento(o);
       let classeBadge, rotuloStatus;
       if(o.rascunho){ classeBadge = 'badge-rascunho'; rotuloStatus = 'Rascunho'; }
-      else if(auto){ classeBadge = auto.cor==='vermelho' ? 'badge-vencido' : (auto.cor==='verde' ? 'badge-aprovado' : 'badge-pendente'); rotuloStatus = auto.nome; }
+      else if(o.convertidoEm){ classeBadge = 'badge-aprovado'; rotuloStatus = info ? info.nome : o.status; }
+      else if(auto && auto.devido){ classeBadge = 'badge-vencido'; rotuloStatus = (info ? info.nome : o.status) + ' · ação vencida'; }
       else if(info && info.encerra){ classeBadge = (o.status==='recusado') ? 'badge-vencido' : 'badge-aprovado'; rotuloStatus = info.nome; }
       else { classeBadge = 'badge-pendente'; rotuloStatus = info ? info.nome : o.status; }
-      // No lugar dos ícones de WhatsApp/e-mail: aviso discreto de mensagem pendente/enviada.
-      let acaoMsgHtml;
-      if(auto && auto.precisaEnviar){
-        acaoMsgHtml = `<button type="button" class="link-msg-auto" data-enviarmsgauto="${o.id}" title="Está na hora de mandar a mensagem de acompanhamento">${ic('mensagem',13)} Enviar mensagem</button>`;
-      } else if(auto && auto.enviadoRecente){
-        acaoMsgHtml = `<span class="msg-enviada-tag" title="Mensagem já enviada nesta etapa">${ic('check',13)} Mensagem enviada</span>`;
-      } else {
-        acaoMsgHtml = `${o.telefone ? `<button type="button" class="btn-icone wa" data-orcwa="${o.id}" title="Enviar pelo WhatsApp" aria-label="Enviar pelo WhatsApp">${waIconSvg(17)}</button>` : ''}${o.email ? `<button type="button" class="btn-icone" data-orcmail="${o.id}" title="Enviar por e-mail" aria-label="Enviar por e-mail">${ic('email')}</button>` : ''}`;
-      }
+      // 09/11: o WhatsApp sai pela mudança de status (blocos de ações) ou sozinho pelo sistema; aqui fica só o e-mail.
+      const acaoMsgHtml = o.email ? `<button type="button" class="btn-icone" data-orcmail="${o.id}" title="Enviar por e-mail" aria-label="Enviar por e-mail">${ic('email')}</button>` : '';
       const vencido = estaVencido(o);
       return `<tr>
         <td class="td-cliente" data-label="Cliente"><b>${escapeHtml(o.cliente)}</b>${o.codigoVia?`<span class="sub">${escapeHtml(o.codigoVia)}</span>`:''}</td>
@@ -2210,9 +2151,6 @@ function renderLista(main){
       RetiradaTerceiro.abrir({ tipo:'orc', id:o.id, via:o.numero||o.codigoVia, cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId });
     }));
     ligarBotoesConversao(tbody);
-    tbody.querySelectorAll('[data-enviarmsgauto]').forEach(b=>{
-      b.addEventListener('click', ()=> abrirPopupEnviarMensagemAuto(b.dataset.enviarmsgauto) );
-    });
     // data-excluir foi movido para dentro do modal (botão no detalhe)
     tbody.querySelectorAll('[data-editar]').forEach(b=>{
       b.addEventListener('click', async ()=>{
@@ -2270,6 +2208,7 @@ function renderLista(main){
   document.getElementById('fVendedora').addEventListener('change', draw);
   document.getElementById('fBusca').addEventListener('input', draw);
   document.getElementById('fHoje').addEventListener('change', draw);
+  document.getElementById('fConv').addEventListener('change', draw);
 }
 
 /* Ações rápidas direto na linha da lista (mesmo padrão usado no módulo Marketing):
@@ -2283,120 +2222,209 @@ async function mudarStatusOrcRapido(orcId){
     <div class="field"><label for="novoStatusSelRapido">Novo status</label>
       <select id="novoStatusSelRapido">${statusList().map(s=>`<option value="${s.id}" ${s.id===o.status?'selected':''}>${escapeHtml(s.nome)}${s.encerra?' (encerra o orçamento)':''}</option>`).join('')}</select>
     </div>
+    ${o.telefone ? `<label class="check-filtro" style="display:flex;gap:8px;align-items:center;margin:10px 0;"><input type="checkbox" id="stEnviarMsg"> Enviar ao cliente, por WhatsApp, a mensagem deste status</label>` : ''}
     <p class="muted" style="margin:0;">Ao mudar o status, os prazos das mensagens de acompanhamento recomeçam a contar a partir de hoje.</p>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btnCancelarStatusRapido">Cancelar</button>
       <button class="btn btn-accent" id="btnSalvarStatusRapido">${ic('check')} Salvar status</button>
     </div>
   `);
+  const selSt = document.getElementById('novoStatusSelRapido'), chkMsg = document.getElementById('stEnviarMsg');
+  function ajustaChk(){ if(!chkMsg) return; const inf = statusInfoDe(selSt.value); const tem = !!(inf && inf.mensagemWhatsapp && inf.mensagemWhatsapp.trim()); chkMsg.disabled = !tem; chkMsg.checked = tem && !inf.encerra && selSt.value!==o.status; }
+  selSt.addEventListener('change', ajustaChk); ajustaChk();
   document.getElementById('btnCancelarStatusRapido').addEventListener('click', closeModal);
   document.getElementById('btnSalvarStatusRapido').addEventListener('click', async ()=>{
-    o.status = document.getElementById('novoStatusSelRapido').value;
+    const novoId = selSt.value, enviar = !!(chkMsg && chkMsg.checked), inf = statusInfoDe(novoId);
+    if(enviar){
+      if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
+      const okEnvio = window.WhatsAuto ? await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(inf.mensagemWhatsapp, o), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' }) : false;
+      if(okEnvio!==true) return;   // não mudou nada: o aviso do envio já apareceu
+    }
+    o.status = novoId;
     o.rascunho = false;
+    o.statusAtualizadoEm = new Date().toISOString();
     reiniciarAutoAposMudancaManual(o);
     const ok = await orcamentoSalvar(o);
     if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
   });
 }
-/* Mensagens do acompanhamento automático — uma pra cada "envio" (a 1ª leva de Aberto pra
- * Ação de fixação, a 2ª de Ação de fixação pra Prorrogado à ação, a 3ª fecha o ciclo). */
-const MENSAGENS_AUTO_PADRAO = [
-  'Olá {cliente}! Passando pra saber se ficou alguma dúvida sobre o seu orçamento na Vilaça Joias, no valor de {valor}. Posso ajudar a fechar?',
-  'Olá {cliente}! Seu orçamento na Vilaça Joias, no valor de {valor}, já está em aberto há um tempinho. Podemos fechar?',
-  'Olá {cliente}, seu orçamento na Vilaça Joias (valor {valor}) ainda está aberto — se ainda tiver interesse, é só chamar 💛',
-];
-/** Popup de escolha: WhatsApp ou e-mail. Desabilita o que o cliente não tiver cadastrado. */
-function abrirPopupEnviarMensagemAuto(orcId){
+/* ===== BLOCOS DE AÇÕES (09/11) ===== */
+function diasTxtOrc(n){ return n===1 ? '1 dia' : n+' dias'; }
+async function executarAcaoOrc(orcId, idx){
   const o = orcamentos.find(x=>x.id===orcId);
-  if(!o) return;
-  const auto = estagioAutoOrcamento(o);
-  if(!auto || !auto.precisaEnviar) return;
-  const temTel = !!o.telefone;
-  const temEmail = !!o.email;
-  openModal(`
-    <h3>Enviar mensagem de acompanhamento</h3>
-    <p class="modal-sub">${escapeHtml(o.cliente||'—')} · ${fmtMoeda(o.valorTotal)} · etapa ${escapeHtml(auto.nome)} (${auto.dias===1?'1 dia':auto.dias+' dias'} desde a criação)</p>
-    <p style="margin:0 0 6px; font-size:13.5px;">Escolha por onde enviar. A mensagem já vai pronta com o nome do cliente e o valor.</p>
-    <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
-      <button class="btn btn-wa" id="btnEnvioAutoWA" ${temTel?'':'disabled'}>${waIconSvg(16)} Enviar pelo WhatsApp</button>
-      <button class="btn btn-ghost" id="btnEnvioAutoEmail" ${temEmail?'':'disabled'}>${ic('email')} Enviar por e-mail</button>
-    </div>
-    ${!temTel ? `<p class="muted" style="color:var(--danger); margin-top:10px;">Sem WhatsApp no cadastro deste cliente. Edite o orçamento para incluir o telefone.</p>` : ''}
-    ${!temEmail ? `<p class="muted" style="margin-top:6px;">Sem e-mail no cadastro deste cliente.</p>` : ''}
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="btnCancelarEnvioAuto">Cancelar</button>
-    </div>
-  `);
-  document.getElementById('btnCancelarEnvioAuto').addEventListener('click', closeModal);
-  if(temTel){
-    document.getElementById('btnEnvioAutoWA').addEventListener('click', async ()=>{
-      if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
-      const template = MENSAGENS_AUTO_PADRAO[Math.min(auto.N,2)];
-      if(window.WhatsAuto){ await WhatsAuto.enviar({ telefone:o.telefone, texto:montarMensagemStatus(o, template), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orcamento', padrao:(WhatsAuto.padrao||function(){return null;})('orcamento',o), registroId:o.id, via:o.via||o.codigoVia||'' }); avancarEstagioAutoAposEnvio(o); return; }
-      showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
-    });
-  }
-  if(temEmail){
-    document.getElementById('btnEnvioAutoEmail').addEventListener('click', async ()=>{
-      if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
-      const template = MENSAGENS_AUTO_PADRAO[Math.min(auto.N,2)];
-      const corpo = montarMensagemStatus(o, template);
-      try{
-        const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
-          body: JSON.stringify({ to:o.email, subject:MENSAGEM_EMAIL_ASSUNTO_PADRAO, body:corpo, senha:__gatewaySenha })
-        });
-        if(!r.ok) throw new Error('falha no envio');
-      }catch(e){ showToast('Não foi possível enviar o e-mail. Confira a internet e tente de novo.'); return; }
-      avancarEstagioAutoAposEnvio(o);
-    });
-  }
-}
-async function avancarEstagioAutoAposEnvio(o){
-  o.autoMensagensEnviadas = (o.autoMensagensEnviadas || 0) + 1;
+  const passos = passosOrc(); const p = passos[idx];
+  if(!o || !p) return false;
+  if(!o.telefone){ showToast('Este orçamento não tem WhatsApp do cliente. Abra o orçamento e inclua o telefone.'); return false; }
+  if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return false;
+  if(!window.WhatsAuto){ showToast('Envio automático indisponível. Recarregue a página e tente de novo.'); return false; }
+  const texto = preencherMsgOrc(textoPassoOrc(p, idx), o);
+  const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' });
+  if(ok!==true) return false;
+  const agora = new Date().toISOString();
+  o.autoMensagensEnviadas = idx+1;
+  if(p.statusId && statusList().some(x=>x.id===p.statusId)){ o.status = p.statusId; o.statusAtualizadoEm = agora; }
+  (o.acoesLog = o.acoesLog || []).push({ em:agora, passo:p.id, nome:p.nome, por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
   await orcamentoSalvar(o);
-  closeModal();
   renderView();
-  showToast('Mensagem enviada.');
+  return true;
+}
+async function mudarStatusNoBloco(orcId, valor){
+  const o = orcamentos.find(x=>x.id===orcId); if(!o || !valor) return;
+  if(valor.indexOf('__acao__')===0){ await executarAcaoOrc(orcId, Number(valor.split(':')[1])); return; }
+  const info = statusInfoDe(valor);
+  if(info && info.encerra && !confirm('Marcar este orçamento como "'+info.nome+'"? Ele sai da lista de ações.')){ renderView(); return; }
+  o.status = valor; o.rascunho = false; o.statusAtualizadoEm = new Date().toISOString();
+  reiniciarAutoAposMudancaManual(o);
+  if(await orcamentoSalvar(o)){ showToast('Status atualizado.'); renderView(); }
+}
+function drawBlocosAcoes(base){
+  const el = document.getElementById('blocosAcoes'); if(!el) return;
+  const passos = passosOrc();
+  const grupos = passos.map(()=>[]);
+  base.forEach(o=>{ const e = estagioAutoOrcamento(o); if(e && e.devido && grupos[e.idx]) grupos[e.idx].push({ o, e }); });
+  grupos.forEach(l=>l.sort((a,b)=>b.e.atraso-a.e.atraso));
+  const total = grupos.reduce((a,l)=>a+l.length,0);
+  const auto = acoesAutoLigado();
+  el.innerHTML = `
+    <div class="page-head" style="margin-top:18px;"><div>
+      <h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
+      <p class="page-sub">${auto ? 'Envio automático LIGADO: o sistema manda sozinho (9h às 18h). Os blocos mostram o que ainda está esperando.' : 'Orçamentos que chegaram na data de uma ação, um bloco para cada ação. Mude o status para enviar a mensagem pelo WhatsApp — ele sai do bloco e só volta quando chegar a data da próxima ação.'}</p>
+    </div></div>
+    ${total===0 ? `<div class="aviso aviso-ok" role="status">${ic('check',18)}<div class="aviso-corpo"><p class="aviso-titulo">Nenhuma ação para enviar agora</p><p class="aviso-texto">Quando um orçamento chegar na data de uma ação, ele aparece aqui.</p></div></div>` : ''}
+    ${passos.map((p,idx)=>{
+      const lista = grupos[idx]; if(!lista.length) return '';
+      const stNome = p.statusId ? (statusList().find(x=>x.id===p.statusId)||{}).nome : '';
+      return `<div class="card card-tabela" style="margin-bottom:14px;">
+        <div style="padding:12px 16px 6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <b style="font-size:15px;">${idx+1}ª ação — ${escapeHtml(p.nome)}</b>
+          <span class="badge badge-pendente">${lista.length}</span>
+          <span class="muted" style="font-size:12.5px;">${diasTxtOrc(Number(p.dias))} depois do orçamento${stNome?' · passa para “'+escapeHtml(stNome)+'”':''}</span>
+        </div>
+        <div class="tabela-rolagem"><table class="tabela-cartoes"><thead><tr><th>Cliente</th><th>Vendedora</th><th>Loja</th><th class="num">Valor</th><th>Status</th><th>Prazo</th><th class="num">Ação</th></tr></thead><tbody>
+        ${lista.map(({o,e})=>`<tr class="${e.atraso>=1?'linha-atrasada':''}">
+          <td class="td-cliente" data-label="Cliente"><b>${escapeHtml(o.cliente||'—')}</b>${o.codigoVia?`<span class="sub">${escapeHtml(o.codigoVia)}</span>`:''}</td>
+          <td class="td-meta" data-label="Vendedora">${escapeHtml(o.vendedora||'—')}</td>
+          <td class="td-meta" data-label="Loja">${escapeHtml(nomeLojaOrc(o))}</td>
+          <td class="num td-valor" data-label="Valor">${fmtMoeda(o.valorTotal)}</td>
+          <td class="td-status" data-label="Status"><span class="badge badge-pendente">${escapeHtml(statusInfoDe(o.status).nome)}</span></td>
+          <td class="nowrap td-meta" data-label="Prazo">${e.atraso>=1?`<span class="badge badge-vencido">${ic('relogio',12)} Atrasada ${diasTxtOrc(e.atraso)}</span>`:'Hoje é o dia'}</td>
+          <td class="num td-acoes"><div class="acoes-linha">
+            ${o.telefone ? `<select class="sel-acao" data-acaoorc="${escapeHtml(o.id)}" aria-label="Mudar status" title="Mudar o status — a primeira opção envia a mensagem desta ação pelo WhatsApp">
+              <option value="">Mudar status…</option>
+              <option value="__acao__:${idx}">▶ ${escapeHtml(p.nome)} (envia a mensagem)</option>
+              ${statusList().map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.nome)}${x.encerra?' (encerra)':''}</option>`).join('')}
+            </select>` : `<span class="muted" title="Sem WhatsApp no cadastro">Sem WhatsApp</span>`}
+            <button type="button" class="btn btn-ghost btn-sm" data-acaoabrir="${escapeHtml(o.id)}">${ic('olho',14)} Abrir</button>
+          </div></td></tr>`).join('')}
+        </tbody></table></div></div>`;
+    }).join('')}`;
+  el.querySelectorAll('[data-acaoorc]').forEach(sel=> sel.addEventListener('change', async ()=>{ sel.disabled = true; await mudarStatusNoBloco(sel.dataset.acaoorc, sel.value); sel.disabled = false; }));
+  el.querySelectorAll('[data-acaoabrir]').forEach(b=> b.addEventListener('click', ()=>{ const o = orcamentos.find(x=>x.id===b.dataset.acaoabrir); if(o) abrirDetalheOrcamento(o); }));
+}
+/** Estatística de conversão: convertidos em venda/pedido saem da lista, mas contam aqui; recusado/cancelado = não convertido. */
+function classeConversaoOrc(o){
+  if(o.rascunho) return null;
+  if(o.convertidoEm) return 'conv';
+  const info = statusInfoDe(o.status);
+  const nome = semAcentoOrc((info&&info.nome)||'')+' '+semAcentoOrc(o.status);
+  if(/cancel|recus|nao convert/.test(nome)) return 'nao';
+  if(info && info.encerra) return 'aprov';
+  return 'aberto';
+}
+function drawEstatisticasOrc(base, de, ate){
+  const el = document.getElementById('statsOrc'); if(!el) return;
+  const ini = de || (()=>{ const d=new Date(); d.setDate(d.getDate()-30); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+  const dia = o=>{ if(o.criadoEm){ const d=new Date(Number(o.criadoEm)||o.criadoEm); if(!isNaN(d)) return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); } return o.data||''; };
+  const lista = base.filter(o=>{ const d=dia(o); return d && d>=ini && (!ate || d<=ate); });
+  const c = { conv:0, nao:0, aprov:0, aberto:0 }, v = { conv:0, total:0 };
+  lista.forEach(o=>{ const k = classeConversaoOrc(o); if(!k) return; c[k]++; v.total += Number(o.valorTotal)||0; if(k==='conv') v.conv += Number(o.valorTotal)||0; });
+  const n = c.conv+c.nao+c.aprov+c.aberto;
+  const taxa = n ? Math.round(c.conv/n*100) : 0;
+  const cartao = (rot,val,sub,cor)=>`<div class="card" style="padding:12px 16px;min-width:150px;flex:1;"><div class="muted" style="font-size:12px;">${rot}</div><div style="font-size:22px;font-weight:800;${cor?'color:'+cor+';':''}">${val}</div>${sub?`<div class="muted" style="font-size:12px;">${sub}</div>`:''}</div>`;
+  el.innerHTML = `<div class="muted" style="font-size:12.5px;margin:14px 0 6px;">Estatística de conversão — orçamentos gerados ${de||ate ? 'no período escolhido' : 'nos últimos 30 dias'} (${n}). Inclui os já convertidos.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      ${cartao('Taxa de conversão', taxa+'%', c.conv+' de '+n, 'var(--ok,#0f6b40)')}
+      ${cartao('Convertidos (venda/pedido)', c.conv, fmtMoeda(v.conv))}
+      ${cartao('Não convertidos (recusado/cancelado)', c.nao, '', c.nao?'var(--danger,#b3261e)':'')}
+      ${cartao('Aprovados, a converter', c.aprov, '')}
+      ${cartao('Em aberto', c.aberto, '')}
+    </div>`;
 }
 
-/** Tela de configuração dos prazos do acompanhamento automático (Diretoria/Gerente). */
-function abrirConfigMsgAuto(){
-  const p = prazosAutoMsg();
-  openModal(`
-    <h3>Prazos das mensagens</h3>
-    <p class="modal-sub">Quando a lista avisa que é hora de chamar o cliente, e quando o orçamento se encerra sozinho.</p>
-    <div class="field" style="margin-top:14px;">
-      <label for="cfgDiasValidade">Validade padrão dos orçamentos (dias)</label>
-      <input type="number" min="1" id="cfgDiasValidade" value="${p.diasValidade}">
-    </div>
-    <p class="muted" style="margin-top:4px; font-size:12.5px;">Ao abrir "Novo orçamento", o campo Validade já vem preenchido com a data do orçamento + esses dias.</p>
-    <div class="section-label" style="font-size:14px; margin:18px 0 4px;">Avisos de acompanhamento</div>
-    <p class="muted" style="margin:0 0 10px;">Em dias, contados a partir da criação do orçamento.</p>
-    <div class="grid-2" style="margin-top:10px;">
-      <div class="field"><label for="cfgT1">1ª mensagem (Aberto para Ação de fixação)</label><input type="number" min="1" id="cfgT1" value="${p.t1}"></div>
-      <div class="field"><label for="cfgT2">2ª mensagem (Ação de fixação para Prorrogado à ação)</label><input type="number" min="1" id="cfgT2" value="${p.t2}"></div>
-      <div class="field"><label for="cfgT3">3ª mensagem (última do ciclo)</label><input type="number" min="1" id="cfgT3" value="${p.t3}"></div>
-      <div class="field"><label for="cfgTFinal">Prazo final (encerra sozinho como Recusado)</label><input type="number" min="1" id="cfgTFinal" value="${p.tFinal}"></div>
-    </div>
-    <p class="muted" style="margin-top:10px; font-size:12.5px;">O prazo final só entra em ação se o orçamento não tiver sido editado nem aprovado manualmente até lá.</p>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="btnCancelarCfgMsgAuto">Cancelar</button>
-      <button class="btn btn-accent" id="btnSalvarCfgMsgAuto">${ic('check')} Salvar prazos</button>
-    </div>
-  `);
-  document.getElementById('btnCancelarCfgMsgAuto').addEventListener('click', closeModal);
-  document.getElementById('btnSalvarCfgMsgAuto').addEventListener('click', async ()=>{
-    const diasValidade = Number(document.getElementById('cfgDiasValidade').value)||PRAZOS_AUTO_MSG_PADRAO.diasValidade;
-    const t1 = Number(document.getElementById('cfgT1').value)||PRAZOS_AUTO_MSG_PADRAO.t1;
-    const t2 = Number(document.getElementById('cfgT2').value)||PRAZOS_AUTO_MSG_PADRAO.t2;
-    const t3 = Number(document.getElementById('cfgT3').value)||PRAZOS_AUTO_MSG_PADRAO.t3;
-    const tFinal = Number(document.getElementById('cfgTFinal').value)||PRAZOS_AUTO_MSG_PADRAO.tFinal;
-    if(!(t1<t2 && t2<t3 && t3<=tFinal)){ showToast('Os prazos precisam crescer: 1ª menor que a 2ª, 2ª menor que a 3ª e a 3ª até o prazo final.'); return; }
-    const ok = await salvarPrazosAutoMsg({ t1, t2, t3, tFinal, diasValidade });
-    if(ok){ closeModal(); renderView(); showToast('Configurações salvas.'); }
-  });
+/* ===== CONFIGURAÇÃO DAS AÇÕES (Diretoria/Gerente) ===== */
+function abrirConfigAcoes(){
+  const a = (config && config.orcamentoAcoes) || {};
+  const passos = JSON.parse(JSON.stringify(passosOrc()));
+  const fin = JSON.parse(JSON.stringify(finalOrc()));
+  const abertos = statusList().filter(x=>!x.encerra), encerram = statusList().filter(x=>x.encerra);
+  const diasValidade = prazosAutoMsg().diasValidade;
+  let autoAntes = !!a.auto;
+  function passoHtml(p,i){
+    const msg = textoPassoOrc(p, i);
+    return `<div class="card" style="padding:12px;margin:10px 0;" data-passo="${i}">
+      <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+        <div class="field" style="flex:2;min-width:160px;"><label>Nome da ação</label><input type="text" data-f="nome" value="${escapeHtml(p.nome)}"></div>
+        <div class="field" style="width:110px;"><label>Dias depois</label><input type="number" min="1" data-f="dias" value="${Number(p.dias)||1}"></div>
+        <div class="field" style="flex:2;min-width:160px;"><label>Passa para o status</label><select data-f="statusId"><option value="">(não muda)</option>${abertos.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===p.statusId?'selected':''}>${escapeHtml(x.nome)}</option>`).join('')}</select></div>
+        <button type="button" class="btn btn-ghost btn-sm" data-rem="${i}" ${passos.length<=1?'disabled':''}>Remover</button>
+      </div>
+      <div class="field" style="margin-top:8px;"><label>Mensagem de WhatsApp <span class="muted">({cliente} {loja} {valor} {validade} {vendedora})</span></label>
+        <textarea data-f="mensagem" rows="6" style="width:100%;">${escapeHtml(msg)}</textarea></div>
+      <button type="button" class="btn btn-ghost btn-sm" data-padrao="${i}">Usar mensagem padrão</button>
+    </div>`;
+  }
+  function desenhar(){
+    openModal(`<h3>Ações automáticas de orçamento</h3>
+      <p class="modal-sub">Cada ação é enviada por WhatsApp depois de X dias do orçamento. A mensagem sempre leva o botão “Iniciar conversa” para o WhatsApp de atendimento.</p>
+      <label class="check-filtro" style="margin:10px 0;display:flex;gap:8px;align-items:center;"><input type="checkbox" id="acAuto" ${autoAntes?'checked':''}> <b>Enviar automaticamente, sem ação humana</b> (o sistema manda sozinho entre 9h e 18h)</label>
+      <p class="muted" style="margin:0 0 6px;font-size:12.5px;">Ao ligar, só valem os orçamentos criados a partir de hoje; os anteriores continuam nos blocos, para envio manual. Desligado, as ações aparecem nos blocos para você enviar.</p>
+      <div id="acPassos">${passos.map(passoHtml).join('')}</div>
+      <button type="button" class="btn btn-ghost btn-sm" id="acAdd">+ Adicionar ação</button>
+      <div class="card" style="padding:12px;margin:12px 0;">
+        <label class="check-filtro" style="display:flex;gap:8px;align-items:center;"><input type="checkbox" id="acFinAtivo" ${fin.ativo?'checked':''}> Encerrar sozinho se não houver resposta</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <div class="field" style="width:130px;"><label>Depois de (dias)</label><input type="number" min="1" id="acFinDias" value="${Number(fin.dias)||15}"></div>
+          <div class="field" style="flex:1;min-width:160px;"><label>Marcar como</label><select id="acFinStatus">${encerram.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===fin.statusId?'selected':''}>${escapeHtml(x.nome)}</option>`).join('')}</select></div>
+          <div class="field" style="width:150px;"><label>Validade padrão (dias)</label><input type="number" min="1" id="acValidade" value="${diasValidade}"></div>
+        </div>
+        <p class="muted" style="margin:6px 0 0;font-size:12.5px;">Encerrado entra na estatística como orçamento não convertido.</p>
+      </div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="acCancelar">Cancelar</button><button class="btn btn-accent" id="acSalvar">${ic('check')} Salvar</button></div>`);
+    document.getElementById('acCancelar').addEventListener('click', closeModal);
+    document.getElementById('acAdd').addEventListener('click', ()=>{ ler(); passos.push({ id:'p'+Date.now().toString(36), nome:'Nova ação', dias:(Number((passos[passos.length-1]||{}).dias)||0)+3, statusId:'', mensagem:'' }); desenhar(); });
+    document.querySelectorAll('[data-rem]').forEach(b=> b.addEventListener('click', ()=>{ ler(); passos.splice(Number(b.dataset.rem),1); desenhar(); }));
+    document.querySelectorAll('[data-padrao]').forEach(b=> b.addEventListener('click', ()=>{ ler(); const i=Number(b.dataset.padrao); passos[i].mensagem=''; const st=statusList().find(x=>x.id===passos[i].statusId); passos[i].mensagem = MSG_ACAO_PADRAO[Math.min(i,MSG_ACAO_PADRAO.length-1)]; desenhar(); }));
+    document.getElementById('acSalvar').addEventListener('click', salvar);
+  }
+  function ler(){
+    autoAntes = document.getElementById('acAuto').checked;
+    document.querySelectorAll('[data-passo]').forEach(box=>{
+      const i = Number(box.dataset.passo), p = passos[i]; if(!p) return;
+      p.nome = box.querySelector('[data-f=nome]').value.trim() || ('Ação '+(i+1));
+      p.dias = Math.max(1, Number(box.querySelector('[data-f=dias]').value)||1);
+      p.statusId = box.querySelector('[data-f=statusId]').value;
+      p.mensagem = box.querySelector('[data-f=mensagem]').value;
+    });
+    fin.ativo = document.getElementById('acFinAtivo').checked;
+    fin.dias = Math.max(1, Number(document.getElementById('acFinDias').value)||15);
+    fin.statusId = document.getElementById('acFinStatus').value || 'recusado';
+  }
+  async function salvar(){
+    ler();
+    const dv = Math.max(1, Number(document.getElementById('acValidade').value)||15);
+    for(let i=1;i<passos.length;i++){ if(!(Number(passos[i].dias) > Number(passos[i-1].dias))){ showToast('Os dias precisam crescer de uma ação para a próxima.'); return; } }
+    if(fin.ativo && !(Number(fin.dias) > Number(passos[passos.length-1].dias))){ showToast('O encerramento precisa vir depois da última ação.'); return; }
+    const hoje = todayStr();
+    const novo = { auto: autoAntes, desde: (autoAntes ? (a.auto && a.desde ? a.desde : hoje) : (a.desde||'')), passos, final: fin };
+    const r1 = await gatewayCall({ op:'mergeConfigKey', params:{ key:'orcamentoAcoes', value: novo } });
+    if(r1 && r1.error){ showToast('Não foi possível salvar: '+r1.error); return; }
+    // mantém os prazos antigos coerentes (e a validade padrão) para quem ainda lê o formato anterior
+    const antigo = { t1:Number(passos[0]&&passos[0].dias)||3, t2:Number(passos[1]&&passos[1].dias)||6, t3:Number(passos[2]&&passos[2].dias)||9, tFinal:Number(fin.dias)||15, diasValidade:dv };
+    await gatewayCall({ op:'mergeConfigKey', params:{ key:'orcamentoAutoMsgConfig', value: antigo } });
+    config.orcamentoAcoes = novo; config.orcamentoAutoMsgConfig = antigo;
+    closeModal(); renderView(); showToast(autoAntes ? 'Salvo. Envio automático ligado.' : 'Salvo.');
+  }
+  desenhar();
 }
 
 async function enviarWhatsAppOrcId(orcId){
@@ -2651,7 +2679,6 @@ function tabsForLevel(){
   const t = [
     { id:'novo', label:'Novo orçamento', icon:'documento' },
     { id:'lista', label:'Lançados', icon:'lista' },
-    { id:'followup', label:'Follow-up', icon:'relogio', badge: (config ? followupAtrasados().length : 0) || null },
   ];
   if(window.__permissoesAbasOverride) return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
   return t;
@@ -2673,7 +2700,6 @@ function renderView(){
   if(!main) return;
   main.innerHTML = '';
   if(currentTab==='novo') renderNovo(main);
-  else if(currentTab==='followup') renderFollowup(main);
   else renderLista(main);
 }
 function podeCriarOrcamento(){

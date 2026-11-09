@@ -4701,6 +4701,87 @@ function vendedoraCurta(v){
   const f = (config.funcionarios||[]).find(x=> (v.vendedoraId && x.id===v.vendedoraId) || funcionarioBateComNome(x, v.vendedora));
   const ap = f ? String(f.apelido||'').trim() : ''; return ap || String((f && f.nome) || v.vendedora || '').trim().split(/\s+/)[0] || '—';
 }
+/* ===== PÓS-VENDA (09/11) =====
+ * config.posVendaAuto = { auto, desde, dias, mensagem }. X dias depois da venda (padrão 7) a venda entra na lista "Enviar pós-venda";
+ * ao enviar pelo WhatsApp ela sai da lista (venda.posVendaEnviadoEm). Com "auto" ligado o servidor (acompanhamento-auto) envia sozinho,
+ * sem ação humana, para as vendas feitas depois de ligar. */
+const RODAPE_WA_PV = 'Caso precise falar conosco, clique no link:\nhttps://wa.me/5532988307617';
+const MSG_POSVENDA_PADRAO = 'Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você levou a sua joia e queremos saber: está tudo certo? Se precisar de qualquer ajuste, limpeza ou tiver alguma dúvida, estamos à disposição.\n\n{avaliacao}\n\nObrigado por escolher a Vilaça Joias!\n\n'+RODAPE_WA_PV;
+function posVendaCfg(){ const c = (config && config.posVendaAuto) || {}; return { auto:!!c.auto, desde:c.desde||'', dias:Number(c.dias)||7, mensagem:c.mensagem||'' }; }
+function preencherMsgPv(txt, v){
+  const lj = (config.lojas||[]).find(l=>l.id===v.lojaId);
+  const nomeLoja = (lj && (lj.nomePublico||lj.nomeFantasia||lj.nome)) || v.loja || 'Vilaça Joias';
+  const av = lj && lj.googleReviewUrl ? 'Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n'+lj.googleReviewUrl : '';
+  const p = String(v.cliente||'').trim().split(/\s+/)[0]||'';
+  const nome = p ? p.charAt(0).toUpperCase()+p.slice(1).toLowerCase() : 'cliente';
+  return String(txt||'').replaceAll('{cliente}', nome).replaceAll('{loja}', nomeLoja).replaceAll('{vendedora}', v.vendedora||'').replaceAll('{valor}', fmtMoeda(v.valorTotal)).replaceAll('{avaliacao}', av).replace(/\n{3,}/g,'\n\n').trim();
+}
+function vendasParaPosVenda(){
+  const c = posVendaCfg(), hj = hoje();
+  const dif = (a,b)=> Math.round((Date.parse(b+'T00:00:00Z')-Date.parse(a+'T00:00:00Z'))/86400000);
+  const desdeMs = c.desde ? Date.parse(c.desde+'T00:00:00') : 0;
+  return (vendas||[]).filter(v=>{
+    if(!v || v.posVendaEnviadoEm || v.status==='cancelada' || v.status==='cancelado' || v.rascunho || !v.data || !v.telefone) return false;
+    const idade = dif(String(v.data).slice(0,10), hj);
+    if(idade < c.dias || idade > c.dias+23) return false;   // só a janela recente (nunca o histórico todo)
+    if(c.auto && desdeMs && Number(v.criadoEm||0) >= desdeMs) return false;   // essas o servidor envia sozinho
+    return true;
+  }).sort((a,b)=> String(a.data).localeCompare(String(b.data)));
+}
+function desenharPosVenda(){
+  const el = document.getElementById('posVendaBox'); if(!el) return;
+  const c = posVendaCfg();
+  const lista = vendasParaPosVenda();
+  const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
+  if(!lista.length && !gestao && !c.auto){ el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="card" style="padding:12px 16px;margin-bottom:14px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <b>Enviar pós-venda</b> <span class="badge ${lista.length?'badge-vencido':'badge-pendente'}">${lista.length}</span>
+      <span class="muted" style="font-size:12.5px;">vendas de ${c.dias} dias atrás ou mais, que ainda não receberam a mensagem${c.auto?' · envio automático LIGADO (o sistema manda sozinho entre 9h e 18h)':''}</span>
+      ${gestao ? `<button type="button" class="btn btn-ghost btn-sm" id="btnCfgPosVenda" style="margin-left:auto;">${ic('engrenagem',14)} Pós-venda automático</button>` : ''}
+    </div>
+    ${lista.length ? `<div class="tabela-rolagem" style="margin-top:8px;"><table class="tabela-cartoes"><thead><tr><th>Cliente</th><th>Venda</th><th>Vendedora</th><th class="num">Valor</th><th class="num">Ação</th></tr></thead><tbody>
+      ${lista.map(v=>`<tr><td class="td-cliente" data-label="Cliente"><b>${escapeHtml(v.cliente||'—')}</b>${v.codigoVia?`<span class="sub">${escapeHtml(v.codigoVia)}</span>`:''}</td>
+        <td class="td-meta" data-label="Venda">${escapeHtml(String(v.data).slice(8,10)+'/'+String(v.data).slice(5,7))}</td>
+        <td class="td-meta" data-label="Vendedora">${escapeHtml(v.vendedora||'—')}</td>
+        <td class="num td-valor" data-label="Valor">${fmtMoeda(v.valorTotal)}</td>
+        <td class="num td-acoes"><button type="button" class="btn btn-accent btn-sm" data-posvenda="${escapeHtml(v.id)}">${ic('whatsapp',14)} Enviar pós-venda</button></td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+  </div>`;
+  el.querySelectorAll('[data-posvenda]').forEach(b=> b.addEventListener('click', async ()=>{ b.disabled = true; await enviarPosVenda(b.dataset.posvenda); desenharPosVenda(); }));
+  const cfgb = document.getElementById('btnCfgPosVenda'); if(cfgb) cfgb.addEventListener('click', abrirConfigPosVenda);
+}
+async function enviarPosVenda(id){
+  const v = (vendas||[]).find(x=>x.id===id); if(!v) return;
+  if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:v.telefone, nome:v.cliente }))) return;
+  if(!window.WhatsAuto){ showToast('Envio automático indisponível. Recarregue a página e tente de novo.'); return; }
+  const c = posVendaCfg();
+  const ok = await WhatsAuto.enviar({ telefone:v.telefone, texto:preencherMsgPv(c.mensagem||MSG_POSVENDA_PADRAO, v), lojaId:v.lojaId||'', senha:__gatewaySenha, tipo:'posvenda', registroId:v.id, via:v.codigoVia||'' });
+  if(ok!==true) return;
+  v.posVendaEnviadoEm = new Date().toISOString(); v.posVendaPor = (currentUser&&currentUser.nome)||'';
+  await vendaSalvar(v);
+}
+function abrirConfigPosVenda(){
+  const c = posVendaCfg();
+  openModal(`<h3>Pós-venda automático</h3>
+    <p class="modal-sub">Mensagem enviada por WhatsApp alguns dias depois da venda. Sempre leva o botão “Iniciar conversa” para o WhatsApp de atendimento.</p>
+    <label class="check-filtro" style="margin:10px 0;display:flex;gap:8px;align-items:center;"><input type="checkbox" id="pvAuto" ${c.auto?'checked':''}> <b>Enviar automaticamente, sem ação humana</b> (o sistema manda sozinho entre 9h e 18h)</label>
+    <p class="muted" style="margin:0 0 8px;font-size:12.5px;">Ao ligar, só valem as vendas feitas a partir de hoje; as anteriores continuam na lista, para envio manual. Desligado, as vendas aparecem na lista “Enviar pós-venda”.</p>
+    <div class="field" style="width:170px;"><label>Enviar depois de (dias)</label><input type="number" min="1" id="pvDias" value="${c.dias}"></div>
+    <div class="field" style="margin-top:8px;"><label>Mensagem <span class="muted">({cliente} {loja} {vendedora} {avaliacao})</span></label><textarea id="pvMsg" rows="9" style="width:100%;">${escapeHtml(c.mensagem||MSG_POSVENDA_PADRAO)}</textarea></div>
+    <button type="button" class="btn btn-ghost btn-sm" id="pvPadrao">Usar mensagem padrão</button>
+    <p class="muted" style="font-size:12.5px;">{avaliacao} vira o link de avaliação no Google da loja (se estiver cadastrado).</p>
+    <div class="modal-actions"><button class="btn btn-ghost" id="pvCancelar">Cancelar</button><button class="btn btn-accent" id="pvSalvar">${ic('check')} Salvar</button></div>`);
+  document.getElementById('pvCancelar').addEventListener('click', closeModal);
+  document.getElementById('pvPadrao').addEventListener('click', ()=>{ document.getElementById('pvMsg').value = MSG_POSVENDA_PADRAO; });
+  document.getElementById('pvSalvar').addEventListener('click', async ()=>{
+    const auto = document.getElementById('pvAuto').checked;
+    const novo = { auto, desde: auto ? (c.auto && c.desde ? c.desde : hoje()) : (c.desde||''), dias: Math.max(1, Number(document.getElementById('pvDias').value)||7), mensagem: document.getElementById('pvMsg').value };
+    const r = await gatewayCall({ op:'mergeConfigKey', params:{ key:'posVendaAuto', value: novo } });
+    if(r && r.error){ showToast('Não foi possível salvar: '+r.error); return; }
+    config.posVendaAuto = novo; closeModal(); desenharPosVenda(); showToast(auto ? 'Salvo. Envio automático ligado.' : 'Salvo.');
+  });
+}
 function renderVendas(main){
   main.innerHTML = `
     <div class="page-head">
@@ -4713,6 +4794,7 @@ function renderVendas(main){
         <button class="btn btn-accent btn-lg" id="btnNovaVendaLista" title="Nova venda (F2)">${ic('mais',18)} Nova venda</button>
       </div>
     </div>
+    <div id="posVendaBox"></div>
     <div class="filters" role="search">
       <div class="campo-busca">${ic('busca')}<input type="text" id="filtroBusca" placeholder="Buscar por cliente ou vendedora" aria-label="Buscar por cliente ou vendedora"></div>
       <select id="filtroLoja" aria-label="Loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
@@ -4731,6 +4813,7 @@ function renderVendas(main){
   const fSemPagamento = document.getElementById('filtroSemPagamento');
   fData.value = hoje();   // ao abrir: lista as vendas de hoje (Limpar filtros mostra todas)
   document.getElementById('btnNovaVendaLista').addEventListener('click', ()=>{ modoNovaVenda = true; renderView(); });
+  desenharPosVenda();
 
   function abrevLojaDe(v){
     const l = (config.lojas||[]).find(x=>x.id===v.lojaId);
