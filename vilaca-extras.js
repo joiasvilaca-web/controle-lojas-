@@ -186,7 +186,7 @@
         var m={ em:new Date().toISOString(), por:'', rotulo:m0?m0[1].trim():'' };
         if(opts.registroId) marcas[opts.registroId+'|'+botao]=m;
         marcar(clicado, m); agendar();
-        return;
+        return true;
       }
       if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return; }
       aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');

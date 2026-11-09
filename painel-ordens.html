@@ -3709,6 +3709,18 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
   showToast('Não foi possível carregar o cupom. Recarregue a página.');
 }
 
+/* 09/11: via PRONTA avisada ao cliente (WhatsApp ou e-mail) sai de "avise o cliente" e vai para "Já avisados". Grava em order.avisoCliente. */
+async function marcarAvisado(order, meio){
+  try{
+    if(!order || order.status!=='pronto') return;
+    const ant = order.avisoCliente || {};
+    const meios = Array.from(new Set([...(ant.meios||[]), meio]));
+    order.avisoCliente = { em: Date.now(), por: (currentUser&&currentUser.nome)||'', meios, status:'pronto', vezes:(ant.vezes||0)+1 };
+    const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
+    if(rr && rr.error) console.error('erro ao gravar aviso ao cliente', order.id, rr.error);
+    if(typeof window.__renderProntos==='function') window.__renderProntos();
+  }catch(e){ console.error('marcarAvisado', e); }
+}
 async function sendWhatsApp(order){
   if(!order){ showToast('Ordem não encontrada.'); return; }
   if(!order.telefone){ showToast('Este pedido não tem telefone salvo.'); return; }
@@ -3718,7 +3730,7 @@ async function sendWhatsApp(order){
     : order.status==='entregue'
     ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
     : (config.mensagemPadrao||DEFAULT_TEMPLATE);
-  if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:order.via||'' }); return; }
+  if(window.WhatsAuto){ const okEnvio = await WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:order.via||'' }); if(okEnvio===true) await marcarAvisado(order,'WhatsApp'); return; }
   showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
 }
 async function sendEmail(order){
@@ -3740,6 +3752,7 @@ async function sendEmail(order){
     });
     if(!r.ok) throw new Error('Falha no envio');
     showToast('E-mail enviado com sucesso!');
+    await marcarAvisado(order,'E-mail');
   }catch(e){
     console.error('sendEmail:', e);
     showToast('Falha ao enviar e-mail. Verifique a conexão.');
@@ -5811,32 +5824,41 @@ function renderPainel(main){
     </div>
   `;
 
+  let mostrarAvisados = false;
   function renderProntosCard(){
     const card = document.getElementById('prontosCard');
-    const prontos = orders.filter(o=>o.status==='pronto').sort((a,b)=>a.data.localeCompare(b.data));
-    if(prontos.length===0){ card.innerHTML = ''; return; }
+    const todos = orders.filter(o=>o.status==='pronto').sort((a,b)=>a.data.localeCompare(b.data));
+    const jaAv = (o)=> !!(o.avisoCliente && o.avisoCliente.em);
+    const pendentes = todos.filter(o=>!jaAv(o));
+    const avisados = todos.filter(jaAv).sort((a,b)=>(b.avisoCliente.em||0)-(a.avisoCliente.em||0));
+    if(todos.length===0){ card.innerHTML = ''; return; }
+    if(avisados.length===0) mostrarAvisados = false;
+    const podeAvisar = currentUser.nivel!=='oficina';
+    const linha = (o)=>`
+      <div class="pronto-item">
+        <div>
+          <span class="via" style="font-family:var(--mono);font-weight:700;">${escapeHtml(o.via||'')}</span>
+          <b style="margin-left:6px;">${escapeHtml(o.cliente)}</b>
+          <span class="muted"> · ${escapeHtml(o.serviceTypeName||'')} · ${escapeHtml(nomeLojaOrder(o))} · agendado para ${fmtDate(o.data)}</span>
+          ${jaAv(o) ? `<div class="muted" style="font-size:12px;">${ico('check',12)} Avisado em ${new Date(o.avisoCliente.em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}${o.avisoCliente.por?' por '+escapeHtml(o.avisoCliente.por):''} (${escapeHtml((o.avisoCliente.meios||[]).join(' + '))})</div>` : ''}
+        </div>
+        ${podeAvisar ? `
+        <div style="display:flex; gap:2px;">
+          <button class="btn-icone wa" data-prontowa="${o.id}" title="${jaAv(o)?'Avisar de novo pelo WhatsApp':'Avisar pelo WhatsApp'}" aria-label="Avisar pelo WhatsApp">${waIconSvg(17)}</button>
+          <button class="btn-icone" data-prontomail="${o.id}" title="${jaAv(o)?'Avisar de novo por e-mail':'Avisar por e-mail'}" aria-label="Avisar por e-mail">${ico('email')}</button>
+        </div>` : ''}
+      </div>`;
     card.innerHTML = `
       <div class="card prontos-card">
-        <div class="prontos-titulo">${ico('check')} Prontos para retirada (${prontos.length}) <span class="muted" style="font-weight:500;">— avise o cliente</span></div>
-        <div class="prontos-lista">
-          ${prontos.map(o=>`
-            <div class="pronto-item">
-              <div>
-                <span class="via" style="font-family:var(--mono);font-weight:700;">${escapeHtml(o.via||'')}</span>
-                <b style="margin-left:6px;">${escapeHtml(o.cliente)}</b>
-                <span class="muted"> · ${escapeHtml(o.serviceTypeName||'')} · ${escapeHtml(nomeLojaOrder(o))} · agendado para ${fmtDate(o.data)}</span>
-              </div>
-              ${currentUser.nivel!=='oficina' ? `
-              <div style="display:flex; gap:2px;">
-                <button class="btn-icone wa" data-prontowa="${o.id}" title="Avisar pelo WhatsApp" aria-label="Avisar pelo WhatsApp">${waIconSvg(17)}</button>
-                <button class="btn-icone" data-prontomail="${o.id}" title="Avisar por e-mail" aria-label="Avisar por e-mail">${ico('email')}</button>
-              </div>
-              ` : ''}
-            </div>
-          `).join('')}
+        <div class="prontos-titulo" style="flex-wrap:wrap;">${ico('check')} Prontos para retirada (${pendentes.length}) ${pendentes.length?'<span class="muted" style="font-weight:500;">— avise o cliente</span>':'<span class="muted" style="font-weight:500;">— todos avisados</span>'}
+          ${avisados.length ? `<button type="button" class="btn btn-ghost btn-sm" id="btnJaAvisados" style="margin-left:auto;">${mostrarAvisados?'Ocultar':'Já avisados'} (${avisados.length})</button>` : ''}
         </div>
+        ${pendentes.length ? `<div class="prontos-lista">${pendentes.map(linha).join('')}</div>` : ''}
+        ${mostrarAvisados ? `<div class="prontos-titulo" style="margin-top:12px;color:var(--ink-soft,inherit);">Já avisados — dá para avisar de novo</div><div class="prontos-lista">${avisados.map(linha).join('')}</div>` : ''}
       </div>
     `;
+    const bj = card.querySelector('#btnJaAvisados');
+    if(bj) bj.addEventListener('click', ()=>{ mostrarAvisados = !mostrarAvisados; renderProntosCard(); });
     card.querySelectorAll('[data-prontowa]').forEach(b=>{
       b.addEventListener('click', ()=> sendWhatsApp(orders.find(x=>x.id===b.dataset.prontowa)) );
     });
@@ -5844,6 +5866,7 @@ function renderPainel(main){
       b.addEventListener('click', ()=> sendEmail(orders.find(x=>x.id===b.dataset.prontomail)) );
     });
   }
+  window.__renderProntos = renderProntosCard;
 
   const fServico = document.getElementById('filtroServico');
   const fLoja = document.getElementById('filtroLoja');
