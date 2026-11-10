@@ -197,6 +197,16 @@ textarea{border:1px solid var(--line-strong); border-radius:8px; background:var(
 .qo-nome{font-weight:600;}
 .qo-sub{color:var(--muted);font-size:12px;margin-top:2px;}
 .qo-acoes{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:7px;}
+.ac-colunas{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;margin-bottom:14px;}
+@media (max-width:760px){.ac-colunas{grid-template-columns:1fr;}}
+.ac-col h3{margin:0;padding:12px 16px;font-size:15px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);}
+.ac-lista{list-style:none;margin:0;padding:0;max-height:420px;overflow-y:auto;}
+.ac-item{display:flex;gap:12px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);cursor:pointer;}
+.ac-item:hover{background:var(--primary-soft,#e8f0f6);}
+.ac-hora{font-family:var(--mono,monospace);font-weight:700;font-size:13px;min-width:62px;color:var(--warn,#a15c00);}
+.ac-hora.ok{color:var(--ok);}
+.ac-corpo{display:flex;flex-direction:column;min-width:0;}
+.ac-sub{font-size:12px;}
 .qo-vazio{color:var(--muted);font-size:11px;text-align:center;padding:6px 0;}
 .card-tabela{padding:0; overflow:hidden;}
 .card-tabela .tabela-rolagem{overflow-x:auto;}
@@ -2189,8 +2199,8 @@ function renderQuadroOrc(base){
 function restringirLoja(){ return !!(currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='oficina') && window.__lojaAtual && window.__lojaAtual.id); }
 function renderLista(main){
   const avisos = orcamentosParaAvisar();
-  const atrasadasAcao = orcamentos.map(o=>({ o, e: estagioAutoOrcamento(o) })).filter(x=>x.e && x.e.devido && x.e.atraso>=1);   // passou do dia de enviar a ação
-  const nAv = avisos.length, n5 = atrasadasAcao.length;
+  const atrasadasAcao = acoesAutoLigado() ? [] : orcamentos.map(o=>({ o, e: estagioAutoOrcamento(o) })).filter(x=>x.e && x.e.devido && x.e.atraso>=1);   // com o envio automático ligado, o robô cuida: nada "atrasado" para a pessoa   // passou do dia de enviar a ação
+  const nAv = acoesAutoLigado() ? 0 : avisos.length, n5 = atrasadasAcao.length;
   const porPassoAtraso = {}; atrasadasAcao.forEach(x=>{ const k = x.e.passo.nome; porPassoAtraso[k] = (porPassoAtraso[k]||0)+1; });
   main.innerHTML = `
     <div class="page-head">
@@ -2471,8 +2481,50 @@ async function mudarStatusNoBloco(orcId, valor){
   if(valor.indexOf('__acao__')===0){ await executarAcaoOrc(orcId, Number(valor.split(':')[1])); return; }
   if(await mudarStatusManual(o, valor)) renderView(); else renderView();
 }
+/** Envio automático LIGADO: duas colunas — Programados (com a hora prevista) e Já enviados (com a hora do envio). */
+function drawPainelAcoesAuto(base, el){
+  const passos = passosOrc();
+  const tz = { timeZone:'America/Sao_Paulo' };
+  const hojeBR = new Date().toLocaleDateString('en-CA', tz);
+  const dia = ms => new Date(ms).toLocaleDateString('en-CA', tz);
+  const hora = ms => new Date(ms).toLocaleTimeString('pt-BR', { ...tz, hour:'2-digit', minute:'2-digit' });
+  const quando = ms => { const d = dia(ms); return d===hojeBR ? hora(ms) : fmtDate(d)+' '+hora(ms); };
+  const prog = [], env = [];
+  const limite = Date.now() - 3*86400000;
+  base.forEach(o=>{
+    if(o.rascunho) return;
+    const ag = o.autoAgenda;
+    if(ag && ag.dia >= hojeBR){
+      const p = passos[ag.passo] || {};
+      prog.push({ o, em: Number(ag.em)||9e15, acao: p.nome || 'Ação' });
+    }
+    Object.entries(o.msgEnviadas||{}).forEach(([stId, iso])=>{
+      const t = Date.parse(iso); if(!(t>limite)) return;
+      env.push({ o, em: t, acao: (statusInfoDe(stId)||{}).nome || stId });
+    });
+  });
+  prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
+  const linha = (x, tempo, cls) => `<li class="ac-item" data-acaoabrir="${escapeHtml(x.o.id)}" title="Abrir o orçamento">
+      <span class="ac-hora ${cls}">${tempo}</span>
+      <span class="ac-corpo"><b>${escapeHtml(x.o.codigoVia||'—')}</b> · ${escapeHtml(x.o.cliente||'—')}<span class="muted ac-sub">${escapeHtml(x.acao)} · ${escapeHtml(nomeLojaOrc(x.o))}</span></span></li>`;
+  el.innerHTML = `
+    <div class="page-head" style="margin-top:18px;"><div>
+      <h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
+      <p class="page-sub">Envio automático LIGADO: o sistema manda sozinho (9h às 18h). À esquerda o que está programado e a hora prevista; à direita o que já foi enviado (últimos 3 dias) e a hora do envio.</p>
+    </div></div>
+    <div class="ac-colunas">
+      <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>
+        ${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, x.em>=9e14 ? 'em breve' : quando(x.em), '')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}
+      </section>
+      <section class="card ac-col"><h3>Já enviados <span class="badge badge-aprovado">${env.length}</span></h3>
+        ${env.length ? `<ul class="ac-lista">${env.map(x=>linha(x, quando(x.em), 'ok')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>`}
+      </section>
+    </div>`;
+  el.querySelectorAll('[data-acaoabrir]').forEach(li=> li.addEventListener('click', ()=>{ const o = orcamentos.find(x=>x.id===li.dataset.acaoabrir); if(o) abrirDetalheOrcamento(o); }));
+}
 function drawBlocosAcoes(base){
   const el = document.getElementById('blocosAcoes'); if(!el) return;
+  if(acoesAutoLigado()){ drawPainelAcoesAuto(base, el); return; }
   const passos = passosOrc();
   const grupos = passos.map(()=>[]);
   base.forEach(o=>{ const e = estagioAutoOrcamento(o); if(e && e.devido && grupos[e.idx]) grupos[e.idx].push({ o, e }); });
