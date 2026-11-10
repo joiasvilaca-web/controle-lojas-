@@ -1,3 +1,7 @@
+// acompanhamento-auto v4 (10/11/2026) — FLUXO POR STATUS: a ação 0 (status inicial, dias 0) sai logo que o orçamento é salvo (dentro do horário 9h–18h);
+//   nunca volta de status (só passos à frente do status atual); orçamento movido à mão para um status conta os dias dele como já cumpridos; DESCONTO ESPECIAL por status
+//   (status.descontoEspecial {ativo, percentual, mensagemWhatsapp}: com a chave ligada o passo manda a outra mensagem, com {desconto} e {valorDesconto}); `msgEnviadas` {statusId: data}
+//   guarda o visto de mensagem enviada; {vendedora} sem nome vira "nossa equipe". 
 // acompanhamento-auto v3 (10/11/2026) — REGRAS DO ANIVERSÁRIO + POSIÇÃO CERTA PELO PRAZO:
 //   (1) cada ação vence pelos DIAS configurados; orçamento já atrasado recebe a ação CORRETA de agora (a mais avançada que já venceu, sem repetir as anteriores) e vai para o status dela;
 //   (2) o dia é distribuído como o aniversário: a janela de agora (ou das 9h) até as 18h é cortada em partes iguais e cada mensagem sai num horário sorteado dentro da sua parte (mín. 1 min por mensagem);
@@ -90,20 +94,27 @@ function passosEfetivos(cfg: any): Passo[] {
   ];
 }
 const finalEfetivo = (cfg: any) => { const a = cfg.orcamentoAcoes || {}; const t = cfg.orcamentoAutoMsgConfig || {}; return a.final || { ativo: true, dias: Number(t.tFinal) || 15, statusId: "recusado" }; };
+function descontoDoPasso(cfg: any, passo: Passo): number {
+  const st = (cfg.statusOrcamento || []).find((s: any) => s.id === passo.statusId);
+  const d = st && st.descontoEspecial;
+  return d && d.ativo && Number(d.percentual) > 0 ? Number(d.percentual) : 0;
+}
 function textoPasso(cfg: any, passo: Passo, idx: number): string {
   if (passo.mensagem && passo.mensagem.trim()) return passo.mensagem;
   const st = (cfg.statusOrcamento || []).find((s: any) => s.id === passo.statusId);
+  if (descontoDoPasso(cfg, passo) && st.descontoEspecial.mensagemWhatsapp && String(st.descontoEspecial.mensagemWhatsapp).trim()) return st.descontoEspecial.mensagemWhatsapp;
   if (st && st.mensagemWhatsapp && st.mensagemWhatsapp.trim()) return st.mensagemWhatsapp;
   return MSG_ACAO_PADRAO[Math.min(idx, MSG_ACAO_PADRAO.length - 1)];
 }
 function lojaDe(cfg: any, id: string) { return (cfg.lojas || []).find((l: any) => l && l.id === id) || null; }
-function preencher(txt: string, cfg: any, reg: any) {
+function preencher(txt: string, cfg: any, reg: any, descPerc = 0) {
   const lj = lojaDe(cfg, reg.lojaId);
   const nomeLoja = (lj && (lj.nomePublico || lj.nomeFantasia || lj.nome)) || reg.loja || "Vilaça Joias";
   const av = lj && lj.googleReviewUrl ? `Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n${lj.googleReviewUrl}` : "";
   let t = String(txt || "")
     .replaceAll("{cliente}", bonito(String(reg.cliente || "").split(/\s+/)[0] || "cliente"))
-    .replaceAll("{loja}", nomeLoja).replaceAll("{vendedora}", bonito(reg.vendedora || ""))
+    .replaceAll("{loja}", nomeLoja).replaceAll("{vendedora}", bonito(reg.vendedora || "") || "nossa equipe")
+    .replaceAll("{desconto}", descPerc ? `${String(descPerc).replace(".", ",")}%` : "").replaceAll("{valorDesconto}", fmtBRL((Number(reg.valorTotal) || 0) * (1 - descPerc / 100)))
     .replaceAll("{valor}", fmtBRL(reg.valorTotal)).replaceAll("{validade}", fmtData(reg.validade)).replaceAll("{avaliacao}", av);
   return t.replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -161,16 +172,24 @@ Deno.serve(async (req: Request) => {
           if (soNovos && Number(o.criadoEm || 0) < desdeMs) continue;
           const base = o.autoBaseData || o.data || (o.criadoEm ? diaDe(Number(o.criadoEm)) : "");
           if (!base) continue;
-          const dias = diasEntre(base, agora.dia);
           const N = Number(o.autoMensagensEnviadas || 0);
+          // posição atual no fluxo (pelo status): nunca volta; o passo 0 (status inicial) só sai se nada foi enviado e o orçamento ainda está nele
+          const idxSt = passos.findIndex((p) => p.statusId && p.statusId === o.status);
+          // orçamento movido à mão para um status: os dias desse status contam como já cumpridos
+          const bonus = N === 0 && idxSt >= 1 && o.autoBaseData ? Number(passos[idxSt].dias) || 0 : 0;
+          const dias = diasEntre(base, agora.dia) + bonus;
           if (fin.ativo && !o.editadoManualmente && dias >= Number(fin.dias)) { fechar.push({ id: r.id, statusId: fin.statusId || "recusado" }); continue; }
           // ação correta pelo prazo: a mais avançada que já venceu (sem repetir as anteriores)
           let k = -1;
-          for (let j = passos.length - 1; j >= N; j--) { if (dias >= Number(passos[j].dias)) { k = j; break; } }
+          for (let j = passos.length - 1; j >= Math.max(N, 0); j--) {
+            if (j <= idxSt && j > 0) break;                       // não volta de status
+            if (j === 0 && !(N === 0 && (idxSt <= 0))) break;     // ação 0: só orçamento novo, ainda no status inicial
+            if (dias >= Number(passos[j].dias)) { k = j; break; }
+          }
           if (k < 0) continue;
           const tel = celular(o.telefone);
-          cand.push({ tipo: "orcamento", tabela: "orcamentos", id: r.id, reg: o, passo: k, tel, pulados: k - N, statusDestino: passos[k].statusId || "", nomeAcao: passos[k].nome || `ação ${k + 1}`, agenda: o.autoAgenda || null,
-            texto: preencher(textoPasso(cfg, passos[k], k), cfg, o) });
+          cand.push({ tipo: "orcamento", tabela: "orcamentos", id: r.id, reg: o, passo: k, tel, pulados: Math.max(0, k - N), statusDestino: passos[k].statusId || "", nomeAcao: passos[k].nome || `ação ${k + 1}`, agenda: o.autoAgenda || null,
+            texto: preencher(textoPasso(cfg, passos[k], k), cfg, o, descontoDoPasso(cfg, passos[k])) });
         }
         if (!data || data.length < 1000) break;
       }
@@ -209,18 +228,34 @@ Deno.serve(async (req: Request) => {
     const validos = (it: Item) => it.agenda && it.agenda.dia === agora.dia && it.agenda.passo === it.passo;
     const semHorario = cand.filter((it) => !validos(it)).sort((a, b) => String(a.reg.autoBaseData || a.reg.data || "").localeCompare(String(b.reg.autoBaseData || b.reg.data || "")));
     let agendadosAgora = 0, proximoDia = 0;
+    const gravarAgenda = async (it: Item, em: number) => {
+      const { data: row } = await admin.from(it.tabela).select("payload").eq("id", it.id).maybeSingle();
+      const reg = row && row.payload; if (!reg) return;
+      reg.autoAgenda = { dia: agora.dia, em, passo: it.passo, tent: 0 };
+      await admin.from(it.tabela).update({ payload: reg, updated_at: new Date().toISOString() }).eq("id", it.id);
+      it.agenda = reg.autoAgenda; it.reg = reg; agendadosAgora++;
+    };
     if (semHorario.length) {
-      const ultimo = Math.max(0, ...cand.filter(validos).map((it) => Number(it.agenda.em) || 0).filter((x) => x < 9e14));
-      const jan = janelaHoje(Date.now(), ultimo ? ultimo + 30000 : 0);
-      const d = jan ? distribuir(semHorario.length, jan) : { cabem: 0, horas: [] as number[] };
-      for (let i = 0; i < semHorario.length; i++) {
-        const it = semHorario[i];
-        if (i >= d.cabem) { proximoDia++; continue; }   // não coube hoje: entra na fila de amanhã
-        const { data: row } = await admin.from(it.tabela).select("payload").eq("id", it.id).maybeSingle();
-        const reg = row && row.payload; if (!reg) continue;
-        reg.autoAgenda = { dia: agora.dia, em: d.horas[i], passo: it.passo, tent: 0 };
-        await admin.from(it.tabela).update({ payload: reg, updated_at: new Date().toISOString() }).eq("id", it.id);
-        it.agenda = reg.autoAgenda; it.reg = reg; agendadosAgora++;
+      const fimDia = Date.parse(`${agora.dia}T${String(HORA_FIM).padStart(2, "0")}:00:00-03:00`);
+      const iniDia = Date.parse(`${agora.dia}T${String(HORA_INI).padStart(2, "0")}:00:00-03:00`);
+      let ultimo = Math.max(0, ...cand.filter(validos).map((it) => Number(it.agenda.em) || 0).filter((x) => x < 9e14));
+      // ação 0 (orçamento recém-salvo): sai logo, com ~1 min entre uma e outra; se já passou das 18h, fica para amanhã
+      const imediatos = semHorario.filter((it) => it.tipo === "orcamento" && it.passo === 0 && it.statusDestino && it.pulados === 0);
+      let t = Math.max(Date.now() + 25000, iniDia);
+      for (const it of imediatos) {
+        if (t >= fimDia - 60000) { proximoDia++; continue; }
+        await gravarAgenda(it, t + Math.floor(Math.random() * 20000));
+        ultimo = Math.max(ultimo, t); t += 70000;
+      }
+      // demais: janela restante do dia cortada em partes iguais, horário sorteado em cada uma (regras do aniversário)
+      const outros = semHorario.filter((it) => !imediatos.includes(it));
+      if (outros.length) {
+        const jan = janelaHoje(Date.now(), ultimo ? ultimo + 30000 : 0);
+        const d = jan ? distribuir(outros.length, jan) : { cabem: 0, horas: [] as number[] };
+        for (let i = 0; i < outros.length; i++) {
+          if (i >= d.cabem) { proximoDia++; continue; }   // não coube hoje: entra na fila de amanhã
+          await gravarAgenda(outros[i], d.horas[i]);
+        }
       }
     }
 
@@ -292,6 +327,7 @@ Deno.serve(async (req: Request) => {
       if (f.tipo === "orcamento") {
         reg.autoMensagensEnviadas = f.passo + 1;
         if (f.statusDestino) { reg.status = f.statusDestino; reg.statusAtualizadoEm = agoraIso; }
+        if (!motivoSem) { reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas[f.statusDestino || reg.status] = agoraIso; }   // visto de mensagem enviada deste status
         (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: passos[f.passo].id, nome: passos[f.passo].nome, por: "sistema", via: motivoSem ? "sem mensagem (" + motivoSem + ")" : "whatsapp", auto: true, pulou: f.pulados || 0 });
       } else { reg.posVendaEnviadoEm = agoraIso; reg.posVendaPor = motivoSem ? "sistema (sem mensagem: " + motivoSem + ")" : "sistema"; }
       await admin.from(f.tabela).update({ payload: reg, updated_at: agoraIso }).eq("id", f.id);

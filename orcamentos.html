@@ -184,6 +184,8 @@ textarea{border:1px solid var(--line-strong); border-radius:8px; background:var(
 .qo-card:hover{border-color:var(--line-strong,#c6ced6);}
 .qo-col.aberta .qo-card{padding:9px 10px;font-size:13px;border-radius:10px;}
 .qo-via{font-family:var(--mono,monospace);font-weight:700;font-size:11px;display:block;}
+.qo-visto{color:var(--ok);display:inline-flex;vertical-align:middle;}
+.qo-visto svg,.selo-status svg.ic-visto{stroke:var(--ok);stroke-width:3;}
 .qo-curto{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qo-cheio{display:none;}
 .qo-col.aberta .qo-curto{display:none;}
@@ -770,18 +772,36 @@ function finalOrc(){
   return a.final || { ativo:true, dias:Number(prazosAutoMsg().tFinal)||15, statusId:'recusado' };
 }
 function acoesAutoLigado(){ const a = config && config.orcamentoAcoes; return !!(a && a.auto); }
+/** Desconto especial do status (botão em Configurações › Status e Mensagens): com ele ligado o status manda a outra mensagem. */
+function descontoStatus(st){ const d = st && st.descontoEspecial; return d && d.ativo && Number(d.percentual)>0 ? Number(d.percentual) : 0; }
+function msgWhatsStatus(st){
+  if(!st) return '';
+  if(descontoStatus(st) && st.descontoEspecial.mensagemWhatsapp && String(st.descontoEspecial.mensagemWhatsapp).trim()) return st.descontoEspecial.mensagemWhatsapp;
+  return st.mensagemWhatsapp || '';
+}
+/** Visto de mensagem enviada: este orçamento já recebeu a mensagem do status em que está? (guarda `msgEnviadas`; vale também o histórico de ações) */
+function msgEnviadaDoStatus(o){
+  if(o.msgEnviadas && o.msgEnviadas[o.status]) return o.msgEnviadas[o.status];
+  const passos = passosOrc();
+  const h = (o.acoesLog||[]).find(a=> a && a.via==='whatsapp' && (()=>{ const p = passos.find(x=>x.id===a.passo); return p && p.statusId===o.status; })());
+  return h ? h.em : '';
+}
+function marcarMsgEnviada(o, statusId){ o.msgEnviadas = o.msgEnviadas || {}; o.msgEnviadas[statusId] = new Date().toISOString(); }
 function textoPassoOrc(p, idx){
   if(p.mensagem && p.mensagem.trim()) return p.mensagem;
   const st = statusList().find(x=>x.id===p.statusId);
+  if(st && msgWhatsStatus(st).trim()) return msgWhatsStatus(st);
   if(st && st.mensagemWhatsapp && st.mensagemWhatsapp.trim()) return st.mensagemWhatsapp;
   return MSG_ACAO_PADRAO[Math.min(idx, MSG_ACAO_PADRAO.length-1)];
 }
 function nomePrimeiro(t){ const p = String(t||'').trim().split(/\s+/)[0]||''; return p ? p.charAt(0).toUpperCase()+p.slice(1).toLowerCase() : 'cliente'; }
-function preencherMsgOrc(txt, o){
+function preencherMsgOrc(txt, o, descPerc){
+  descPerc = Number(descPerc)||0;
   const lj = (config.lojas||[]).find(l=>l.id===o.lojaId);
   const nomeLoja = (lj && (lj.nomePublico||lj.nomeFantasia||lj.nome)) || o.loja || 'Vilaça Joias';
   return String(txt||'').replaceAll('{cliente}', nomePrimeiro(o.cliente)).replaceAll('{loja}', nomeLoja)
-    .replaceAll('{vendedora}', o.vendedora||'').replaceAll('{valor}', fmtMoeda(o.valorTotal)).replaceAll('{validade}', fmtDate(o.validade))
+    .replaceAll('{vendedora}', nomePrimeiro(o.vendedora||'') === 'cliente' ? 'nossa equipe' : (o.vendedora||'')).replaceAll('{valor}', fmtMoeda(o.valorTotal)).replaceAll('{validade}', fmtDate(o.validade))
+    .replaceAll('{desconto}', descPerc ? String(descPerc).replace('.',',')+'%' : '').replaceAll('{valorDesconto}', fmtMoeda((Number(o.valorTotal)||0)*(1-descPerc/100)))
     .replace(/\n{3,}/g, '\n\n').trim();
 }
 /** Em que passo está o orçamento e se já venceu. null = fora do fluxo (rascunho, convertido ou encerrado). */
@@ -2055,7 +2075,7 @@ function renderQuadroOrc(base){
     const prim = String(o.cliente||'Sem cliente').trim().split(/\s+/)[0];
     const venc = estaVencido(o);
     return `<div class="qo-card" data-qoid="${escapeHtml(o.id)}" title="Toque para ver detalhes">
-      <span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span>
+      <span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}${msgEnviadaDoStatus(o) ? ` <span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',12)}</span>` : ''}</span>
       <span class="qo-curto">${escapeHtml(prim)}</span>
       <div class="qo-cheio">
         <div class="qo-nome">${escapeHtml(o.cliente||'Sem cliente')}</div>
@@ -2236,7 +2256,7 @@ function renderLista(main){
         <td class="nowrap td-meta" data-label="Validade"${vencido?' style="color:var(--danger);font-weight:600;"':''}>${fmtDate(o.validade)}${vencido?' · vencido':''}</td>
         <td class="num td-valor" data-label="Valor">${fmtMoeda(o.valorTotal)}</td>
         <td class="td-status" data-label="Status">
-          <button type="button" class="badge selo-status ${classeBadge}" data-orcstatus="${o.id}" title="${o.rascunho ? 'Clique para continuar preenchendo' : 'Clique para mudar o status'}">${escapeHtml(rotuloStatus)}${ic('baixo',12)}</button>
+          <button type="button" class="badge selo-status ${classeBadge}" data-orcstatus="${o.id}" title="${o.rascunho ? 'Clique para continuar preenchendo' : 'Clique para mudar o status'}${msgEnviadaDoStatus(o) ? ' · mensagem deste status enviada em '+fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10)) : ''}">${msgEnviadaDoStatus(o) ? ic('check',12)+' ' : ''}${escapeHtml(rotuloStatus)}${ic('baixo',12)}</button>
         </td>
         <td class="num td-acoes">
           <div class="acoes-linha">
@@ -2340,16 +2360,17 @@ async function mudarStatusOrcRapido(orcId){
     </div>
   `);
   const selSt = document.getElementById('novoStatusSelRapido'), chkMsg = document.getElementById('stEnviarMsg');
-  function ajustaChk(){ if(!chkMsg) return; const inf = statusInfoDe(selSt.value); const tem = !!(inf && inf.mensagemWhatsapp && inf.mensagemWhatsapp.trim()); chkMsg.disabled = !tem; chkMsg.checked = tem && !inf.encerra && selSt.value!==o.status; }
+  function ajustaChk(){ if(!chkMsg) return; const inf = statusInfoDe(selSt.value); const tem = !!(inf && msgWhatsStatus(inf).trim()); chkMsg.disabled = !tem; chkMsg.checked = tem && !inf.encerra && selSt.value!==o.status; }
   selSt.addEventListener('change', ajustaChk); ajustaChk();
   document.getElementById('btnCancelarStatusRapido').addEventListener('click', closeModal);
   document.getElementById('btnSalvarStatusRapido').addEventListener('click', async ()=>{
     const novoId = selSt.value, enviar = !!(chkMsg && chkMsg.checked), inf = statusInfoDe(novoId);
     if(enviar){
       if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
-      const okEnvio = window.WhatsAuto ? await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(inf.mensagemWhatsapp, o), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' }) : false;
+      const okEnvio = window.WhatsAuto ? await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(msgWhatsStatus(inf), o, descontoStatus(inf)), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' }) : false;
       if(okEnvio!==true) return;   // não mudou nada: o aviso do envio já apareceu
     }
+    if(enviar) marcarMsgEnviada(o, novoId);
     o.status = novoId;
     o.rascunho = false;
     o.statusAtualizadoEm = new Date().toISOString();
@@ -2367,12 +2388,13 @@ async function executarAcaoOrc(orcId, idx){
   if(!o.telefone){ showToast('Este orçamento não tem WhatsApp do cliente. Abra o orçamento e inclua o telefone.'); return false; }
   if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return false;
   if(!window.WhatsAuto){ showToast('Envio automático indisponível. Recarregue a página e tente de novo.'); return false; }
-  const texto = preencherMsgOrc(textoPassoOrc(p, idx), o);
+  const texto = preencherMsgOrc(textoPassoOrc(p, idx), o, descontoStatus(statusList().find(x=>x.id===p.statusId)));
   const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' });
   if(ok!==true) return false;
   const agora = new Date().toISOString();
   o.autoMensagensEnviadas = idx+1;
   if(p.statusId && statusList().some(x=>x.id===p.statusId)){ o.status = p.statusId; o.statusAtualizadoEm = agora; }
+  marcarMsgEnviada(o, o.status);
   (o.acoesLog = o.acoesLog || []).push({ em:agora, passo:p.id, nome:p.nome, por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
   await orcamentoSalvar(o);
   renderView();
@@ -2479,7 +2501,7 @@ function abrirConfigAcoes(){
     return `<div class="card" style="padding:12px;margin:10px 0;" data-passo="${i}">
       <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
         <div class="field" style="flex:2;min-width:160px;"><label>Nome da ação</label><input type="text" data-f="nome" value="${escapeHtml(p.nome)}"></div>
-        <div class="field" style="width:110px;"><label>Dias depois</label><input type="number" min="1" data-f="dias" value="${Number(p.dias)||1}"></div>
+        <div class="field" style="width:110px;"><label>Dias depois</label><input type="number" min="0" data-f="dias" value="${Number(p.dias)||0}"></div>
         <div class="field" style="flex:2;min-width:160px;"><label>Depois desta ação, passa para o status</label><select data-f="statusId">${statusOpcoesHtml(p.statusId)}</select></div>
         <button type="button" class="btn btn-ghost btn-sm" data-rem="${i}" ${passos.length<=1?'disabled':''}>Remover</button>
       </div>
@@ -2540,7 +2562,7 @@ function abrirConfigAcoes(){
     document.querySelectorAll('[data-passo]').forEach(box=>{
       const i = Number(box.dataset.passo), p = passos[i]; if(!p) return;
       p.nome = box.querySelector('[data-f=nome]').value.trim() || ('Ação '+(i+1));
-      p.dias = Math.max(1, Number(box.querySelector('[data-f=dias]').value)||1);
+      p.dias = Math.max(0, Number(box.querySelector('[data-f=dias]').value)||0);
       { const sv = box.querySelector('[data-f=statusId]').value; if(sv!=='__novo__') p.statusId = sv; }
       p.mensagem = box.querySelector('[data-f=mensagem]').value;
     });
