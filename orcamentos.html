@@ -164,6 +164,35 @@ textarea{border:1px solid var(--line-strong); border-radius:8px; background:var(
 .filters .contagem{margin-left:auto; font-size:12.5px; color:var(--muted); white-space:nowrap;}
 
 /* ── Tabelas ────────────────────────────────────────────────── */
+/* 10/11: QUADRO dos orçamentos — colunas por status dividem toda a largura; fechada = status + via + 1º nome; aberta = cartão completo */
+.modo-orc{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--surface);}
+.modo-orc button{border:none;background:transparent;color:var(--ink-soft);font:600 13px/1 inherit;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+.modo-orc button.ativo{background:var(--primary-soft,#e8f0f6);color:var(--primary,#1f5f7a);}
+.quadro-orc{display:flex;gap:8px;padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:14px;align-items:flex-start;overflow-x:auto;margin-bottom:14px;}
+.qo-col{flex:1 1 0;min-width:84px;background:var(--surface-2,#f3f5f7);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;max-height:calc(100vh - 260px);transition:flex-grow .18s ease;}
+.qo-col.aberta{flex:4 1 0;min-width:260px;}
+.qo-head{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:7px 5px;border:0;border-bottom:1px solid var(--line);background:transparent;color:inherit;font:inherit;cursor:pointer;border-radius:12px 12px 0 0;}
+.qo-head:hover{background:var(--primary-soft,#e8f0f6);}
+.qo-head .badge{white-space:normal;text-align:center;font-size:10px;line-height:1.2;padding:4px 6px;border-radius:8px;width:100%;justify-content:center;}
+.qo-col.aberta .qo-head{justify-content:space-between;padding:10px 12px;}
+.qo-col.aberta .qo-head .badge{width:auto;font-size:12px;white-space:nowrap;padding:4px 10px;border-radius:999px;}
+.qo-head .qo-seta{display:none;opacity:.6;transition:transform .18s;}
+.qo-col.aberta .qo-head .qo-seta{display:inline-flex;transform:rotate(90deg);}
+.qo-body{padding:5px;display:flex;flex-direction:column;gap:5px;overflow-y:auto;min-height:40px;}
+.qo-col.aberta .qo-body{padding:8px;gap:8px;}
+.qo-card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:5px 6px;cursor:pointer;font-size:11.5px;}
+.qo-card:hover{border-color:var(--line-strong,#c6ced6);}
+.qo-col.aberta .qo-card{padding:9px 10px;font-size:13px;border-radius:10px;}
+.qo-via{font-family:var(--mono,monospace);font-weight:700;font-size:11px;display:block;}
+.qo-curto{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.qo-cheio{display:none;}
+.qo-col.aberta .qo-curto{display:none;}
+.qo-col.aberta .qo-cheio{display:block;}
+.qo-col.aberta .qo-via{font-size:12.5px;}
+.qo-nome{font-weight:600;}
+.qo-sub{color:var(--muted);font-size:12px;margin-top:2px;}
+.qo-acoes{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:7px;}
+.qo-vazio{color:var(--muted);font-size:11px;text-align:center;padding:6px 0;}
 .card-tabela{padding:0; overflow:hidden;}
 .card-tabela .tabela-rolagem{overflow-x:auto;}
 table{width:100%; border-collapse:collapse; font-size:13px;}
@@ -2006,6 +2035,57 @@ function nomeLojaOrc(o){
   return l ? l.nome : (o.loja || '—');
 }
 let filtrosOrc = { busca:'', loja:null, status:'', vendedora:'', hoje:true, de:'', ate:'', conv:false };   // lembra os filtros ao mudar status/voltar à lista
+function modoOrc(){ try{ return localStorage.getItem('vilaca_modo_orc')==='quadro' ? 'quadro' : 'lista'; }catch(e){ return 'lista'; } }
+function quadroOrcAbertas(){ try{ return new Set(JSON.parse(localStorage.getItem('vilaca_quadro_orc_abertas')||'[]')); }catch(e){ return new Set(); } }
+function classeBadgeOrc(o){
+  const info = statusInfoDe(o.status);
+  if(o.rascunho) return 'badge-rascunho';
+  if(o.convertidoEm) return 'badge-aprovado';
+  if(info && info.encerra) return (o.status==='recusado') ? 'badge-vencido' : 'badge-aprovado';
+  return 'badge-pendente';
+}
+/** QUADRO: uma coluna por status (e uma de rascunhos, se houver). Fechada: status + via + 1º nome. Aberta: cartão completo. */
+function renderQuadroOrc(base){
+  const wrap = document.getElementById('quadroOrc'); if(!wrap) return;
+  const abertas = quadroOrcAbertas();
+  const colunas = statusList().map(s=>({ id:s.id, nome:s.nome, itens: base.filter(o=>!o.rascunho && o.status===s.id), cls: s.encerra ? (s.id==='recusado'?'badge-vencido':'badge-aprovado') : 'badge-pendente' }));
+  const rasc = base.filter(o=>o.rascunho);
+  if(rasc.length) colunas.unshift({ id:'__rascunho__', nome:'Rascunho', itens:rasc, cls:'badge-rascunho' });
+  const cartao = o=>{
+    const prim = String(o.cliente||'Sem cliente').trim().split(/\s+/)[0];
+    const venc = estaVencido(o);
+    return `<div class="qo-card" data-qoid="${escapeHtml(o.id)}" title="Toque para ver detalhes">
+      <span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span>
+      <span class="qo-curto">${escapeHtml(prim)}</span>
+      <div class="qo-cheio">
+        <div class="qo-nome">${escapeHtml(o.cliente||'Sem cliente')}</div>
+        <div class="qo-sub">${escapeHtml(o.loja||'—')} · ${escapeHtml(o.vendedora||'—')}</div>
+        <div class="qo-sub">${fmtDate(o.data)} · <span${venc?' style="color:var(--danger);font-weight:700;"':''}>validade ${fmtDate(o.validade)}${venc?' (vencido)':''}</span></div>
+        <div class="qo-acoes"><b>${fmtMoeda(o.valorTotal)}</b><button type="button" class="btn btn-ghost btn-sm" data-qostatus="${escapeHtml(o.id)}">${o.rascunho?'Continuar':'Mudar status'}</button></div>
+      </div>
+    </div>`;
+  };
+  wrap.innerHTML = colunas.map(c=>`<section class="qo-col${abertas.has(c.id)?' aberta':''}" data-qocol="${escapeHtml(c.id)}" aria-label="${escapeHtml(c.nome)}">
+      <button type="button" class="qo-head" data-qotoggle="${escapeHtml(c.id)}" aria-expanded="${abertas.has(c.id)}" title="Toque para abrir ou fechar esta coluna"><span class="badge ${c.cls}">${escapeHtml(c.nome)}</span><span class="qo-seta">${ic('direita',14)}</span></button>
+      <div class="qo-body">${c.itens.length ? c.itens.map(cartao).join('') : '<div class="qo-vazio">—</div>'}</div>
+    </section>`).join('');
+  wrap.querySelectorAll('[data-qotoggle]').forEach(h=> h.addEventListener('click', ()=>{
+    const col = h.closest('.qo-col'), id = h.dataset.qotoggle, abre = !col.classList.contains('aberta');
+    col.classList.toggle('aberta', abre); h.setAttribute('aria-expanded', abre);
+    const set = quadroOrcAbertas(); if(abre) set.add(id); else set.delete(id);
+    try{ localStorage.setItem('vilaca_quadro_orc_abertas', JSON.stringify(Array.from(set))); }catch(e){}
+  }));
+  wrap.querySelectorAll('[data-qoid]').forEach(c=> c.addEventListener('click', e=>{
+    if(e.target.closest('[data-qostatus]')) return;
+    const o = orcamentos.find(x=>x.id===c.dataset.qoid); if(o) abrirDetalheOrcamento(o);
+  }));
+  wrap.querySelectorAll('[data-qostatus]').forEach(b=> b.addEventListener('click', e=>{
+    e.stopPropagation();
+    const o = orcamentos.find(x=>x.id===b.dataset.qostatus); if(!o) return;
+    if(o.rascunho){ orcamentoEmEdicao = o; currentTab = 'novo'; renderTabs(); renderView(); }
+    else mudarStatusOrcRapido(o.id);
+  }));
+}
 function restringirLoja(){ return !!(currentUser && (currentUser.nivel==='vendedora' || currentUser.nivel==='oficina') && window.__lojaAtual && window.__lojaAtual.id); }
 function renderLista(main){
   const avisos = orcamentosParaAvisar();
@@ -2019,6 +2099,10 @@ function renderLista(main){
         <p class="page-sub">Acompanhe cada orçamento, chame o cliente no WhatsApp e converta em venda ou pedido. Clique no status para mudar.</p>
       </div>
       <div class="head-acoes">
+        <div class="modo-orc" role="group" aria-label="Forma de exibição">
+          <button type="button" data-modo-orc="lista" class="${modoOrc()==='lista'?'ativo':''}">${ic('lista',15)} Lista</button>
+          <button type="button" data-modo-orc="quadro" class="${modoOrc()==='quadro'?'ativo':''}">${ic('grade',15)} Quadro</button>
+        </div>
         ${ehGestaoLoja() ? `<button type="button" class="btn btn-ghost" id="btnConfigMsgAuto" title="Mensagens, prazos e envio automático das ações de acompanhamento">${ic('engrenagem')} Ações automáticas</button>` : ''}
         ${podeCriarOrcamento() ? `<button type="button" class="btn btn-accent" id="btnNovoOrcamento">${ic('mais')} Novo orçamento</button>` : ''}
       </div>
@@ -2055,6 +2139,7 @@ function renderLista(main){
     </div>
     <div id="statsOrc"></div>
     <div id="blocosAcoes"></div>
+    <div id="quadroOrc" class="quadro-orc" style="display:none;"></div>
     <div class="card card-tabela">
       <div class="tabela-rolagem">
       <table id="tabelaOrc" class="tabela-cartoes">
@@ -2102,6 +2187,26 @@ function renderLista(main){
     if(busca) lista = Busca.filtrar(lista, busca, o=>[o.cliente,o.codigoVia]);   // mais parecido com o digitado primeiro
     const tbody = document.getElementById('tbodyOrc');
     const cont = document.getElementById('contagemOrc');
+    { const quadroOn = modoOrc()==='quadro';
+      const ct = document.querySelector('.card-tabela'); if(ct) ct.style.display = quadroOn ? 'none' : '';
+      const qo = document.getElementById('quadroOrc'); if(qo) qo.style.display = quadroOn ? '' : 'none';
+      // no Quadro, "status" e "só gerados hoje" não se aplicam (as colunas já são os status)
+      const fs = document.getElementById('fStatus'); if(fs) fs.style.display = quadroOn ? 'none' : '';
+      const lh = document.getElementById('fHoje'); if(lh && lh.closest('label')) lh.closest('label').style.display = quadroOn ? 'none' : '';
+      if(quadroOn){
+        const baseQ = orcamentos.filter(o=>{
+          if(!mostrarConv && o.convertidoEm) return false;
+          if(de || ate){ const dia = diaCriacao(o); if(!dia || (de && dia<de) || (ate && dia>ate)) return false; }
+          if(lojaFiltro && o.lojaId!==lojaFiltro) return false;
+          if(vendedoraFiltro && o.vendedora!==vendedoraFiltro) return false;
+          if(busca && !Busca.testa([o.cliente,o.codigoVia].join(' '), busca)) return false;
+          return true;
+        }).slice().sort((a,b)=> (diaCriacao(b)+String(b.criadoEm||'')).localeCompare(diaCriacao(a)+String(a.criadoEm||'')));
+        baseQ.forEach(o=> aplicarPrazoFinalAutoSeNecessario(o));
+        if(cont) cont.textContent = baseQ.length===1 ? '1 orçamento' : baseQ.length + ' orçamentos';
+        renderQuadroOrc(baseQ);
+        return;
+      } }
     if(cont) cont.textContent = (lista.length===1 ? '1 orçamento' : lista.length + ' orçamentos') + (soHoje ? ' gerados hoje' : (de||ate) ? ' no período' : '');
     if(lista.length===0){
       tbody.innerHTML = orcamentos.length===0
@@ -2209,6 +2314,11 @@ function renderLista(main){
   document.getElementById('fBusca').addEventListener('input', draw);
   document.getElementById('fHoje').addEventListener('change', draw);
   document.getElementById('fConv').addEventListener('change', draw);
+  main.querySelectorAll('[data-modo-orc]').forEach(b=> b.addEventListener('click', ()=>{
+    try{ localStorage.setItem('vilaca_modo_orc', b.dataset.modoOrc==='quadro'?'quadro':'lista'); }catch(e){}
+    main.querySelectorAll('[data-modo-orc]').forEach(x=> x.classList.toggle('ativo', x===b));
+    draw();
+  }));
 }
 
 /* Ações rápidas direto na linha da lista (mesmo padrão usado no módulo Marketing):
