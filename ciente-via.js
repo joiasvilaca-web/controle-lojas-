@@ -31,6 +31,7 @@
       var r=await chamar({acao:'ciente'}); enviando=false;
       if(!r.ok){ b.disabled=false; b.textContent='Ciente — tentar de novo'; return; }
       var a=r.avaliacao;
+      if(a && o.tipo==='orc') a.google=null;   // orçamento: só avalia o atendimento (sem Google)
       if(a && a.pendente && window.AvaliacaoVia && window.AvaliacaoVia.etapas) window.AvaliacaoVia.etapas(ov, a, chamar, fim);
       else fim();
     };

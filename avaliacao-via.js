@@ -41,15 +41,15 @@
     }
     var est=5;
     function estrelas(){ return [1,2,3,4,5].map(function(n){ return '<button type="button" class="av-star'+(n<=est?' on':'')+'" data-n="'+n+'" aria-label="'+n+' estrela'+(n>1?'s':'')+'">★</button>'; }).join(''); }
-    ov.innerHTML='<div class="av-box"><h2>Como foi seu atendimento'+(a.atendente?' com '+esc(String(a.atendente).split(' ')[0]):'')+'?</h2><p>Toque nas estrelas. Se quiser, conte como foi — a nossa equipe lê cada mensagem.</p>'
+    ov.innerHTML='<div class="av-box"><h2>Como foi seu atendimento'+(a.atendente?' com '+esc(String(a.atendente).split(' ')[0]):'')+'?</h2><p>Toque nas estrelas para avaliar o atendimento.</p>'
       +'<div class="av-stars" data-st>'+estrelas()+'</div>'
-      +'<textarea class="av-txt" data-txt maxlength="1500" placeholder="Conte como foi sua experiência (opcional)"></textarea>'
+      +'<div data-wrap style="display:none;"><p style="margin-bottom:8px;">Sentimos muito! Conte o que podemos melhorar — a nossa equipe lê cada mensagem.</p><textarea class="av-txt" data-txt maxlength="1500" placeholder="Escreva aqui o que aconteceu (opcional)"></textarea></div>'
       +'<div class="av-row"><button class="av-btn sec" data-pular>Pular</button><button class="av-btn" data-env>Enviar</button></div></div>';
     var st=ov.querySelector('[data-st]');
-    st.addEventListener('click',function(e){ var b=e.target.closest('[data-n]'); if(!b) return; est=Number(b.dataset.n); st.innerHTML=estrelas(); });
+    st.addEventListener('click',function(e){ var b=e.target.closest('[data-n]'); if(!b) return; est=Number(b.dataset.n); st.innerHTML=estrelas(); ov.querySelector('[data-wrap]').style.display = est<=3 ? 'block' : 'none'; });
     async function enviar(pulou){
       var bs=ov.querySelectorAll('button'); bs.forEach(function(b){ b.disabled=true; });
-      var r=await chamar(pulou?{acao:'avaliar',pulou:true}:{acao:'avaliar',estrelas:est,comentario:ov.querySelector('[data-txt]').value});
+      var r=await chamar(pulou?{acao:'avaliar',pulou:true}:{acao:'avaliar',estrelas:est,comentario:(est<=3?ov.querySelector('[data-txt]').value:'')});
       if(!r.ok){ bs.forEach(function(b){ b.disabled=false; }); return; }
       etapaGoogle();
     }
