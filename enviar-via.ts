@@ -1,3 +1,7 @@
+// v7 (10/11): número de disparo (vilaca) — (1) fora do ar: a mensagem (feita por pessoa) entra na FILA (marketing_fila tipo "via") e sai
+//   sozinha quando o número voltar, pelas regras da fila única (9h–20h, 5 min entre automáticas); (2) cada envio fica em disparo_envios (telefone, loja,
+//   vendedora) para a resposta automática dizer com quem falar; (3) envio feito na hora empurra o próximo automático 5 min (disparo_manual);
+//   (4) texto: sai "Não responda esta mensagem"; entra "Para falar com a gente, é só clicar no link" + "Responda com 👍 para confirmar que recebeu."
 // v6 (08/11): o servidor monta a mensagem padrão sozinho para os/venda/orcamento. v5 (08/11): `padrao` {cliente, atendente, link} monta a mensagem sem dados da via. v4 (08/11): op `consultar` (marcas "já enviado") + botao/rotulo no log. v3: wa.me primeiro (botão Iniciar conversa).
 // enviar-via v2 (05/11/2026) — v2: loja opcional (sem loja ou loja desconhecida = instância "vilaca"); usado também por Gravações, Reserva, Site e Retirada.
 // enviar-via v1 (05/11/2026) — dispara a via (link) ao cliente pelo WhatsApp da loja, sem abrir o WhatsApp Web.
@@ -68,8 +72,21 @@ function mensagemPadrao(pd: any, lojaNome: string | null): string {
   const quem = (atend ? atend : "") + (atend && loja ? " · " : "") + (loja ? loja : "");
   return l1 + "\n\n" + (quem ? "Atendimento: " + quem + ".\n\n" : "")
     + "Todas as informações da sua via podem ser visualizadas pelo link:\n" + link
-    + "\n\nNão responda esta mensagem. Caso precise falar conosco, clique no link:\nhttps://wa.me/5532988307617";
+    + "\n\nPara falar com a gente, é só clicar no link:\nhttps://wa.me/5532988307617"
+    + "\n\n" + LINHA_JOINHA;
 }
+const WA_ATENDIMENTO = "https://wa.me/5532988307617";
+const LINHA_JOINHA = "Responda com 👍 para confirmar que recebeu.";
+/** Texto do número de disparo: sem "não responda", com o link de atendimento e o pedido do 👍 (vale também para textos antigos guardados nas configurações). */
+function ajustaTextoDisparo(t: string): string {
+  let s = String(t || "");
+  s = s.replace(/N[ãa]o responda (a |esta |essa )?mensagem[.!]?\s*/gi, "");
+  s = s.replace(/Caso precise falar conosco,?\s*clique no link:?/gi, "Para falar com a gente, é só clicar no link:");
+  if (!/wa\.me\/5532988307617/.test(s)) s = s.trimEnd() + "\n\nPara falar com a gente, é só clicar no link:\n" + WA_ATENDIMENTO;
+  if (!/Responda com 👍/.test(s)) s = s.trimEnd() + "\n\n" + LINHA_JOINHA;
+  return s.replace(/\n{3,}/g, "\n\n").trim();
+}
+const fone8 = (t: string) => String(t || "").replace(/\D/g, "").slice(-8);
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -131,7 +148,27 @@ Deno.serve(async (req: Request) => {
       const js = await rs.json().catch(() => ({}));
       estado = String((js && js.instance && js.instance.state) || js.state || "");
     } catch (_) { estado = ""; }
-    if (estado !== "open") return json({ ok: false, fallback: true, erro: `WhatsApp da loja (${instancia}) não está conectado.` });
+    const disparo = instancia === INSTANCIA_PADRAO;
+    if (disparo) texto = ajustaTextoDisparo(texto);
+    const vendedora = String((body.padrao && body.padrao.atendente) || body.vendedora || (String(body.tipo || "") === "chamar_cliente" ? (user.apelido || user.nome || "") : "") || "").trim();
+    const lojaReg = lojaPad || lojaId || "";
+    if (estado !== "open") {
+      if (!disparo) return json({ ok: false, fallback: true, erro: `WhatsApp da loja (${instancia}) não está conectado.` });
+      // número de disparo fora do ar: a mensagem entra na fila e sai quando ele voltar (regras da fila única)
+      const tipo = String(body.tipo || ""), regId = String(body.registroId || ""), botao = String(body.botao || "").slice(0, 40);
+      let marcar: any = null;
+      const TB: Record<string, string> = { os: "ordens_servico", orcamento: "orcamentos", orc_acao: "orcamentos" };
+      if (TB[tipo] && regId) { const { data: rw } = await admin.from(TB[tipo]).select("payload").eq("id", regId).maybeSingle(); const st = rw && rw.payload && rw.payload.status; if (st) marcar = { tabela: TB[tipo], chave: String(st) }; }
+      const linha: any = { tipo: "via", campanha: "VIA (WhatsApp fora do ar)", cliente_nome: String((body.padrao && body.padrao.cliente) || body.cliente || "").slice(0, 160), telefone: numero, texto: waMePrimeiro(texto),
+        loja_id: lojaReg || null, criado_por: user.apelido || user.nome || "", dia_criacao: new Date().toISOString().slice(0, 10), status: "pendente",
+        registro_tabela: tipo || null, registro_id: regId || null, botao, rotulo: String(body.rotulo || "").slice(0, 60), vendedora: vendedora || null, marcar, atualizado_em: new Date().toISOString() };
+      let ja: any = null;
+      if (regId) { const { data: jx } = await admin.from("marketing_fila").select("id").eq("status", "pendente").eq("tipo", "via").eq("registro_id", regId).eq("botao", botao).limit(1); ja = jx && jx[0]; }
+      const { error: eFila } = ja ? await admin.from("marketing_fila").update(linha).eq("id", ja.id) : await admin.from("marketing_fila").insert(linha);
+      if (eFila) { console.error("enviar-via fila", eFila); return json({ ok: false, fallback: true, erro: "O WhatsApp de envio está fora do ar e não foi possível guardar a mensagem na fila." }); }
+      try { await admin.from("auditoria_log").insert({ usuario_id: user.id || null, usuario_nome: user.nome || null, nivel: user.nivel || null, loja_sessao: lojaId || null, acao: "via_whatsapp_na_fila", modulo: "Envio da via", tabela: tipo, registro_id: regId, resumo: `WhatsApp fora do ar: a via ${String(body.via || "")} entrou na fila para …${numero.slice(-4)}`, detalhe: { instancia, botao } }); } catch (_) {}
+      return json({ ok: false, enfileirado: true, erro: "O WhatsApp de envio está fora do ar agora. A mensagem ficou na FILA e sai sozinha quando o número voltar (das 9h às 20h)." });
+    }
 
     const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`, { method: "POST", headers: H, body: JSON.stringify({ number: numero, text: waMePrimeiro(texto) }), signal: AbortSignal.timeout(20000) });
     const rj = await r.json().catch(() => ({}));
@@ -141,7 +178,11 @@ Deno.serve(async (req: Request) => {
         acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Envio da via", tabela: String(body.tipo || ""), registro_id: String(body.registroId || ""),
         resumo: `${ok ? "Enviou" : "Falhou ao enviar"} a via ${String(body.via || "")} por WhatsApp (${instancia}) para ${numero.slice(0, 4)}…${numero.slice(-4)}`, detalhe: { instancia, status: r.status, botao: String(body.botao || "").slice(0, 40), rotulo: String(body.rotulo || "").slice(0, 60) }, agente: String(req.headers.get("user-agent") || "").slice(0, 160) });
     } catch (e) { console.error("log enviar-via", e); }
-    if (!ok) return json({ ok: false, fallback: true, erro: "O WhatsApp recusou o envio. Abrindo o WhatsApp manual." });
+    if (ok && disparo) {
+      try { await admin.rpc("disparo_manual"); } catch (_) {}
+      try { await admin.from("disparo_envios").insert({ fone8: fone8(numero), telefone: numero, loja_id: lojaReg || null, vendedora: vendedora || null, tipo: String(body.tipo || ""), registro_id: String(body.registroId || "") || null, origem: "manual" }); } catch (_) {}
+    }
+    if (!ok) return json({ ok: false, fallback: true, erro: "O WhatsApp recusou o envio." });
     return json({ ok: true, instancia });
   } catch (e) {
     console.error("enviar-via", e);

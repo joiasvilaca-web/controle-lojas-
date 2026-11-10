@@ -1,3 +1,7 @@
+// disparo-webhook v3 (10/11/2026): (1) curtida/reação, figurinha, aviso do sistema, 👍 sozinho, "ok", "obrigado"… → NÃO responde nada;
+//   (2) qualquer outra mensagem → manda o link do atendimento e o menu das lojas. Se o último disparo para aquele telefone (disparo_envios, 30 dias) foi de
+//   Marechal Center, João Beraldo ou Jardim Norte, mostra só a opção dessa loja e o nome de quem atendeu; senão (aniversário, mala direta, Ecommerce,
+//   Reforma ou sem registro), mostra as 3 lojas. Continua no máximo 1 resposta a cada 12 h por número. SAIR continua igual.
 // disparo-webhook v2 (07/11/2026): quem responde SAIR (ou PARAR, CANCELAR…) ganha a tag MARKETING OFF no cadastro, tem as mensagens pendentes da fila canceladas e recebe uma confirmação.
 // disparo-webhook v1 (05/11/2026) — webhook da instância "vilaca" (número só de disparo: vias, aniversário, campanhas).
 // Não registra nada no CHAT e não aciona o bot. Se um cliente responder, manda UMA resposta automática
@@ -33,6 +37,44 @@ async function sairDaLista(numero: string): Promise<void> {
   if (ids.length) await admin.from("marketing_fila").update({ status: "cancelado", erro: "Cliente pediu para sair (respondeu SAIR)", atualizado_em: new Date().toISOString() }).in("id", ids);
 }
 
+// ---------- v3: o que é "só curtir / notificação" ----------
+const TIPOS_SILENCIO = ["reactionMessage", "stickerMessage", "protocolMessage", "pollUpdateMessage", "senderKeyDistributionMessage", "messageContextInfo", "editedMessage", "keepInChatMessage", "pinInChatMessage", "encReactionMessage"];
+const PALAVRAS_OK = ["ok", "okay", "okk", "blz", "beleza", "certo", "recebi", "recebido", "obrigado", "obrigada", "obg", "brigado", "brigada", "valeu", "vlw", "show", "top", "perfeito", "otimo", "sim", "ta", "ta bom", "ta certo", "entendi", "obrigado recebi", "recebi obrigada", "recebi obrigado", "ok obrigado", "ok obrigada"];
+function soReacao(d: any, m: any): boolean {
+  const tipo = String((d && d.messageType) || "");
+  if (TIPOS_SILENCIO.includes(tipo)) return true;
+  const chaves = Object.keys(m || {}).filter((k) => k !== "messageContextInfo");
+  if (!chaves.length) return true;   // sem conteúdo (aviso do sistema)
+  if (chaves.every((k) => TIPOS_SILENCIO.includes(k))) return true;
+  const bruto = String(m.conversation || (m.extendedTextMessage && m.extendedTextMessage.text) || "");
+  if (!bruto && (m.conversation !== undefined || m.extendedTextMessage)) return true;
+  if (bruto) {
+    if (!/[\p{L}\p{N}]/u.test(bruto)) return true;   // só emoji/pontuação (👍, ❤️, 🙏…)
+    const limpo = semAcento(bruto);
+    if (PALAVRAS_OK.includes(limpo)) return true;
+  }
+  return false;
+}
+// ---------- v3: resposta com a loja e quem atendeu ----------
+const LOJAS_MENU: Record<string, string> = { loja_mc: "1 - LOJA MARECHAL CENTER", loja_jb: "2 - LOJA JOÃO BERALDO", loja_jn: "3 - LOJA JARDIM NORTE" };
+const bonito = (t: string) => String(t || "").trim().toLowerCase().replace(/(^|\s)\S/g, (x) => x.toUpperCase());
+async function textoResposta(numero: string): Promise<string> {
+  const f8 = numero.replace(/\D/g, "").slice(-8);
+  const desde = new Date(Date.now() - 30 * 86400000).toISOString();
+  const { data } = await admin.from("disparo_envios").select("loja_id, vendedora, tipo").eq("fone8", f8).gte("em", desde).order("em", { ascending: false }).limit(1);
+  const ult = data && data[0];
+  const linhaLoja = ult && ult.loja_id ? LOJAS_MENU[String(ult.loja_id)] : "";
+  const vend = ult && ult.vendedora ? bonito(String(ult.vendedora).split(/\s+/).slice(0, 2).join(" ")) : "";
+  let t = "Olá! 😊 Este número da Vilaça Joias só envia avisos e não recebe mensagens.\n\nPara falar com a gente, é só clicar no link:\nhttps://wa.me/5532988307617\n\n";
+  if (linhaLoja) {
+    t += "Quando o atendimento pedir a loja, digite:\n" + linhaLoja;
+    if (vend) t += "\n\nE peça para falar com *" + vend + "*.";
+  } else {
+    t += "Quando o atendimento pedir a loja, digite o número dela:\n" + Object.values(LOJAS_MENU).join("\n");
+  }
+  return t;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return ok();
   try {
@@ -60,12 +102,15 @@ Deno.serve(async (req: Request) => {
         await admin.from("disparo_respostas").upsert({ numero, respondido_em: new Date().toISOString(), instancia });
         continue;
       }
+      if (soReacao(d, m)) continue;   // curtiu, figurinha, aviso do sistema, 👍, "ok"…: não responde
       const { data: ult } = await admin.from("disparo_respostas").select("respondido_em").eq("numero", numero).maybeSingle();
       if (ult && Date.now() - new Date(ult.respondido_em).getTime() < INTERVALO_MS) continue;
       await admin.from("disparo_respostas").upsert({ numero, respondido_em: new Date().toISOString(), instancia });
+      let texto = TEXTO_PADRAO;
+      try { texto = await textoResposta(numero); } catch (e) { console.error("disparo-webhook resposta", e); }
       const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`, {
         method: "POST", headers: { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY },
-        body: JSON.stringify({ number: numero, text: seg.DISPARO_RESPOSTA_TEXTO || TEXTO_PADRAO }), signal: AbortSignal.timeout(20000),
+        body: JSON.stringify({ number: numero, text: texto }), signal: AbortSignal.timeout(20000),
       });
       if (!r.ok) console.error("disparo-webhook envio", r.status, await r.text().catch(() => ""));
     }

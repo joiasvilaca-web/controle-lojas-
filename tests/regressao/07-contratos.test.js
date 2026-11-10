@@ -1,9 +1,6 @@
 /* Contratos de código: regras que já deram bug e que um teste de tela não pegaria facilmente. */
 module.exports = { casos: [
-  { nome: 'Envio automático: janela diária 08:30–19:00', bug: 'janela era 9h–18h fixa', rodar: async ({ t, ler }) => {
-    const s = ler('acompanhamento-auto.ts');
-    t.ok(/MIN_INI = 8 \* 60 \+ 30, MIN_FIM = 19 \* 60/.test(s), 'constantes'); t.ok(/agora\.min >= MIN_INI && agora\.min < MIN_FIM/.test(s), 'checagem do horário');
-  } },
+  // 10/11: a regra da janela mudou a pedido (9h–20h, com reserva 19h–20h) — o teste da janela passou para 09-disparo-fila-unica.test.js
   { nome: 'Salvar pós-venda/ações automáticas passa pela função config-chave', bug: 'gateway só aceitava 2 chaves ("chave não permitida")', rodar: async ({ t, ler }) => {
     const chaves = ['posVendaAuto', 'orcamentoAcoes', 'orcamentoAutoMsgConfig', 'statusOrcamento', 'pedidoAcoes'];
     const f = ler('config-chave.ts'); chaves.forEach(k => t.ok(f.includes('"' + k + '"'), 'config-chave.ts sem ' + k));

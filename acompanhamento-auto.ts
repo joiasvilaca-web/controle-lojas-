@@ -1,3 +1,8 @@
+// acompanhamento-auto v10 (10/11/2026) — FILA ÚNICA DO NÚMERO DE DISPARO (vilaca): planejamento das 9h às 19h (19h–20h fica de reserva para o que
+//   atrasou/interrupções; nada sai depois das 20h); entre duas mensagens automáticas, no mínimo 5 min (5–7 min sorteados; com poucas mensagens, espalhadas pelo
+//   dia) — a vez é pega no banco (disparo_vez), dividida com o Marketing; Venda/Pedido/Orçamento têm prioridade sobre aniversário/mala direta. Envio feito por
+//   pessoa (orçamento salvo, botões) sai na hora e empurra o próximo automático 5 min (disparo_manual). O que não sair até as 20h vai para o COMEÇO do dia
+//   seguinte. Texto: sai "Não responda", entra "Para falar com a gente, é só clicar no link" + "Responda com 👍…". Cada envio fica em disparo_envios.
 // acompanhamento-auto v7 (10/11/2026) — PEDIDOS (ordens_servico) entram na fila automática (config.pedidoAcoes {auto, desde, posVendaDias, mensagemPronto?, mensagemPosVenda?}):
 //   (a) status PRONTO (marcado depois de `desde`, `statusEm`) → mensagem de pronto na fila do dia (9h–18h, horário sorteado, o que não couber vai para o dia seguinte);
 //   (b) PÓS-VENDA `posVendaDias` (padrão 7) dias depois de ENTREGUE (`recebidoEm`) → mensagem de pós-venda na mesma fila. Visto em `msgEnviadas.pronto` / `msgEnviadas.posvenda`; `autoAgenda.tipo` mostra o que é.
@@ -29,7 +34,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
-const MIN_INI = 8 * 60 + 30, MIN_FIM = 19 * 60, LIMITE_MS = 52000, PISO_SEG_MS = 60000, FALHAS_PARA_PAUSAR = 3;
+const MIN_INI = 9 * 60, MIN_FIM = 19 * 60, MIN_FIM_ENVIO = 20 * 60, LIMITE_MS = 50000, PISO_SEG_MS = 5 * 60000, FALHAS_PARA_PAUSAR = 3;
 const RODAPE_SAIR = "\n\nPara não receber mais mensagens, responda SAIR.";
 const WA_ATENDIMENTO = "https://wa.me/5532988307617";
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -58,13 +63,42 @@ function janelaHoje(agoraMs: number, aposMs = 0) {
   if (de >= fim - 60000) return null;
   return { de, ate: fim };
 }
-/** Corta a janela em n partes iguais; cada mensagem sai num ponto sorteado dentro da sua parte. */
+/** Horários previstos de n mensagens na janela, nunca menos de 5 min entre uma e outra: com poucas mensagens, a janela é cortada em partes iguais
+ *  (horário sorteado em cada parte, sempre ≥ 5 min da anterior); com muitas, uma atrás da outra a cada 5–7 min (sorteado). O que passa do fim não cabe hoje. */
 function distribuir(n: number, jan: { de: number; ate: number }) {
-  const cabem = Math.min(n, Math.floor((jan.ate - jan.de) / PISO_SEG_MS));
-  const seg = cabem > 0 ? (jan.ate - jan.de) / cabem : 0;
   const horas: number[] = [];
-  for (let i = 0; i < cabem; i++) horas.push(Math.round(jan.de + seg * (i + 0.15 + Math.random() * 0.7)));
-  return { cabem, horas };
+  if (n <= 0) return { cabem: 0, horas };
+  const parte = (jan.ate - jan.de) / n;
+  if (parte >= 7 * 60000) {
+    for (let i = 0; i < n; i++) horas.push(Math.round(jan.de + parte * i + Math.random() * (parte - PISO_SEG_MS)));
+    return { cabem: n, horas };
+  }
+  let t = jan.de;
+  for (let i = 0; i < n; i++) { if (t > jan.ate) break; horas.push(Math.round(t)); t += PISO_SEG_MS + Math.random() * 2 * 60000; }
+  return { cabem: horas.length, horas };
+}
+/** Tempo até a PRÓXIMA mensagem automática (s): 5–7 min sorteados; se sobra tempo no dia, espalha (nunca menos de 5 min). */
+function gapSeg(restantes: number, agoraMs = Date.now()) {
+  const b = agoraBR(agoraMs);
+  const fim = Date.parse(`${b.dia}T${hhmm(b.min < MIN_FIM ? MIN_FIM : MIN_FIM_ENVIO)}:00-03:00`);
+  const base = 300 + Math.random() * 120;
+  if (restantes <= 0) return Math.round(base);
+  const espaco = (fim - agoraMs) / 1000 / restantes;
+  return Math.round(espaco <= 420 ? base : Math.max(300, espaco * (0.75 + Math.random() * 0.5)));
+}
+const LINHA_JOINHA = "Responda com 👍 para confirmar que recebeu.";
+/** Número de disparo: sem "não responda", com o link de atendimento e o pedido do 👍 (vale para textos antigos guardados nas configurações). */
+function ajustaTextoDisparo(t: string): string {
+  let x = String(t || "");
+  x = x.replace(/N[ãa]o responda (a |esta |essa )?mensagem[.!]?\s*/gi, "");
+  x = x.replace(/Caso precise falar conosco,?\s*clique no link:?/gi, "Para falar com a gente, é só clicar no link:");
+  x = x.replace(/Para não receber mais mensagens, responda SAIR\.?/gi, "");
+  if (!/wa\.me\/5532988307617/.test(x)) x = x.trimEnd() + "\n\nPara falar com a gente, é só clicar no link:\n" + WA_ATENDIMENTO;
+  if (!/Responda com 👍/.test(x)) x = x.trimEnd() + "\n\n" + LINHA_JOINHA;
+  return x.replace(/\n{3,}/g, "\n\n").trim();
+}
+async function registrarEnvio(tel: string, reg: any, tipo: string, id: string, origem: string) {
+  try { await admin.from("disparo_envios").insert({ fone8: fone8(tel), telefone: tel, loja_id: reg.lojaId || null, vendedora: reg.vendedora || null, tipo, registro_id: id, origem }); } catch (_) {}
 }
 const fmtBRL = (v: unknown) => "R$ " + (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtData = (s: unknown) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : ""; };
@@ -83,7 +117,7 @@ function waMePrimeiro(t: string): string {
 const varia = (t: string) => String(t || "").replace(/\{([^{}|]+(?:\|[^{}|]+)+)\}/g, (_m, g) => { const o = String(g).split("|"); return o[Math.floor(Math.random() * o.length)].trim(); });
 
 // ---------- mensagens padrão (mesmo texto da tela) ----------
-const RODAPE = `Caso precise falar conosco, clique no link:\n${WA_ATENDIMENTO}`;
+const RODAPE = `Para falar com a gente, é só clicar no link:\n${WA_ATENDIMENTO}`;
 const MSG_ACAO_PADRAO = [
   `Olá, {cliente}! 😊\n\nAqui é da {loja}. Passando para saber se ficou alguma dúvida sobre o seu orçamento de {valor}. Se quiser, ajustamos o que for preciso para você fechar do jeito ideal.\n\nO orçamento vale até {validade}.\n\n${RODAPE}`,
   `Oi, {cliente}! Tudo bem? 💛\n\nSeu orçamento de {valor} na {loja} continua reservado para você. Podemos seguir com o serviço? Se precisar de mais prazo ou de alguma condição, é só nos dizer.\n\n${RODAPE}`,
@@ -199,10 +233,12 @@ async function abertoAgora(body: any) {
   const tagOff = ((cfg.tagsClientes || []).find((x: any) => semAcento(x.nome) === "marketing off") || {}).id || "";
   if (tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(tel), p_tag: tagOff }); if (off === true) return await liberar("cliente com a tag MARKETING OFF"); } catch (_) {} }
   try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) return await liberar("número sem WhatsApp"); } catch (_) {}
-  const texto = waMePrimeiro(varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0), linkOrc(id)))) + (inst === "vilaca" ? RODAPE_SAIR : "");
+  const t0 = varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0), linkOrc(id)));
+  const texto = inst === "vilaca" ? waMePrimeiro(ajustaTextoDisparo(t0)) + RODAPE_SAIR : waMePrimeiro(t0);
   let ok = false, status = 0;
   try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
   try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: o.lojaId || null, acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Acompanhamento automático", tabela: "orc_acao", registro_id: id, resumo: `${ok ? "Enviou" : "Falhou ao enviar"} ${p0.nome} (orçamento salvo) por WhatsApp (${inst}) para …${tel.slice(-4)}`, detalhe: { instancia: inst, status, botao: "auto", rotulo: p0.nome, imediato: true } }); } catch (_) {}
+  if (ok && inst === "vilaca") { try { await admin.rpc("disparo_manual"); } catch (_) {} await registrarEnvio(tel, o, "orc_acao", id, "manual"); }
   const { data: r3 } = await admin.from("orcamentos").select("payload").eq("id", id).maybeSingle();
   const reg = (r3 && r3.payload) || o;
   const agoraIso = new Date().toISOString();
@@ -227,7 +263,8 @@ Deno.serve(async (req: Request) => {
     const seg = await segredos();
     if (!seg.ACOMPANHAMENTO_CRON_TOKEN || req.headers.get("x-cron-token") !== seg.ACOMPANHAMENTO_CRON_TOKEN) return json({ error: "não autorizado" }, 401);
     const agora = agoraBR();
-    if (!body.ignorarHorario && !(agora.min >= MIN_INI && agora.min < MIN_FIM)) return json({ ok: true, fora_do_horario: true });
+    if (!body.ignorarHorario && !(agora.min >= MIN_INI && agora.min < MIN_FIM_ENVIO)) return json({ ok: true, fora_do_horario: true });
+    const podePlanejar = !!body.ignorarHorario || agora.min < MIN_FIM;   // 19h–20h: só sai o que já estava previsto (reserva para atrasos)
     const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
     const cfg: any = (cf && cf.payload) || {};
     const dryRun = !!body.simular;
@@ -245,6 +282,7 @@ Deno.serve(async (req: Request) => {
       travado = true;
     }
     const cand: Item[] = [];
+    let proximoDia = 0;
     const fechar: { id: string; statusId: string }[] = [];
 
     // ---------- 1) ações de orçamento ----------
@@ -336,8 +374,11 @@ Deno.serve(async (req: Request) => {
 
     // ---------- horários do dia (regras do aniversário) ----------
     const validos = (it: Item) => it.agenda && it.agenda.dia === agora.dia && it.agenda.passo === it.passo;
-    const semHorario = cand.filter((it) => !validos(it)).sort((a, b) => String(a.reg.autoBaseData || a.reg.data || "").localeCompare(String(b.reg.autoBaseData || b.reg.data || "")));
-    let agendadosAgora = 0, proximoDia = 0;
+    // o que ficou de dias anteriores (não saiu até as 20h) vai na frente: começo do dia seguinte
+    const sobra = (it: Item) => !!(it.agenda && it.agenda.dia && it.agenda.dia < agora.dia);
+    const semHorario = !podePlanejar ? [] : cand.filter((it) => !validos(it)).sort((a, b) => (Number(sobra(b)) - Number(sobra(a))) || String(a.reg.autoBaseData || a.reg.data || "").localeCompare(String(b.reg.autoBaseData || b.reg.data || "")));
+    if (!podePlanejar) proximoDia = cand.filter((it) => !validos(it)).length;
+    let agendadosAgora = 0;
     const gravarAgenda = async (it: Item, em: number) => {
       const { data: row } = await admin.from(it.tabela).select("payload").eq("id", it.id).maybeSingle();
       const reg = row && row.payload; if (!reg) return;
@@ -349,18 +390,18 @@ Deno.serve(async (req: Request) => {
       const fimDia = Date.parse(`${agora.dia}T${hhmm(MIN_FIM)}:00-03:00`);
       const iniDia = Date.parse(`${agora.dia}T${hhmm(MIN_INI)}:00-03:00`);
       let ultimo = Math.max(0, ...cand.filter(validos).map((it) => Number(it.agenda.em) || 0).filter((x) => x < 9e14));
-      // ação 0 (orçamento recém-salvo): sai logo, com ~1 min entre uma e outra; se já passou das 18h, fica para amanhã
-      const imediatos = semHorario.filter((it) => it.tipo === "orcamento" && it.passo === 0 && it.statusDestino && it.pulados === 0);
-      let t = Math.max(Date.now() + 25000, iniDia);
+      // primeiro: sobras de dias anteriores e ação 0 (orçamento recém-salvo) — logo, uma atrás da outra (5–7 min); o resto espalhado no dia
+      const imediatos = semHorario.filter((it) => sobra(it) || (it.tipo === "orcamento" && it.passo === 0 && it.statusDestino && it.pulados === 0));
+      let t = Math.max(Date.now() + 25000, iniDia, ultimo ? ultimo + PISO_SEG_MS : 0);
       for (const it of imediatos) {
-        if (t >= fimDia - 60000) { proximoDia++; continue; }
-        await gravarAgenda(it, t + Math.floor(Math.random() * 20000));
-        ultimo = Math.max(ultimo, t); t += 70000;
+        if (t >= fimDia) { proximoDia++; continue; }
+        await gravarAgenda(it, t);
+        ultimo = Math.max(ultimo, t); t += PISO_SEG_MS + Math.floor(Math.random() * 120000);
       }
       // demais: janela restante do dia cortada em partes iguais, horário sorteado em cada uma (regras do aniversário)
       const outros = semHorario.filter((it) => !imediatos.includes(it));
       if (outros.length) {
-        const jan = janelaHoje(Date.now(), ultimo ? ultimo + 30000 : 0);
+        const jan = janelaHoje(Date.now(), ultimo ? ultimo + PISO_SEG_MS : 0);
         const d = jan ? distribuir(outros.length, jan) : { cabem: 0, horas: [] as number[] };
         for (let i = 0; i < outros.length; i++) {
           if (i >= d.cabem) { proximoDia++; continue; }   // não coube hoje: entra na fila de amanhã
@@ -383,17 +424,15 @@ Deno.serve(async (req: Request) => {
     const passos = passosEfetivos(cfg);
     let enviados = 0, semMensagem = 0, falhasSeguidas = 0, pausar = "";
     const feitos = new Set<string>();
+    // conta para a fila única: o que já venceu (prioridade sobre o Marketing) e o que ainda sai hoje
+    const pendHoje = cand.filter((it) => validos(it) && Number(it.agenda.em) < 9e14 && instanciaDe(String(it.reg.lojaId || "")) === "vilaca");
+    const devidos0 = pendHoje.filter((it) => Number(it.agenda.em) <= Date.now() && it.tel).length;
+    if (!dryRun) await admin.from("marketing_disparo_estado").update({ cards_devidos: devidos0, cards_restantes: pendHoje.length, cards_em: new Date().toISOString() }).eq("id", 1);
+    let usouVez = false;   // no número de disparo sai no máximo 1 automática por rodada (a próxima só daqui a ≥ 5 min)
     while (Date.now() - inicio < LIMITE_MS) {
       const devidos = cand.filter((it) => validos(it) && !feitos.has(it.id) && Number(it.agenda.em) <= Date.now()).sort((a, b) => Number(a.agenda.em) - Number(b.agenda.em));
-      let f = devidos[0];
-      if (!f) {
-        // nada vence agora: espera o próximo horário se couber nesta execução
-        const prox = cand.filter((it) => validos(it) && !feitos.has(it.id) && Number(it.agenda.em) < 9e14).map((it) => Number(it.agenda.em)).sort((a, b) => a - b)[0];
-        if (!prox) break;
-        const w = prox - Date.now();
-        if (Date.now() - inicio + w > LIMITE_MS) break;
-        await espera(Math.max(0, w)); continue;
-      }
+      const f = devidos[0];
+      if (!f) break;   // nada vence agora: a próxima rodada (1 min) confere de novo
       feitos.add(f.id);
       const inst = instanciaDe(String(f.reg.lojaId || ""));
       // relê o registro (evita sobrescrever edição recente) e confere que ainda precisa agir
@@ -403,14 +442,23 @@ Deno.serve(async (req: Request) => {
       if (f.tipo === "posvenda" && reg.posVendaEnviadoEm) continue;
       if (f.tipo === "os_pronto" && (reg.status !== "pronto" || (reg.msgEnviadas && reg.msgEnviadas.pronto))) continue;   // mudou de status ou o botão já enviou na hora
       if (f.tipo === "os_posvenda" && (reg.status !== "entregue" || reg.posVendaEnviadoEm)) continue;
-      if (f.tel && !(await aberta(inst))) continue;   // WhatsApp fora do ar: fica para o próximo minuto / dia seguinte
+      if (f.tel && !(await aberta(inst))) continue;   // WhatsApp fora do ar: fica para o próximo minuto / dia seguinte (sobra vai para o começo do dia seguinte)
       let motivoSem = "", ok = false, status = 0;
       if (!f.tel) motivoSem = "sem celular válido";
       if (!motivoSem && tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(f.tel!), p_tag: tagOff }); if (off === true) motivoSem = "cliente com a tag MARKETING OFF"; } catch (_) {} }
       if (!motivoSem) { try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [f.tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) motivoSem = "número sem WhatsApp"; } catch (_) {} }
+      if (!motivoSem && inst === "vilaca") {
+        // fila única: pega a vez (≥ 5 min da última; cards na frente do Marketing)
+        if (usouVez) break;
+        const { data: est } = await admin.from("marketing_disparo_estado").select("mkt_restantes, cards_restantes").eq("id", 1).maybeSingle();
+        const rest = Math.max(0, Number((est && est.cards_restantes) || 0) - 1) + Number((est && est.mkt_restantes) || 0);
+        const { data: vez } = await admin.rpc("disparo_vez", { p_cards: true, p_gap_seg: gapSeg(rest) });
+        if (vez !== true) break;
+        usouVez = true;
+      }
       if (!motivoSem) {
         try {
-          const texto = waMePrimeiro(varia(f.texto)) + (inst === "vilaca" ? RODAPE_SAIR : "");
+          const texto = inst === "vilaca" ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) + RODAPE_SAIR : waMePrimeiro(varia(f.texto));
           const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: f.tel, text: texto, delay: 2500 + Math.floor(Math.random() * 5500) }), signal: AbortSignal.timeout(25000) });
           status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key);
         } catch (_) {}
@@ -429,6 +477,7 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         falhasSeguidas = 0;
+        if (inst === "vilaca") await registrarEnvio(String(f.tel), reg, f.tipo, f.id, "auto");
       } else {
         semMensagem++;
         try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: reg.lojaId || null, acao: "orcamento_status_auto", modulo: "Acompanhamento automático", tabela: f.tipo === "orcamento" ? "orcamentos" : "vendas_pdv", registro_id: f.id, resumo: `Não enviou ${f.nomeAcao}: ${motivoSem}`, detalhe: { botao: "auto", motivo: motivoSem } }); } catch (_) {}
