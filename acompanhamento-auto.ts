@@ -1,3 +1,5 @@
+// acompanhamento-auto v6 (10/11/2026) — {link}: toda mensagem de orçamento leva o link do orçamento completo (via.html?t=orc&id=…, com fotos dos itens); o parágrafo do wa.me continua indo para o TOPO
+//   (waMePrimeiro) para o WhatsApp mostrar o botão "Iniciar conversa".
 // acompanhamento-auto v5 (10/11/2026) — op `abertoAgora` (com sessão do app): ao SALVAR o orçamento a tela chama esta op e a mensagem do status inicial (ação 0) sai NA HORA (sem esperar o minuto do
 //   agendador, a qualquer horário), com as mesmas checagens (celular válido, MARKETING OFF, número com WhatsApp) e o mesmo registro (N=1, msgEnviadas, acoesLog). Reserva o orçamento (autoAgenda longe) para o
 //   agendador não mandar de novo.
@@ -110,7 +112,7 @@ function textoPasso(cfg: any, passo: Passo, idx: number): string {
   return MSG_ACAO_PADRAO[Math.min(idx, MSG_ACAO_PADRAO.length - 1)];
 }
 function lojaDe(cfg: any, id: string) { return (cfg.lojas || []).find((l: any) => l && l.id === id) || null; }
-function preencher(txt: string, cfg: any, reg: any, descPerc = 0) {
+function preencher(txt: string, cfg: any, reg: any, descPerc = 0, link = "") {
   const lj = lojaDe(cfg, reg.lojaId);
   const nomeLoja = (lj && (lj.nomePublico || lj.nomeFantasia || lj.nome)) || reg.loja || "Vilaça Joias";
   const av = lj && lj.googleReviewUrl ? `Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n${lj.googleReviewUrl}` : "";
@@ -118,9 +120,14 @@ function preencher(txt: string, cfg: any, reg: any, descPerc = 0) {
     .replaceAll("{cliente}", bonito(String(reg.cliente || "").split(/\s+/)[0] || "cliente"))
     .replaceAll("{loja}", nomeLoja).replaceAll("{vendedora}", bonito(reg.vendedora || "") || "nossa equipe")
     .replaceAll("{desconto}", descPerc ? `${String(descPerc).replace(".", ",")}%` : "").replaceAll("{valorDesconto}", fmtBRL((Number(reg.valorTotal) || 0) * (1 - descPerc / 100)))
+    .replaceAll("{link}", link)
     .replaceAll("{valor}", fmtBRL(reg.valorTotal)).replaceAll("{validade}", fmtData(reg.validade)).replaceAll("{avaliacao}", av);
+  // orçamento: o link do orçamento completo (com fotos) vai sempre; se o texto não tem {link}, entra um parágrafo antes do fim.
+  // O WhatsApp monta o botão "Iniciar conversa" pelo PRIMEIRO link: waMePrimeiro() leva o parágrafo do wa.me para o topo.
+  if (link && !String(txt || "").includes("{link}")) t = t.trimEnd() + `\n\nVeja o seu orçamento completo, com fotos:\n${link}`;
   return t.replace(/\n{3,}/g, "\n\n").trim();
 }
+const linkOrc = (id: string) => `https://vilaca.app/via.html?t=orc&id=${encodeURIComponent(id)}`;
 
 let cacheSeg: Record<string, string> | null = null;
 async function segredos() {
@@ -169,7 +176,7 @@ async function abertoAgora(body: any) {
   const tagOff = ((cfg.tagsClientes || []).find((x: any) => semAcento(x.nome) === "marketing off") || {}).id || "";
   if (tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(tel), p_tag: tagOff }); if (off === true) return await liberar("cliente com a tag MARKETING OFF"); } catch (_) {} }
   try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) return await liberar("número sem WhatsApp"); } catch (_) {}
-  const texto = waMePrimeiro(varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0)))) + (inst === "vilaca" ? RODAPE_SAIR : "");
+  const texto = waMePrimeiro(varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0), linkOrc(id)))) + (inst === "vilaca" ? RODAPE_SAIR : "");
   let ok = false, status = 0;
   try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
   try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: o.lojaId || null, acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Acompanhamento automático", tabela: "orc_acao", registro_id: id, resumo: `${ok ? "Enviou" : "Falhou ao enviar"} ${p0.nome} (orçamento salvo) por WhatsApp (${inst}) para …${tel.slice(-4)}`, detalhe: { instancia: inst, status, botao: "auto", rotulo: p0.nome, imediato: true } }); } catch (_) {}
@@ -247,7 +254,7 @@ Deno.serve(async (req: Request) => {
           if (k < 0) continue;
           const tel = celular(o.telefone);
           cand.push({ tipo: "orcamento", tabela: "orcamentos", id: r.id, reg: o, passo: k, tel, pulados: Math.max(0, k - N), statusDestino: passos[k].statusId || "", nomeAcao: passos[k].nome || `ação ${k + 1}`, agenda: o.autoAgenda || null,
-            texto: preencher(textoPasso(cfg, passos[k], k), cfg, o, descontoDoPasso(cfg, passos[k])) });
+            texto: preencher(textoPasso(cfg, passos[k], k), cfg, o, descontoDoPasso(cfg, passos[k]), linkOrc(r.id)) });
         }
         if (!data || data.length < 1000) break;
       }

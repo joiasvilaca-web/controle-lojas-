@@ -135,6 +135,8 @@ function resumoVia(tipo: string, v: any, loja: string | null) {
   const itens = (Array.isArray(v.itens) ? v.itens : []).filter((it: any) => it && it._modo !== "editar").map((it: any) => ({
     nome: it.produto || it.nome || "Item", qtd: Number(it.quantidade) || 1,
     valor: Number(it.valorUnitario ?? it.valor) || 0, original: Number(it.precoOriginal) || null,
+    produtoId: it.produtoEstoqueId || null, obs: String(it.observacaoItem || "").slice(0, 300),
+    fotos: (Array.isArray(it.fotos) ? it.fotos : []).map((f: any) => f && (f.driveUrl || f.siteUrl || f.url)).filter((u: any) => typeof u === "string" && /^https:\/\//.test(u)).slice(0, 4),
   }));
   return {
     tipo, cliente: v.cliente || "", loja, data: v.data || null, via: v.codigoVia || v.via || v.numero || null,
@@ -142,6 +144,24 @@ function resumoVia(tipo: string, v: any, loja: string | null) {
     pago: tipo === "orc" ? 0 : (Number(v.valorTotal) || 0) - saldoDe(tipo, v), saldo: saldoDe(tipo, v),
     observacao: v.observacaoGeral || v.descricao || null, validade: v.validade || null,
   };
+}
+/** Orçamento: acrescenta as fotos do catálogo (produtos_estoque.fotos) aos itens do resumo público (até 4 por item), para o cliente ver o orçamento completo. */
+async function comFotos(res: any) {
+  try {
+    if (res.tipo !== "orc") { for (const it of res.itens) delete it.produtoId; return res; }
+    const ids = [...new Set(res.itens.map((i: any) => i.produtoId).filter(Boolean))] as string[];
+    if (ids.length) {
+      const { data } = await admin.from("produtos_estoque").select("id,payload").in("id", ids);
+      const mapa: Record<string, string[]> = {};
+      for (const r of (data || [])) {
+        const fs = Array.isArray(r.payload && r.payload.fotos) ? r.payload.fotos : [];
+        mapa[r.id] = fs.filter((f: any) => f && (f.tipo === "foto" || !f.tipo)).map((f: any) => f.siteUrl || f.driveUrl || f.url).filter((u: any) => typeof u === "string" && /^https:\/\//.test(u)).slice(0, 4);
+      }
+      for (const it of res.itens) if (!it.fotos.length && it.produtoId && mapa[it.produtoId]) it.fotos = mapa[it.produtoId];
+    }
+    for (const it of res.itens) delete it.produtoId;
+  } catch (_) { for (const it of res.itens) delete it.produtoId; }
+  return res;
 }
 // "Ciente": comprovante de que o cliente viu a via NESTE status (e de novo quando o status muda ou a via é retirada).
 const cienteChave = (via: any, reg: any) => String(via.status || "ativa") + (reg && reg.status === "usado" ? "|retirada" : "");
@@ -255,7 +275,7 @@ Deno.serve(async (req) => {
     if (acao === "estado") {
       const reg = await lerReg(tipo, id);
       const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg), codigoTerceiro: encerrada(tipo, via, reg) ? null : await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) };
-      if (b.resumo) out.via = resumoVia(tipo, via, await lojaNome(via.lojaId));
+      if (b.resumo) out.via = await comFotos(resumoVia(tipo, via, await lojaNome(via.lojaId)));
       return json(out);
     }
     if (acao === "rotativo") {
