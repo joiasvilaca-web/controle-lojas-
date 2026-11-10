@@ -139,7 +139,8 @@ function resumoVia(tipo: string, v: any, loja: string | null) {
     fotos: (Array.isArray(it.fotos) ? it.fotos : []).map((f: any) => f && (f.driveUrl || f.siteUrl || f.url)).filter((u: any) => typeof u === "string" && /^https:\/\//.test(u)).slice(0, 4),
   }));
   return {
-    tipo, cliente: v.cliente || "", loja, data: v.data || null, via: v.codigoVia || v.via || v.numero || null,
+    tipo, deixouPeca: tipo === "orc" ? (Array.isArray(v.itens) ? v.itens : []).some((it: any) => it && it.deixouPeca === "sim") : undefined,
+    cliente: v.cliente || "", loja, data: v.data || null, via: v.codigoVia || v.via || v.numero || null,
     status: v.status || null, itens, total: Number(v.valorTotal) || itens.reduce((a: number, i: any) => a + i.valor * i.qtd, 0),
     pago: tipo === "orc" ? 0 : (Number(v.valorTotal) || 0) - saldoDe(tipo, v), saldo: saldoDe(tipo, v),
     observacao: v.observacaoGeral || v.descricao || null, validade: v.validade || null,
