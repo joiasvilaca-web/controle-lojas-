@@ -29,7 +29,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
-const HORA_INI = 9, HORA_FIM = 18, LIMITE_MS = 52000, PISO_SEG_MS = 60000, FALHAS_PARA_PAUSAR = 3;
+const MIN_INI = 8 * 60 + 30, MIN_FIM = 19 * 60, LIMITE_MS = 52000, PISO_SEG_MS = 60000, FALHAS_PARA_PAUSAR = 3;
 const RODAPE_SAIR = "\n\nPara não receber mais mensagens, responda SAIR.";
 const WA_ATENDIMENTO = "https://wa.me/5532988307617";
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -44,15 +44,16 @@ function celular(t: string): string | null {
 }
 function agoraBR(ms = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
-  return { dia: `${p.year}-${p.month}-${p.day}`, hora: Number(p.hour) };
+  return { dia: `${p.year}-${p.month}-${p.day}`, hora: Number(p.hour), min: Number(p.hour) * 60 + Number(p.minute) };
 }
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const diasEntre = (a: string, b: string) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
 function diaDe(ms: number) { return agoraBR(ms).dia; }
 /** Janela de hoje (Brasília): de agora (ou das 9h, ou depois do último horário já reservado) até as 18h. null = não há mais tempo hoje. */
 function janelaHoje(agoraMs: number, aposMs = 0) {
   const b = agoraBR(agoraMs);
-  const ini = Date.parse(`${b.dia}T${String(HORA_INI).padStart(2, "0")}:00:00-03:00`);
-  const fim = Date.parse(`${b.dia}T${String(HORA_FIM).padStart(2, "0")}:00:00-03:00`);
+  const ini = Date.parse(`${b.dia}T${hhmm(MIN_INI)}:00-03:00`);
+  const fim = Date.parse(`${b.dia}T${hhmm(MIN_FIM)}:00-03:00`);
   const de = Math.max(agoraMs + 30000, ini, aposMs);
   if (de >= fim - 60000) return null;
   return { de, ate: fim };
@@ -226,7 +227,7 @@ Deno.serve(async (req: Request) => {
     const seg = await segredos();
     if (!seg.ACOMPANHAMENTO_CRON_TOKEN || req.headers.get("x-cron-token") !== seg.ACOMPANHAMENTO_CRON_TOKEN) return json({ error: "não autorizado" }, 401);
     const agora = agoraBR();
-    if (!body.ignorarHorario && !(agora.hora >= HORA_INI && agora.hora < HORA_FIM)) return json({ ok: true, fora_do_horario: true });
+    if (!body.ignorarHorario && !(agora.min >= MIN_INI && agora.min < MIN_FIM)) return json({ ok: true, fora_do_horario: true });
     const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
     const cfg: any = (cf && cf.payload) || {};
     const dryRun = !!body.simular;
@@ -345,8 +346,8 @@ Deno.serve(async (req: Request) => {
       it.agenda = reg.autoAgenda; it.reg = reg; agendadosAgora++;
     };
     if (semHorario.length) {
-      const fimDia = Date.parse(`${agora.dia}T${String(HORA_FIM).padStart(2, "0")}:00:00-03:00`);
-      const iniDia = Date.parse(`${agora.dia}T${String(HORA_INI).padStart(2, "0")}:00:00-03:00`);
+      const fimDia = Date.parse(`${agora.dia}T${hhmm(MIN_FIM)}:00-03:00`);
+      const iniDia = Date.parse(`${agora.dia}T${hhmm(MIN_INI)}:00-03:00`);
       let ultimo = Math.max(0, ...cand.filter(validos).map((it) => Number(it.agenda.em) || 0).filter((x) => x < 9e14));
       // ação 0 (orçamento recém-salvo): sai logo, com ~1 min entre uma e outra; se já passou das 18h, fica para amanhã
       const imediatos = semHorario.filter((it) => it.tipo === "orcamento" && it.passo === 0 && it.statusDestino && it.pulados === 0);
