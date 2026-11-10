@@ -183,14 +183,17 @@ textarea{border:1px solid var(--line-strong); border-radius:8px; background:var(
 .qo-card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:5px 6px;cursor:pointer;font-size:11.5px;}
 .qo-card:hover{border-color:var(--line-strong,#c6ced6);}
 .qo-col.aberta .qo-card{padding:9px 10px;font-size:13px;border-radius:10px;}
-.qo-via{font-family:var(--mono,monospace);font-weight:700;font-size:11px;display:block;}
+.qo-linha{display:flex;align-items:center;gap:4px;min-width:0;}
+.qo-via{font-family:var(--mono,monospace);font-weight:700;font-size:11px;flex:none;}
+.qo-card[draggable="true"]{cursor:grab;}
+.qo-card.arrastando{opacity:.45;}
+.qo-col.alvo{outline:2px dashed var(--primary,#1d5f7a);outline-offset:-2px;background:var(--primary-soft,#e8f0f6);}
 .qo-visto{color:var(--ok);display:inline-flex;vertical-align:middle;}
 .qo-visto svg,.selo-status svg.ic-visto{stroke:var(--ok);stroke-width:3;}
-.qo-curto{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.qo-curto{display:block;flex:1 1 auto;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qo-cheio{display:none;}
-.qo-col.aberta .qo-curto{display:none;}
+.qo-col.aberta .qo-linha{display:none;}
 .qo-col.aberta .qo-cheio{display:block;}
-.qo-col.aberta .qo-via{font-size:12.5px;}
 .qo-nome{font-weight:600;}
 .qo-sub{color:var(--muted);font-size:12px;margin-top:2px;}
 .qo-acoes{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:7px;}
@@ -755,9 +758,43 @@ function diasDesdeCriacao(o){
  * (ex: virou "Recusado" sozinho) e volta pra um status em aberto começa a contar os prazos
  * de novo a partir dessa mudança, em vez de continuar usando a data de criação original. */
 function reiniciarAutoAposMudancaManual(o){
-  o.autoBaseData = todayStr();
-  o.autoMensagensEnviadas = 0;
+  const passos = passosOrc();
+  const idx = passos.findIndex(p=>p.statusId && p.statusId===o.status);
+  let base = new Date(todayStr()+'T00:00:00');
+  if(idx>0){ base.setDate(base.getDate() - (Number(passos[idx].dias)||0)); }   // o prazo do passo seguinte conta como se este passo tivesse vencido hoje
+  const d = base.getFullYear()+'-'+String(base.getMonth()+1).padStart(2,'0')+'-'+String(base.getDate()).padStart(2,'0');
+  o.autoBaseData = d;
+  o.autoMensagensEnviadas = idx>=0 ? idx+1 : 0;   // a mensagem deste status sai agora (ou não existe): o robô não repete
   o.editadoManualmente = false;
+  delete o.autoAgenda;
+}
+/** Mudança manual de status (arrastar no Quadro, popup, bloco ou detalhe): troca o status e DISPARA na hora a mensagem do novo status,
+ * sem fila, horário ou espera. Status que encerra (Aprovado/Recusado) não envia. Se o envio falhar, o status muda mesmo assim. */
+let __mudandoStatusOrc = false;
+async function mudarStatusManual(o, novoId){
+  if(!o || !novoId || __mudandoStatusOrc) return false;
+  if(novoId===o.status && !o.rascunho) return true;
+  const inf = statusInfoDe(novoId);
+  if(inf && inf.encerra && !confirm('Marcar este orçamento como "'+inf.nome+'"? Ele sai da lista de ações.')) return false;
+  __mudandoStatusOrc = true;
+  try{
+    let enviado = false, aviso = '';
+    const texto = (inf && !inf.encerra) ? String(msgWhatsStatus(inf)||'').trim() : '';
+    if(texto){
+      if(!o.telefone) aviso = 'sem WhatsApp do cliente';
+      else if(!window.WhatsAuto) aviso = 'envio indisponível';
+      else if(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente })){
+        enviado = (await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(texto, o, descontoStatus(inf)), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' })) === true;
+        if(!enviado) aviso = 'mensagem não enviada';
+      } else aviso = 'cliente marcado como MARKETING OFF';
+    }
+    if(enviado) marcarMsgEnviada(o, novoId);
+    o.status = novoId; o.rascunho = false; o.statusAtualizadoEm = new Date().toISOString();
+    reiniciarAutoAposMudancaManual(o);
+    const ok = await orcamentoSalvar(o);
+    if(ok) showToast(enviado ? 'Status atualizado e mensagem enviada.' : 'Status atualizado.'+(aviso?' ('+aviso+')':''));
+    return ok;
+  } finally { __mudandoStatusOrc = false; }
 }
 /* ===== AÇÕES DE ORÇAMENTO (fixação) — 09/11 =====
  * config.orcamentoAcoes = { auto, desde, passos:[{id,nome,dias,statusId,mensagem}], final:{ativo,dias,statusId} }
@@ -2090,11 +2127,10 @@ function renderQuadroOrc(base){
   const cartao = o=>{
     const prim = String(o.cliente||'Sem cliente').trim().split(/\s+/)[0];
     const venc = estaVencido(o);
-    return `<div class="qo-card" data-qoid="${escapeHtml(o.id)}" title="Toque para ver detalhes">
-      <span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span>
-      <span class="qo-curto">${escapeHtml(prim)}${msgEnviadaDoStatus(o) ? ` <span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',13)}</span>` : ''}</span>
+    return `<div class="qo-card" data-qoid="${escapeHtml(o.id)}" ${o.rascunho?'':'draggable="true"'} title="Toque para ver detalhes${o.rascunho?'':' · arraste para outra coluna para mudar o status e enviar a mensagem'}">
+      <span class="qo-linha"><span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span><span class="qo-curto">${escapeHtml(prim)}</span>${msgEnviadaDoStatus(o) ? `<span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',13)}</span>` : ''}</span>
       <div class="qo-cheio">
-        <div class="qo-nome">${escapeHtml(o.cliente||'Sem cliente')}${msgEnviadaDoStatus(o) ? ` <span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',14)}</span>` : ''}</div>
+        <div class="qo-nome"><span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span> · ${escapeHtml(o.cliente||'Sem cliente')}${msgEnviadaDoStatus(o) ? ` <span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',14)}</span>` : ''}</div>
         <div class="qo-sub">${escapeHtml(o.loja||'—')} · ${escapeHtml(o.vendedora||'—')}</div>
         <div class="qo-sub">${fmtDate(o.data)} · <span${venc?' style="color:var(--danger);font-weight:700;"':''}>validade ${fmtDate(o.validade)}${venc?' (vencido)':''}</span></div>
         <div class="qo-acoes"><b>${fmtMoeda(o.valorTotal)}</b><button type="button" class="btn btn-ghost btn-sm" data-qostatus="${escapeHtml(o.id)}">${o.rascunho?'Continuar':'Mudar status'}</button></div>
@@ -2111,6 +2147,21 @@ function renderQuadroOrc(base){
     const set = quadroOrcAbertas(); if(abre) set.add(id); else set.delete(id);
     try{ localStorage.setItem('vilaca_quadro_orc_abertas', JSON.stringify(Array.from(set))); }catch(e){}
   }));
+  wrap.querySelectorAll('.qo-card[draggable="true"]').forEach(c=>{
+    c.addEventListener('dragstart', e=>{ try{ e.dataTransfer.setData('text/plain', c.dataset.qoid); e.dataTransfer.effectAllowed='move'; }catch(_){} c.classList.add('arrastando'); wrap.classList.add('arrastando-algo'); });
+    c.addEventListener('dragend', ()=>{ c.classList.remove('arrastando'); wrap.classList.remove('arrastando-algo'); wrap.querySelectorAll('.qo-col.alvo').forEach(x=>x.classList.remove('alvo')); });
+  });
+  wrap.querySelectorAll('.qo-col').forEach(col=>{
+    if(col.dataset.qocol==='__rascunho__') return;
+    col.addEventListener('dragover', e=>{ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} col.classList.add('alvo'); });
+    col.addEventListener('dragleave', e=>{ if(!col.contains(e.relatedTarget)) col.classList.remove('alvo'); });
+    col.addEventListener('drop', async e=>{
+      e.preventDefault(); col.classList.remove('alvo');
+      let id=''; try{ id = e.dataTransfer.getData('text/plain'); }catch(_){}
+      const o = orcamentos.find(x=>x.id===id); if(!o || o.status===col.dataset.qocol) return;
+      await mudarStatusManual(o, col.dataset.qocol); renderView();
+    });
+  });
   wrap.querySelectorAll('[data-qoid]').forEach(c=> c.addEventListener('click', e=>{
     if(e.target.closest('[data-qostatus]')) return;
     const o = orcamentos.find(x=>x.id===c.dataset.qoid); if(o) abrirDetalheOrcamento(o);
@@ -2368,31 +2419,17 @@ async function mudarStatusOrcRapido(orcId){
     <div class="field"><label for="novoStatusSelRapido">Novo status</label>
       <select id="novoStatusSelRapido">${statusList().map(s=>`<option value="${s.id}" ${s.id===o.status?'selected':''}>${escapeHtml(s.nome)}${s.encerra?' (encerra o orçamento)':''}</option>`).join('')}</select>
     </div>
-    ${o.telefone ? `<label class="check-filtro" style="display:flex;gap:8px;align-items:center;margin:10px 0;"><input type="checkbox" id="stEnviarMsg"> Enviar ao cliente, por WhatsApp, a mensagem deste status</label>` : ''}
-    <p class="muted" style="margin:0;">Ao mudar o status, os prazos das mensagens de acompanhamento recomeçam a contar a partir de hoje.</p>
+    <p class="muted" style="margin:0;">Ao salvar, a mensagem do novo status é enviada na hora ao cliente (status que encerra não envia) e os prazos seguintes passam a contar a partir de hoje.</p>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btnCancelarStatusRapido">Cancelar</button>
       <button class="btn btn-accent" id="btnSalvarStatusRapido">${ic('check')} Salvar status</button>
     </div>
   `);
-  const selSt = document.getElementById('novoStatusSelRapido'), chkMsg = document.getElementById('stEnviarMsg');
-  function ajustaChk(){ if(!chkMsg) return; const inf = statusInfoDe(selSt.value); const tem = !!(inf && msgWhatsStatus(inf).trim()); chkMsg.disabled = !tem; chkMsg.checked = tem && !inf.encerra && selSt.value!==o.status; }
-  selSt.addEventListener('change', ajustaChk); ajustaChk();
+  const selSt = document.getElementById('novoStatusSelRapido');
   document.getElementById('btnCancelarStatusRapido').addEventListener('click', closeModal);
   document.getElementById('btnSalvarStatusRapido').addEventListener('click', async ()=>{
-    const novoId = selSt.value, enviar = !!(chkMsg && chkMsg.checked), inf = statusInfoDe(novoId);
-    if(enviar){
-      if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
-      const okEnvio = window.WhatsAuto ? await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(msgWhatsStatus(inf), o, descontoStatus(inf)), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' }) : false;
-      if(okEnvio!==true) return;   // não mudou nada: o aviso do envio já apareceu
-    }
-    if(enviar) marcarMsgEnviada(o, novoId);
-    o.status = novoId;
-    o.rascunho = false;
-    o.statusAtualizadoEm = new Date().toISOString();
-    reiniciarAutoAposMudancaManual(o);
-    const ok = await orcamentoSalvar(o);
-    if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
+    const ok = await mudarStatusManual(o, selSt.value);
+    if(ok){ closeModal(); renderView(); }
   });
 }
 /* ===== BLOCOS DE AÇÕES (09/11) ===== */
@@ -2419,11 +2456,7 @@ async function executarAcaoOrc(orcId, idx){
 async function mudarStatusNoBloco(orcId, valor){
   const o = orcamentos.find(x=>x.id===orcId); if(!o || !valor) return;
   if(valor.indexOf('__acao__')===0){ await executarAcaoOrc(orcId, Number(valor.split(':')[1])); return; }
-  const info = statusInfoDe(valor);
-  if(info && info.encerra && !confirm('Marcar este orçamento como "'+info.nome+'"? Ele sai da lista de ações.')){ renderView(); return; }
-  o.status = valor; o.rascunho = false; o.statusAtualizadoEm = new Date().toISOString();
-  reiniciarAutoAposMudancaManual(o);
-  if(await orcamentoSalvar(o)){ showToast('Status atualizado.'); renderView(); }
+  if(await mudarStatusManual(o, valor)) renderView(); else renderView();
 }
 function drawBlocosAcoes(base){
   const el = document.getElementById('blocosAcoes'); if(!el) return;
@@ -2747,11 +2780,8 @@ function abrirDetalheOrcamento(o){
   });
 
   document.getElementById('btnSalvarStatusOrc').addEventListener('click', async ()=>{
-    o.status = document.getElementById('orcStatusSel').value;
-    o.rascunho = false;
-    reiniciarAutoAposMudancaManual(o);
-    const ok = await orcamentoSalvar(o);
-    if(ok){ closeModal(); renderView(); showToast('Status atualizado.'); }
+    const ok = await mudarStatusManual(o, document.getElementById('orcStatusSel').value);
+    if(ok){ closeModal(); renderView(); }
   });
   const btnWhatsapp = document.getElementById('btnWhatsappOrc');
   if(btnWhatsapp){
