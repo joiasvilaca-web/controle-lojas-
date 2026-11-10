@@ -583,6 +583,17 @@ html.embedded #mainContent.modo-pdv{padding-bottom:16px;}
 .pag-nota-bloco [data-numnota]{margin:0 !important;width:auto;min-height:34px;}
 .pag-nota-bloco #pagNotaPfHint{flex:1 1 100%;margin:0;}
 .pag-nota-bloco #pagNotaPfHint:empty{display:none;}
+  .secao-acomp{margin-top:32px;padding-top:6px;border-top:2px solid var(--line);} .secao-acomp:empty{display:none;} .secao-acomp > .page-head{margin-top:14px !important;}
+  .ac-colunas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start;margin:0 0 14px;}
+  @media (max-width:760px){.ac-colunas{grid-template-columns:minmax(0,1fr);}}
+  .ac-col{margin:0 !important;padding:0;min-width:0;overflow:hidden;}
+  .ac-col h3{margin:0 !important;padding:12px 16px;font-size:15px;line-height:1.2;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);}
+  .ac-lista{list-style:none;margin:0 !important;padding:0 !important;max-height:420px;overflow-y:auto;} .ac-lista>li{margin:0 !important;}
+  .ac-item{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);cursor:pointer;} .ac-item:last-child{border-bottom:0;} .ac-item:hover{background:var(--primary-soft,#e8f0f6);}
+  .ac-hora{font-family:var(--mono,monospace);font-weight:700;font-size:13px;flex:0 0 74px;align-self:center;line-height:1.2;color:var(--wait,#a15c00);} .ac-hora.ok{color:var(--ok);}
+  .ac-corpo{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;} .ac-l1{display:flex;align-items:baseline;gap:8px;min-width:0;} .ac-via{font-family:var(--mono,monospace);flex:none;}
+  .ac-nome{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;} .ac-sub{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  @media (max-width:760px){.ac-item{padding:10px 12px;gap:10px;}.ac-hora{flex-basis:64px;font-size:12.5px;}.ac-col h3{padding:11px 12px;}}
 </style>
 </head>
 <body>
@@ -4726,39 +4737,43 @@ function preencherMsgPv(txt, v){
   const nome = p ? p.charAt(0).toUpperCase()+p.slice(1).toLowerCase() : 'cliente';
   return String(txt||'').replaceAll('{cliente}', nome).replaceAll('{loja}', nomeLoja).replaceAll('{vendedora}', v.vendedora||'').replaceAll('{valor}', fmtMoeda(v.valorTotal)).replaceAll('{avaliacao}', av).replace(/\n{3,}/g,'\n\n').trim();
 }
-function vendasParaPosVenda(){
-  const c = posVendaCfg(), hj = hoje();
-  const dif = (a,b)=> Math.round((Date.parse(b+'T00:00:00Z')-Date.parse(a+'T00:00:00Z'))/86400000);
-  const desdeMs = c.desde ? Date.parse(c.desde+'T00:00:00') : 0;
-  return (vendas||[]).filter(v=>{
-    if(!v || v.posVendaEnviadoEm || v.status==='cancelada' || v.status==='cancelado' || v.rascunho || !v.data || !v.telefone) return false;
-    const idade = dif(String(v.data).slice(0,10), hj);
-    if(idade < c.dias || idade > c.dias+23) return false;   // só a janela recente (nunca o histórico todo)
-    if(c.auto && desdeMs && Number(v.criadoEm||0) >= desdeMs) return false;   // essas o servidor envia sozinho
-    return true;
-  }).sort((a,b)=> String(a.data).localeCompare(String(b.data)));
-}
+/** 10/11: AÇÕES DE ACOMPANHAMENTO da Venda (no fim da tela): à esquerda o que está programado (fila automática de pós-venda, 9h–18h; o que não couber vai para o dia seguinte),
+ *  à direita o que já foi enviado (últimos 3 dias). O envio é automático (servidor `acompanhamento-auto`), sem ação humana. */
 function desenharPosVenda(){
   const el = document.getElementById('posVendaBox'); if(!el) return;
   const c = posVendaCfg();
-  const lista = vendasParaPosVenda();
   const gestao = currentUser && (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente');
-  if(!lista.length && !gestao && !c.auto){ el.innerHTML = ''; return; }
-  el.innerHTML = `<div class="card" style="padding:12px 16px;margin-bottom:14px;">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <b>Enviar pós-venda</b> <span class="badge ${lista.length?'badge-vencido':'badge-pendente'}">${lista.length}</span>
-      <span class="muted" style="font-size:12.5px;">vendas de ${c.dias} dias atrás ou mais, que ainda não receberam a mensagem${c.auto?' · envio automático LIGADO (o sistema manda sozinho entre 9h e 18h)':''}</span>
-      ${gestao ? `<button type="button" class="btn btn-ghost btn-sm" id="btnCfgPosVenda" style="margin-left:auto;">${ic('engrenagem',14)} Pós-venda automático</button>` : ''}
-    </div>
-    ${lista.length ? `<div class="tabela-rolagem" style="margin-top:8px;"><table class="tabela-cartoes"><thead><tr><th>Cliente</th><th>Venda</th><th>Vendedora</th><th class="num">Valor</th><th class="num">Ação</th></tr></thead><tbody>
-      ${lista.map(v=>`<tr><td class="td-cliente" data-label="Cliente"><b>${escapeHtml(v.cliente||'—')}</b>${v.codigoVia?`<span class="sub">${escapeHtml(v.codigoVia)}</span>`:''}</td>
-        <td class="td-meta" data-label="Venda">${escapeHtml(String(v.data).slice(8,10)+'/'+String(v.data).slice(5,7))}</td>
-        <td class="td-meta" data-label="Vendedora">${escapeHtml(v.vendedora||'—')}</td>
-        <td class="num td-valor" data-label="Valor">${fmtMoeda(v.valorTotal)}</td>
-        <td class="num td-acoes"><button type="button" class="btn btn-accent btn-sm" data-posvenda="${escapeHtml(v.id)}">${ic('whatsapp',14)} Enviar pós-venda</button></td></tr>`).join('')}
-    </tbody></table></div>` : ''}
-  </div>`;
-  el.querySelectorAll('[data-posvenda]').forEach(b=> b.addEventListener('click', async ()=>{ b.disabled = true; await enviarPosVenda(b.dataset.posvenda); desenharPosVenda(); }));
+  const tz = { timeZone:'America/Sao_Paulo' };
+  const hojeBR = new Date().toLocaleDateString('en-CA', tz);
+  const dia = ms => new Date(ms).toLocaleDateString('en-CA', tz);
+  const hora = ms => new Date(ms).toLocaleTimeString('pt-BR', { ...tz, hour:'2-digit', minute:'2-digit' });
+  const quando = ms => { const d = dia(ms); return d===hojeBR ? hora(ms) : fmtDate(d)+' '+hora(ms); };
+  const dif = (a,b)=> Math.round((Date.parse(b+'T00:00:00Z')-Date.parse(a+'T00:00:00Z'))/86400000);
+  const desdeMs = c.desde ? Date.parse(c.desde+'T00:00:00-03:00') : 0;
+  const limite = Date.now() - 3*86400000;
+  const prog = [], env = [];
+  (vendas||[]).forEach(v=>{
+    if(!v || v.tipo==='recargaCredito' || v.tipo==='recebimentoFiado' || v.status==='cancelada' || v.status==='cancelado' || v.rascunho || !v.data) return;
+    if(v.posVendaEnviadoEm){
+      const t = Date.parse(v.posVendaEnviadoEm);
+      if(t>limite && !/sem mensagem/.test(String(v.posVendaPor||''))) env.push({ v, em:t });
+      return;
+    }
+    if(!c.auto || !desdeMs || Number(v.criadoEm||0) < desdeMs) return;
+    const ag = v.autoAgenda;
+    if(ag && ag.dia >= hojeBR) prog.push({ v, em: Number(ag.em)||9e15 });
+    else if(dif(String(v.data).slice(0,10), hojeBR) >= c.dias) prog.push({ v, em: 9e15 });
+  });
+  prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
+  const linha = (x, tempo, cls) => `<li class="ac-item" data-acvenda="${escapeHtml(x.v.id)}" title="Abrir a venda"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.v.codigoVia||'—')}</b><span class="ac-nome">${escapeHtml(x.v.cliente||'—')}</span></span><span class="muted ac-sub">Pós-venda · ${escapeHtml(vendedoraCurta(x.v))} · ${fmtMoeda(x.v.valorTotal)}</span></span></li>`;
+  el.innerHTML = `<div class="page-head" style="margin-top:14px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
+      <p class="page-sub">${c.auto ? `Pós-venda automático LIGADO: o sistema manda sozinho ${c.dias} dias depois da venda, das 9h às 18h; o que não couber hoje entra na fila do dia seguinte.` : 'Pós-venda automático DESLIGADO: nada é enviado sozinho.'} À esquerda o que está programado; à direita o que já foi enviado (últimos 3 dias).</p></div>
+      ${gestao ? `<button type="button" class="btn btn-ghost btn-sm" id="btnCfgPosVenda">${ic('engrenagem',14)} Pós-venda automático</button>` : ''}</div>
+    <div class="ac-colunas">
+      <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, x.em>=9e14 ? 'em breve' : quando(x.em), '')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}</section>
+      <section class="card ac-col"><h3>Já enviados <span class="badge badge-aprovado">${env.length}</span></h3>${env.length ? `<ul class="ac-lista">${env.map(x=>linha(x, quando(x.em), 'ok')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>`}</section>
+    </div>`;
+  el.querySelectorAll('[data-acvenda]').forEach(li=> li.addEventListener('click', ()=>{ const v = (vendas||[]).find(x=>x.id===li.dataset.acvenda); if(v) abrirDetalheVenda(v); }));
   const cfgb = document.getElementById('btnCfgPosVenda'); if(cfgb) cfgb.addEventListener('click', abrirConfigPosVenda);
 }
 async function enviarPosVenda(id){
@@ -4776,7 +4791,7 @@ function abrirConfigPosVenda(){
   openModal(`<h3>Pós-venda automático</h3>
     <p class="modal-sub">Mensagem enviada por WhatsApp alguns dias depois da venda. Sempre leva o botão “Iniciar conversa” para o WhatsApp de atendimento.</p>
     <label class="check-filtro" style="margin:10px 0;display:flex;gap:8px;align-items:center;"><input type="checkbox" id="pvAuto" ${c.auto?'checked':''}> <b>Enviar automaticamente, sem ação humana</b> (o sistema manda sozinho entre 9h e 18h)</label>
-    <p class="muted" style="margin:0 0 8px;font-size:12.5px;">Ao ligar, só valem as vendas feitas a partir de hoje; as anteriores continuam na lista, para envio manual. Desligado, as vendas aparecem na lista “Enviar pós-venda”.</p>
+    <p class="muted" style="margin:0 0 8px;font-size:12.5px;">Só valem as vendas feitas depois que o envio foi ligado. O que não couber no dia entra na fila do dia seguinte.</p>
     <div class="field" style="width:170px;"><label>Enviar depois de (dias)</label><input type="number" min="1" id="pvDias" value="${c.dias}"></div>
     <div class="field" style="margin-top:8px;"><label>Mensagem <span class="muted">({cliente} {loja} {vendedora} {avaliacao})</span></label><textarea id="pvMsg" rows="9" style="width:100%;">${escapeHtml(c.mensagem||MSG_POSVENDA_PADRAO)}</textarea></div>
     <button type="button" class="btn btn-ghost btn-sm" id="pvPadrao">Usar mensagem padrão</button>
@@ -4804,7 +4819,6 @@ function renderVendas(main){
         <button class="btn btn-accent btn-lg" id="btnNovaVendaLista" title="Nova venda (F2)">${ic('mais',18)} Nova venda</button>
       </div>
     </div>
-    <div id="posVendaBox"></div>
     <div class="filters" role="search">
       <div class="campo-busca">${ic('busca')}<input type="text" id="filtroBusca" placeholder="Buscar por cliente ou vendedora" aria-label="Buscar por cliente ou vendedora"></div>
       <select id="filtroLoja" aria-label="Loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
@@ -4816,6 +4830,7 @@ function renderVendas(main){
     <div class="card card-tabela">
       <div id="tabelaVendasWrap"></div>
     </div>
+    <div id="posVendaBox" class="secao-acomp"></div>
   `;
   const fLoja = document.getElementById('filtroLoja');
   const fData = document.getElementById('filtroData');
