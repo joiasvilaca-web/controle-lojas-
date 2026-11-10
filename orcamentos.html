@@ -681,6 +681,20 @@ async function orcamentoSalvar(o){
     return true;
   }catch(e){ console.error('erro ao salvar orçamento', e); showToast('Não foi possível salvar. Tente novamente.'); return false; }
 }
+/** Ao salvar: pede ao servidor para mandar já a mensagem do status inicial (Aberto). Não trava a tela; atualiza o orçamento local com o que o servidor gravou. */
+async function enviarAbertoAgora(o){
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/acompanhamento-auto', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op:'abertoAgora', id:o.id, senha:__gatewaySenha }) });
+    const j = await r.json();
+    if(j && j.enviado){
+      o.autoMensagensEnviadas = j.autoMensagensEnviadas; o.msgEnviadas = j.msgEnviadas; o.acoesLog = j.acoesLog; delete o.autoAgenda;
+      showToast('Mensagem enviada ao cliente.');
+      renderView();
+    } else if(j && j.motivo && !/desligado|já enviado|fora do fluxo|sem a[cç][aã]o/i.test(j.motivo)){
+      showToast('Mensagem ao cliente não saiu agora: ' + j.motivo + '.');
+    }
+  }catch(e){ /* o agendador envia em seguida */ }
+}
 async function orcamentoExcluir(id){
   try{
     const { error } = await supabaseClient.from('orcamentos').delete().eq('id', id);
@@ -1590,6 +1604,7 @@ function renderNovo(main){
       if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'orc', id:orcamento.id, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'' }); if(_rt && _rt.error) showToast('Orçamento salvo, mas a retirada por terceiros não foi liberada: '+_rt.error); }
       if(editando){ const idx=orcamentos.findIndex(x=>x.id===orcamento.id); if(idx>=0) orcamentos[idx]=orcamento; else orcamentos.unshift(orcamento); showToast('Orçamento atualizado.'); }
       else { orcamentos.unshift(orcamento); showToast('Orçamento salvo.'); }
+      enviarAbertoAgora(orcamento);   // mensagem do status inicial sai NA HORA (o cliente está esperando); o servidor confere se vale
       orcamentoEmEdicao = null;
       currentTab='lista'; renderTabs(); renderView();
     }

@@ -1,3 +1,6 @@
+// acompanhamento-auto v5 (10/11/2026) — op `abertoAgora` (com sessão do app): ao SALVAR o orçamento a tela chama esta op e a mensagem do status inicial (ação 0) sai NA HORA (sem esperar o minuto do
+//   agendador, a qualquer horário), com as mesmas checagens (celular válido, MARKETING OFF, número com WhatsApp) e o mesmo registro (N=1, msgEnviadas, acoesLog). Reserva o orçamento (autoAgenda longe) para o
+//   agendador não mandar de novo.
 // acompanhamento-auto v4 (10/11/2026) — FLUXO POR STATUS: a ação 0 (status inicial, dias 0) sai logo que o orçamento é salvo (dentro do horário 9h–18h);
 //   nunca volta de status (só passos à frente do status atual); orçamento movido à mão para um status conta os dias dele como já cumpridos; DESCONTO ESPECIAL por status
 //   (status.descontoEspecial {ativo, percentual, mensagemWhatsapp}: com a chave ligada o passo manda a outra mensagem, com {desconto} e {valorDesconto}); `msgEnviadas` {statusId: data}
@@ -128,6 +131,60 @@ async function segredos() {
   return (cacheSeg = v);
 }
 
+function sessaoValida(u: any, senha: string): boolean {
+  if (!u || !senha || typeof senha !== "string" || !senha.startsWith("sess_") || u.bloqueado) return false;
+  const agora = Date.now();
+  if (u.senha === senha && (!u.sessaoExpiraEm || Number(u.sessaoExpiraEm) > agora)) return true;
+  return (Array.isArray(u.sessoes) ? u.sessoes : []).some((s: any) => s && s.token === senha && (!s.exp || Number(s.exp) > agora));
+}
+
+/** Envia AGORA a mensagem do status inicial de um orçamento recém-salvo (chamada pela tela, com a sessão da pessoa). */
+async function abertoAgora(body: any) {
+  const seg = await segredos();
+  const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
+  const cfg: any = (cf && cf.payload) || {};
+  const user = (cfg.users || []).find((u: any) => sessaoValida(u, String(body.senha || "")));
+  if (!user) return json({ error: "não autorizado" }, 401);
+  const nao = (motivo: string) => json({ ok: true, enviado: false, motivo });
+  const acoes = cfg.orcamentoAcoes || {};
+  if (!(acoes.auto && acoes.desde)) return nao("envio automático desligado");
+  const passos = passosEfetivos(cfg), p0 = passos[0];
+  if (!p0 || Number(p0.dias) !== 0 || !p0.statusId) return nao("sem ação inicial configurada");
+  const id = String(body.id || "");
+  const { data: row } = await admin.from("orcamentos").select("payload").eq("id", id).maybeSingle();
+  const o = row && row.payload; if (!o) return nao("orçamento não encontrado");
+  const hoje = agoraBR().dia;
+  const base = o.autoBaseData || o.data || (o.criadoEm ? diaDe(Number(o.criadoEm)) : "");
+  if (o.rascunho || o.convertidoEm || o.status !== p0.statusId || Number(o.autoMensagensEnviadas || 0) !== 0 || (o.msgEnviadas && o.msgEnviadas[p0.statusId]) || !base || diasEntre(base, hoje) !== 0) return nao("já enviado ou fora do fluxo");
+  { const { data: pz } = await admin.from("marketing_disparo_estado").select("pausado_motivo").eq("id", 1).maybeSingle(); if (pz && pz.pausado_motivo) return nao("envios pausados"); }
+  const tel = celular(o.telefone);
+  if (!tel) return nao("sem celular válido");   // o agendador registra a ação sem mensagem
+  // reserva: o agendador não manda a mesma ação enquanto esta está em andamento
+  o.autoAgenda = { dia: hoje, em: 9e15, passo: 0, tent: 0, imediato: true };
+  await admin.from("orcamentos").update({ payload: o, updated_at: new Date().toISOString() }).eq("id", id);
+  const liberar = async (motivo: string) => { const { data: r2 } = await admin.from("orcamentos").select("payload").eq("id", id).maybeSingle(); const x = r2 && r2.payload; if (x && x.autoAgenda && x.autoAgenda.imediato) { delete x.autoAgenda; await admin.from("orcamentos").update({ payload: x, updated_at: new Date().toISOString() }).eq("id", id); } return nao(motivo); };
+  const H = { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY };
+  const inst = o.lojaId === "loja_rj" ? "reformajoias" : "vilaca";
+  try { const rs = await fetch(`${seg.EVOLUTION_URL}/instance/connectionState/${inst}`, { headers: H, signal: AbortSignal.timeout(8000) }); const js = await rs.json().catch(() => ({})); if (String((js && js.instance && js.instance.state) || js.state || "") !== "open") return await liberar("WhatsApp fora do ar (o sistema tenta de novo em seguida)"); } catch (_) { return await liberar("WhatsApp fora do ar (o sistema tenta de novo em seguida)"); }
+  const tagOff = ((cfg.tagsClientes || []).find((x: any) => semAcento(x.nome) === "marketing off") || {}).id || "";
+  if (tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(tel), p_tag: tagOff }); if (off === true) return await liberar("cliente com a tag MARKETING OFF"); } catch (_) {} }
+  try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) return await liberar("número sem WhatsApp"); } catch (_) {}
+  const texto = waMePrimeiro(varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0)))) + (inst === "vilaca" ? RODAPE_SAIR : "");
+  let ok = false, status = 0;
+  try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
+  try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: o.lojaId || null, acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Acompanhamento automático", tabela: "orc_acao", registro_id: id, resumo: `${ok ? "Enviou" : "Falhou ao enviar"} ${p0.nome} (orçamento salvo) por WhatsApp (${inst}) para …${tel.slice(-4)}`, detalhe: { instancia: inst, status, botao: "auto", rotulo: p0.nome, imediato: true } }); } catch (_) {}
+  const { data: r3 } = await admin.from("orcamentos").select("payload").eq("id", id).maybeSingle();
+  const reg = (r3 && r3.payload) || o;
+  const agoraIso = new Date().toISOString();
+  if (!ok) { reg.autoAgenda = { dia: hoje, em: Date.now() + 5 * 60000, passo: 0, tent: 1 }; await admin.from("orcamentos").update({ payload: reg, updated_at: agoraIso }).eq("id", id); return nao("não foi possível enviar agora; o sistema tenta de novo em 5 minutos"); }
+  delete reg.autoAgenda;
+  reg.autoMensagensEnviadas = 1;
+  reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas[p0.statusId] = agoraIso;
+  (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: p0.id, nome: p0.nome, por: "sistema", via: "whatsapp", auto: true, imediato: true });
+  await admin.from("orcamentos").update({ payload: reg, updated_at: agoraIso }).eq("id", id);
+  return json({ ok: true, enviado: true, autoMensagensEnviadas: 1, msgEnviadas: reg.msgEnviadas, acoesLog: reg.acoesLog });
+}
+
 type Item = { tipo: "orcamento" | "posvenda"; tabela: string; id: string; reg: any; passo: number; tel: string | null; texto: string; statusDestino: string; nomeAcao: string; pulados: number; agenda: any };
 
 Deno.serve(async (req: Request) => {
@@ -135,9 +192,10 @@ Deno.serve(async (req: Request) => {
   const inicio = Date.now();
   let travado = false;
   try {
+    const body = await req.json().catch(() => ({}));
+    if (body && body.op === "abertoAgora") return await abertoAgora(body);   // chamada da tela (sessão do app), não do agendador
     const seg = await segredos();
     if (!seg.ACOMPANHAMENTO_CRON_TOKEN || req.headers.get("x-cron-token") !== seg.ACOMPANHAMENTO_CRON_TOKEN) return json({ error: "não autorizado" }, 401);
-    const body = await req.json().catch(() => ({}));
     const agora = agoraBR();
     if (!body.ignorarHorario && !(agora.hora >= HORA_INI && agora.hora < HORA_FIM)) return json({ ok: true, fora_do_horario: true });
     const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
