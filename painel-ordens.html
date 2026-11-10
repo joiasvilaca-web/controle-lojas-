@@ -1486,7 +1486,7 @@ async function reverterFiadoECreditoOrdem(order, rotulo){
   if(order.creditoUsado > 0){
     cliCad.credito = (Number(cliCad.credito)||0) + order.creditoUsado;
     if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-    cliCad.creditoMovimentos.push({ data: hojeStr(), valor: order.creditoUsado, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''}` });
+    cliCad.creditoMovimentos.push({ data: hojeStr(), valor: order.creditoUsado, tipo:'estorno', obs:`${rotulo} O.S. ${viaTxt(order)||''}` });
     mudou = true;
   }
   if(order.creditoGerado > 0){
@@ -1494,7 +1494,7 @@ async function reverterFiadoECreditoOrdem(order, rotulo){
     if(tirar > 0){
       cliCad.credito = (Number(cliCad.credito)||0) - tirar;
       if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-      cliCad.creditoMovimentos.push({ data: hojeStr(), valor: -tirar, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''} (sobra do ouro)` });
+      cliCad.creditoMovimentos.push({ data: hojeStr(), valor: -tirar, tipo:'estorno', obs:`${rotulo} O.S. ${viaTxt(order)||''} (sobra do ouro)` });
       mudou = true;
     }
   }
@@ -1506,7 +1506,7 @@ async function reverterFiadoECreditoOrdem(order, rotulo){
       if(jaPago > 0){
         if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
         cliCad.credito = (Number(cliCad.credito)||0) + jaPago;
-        cliCad.creditoMovimentos.push({ data: hojeStr(), valor: jaPago, tipo:'estorno', obs:`${rotulo} O.S. ${order.via||''} (parcela de fiado já paga)` });
+        cliCad.creditoMovimentos.push({ data: hojeStr(), valor: jaPago, tipo:'estorno', obs:`${rotulo} O.S. ${viaTxt(order)||''} (parcela de fiado já paga)` });
       }
       cliCad.fiadoDebitos.splice(idx,1);
       mudou = true;
@@ -1620,7 +1620,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
       if(cli){
         cli.credito = (Number(cli.credito)||0) + recebido;
         if(!cli.creditoMovimentos) cli.creditoMovimentos = [];
-        cli.creditoMovimentos.push({ data: hojeStr(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento O.S. ${order.via||''}` });
+        cli.creditoMovimentos.push({ data: hojeStr(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento O.S. ${viaTxt(order)||''}` });
         await salvarUmCliente(cli);
         order.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
       }
@@ -1633,12 +1633,12 @@ async function aplicarCancelamentoOrdem(order, motivo){
 /** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
 async function abrirCancelarOrdem(order){
   if(!order || order.status==='cancelado') return;
-  if(!podeCancelarOrdem(order)){ const a = await autorizarGerencia('cancelar_pedido', 'Cancelar o pedido '+(order.via||'')+' de '+(order.cliente||''), order.id, order.lojaId); if(!a) return; }
+  if(!podeCancelarOrdem(order)){ const a = await autorizarGerencia('cancelar_pedido', 'Cancelar o pedido '+(viaTxt(order)||'')+' de '+(order.cliente||''), order.id, order.lojaId); if(!a) return; }
   if(await bloqueadoPorCaixaFechado(order.lojaId)) return;
   const recebido = valorRecebidoDe(order);
   openModal(`
     <h3>Cancelar pedido</h3>
-    <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(order.via||'—')} · <b>${fmtMoeda(order.valorTotal)}</b></p>
+    <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(viaTxt(order)||'—')} · <b>${fmtMoeda(order.valorTotal)}</b></p>
     ${recebido>0 ? `<div class="aviso-linha excede" style="margin-bottom:12px;">${ico('alerta')}<span>Este pedido já recebeu ${fmtMoeda(recebido)}. Ao confirmar, você escolhe: crédito do cliente ou devolução.</span></div>` : ''}
     <div class="field"><label>Motivo do cancelamento <span class="muted">(obrigatório)</span></label><textarea id="co_motivo" style="min-height:70px;" placeholder="Ex: cliente desistiu, erro de lançamento..."></textarea></div>
     <div class="modal-actions">
@@ -1695,7 +1695,7 @@ function abrirExcluirOrdem(order){
   const temFiado = order.status!=='cancelado' && !!order.fiadoDebitoId;
   openModal(`
     <h3>Excluir pedido</h3>
-    <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(order.via||'—')} · <b>${fmtMoeda(order.valorTotal)}</b> · ${seloStatusHtml(order.status)}</p>
+    <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(viaTxt(order)||'—')} · <b>${fmtMoeda(order.valorTotal)}</b> · ${seloStatusHtml(order.status)}</p>
     <div class="aviso-linha excede">${ico('alerta')}<span>A exclusão é definitiva: o pedido some da lista e da agenda (a vaga é liberada).</span></div>
     <ul style="margin:10px 0 12px 18px; font-size:13px; line-height:1.6; color:var(--ink-soft);">
       ${recebido>0 ? `<li>${fmtMoeda(recebido)} já recebidos deixam de contar no caixa e nos relatórios.</li>` : ''}
@@ -1742,13 +1742,13 @@ async function sincronizarAutorizacoesPendentes(){
       if(r.status==='liberado'){
         o.autorizacao = { ...o.autorizacao, status:'liberado', por:r.liberadoPor||'', em:r.respondidoEm||Date.now() };
         o.encaixe = true; o.autorizadoPor = r.liberadoPor || 'OFICINA';
-        showToast('Encaixe do pedido '+(o.via||'')+' liberado por '+(r.liberadoPor||'Oficina')+'.');
+        showToast('Encaixe do pedido '+(viaTxt(o)||'')+' liberado por '+(r.liberadoPor||'Oficina')+'.');
       } else if(r.status==='recusado'){
         const nova = (o.status==='cancelado') ? null : proximaDataDisponivel(o.serviceTypeId, o.id);
         o.autorizacao = { ...o.autorizacao, status:'recusado', por:r.recusadoPor||'', motivoRecusa:r.motivoRecusa||'', dataAnterior:o.data, em:r.respondidoEm||Date.now() };
         if(nova) o.data = nova;
         o.encaixe = false; o.autorizadoPor = null;
-        showToast('Pedido '+(o.via||'')+': autorização recusada'+(nova?'. Nova data: '+fmtDate(nova):'')+'.');
+        showToast('Pedido '+(viaTxt(o)||'')+': autorização recusada'+(nova?'. Nova data: '+fmtDate(nova):'')+'.');
       } else continue;
       mudou = true;
       const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:o.id, payload:o, updated_at:new Date().toISOString() } } });
@@ -1941,7 +1941,7 @@ async function cashbackProcessar(reg, tipo, total, modo, anterior, clienteIdHint
   let cid = (anterior && anterior.clienteId) || clienteIdHint || null;
   if(!cid) cid = await cbAcharClienteId(reg);
   if(!cid){ if(t.uso>0.004) return { ok:false, erro:'Para usar cashback, escolha um cliente cadastrado na busca.' }; return { ok:true, semCliente:true }; }
-  const r = await Cashback.aplicar(gatewayCall, cid, { registroId:reg.id, tipo, via:reg.codigoVia||reg.via||'', loja:reg.lojaId||'', dinheiroTotal:t.din, usadoTotal:t.uso, total:Number(total)||0, anterior }, modo==='validar' ? 'validar' : null);
+  const r = await Cashback.aplicar(gatewayCall, cid, { registroId:reg.id, tipo, via:reg.codigoVia||viaTxt(reg)||'', loja:reg.lojaId||'', dinheiroTotal:t.din, usadoTotal:t.uso, total:Number(total)||0, anterior }, modo==='validar' ? 'validar' : null);
   if(r.erro) return { ok:false, erro:r.erro };
   return { ok:true, resumo:r.resumo };
 }
@@ -3065,7 +3065,7 @@ function promptCiente(callback){
  * Devolve o registro da retirada ({recebidoPor, metodo, portador, usadoPor, usadoEm…}) ou null se não concluiu. */
 async function entregarComCodigo(ord, saldoConferido){
   if(!window.RetiradaTerceiro){ showToast('Não foi possível abrir a conferência do código. Recarregue a página.'); return null; }
-  const r = await RetiradaTerceiro.abrir({ tipo:'os', id:ord.id, via:ord.via, cliente:ord.cliente, telefone:ord.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||ord.lojaId, retomar:true, saldoConferido:!!saldoConferido });
+  const r = await RetiradaTerceiro.abrir({ tipo:'os', id:ord.id, via:viaTxt(ord), cliente:ord.cliente, telefone:ord.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||ord.lojaId, retomar:true, saldoConferido:!!saldoConferido });
   return r && r.retirada ? r.retirada : null;
 }
 /* Marca a O.S. como entregue e arquiva na própria via quem recebeu e como foi liberado. */
@@ -3673,16 +3673,20 @@ function funcionarioOptionsTodosHtml(selected){
 /* ============================================================
    NOTIFICAR CLIENTE (modal pós-lançamento / pós-edição)
    ============================================================ */
+/** 10/11: o único número de via que o app mostra é o código oficial (ex.: JN4P); `via` (JN-16) ficou só como histórico interno. */
+function viaTxt(o){ return (o && o.codigoVia) || ''; }
+/** código oficial do pedido que nasceu de uma solicitação de autorização (a solicitação só guarda o número antigo) */
+function viaDaSolicitacao(r){ const o = r && r.ordemId ? (orders||[]).find(x=>x.id===r.ordemId) : null; return viaTxt(o); }
 function montarMensagemOS(order, template){
   const st = (config.serviceTypes||[]).find(s=>s.id===order.serviceTypeId);
   const loja = (config.lojas||[]).find(l=>l.id===order.lojaId);
-  const nota = order.codigoVia || order.via || '';
+  const nota = order.codigoVia || viaTxt(order) || '';
   const notaLinha = nota ? `Número da nota: ${nota}
 ` : '';
   const linkAcomp = `${window.APP_URL || 'https://vilaca.app'}/acompanhar.html?id=${encodeURIComponent(order.id||'')}`;   // página pública de acompanhamento (acompanhar.html lê o id da O.S.)
   return (template||DEFAULT_TEMPLATE)
     .replace(/\{cliente\}/g, order.cliente||'')
-    .replace(/\{via\}/g, order.via||'')
+    .replace(/\{via\}/g, viaTxt(order)||'')
     .replace(/\{status\}/g, statusLabel(order.status))
     .replace(/\{servico\}/g, st ? st.nome : (order.serviceTypeName||''))
     .replace(/\{data\}/g, fmtDate(order.data))
@@ -3706,7 +3710,7 @@ function printOrder(order){
 
   const linhas = [];
   linhas.push(`<div class="titulo">ORDEM DE SERVIÇO</div>`);
-  linhas.push(`<div class="destaque" style="text-align:center;">Loja ${escapeHtml(nomeLojaOrder(order))} · Via ${escapeHtml(order.via||'—')}</div>`);
+  linhas.push(`<div class="destaque" style="text-align:center;">Loja ${escapeHtml(nomeLojaOrder(order))}</div>`);
   linhas.push(`<div class="destaque" style="text-align:center;">Entrega prevista: ${fmtDate(order.data)}</div>`);
   linhas.push(`<div class="linha"></div>`);
 
@@ -3820,7 +3824,7 @@ async function sendWhatsApp(order){
     : order.status==='entregue'
     ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
     : (config.mensagemPadrao||DEFAULT_TEMPLATE);
-  if(window.WhatsAuto){ const okEnvio = await WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:order.via||'' }); if(okEnvio===true) await marcarMsgEnviadaOS(order);
+  if(window.WhatsAuto){ const okEnvio = await WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:viaTxt(order)||'' }); if(okEnvio===true) await marcarMsgEnviadaOS(order);
     if(okEnvio===true) await marcarAvisado(order,'WhatsApp'); return okEnvio===true; }
   showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
 }
@@ -3833,7 +3837,7 @@ async function sendEmail(order){
     : order.status==='entregue'
     ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
     : (config.mensagemPadrao||DEFAULT_TEMPLATE);
-  const assunto = `Atualização do seu pedido — ${order.via||''}`;
+  const assunto = `Atualização do seu pedido — ${viaTxt(order)||''}`;
   const corpo = montarMensagemOS(order, template);
   try{
     const r = await fetch(`${SUPABASE_URL}/functions/v1/send-email-gmail`, {
@@ -4147,7 +4151,7 @@ async function marcarOrcamentoConvertido(orc, ordem){
     const atual = orcamentos.find(x=>x.id===orc.id) || orc;
     const st = statusOrcamentoConvertido();
     if(st) atual.status = st.id;
-    atual.convertidoEm = { tipo:'pedido', id: ordem.id, codigo: ordem.codigoVia || ordem.via || '', data: new Date().toISOString() };
+    atual.convertidoEm = { tipo:'pedido', id: ordem.id, codigo: ordem.codigoVia || viaTxt(ordem) || '', data: new Date().toISOString() };
     const ok = await orcamentoSalvar(atual);
     if(ok) showToast('Orçamento marcado como convertido em pedido.');
   }catch(e){ console.error('marcarOrcamentoConvertido', e); }
@@ -4754,7 +4758,7 @@ function renderNovaOrdem(main){
           </div>
           <input type="hidden" id="f_loja" value="${window.__lojaAtual ? escapeHtml(window.__lojaAtual.id) : ''}">
         </div>
-        <div class="field"><label for="f_via">Número da via</label><input id="f_via" placeholder="Gerado automaticamente" readonly></div>
+        <div class="field" style="display:none;"><label for="f_via">Número da via</label><input id="f_via" placeholder="Gerado automaticamente" readonly></div>
         <div class="field"><label for="f_vendedora">Vendedora</label>${vendedoraTravadaNoLogin() ? `<input id="f_vendedora" value="${escapeHtml(vendedoraTravadaNoLogin())}" readonly title="Preenchido com o seu login">` : `<select id="f_vendedora">${funcionarioOptionsHtml('vendedora', '')}</select>`}</div>
       </div>
 
@@ -4962,7 +4966,7 @@ function renderNovaOrdem(main){
     btnTenho.style.display = (foraPadrao && !mostrarLancar) ? '' : 'none';
     codeArea.style.display = (foraPadrao && (tenhoCodigo || liberado)) ? 'block' : 'none';
     if(!foraPadrao || !solicitacaoAtual){ solBox.innerHTML = ''; return; }
-    if(pendente) solBox.innerHTML = `<div class="slot-banner slot-bad" style="margin-top:10px;"><span class="dot"></span><div><b>Aguardando a Oficina liberar.</b> Os dados da via já foram enviados (${escapeHtml(solicitacaoAtual.via.numeroVia||'')}). Esta tela libera sozinha quando a Oficina aprovar. <button type="button" class="btn btn-sm" id="btnCancelarSol" style="margin-left:8px;">Cancelar solicitação</button></div></div>`;
+    if(pendente) solBox.innerHTML = `<div class="slot-banner slot-bad" style="margin-top:10px;"><span class="dot"></span><div><b>Aguardando a Oficina liberar.</b> Os dados da via já foram enviados (${escapeHtml(viaDaSolicitacao(solicitacaoAtual))}). Esta tela libera sozinha quando a Oficina aprovar. <button type="button" class="btn btn-sm" id="btnCancelarSol" style="margin-left:8px;">Cancelar solicitação</button></div></div>`;
     else if(liberado) solBox.innerHTML = `<div class="slot-banner slot-ok" style="margin-top:10px;"><span class="dot"></span><div><b>Liberado por ${escapeHtml(solicitacaoAtual.liberadoPor||'Oficina')}.</b> O código já foi preenchido — pode lançar o pedido.</div></div>`;
     const bc = document.getElementById('btnCancelarSol');
     if(bc) bc.onclick = async ()=>{ await autorizacoesMut(l=>{ const r=l.find(x=>x.id===solicitacaoAtual.id); if(r && r.status==='pendente') r.status='cancelado'; }); solicitacaoAtual=null; if(pollSol){clearInterval(pollSol);pollSol=null;} atualizarBotoesPermissao(); showToast('Solicitação cancelada.'); };
@@ -5328,16 +5332,16 @@ function renderNovaOrdem(main){
       if(totalCredOS>0){
         cliCad.credito = (Number(cliCad.credito)||0) - totalCredOS;
         if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-        cliCad.creditoMovimentos.push({ data: dt, valor: -totalCredOS, tipo:'uso', obs:`O.S. ${via}` });
+        cliCad.creditoMovimentos.push({ data: dt, valor: -totalCredOS, tipo:'uso', obs:`O.S. ${novaOrdem.codigoVia||via}` });
       }
       if(creditoGeradoOS>0){
         cliCad.credito = (Number(cliCad.credito)||0) + creditoGeradoOS;
         if(!cliCad.creditoMovimentos) cliCad.creditoMovimentos = [];
-        cliCad.creditoMovimentos.push({ data: dt, valor: creditoGeradoOS, tipo:'ouro', obs:`Sobra do ouro — O.S. ${via}` });
+        cliCad.creditoMovimentos.push({ data: dt, valor: creditoGeradoOS, tipo:'ouro', obs:`Sobra do ouro — O.S. ${novaOrdem.codigoVia||via}` });
       }
       if(totalFiaOS>0){
         if(!cliCad.fiadoDebitos) cliCad.fiadoDebitos = [];
-        cliCad.fiadoDebitos.push({ id:novoFiadoDebitoIdOS, origem:'O.S.', numero:via, data:dt, valor:totalFiaOS, valorPago:0, loja:loja||'' });
+        cliCad.fiadoDebitos.push({ id:novoFiadoDebitoIdOS, origem:'O.S.', numero:novaOrdem.codigoVia||via, data:dt, valor:totalFiaOS, valorPago:0, loja:loja||'' });
       }
       await salvarUmCliente(cliCad);
     }
@@ -5400,7 +5404,7 @@ async function openEditModal(orderId, somenteLeitura, soPagamento){
 
 function openEditModalOficina(order){
   openModal(`
-    <h3>Pedido ${escapeHtml(order.via||'')} · ${escapeHtml(order.cliente)}</h3>
+    <h3>Pedido ${escapeHtml(viaTxt(order)||'')} · ${escapeHtml(order.cliente)}</h3>
     <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <span>${escapeHtml(order.serviceTypeName||'')}</span> <span>Agendado para ${fmtDate(order.data)}</span></div>
     <div class="locked-note">${ico('cadeado')}<span>Aqui você pode incluir observações, dar ciência e atualizar onde está a peça. Para mudar outros dados, fale com a vendedora ou a diretoria.</span></div>
     ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
@@ -5447,7 +5451,7 @@ function openEditModalCompleto(order, opts){
   const bloqueadoPorLoja = !podeEditarRegistro(order) && !__pedidosLiberados.has(order.id);
   const somenteLeitura = !!opts.somenteLeitura || bloqueadoPorLoja;
   openModal(`
-    <h3>${opts.soPagamento && !somenteLeitura ? 'Pagamento — pedido' : somenteLeitura ? 'Pedido' : 'Editar pedido'} ${escapeHtml(order.via||'')}</h3>
+    <h3>${opts.soPagamento && !somenteLeitura ? 'Pagamento — pedido' : somenteLeitura ? 'Pedido' : 'Editar pedido'} ${escapeHtml(viaTxt(order)||'')}</h3>
     <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <b style="color:var(--ink);">${escapeHtml(order.cliente||'')}</b>${order.encaixe?` <span class="badge badge-encaixe" title="Autorizado por ${escapeHtml(order.autorizadoPor||'')}">Encaixe autorizado por ${escapeHtml(order.autorizadoPor||'—')}</span>`:''}</div>
     ${bloqueadoPorLoja ? `<div class="locked-note">${ico('cadeado')}<span>${escapeHtml(motivoSemEdicao(order))}</span> <button type="button" class="btn btn-ghost btn-sm" id="btnLiberarEdicao">Liberar edição (senha da gerência)</button></div>` : `<p>${somenteLeitura ? 'Só leitura. Para alterar, feche e clique no lápis da lista.' : 'Se a nova data ou o novo serviço saírem do padrão, o sistema pede o código de autorização.'}</p>`}
     <div class="section-label">Cliente</div>
@@ -5459,7 +5463,7 @@ function openEditModalCompleto(order, opts){
     <div class="modal-secao">
     <div class="section-label">Pedido</div>
     <div class="grid-2">
-      <div class="field"><label for="e_via">Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
+      <div class="field" style="display:none;"><label for="e_via">Número da via</label><input id="e_via" value="${escapeHtml(order.via)}"></div>
       <div class="field"><label for="e_vendedora">Vendedora</label><select id="e_vendedora">${funcionarioOptionsHtml('vendedora', order.vendedora)}</select></div>
     </div>
     <div class="grid-2">
@@ -5609,7 +5613,7 @@ function openEditModalCompleto(order, opts){
     });
     document.getElementById('editCancel').addEventListener('click', closeModal);
     { const bl = document.getElementById('btnLiberarEdicao'); if(bl) bl.addEventListener('click', async ()=>{
-      const a = await autorizarGerencia('editar_outra_loja', 'Editar o pedido '+(order.via||'')+' de outra loja', order.id);
+      const a = await autorizarGerencia('editar_outra_loja', 'Editar o pedido '+(viaTxt(order)||'')+' de outra loja', order.id);
       if(!a) return; __pedidosLiberados.add(order.id); openEditModalCompleto(order, {});
     }); }
     return;
@@ -5771,7 +5775,7 @@ function openEditModalCompleto(order, opts){
           showToast('Código inválido ou já utilizado.');
           return;
         }
-        if(codeObj.solicitacaoId && codeObj.viaNumero!==String(order.via||'')){
+        if(codeObj.solicitacaoId && codeObj.viaNumero!==String(viaTxt(order)||'')){
           showToast('Este código foi liberado para outra via (' + (codeObj.viaNumero||'—') + ').');
           return;
         }
@@ -5806,7 +5810,7 @@ function openEditModalCompleto(order, opts){
       if(Math.abs(_mov) > 0.009){
         _cli.credito = (Number(_cli.credito)||0) + _mov;
         if(!_cli.creditoMovimentos) _cli.creditoMovimentos = [];
-        _cli.creditoMovimentos.push({ data: hojeStr(), valor: _mov, tipo:'ouro', obs:`Sobra do ouro (edição) — O.S. ${order.via||''}` });
+        _cli.creditoMovimentos.push({ data: hojeStr(), valor: _mov, tipo:'ouro', obs:`Sobra do ouro (edição) — O.S. ${viaTxt(order)||''}` });
         await salvarUmCliente(_cli);
       }
     }
@@ -5931,7 +5935,7 @@ function renderPainel(main){
     const linha = (o)=>`
       <div class="pronto-item">
         <div>
-          <span class="via" style="font-family:var(--mono);font-weight:700;">${escapeHtml(o.via||'')}</span>
+          <span class="via" style="font-family:var(--mono);font-weight:700;">${escapeHtml(viaTxt(o)||'')}</span>
           <b style="margin-left:6px;">${escapeHtml(o.cliente)}</b>
           <span class="muted"> · ${escapeHtml(o.serviceTypeName||'')} · ${escapeHtml(nomeLojaOrder(o))} · agendado para ${fmtDate(o.data)}</span>
           ${jaAv(o) ? `<div class="muted" style="font-size:12px;">${ico('check',12)} Avisado em ${new Date(o.avisoCliente.em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}${o.avisoCliente.por?' por '+escapeHtml(o.avisoCliente.por):''} (${escapeHtml((o.avisoCliente.meios||[]).join(' + '))})</div>` : ''}
@@ -6023,7 +6027,7 @@ function renderPainel(main){
     if(fData.value) list = list.filter(o=>o.data===fData.value);
     if(fBusca.value.trim()){
       const q = fBusca.value.trim(), qDig = onlyDigits(q);
-      list = list.filter(o=> Busca.testa([o.cliente,o.via,o.codigoVia].join(' '), q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
+      list = list.filter(o=> Busca.testa([o.cliente,viaTxt(o),o.codigoVia].join(' '), q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
     }
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     const fimRecente = o=> { const t = Number(o.recebidoEm || o.canceladoEm || o.atualizadoEm || o.criadoEm || 0); return t >= limite; };
@@ -6036,7 +6040,7 @@ function renderPainel(main){
       const falta = valorAReceberDe(o);
       const atraso = estaAtrasada(o);
       return `<div class="quadro-card${pode?'':' travado'}" data-qid="${escapeHtml(o.id)}" ${pode?'draggable="true"':''} title="${pode?'Arraste para mudar o status · toque para abrir':'Toque para ver'}">
-        <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||o.via||'—')}</span><span class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}${vistoMsgHtml(o)}</span><span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}${vistoMsgHtml(o)}</span>${(pode && o.telefone && o.status!=='rascunho') ? `<button type="button" class="btn-icone wa qc-wa" data-qwa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status agora pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(16)}</button>` : ''}${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
+        <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||viaTxt(o)||'—')}</span><span class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}${vistoMsgHtml(o)}</span><span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}${vistoMsgHtml(o)}</span>${(pode && o.telefone && o.status!=='rascunho') ? `<button type="button" class="btn-icone wa qc-wa" data-qwa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status agora pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(16)}</button>` : ''}${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
         <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(o.data)}${atraso?' (atrasado)':''}</span>`:''}</div>
         ${falta>0.009 && o.status!=='cancelado' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
         ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho')}</select>` : ''}
@@ -6113,7 +6117,7 @@ function renderPainel(main){
       Object.entries(o.msgEnviadas||{}).forEach(([k, iso])=>{ const t = Date.parse(iso); if(t>limite) env.push({ o, em:t, acao: k==='posvenda' ? 'Pós-venda' : statusLabel(k) }); });
     });
     prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
-    const linha = (x, tempo, cls) => `<li class="ac-item" data-acabrir="${escapeHtml(x.o.id)}" title="Abrir o pedido"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.o.codigoVia||x.o.via||'—')}</b><span class="ac-nome">${escapeHtml(x.o.cliente||'—')}</span></span><span class="muted ac-sub">${escapeHtml(x.acao)} · ${escapeHtml(nomeLojaOrder(x.o)||'')}</span></span></li>`;
+    const linha = (x, tempo, cls) => `<li class="ac-item" data-acabrir="${escapeHtml(x.o.id)}" title="Abrir o pedido"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.o.codigoVia||viaTxt(x.o)||'—')}</b><span class="ac-nome">${escapeHtml(x.o.cliente||'—')}</span></span><span class="muted ac-sub">${escapeHtml(x.acao)} · ${escapeHtml(nomeLojaOrder(x.o)||'')}</span></span></li>`;
     const tProg = x => x.em>=9e14 ? 'em breve' : (x.previsto ? 'dia ' + fmtDate(dia(x.em)) : quando(x.em));
     el.innerHTML = `<div class="page-head" style="margin-top:18px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
       <p class="page-sub">À esquerda o que está programado (a fila automática sai das 9h às 18h; o aviso de PRONTO entra na fila ao mudar o status e o pós-venda sai ${diasPV} dias depois de ENTREGUE). À direita o que já foi enviado nos últimos 3 dias. O botão do WhatsApp envia na hora, em qualquer status.</p></div></div>
@@ -6151,13 +6155,13 @@ function renderPainel(main){
     if(fBusca.value.trim()) {
       const q = fBusca.value.trim();
       const qDig = onlyDigits(q);
-      list = list.filter(o=> Busca.testa([o.cliente,o.via,o.codigoVia].join(' '), q)
+      list = list.filter(o=> Busca.testa([o.cliente,viaTxt(o),o.codigoVia].join(' '), q)
         || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
     }
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     if(fStatus.value==='todos' || fHoje.checked) list.sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0));   // mais recentes primeiro
     else list.sort((a,b)=> a.data.localeCompare(b.data) || b.criadoEm-a.criadoEm );
-    if(fBusca.value.trim()) list = list.map((o,i)=>({o,i,p:Busca.pontua([o.cliente,o.via,o.codigoVia].join(' '), fBusca.value.trim())})).sort((x,y)=>((x.p<0?9e9:x.p)-(y.p<0?9e9:y.p))||(x.i-y.i)).map(x=>x.o);   // mais parecido com o digitado primeiro
+    if(fBusca.value.trim()) list = list.map((o,i)=>({o,i,p:Busca.pontua([o.cliente,viaTxt(o),o.codigoVia].join(' '), fBusca.value.trim())})).sort((x,y)=>((x.p<0?9e9:x.p)-(y.p<0?9e9:y.p))||(x.i-y.i)).map(x=>x.o);   // mais parecido com o digitado primeiro
 
     const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
     const totalAReceber = list.reduce((acc,o)=> acc + valorAReceberDe(o), 0);
@@ -6209,7 +6213,7 @@ function renderPainel(main){
       b.addEventListener('click', ()=>{
         const o = orders.find(x=>x.id===b.dataset.retirada); if(!o || !window.RetiradaTerceiro) return;
         if(bloqueioSaldoEntrega(o)) return;
-        RetiradaTerceiro.abrir({ tipo:'os', id:o.id, via:o.via, cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId, retomar:true,
+        RetiradaTerceiro.abrir({ tipo:'os', id:o.id, via:viaTxt(o), cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId, retomar:true,
           aoConcluir: async (ret)=>{
             if(o.status==='entregue') return;
             aplicarEntregaNaOrdem(o, ret||{});
@@ -6255,7 +6259,7 @@ function renderPainel(main){
     ].filter(Boolean).join('');
     return `
       <tr>
-        <td class="c-via"><span class="via">${escapeHtml(o.via||'—')}</span></td>
+        <td class="c-via"><span class="via">${escapeHtml(viaTxt(o)||'—')}</span></td>
         <td class="c-cliente">
           <div class="cli-nome">${escapeHtml(o.cliente)}</div>
           ${o.telefone ? `<div class="sub">${escapeHtml(o.telefone)}</div>` : ''}
@@ -6274,7 +6278,7 @@ function renderPainel(main){
             ? `<span class="selo st-rascunho">Rascunho</span>`
             : (oficina && !STATUS_FABRICA_OFICINA.includes(o.status))
               ? seloStatusHtml(o.status)
-              : `<select class="status-select" data-id="${o.id}" aria-label="Status do pedido ${escapeHtml(o.via||'')}">
+              : `<select class="status-select" data-id="${o.id}" aria-label="Status do pedido ${escapeHtml(viaTxt(o)||'')}">
                   ${statusOptionsHtml(o.status, false)}
                 </select>`
           }${vistoMsgHtml(o)}</div>
@@ -6328,7 +6332,7 @@ function renderPainel(main){
 /** Lote: pedidos APROVADOS da loja → ENVIADO P/ FÁBRICA (só número da via e nome). */
 function abrirEnviarParaFabrica(aoConcluir){
   const filtroLoja = (document.getElementById('filtroLoja')||{}).value || (window.__lojaAtual && window.__lojaAtual.id) || '';
-  const lista = orders.filter(o=>o.status==='aguardando' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(a.via||'').localeCompare(String(b.via||''), 'pt-BR', {numeric:true}));
+  const lista = orders.filter(o=>o.status==='aguardando' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(viaTxt(a)).localeCompare(String(viaTxt(b)), 'pt-BR', {numeric:true}));
   const nomeLoja = filtroLoja ? String(((config.lojas||[]).find(l=>l.id===filtroLoja)||{}).nome||'').toUpperCase() : 'TODAS AS LOJAS';
   if(!lista.length){
     openModal(`<h3>ENVIAR PARA FÁBRICA</h3><p class="muted">Nenhum pedido com status APROVADO${nomeLoja?' em '+escapeHtml(nomeLoja):''} para enviar.</p><div class="modal-actions"><button class="btn btn-accent" id="efFechar">Fechar</button></div>`);
@@ -6340,7 +6344,7 @@ function abrirEnviarParaFabrica(aoConcluir){
     <p class="muted">Pedidos APROVADOS${nomeLoja?' — '+escapeHtml(nomeLoja):''}. Ao enviar, todos os marcados passam para ENVIADO P/ FÁBRICA.</p>
     <label class="chk" style="margin:6px 0;"><input type="checkbox" id="efTodos" checked> Marcar todos (<span id="efQtd">${lista.length}</span>)</label>
     <div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:10px;">
-      ${lista.map(o=>`<label class="chk" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);"><input type="checkbox" class="efItem" data-id="${o.id}" checked><span style="font-family:var(--mono);font-weight:700;">${escapeHtml(o.via||'—')}</span><b>${escapeHtml(o.cliente||'')}</b></label>`).join('')}
+      ${lista.map(o=>`<label class="chk" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);"><input type="checkbox" class="efItem" data-id="${o.id}" checked><span style="font-family:var(--mono);font-weight:700;">${escapeHtml(viaTxt(o)||'—')}</span><b>${escapeHtml(o.cliente||'')}</b></label>`).join('')}
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="efCancel">Cancelar</button>
@@ -6367,7 +6371,7 @@ function abrirEnviarParaFabrica(aoConcluir){
  *  O leitor de código marca via por via, conferindo o que realmente veio na caixa. */
 function abrirReceberDaFabrica(aoConcluir){
   const filtroLoja = (document.getElementById('filtroLoja')||{}).value || (window.__lojaAtual && window.__lojaAtual.id) || '';
-  const lista = orders.filter(o=>o.status==='oficina_pronto' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(a.via||'').localeCompare(String(b.via||''), 'pt-BR', {numeric:true}));
+  const lista = orders.filter(o=>o.status==='oficina_pronto' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(viaTxt(a)).localeCompare(String(viaTxt(b)), 'pt-BR', {numeric:true}));
   const nomeLoja = filtroLoja ? String(((config.lojas||[]).find(l=>l.id===filtroLoja)||{}).nome||'').toUpperCase() : '';
   if(!lista.length){
     openModal(`<h3>RECEBER DA FÁBRICA</h3><p class="muted">Nenhuma via PRODUZIDA${nomeLoja?' em '+escapeHtml(nomeLoja):''} esperando para voltar da fábrica.</p><div class="modal-actions"><button class="btn btn-accent" id="rfFechar">Fechar</button></div>`);
@@ -6381,7 +6385,7 @@ function abrirReceberDaFabrica(aoConcluir){
     <input id="rfLeitor" placeholder="Leia ou digite o código da via e tecle Enter" autocomplete="off" autocapitalize="characters" spellcheck="false" style="width:100%;min-height:44px;font-size:16px;font-weight:700;letter-spacing:.04em;padding:10px 12px;border:2px solid var(--accent);border-radius:10px;margin-bottom:10px;">
     <label class="chk" style="margin:6px 0;"><input type="checkbox" id="rfTodos"> Marcar todas — <b><span id="rfQtd">0</span> de ${lista.length}</b> marcadas</label>
     <div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:10px;">
-      ${lista.map(o=>`<label class="chk" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);"><input type="checkbox" class="rfItem" data-id="${o.id}" data-cod="${escapeHtml(chave(o.codigoVia||o.via||''))}"><span style="font-family:monospace;font-weight:700;min-width:72px;">${escapeHtml(o.codigoVia||o.via||'—')}</span><span style="flex:1;">${escapeHtml(o.cliente||'')}</span></label>`).join('')}
+      ${lista.map(o=>`<label class="chk" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);"><input type="checkbox" class="rfItem" data-id="${o.id}" data-cod="${escapeHtml(chave(o.codigoVia||viaTxt(o)||''))}"><span style="font-family:monospace;font-weight:700;min-width:72px;">${escapeHtml(o.codigoVia||viaTxt(o)||'—')}</span><span style="flex:1;">${escapeHtml(o.cliente||'')}</span></label>`).join('')}
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="rfCancel">Cancelar</button>
@@ -6549,7 +6553,7 @@ function openDayModal(iso){
     ${dayOrders.length===0 ? '<div class="empty" style="padding:20px;">Nenhum pedido agendado.</div>' : dayOrders.map(o=>`
       <div class="day-order-item">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-          <span><span style="font-family:var(--mono);font-weight:700;">${escapeHtml(o.via||'')}</span> <b>${escapeHtml(o.cliente)}</b></span>
+          <span><span style="font-family:var(--mono);font-weight:700;">${escapeHtml(viaTxt(o)||'')}</span> <b>${escapeHtml(o.cliente)}</b></span>
           ${seloStatusHtml(o.status)}
         </div>
         <div class="muted" style="margin-top:4px; display:flex; align-items:center; gap:6px; flex-wrap:wrap;"><span class="legend-dot" style="background:${serviceColor(o.serviceTypeId)}"></span>${escapeHtml(o.serviceTypeName||'')} · Loja ${escapeHtml(nomeLojaOrder(o))} · Vendedora ${escapeHtml(o.vendedora||'—')}${o.encaixe?' · <span class="badge badge-encaixe">Encaixe</span>':''}</div>
@@ -6638,7 +6642,7 @@ function renderGerarCodigo(main){
     const rec = lista.filter(r=>r.status!=='pendente').slice(0,8);
     const cont = document.getElementById('solCont'); if(cont) cont.textContent = pend.length ? `· ${pend.length} aguardando` : '';
     const linha = (r, hist) => `<div class="code-list-item" style="align-items:center;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-      <div><b>${escapeHtml(r.via.numeroVia||'—')}</b> · ${escapeHtml(nomeLojaSol(r.lojaId))} · ${escapeHtml(r.via.servico||'')} para ${fmtDate(r.via.dataPedida)}
+      <div><b>${escapeHtml(viaDaSolicitacao(r)||'—')}</b> · ${escapeHtml(nomeLojaSol(r.lojaId))} · ${escapeHtml(r.via.servico||'')} para ${fmtDate(r.via.dataPedida)}
         <div class="muted" style="font-size:12.5px;">${Fmt.dataHora(r.criadoEm)} · ${escapeHtml(r.motivo||'')}</div>
         <div style="font-size:12.5px;"><b>Solicitado por:</b> ${escapeHtml(r.solicitante||'—')}${r.status==='recusado'?` · <b>Recusado por:</b> ${escapeHtml(r.recusadoPor||'—')}`:''}</div></div>
       ${hist ? `<span class="selo ${r.status==='liberado'?'st-pronto':'st-entregue'}">${r.status==='liberado'?'Liberado'+(r.liberadoPor?' por '+escapeHtml(r.liberadoPor):''):r.status==='recusado'?'Recusado':'Cancelado'}</span>`
@@ -6671,7 +6675,7 @@ function renderGerarCodigo(main){
   function verSolicitacao(r){
     if(!r) return;
     const v = r.via||{};
-    openModal(`<div class="modal-titulo"><h3>Solicitação de autorização · ${escapeHtml(v.numeroVia||'')}</h3></div>
+    openModal(`<div class="modal-titulo"><h3>Solicitação de autorização · ${escapeHtml(viaDaSolicitacao(r))}</h3></div>
       <div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;margin-top:0;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${escapeHtml(r.motivo||'')}</div></div>
       <div class="grid-2" style="margin-top:12px;">
         <div><div class="muted" style="font-size:12px;">Loja</div>${escapeHtml(nomeLojaSol(r.lojaId))}</div>

@@ -141,7 +141,7 @@ function preencherOS(txt: string, cfg: any, o: any) {
   const av = lj && lj.googleReviewUrl ? `Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n${lj.googleReviewUrl}` : "";
   const nota = o.codigoVia || o.via || "";
   let t = String(txt || "")
-    .replaceAll("{cliente}", bonito(o.cliente || "") || "cliente").replaceAll("{via}", String(o.via || o.codigoVia || ""))
+    .replaceAll("{cliente}", bonito(o.cliente || "") || "cliente").replaceAll("{via}", String(o.codigoVia || o.via || ""))
     .replaceAll("{status}", STATUS_OS_NOME[o.status] || String(o.status || "")).replaceAll("{servico}", String(o.serviceTypeName || ""))
     .replaceAll("{data}", fmtData(o.data)).replaceAll("{loja}", nomeLoja).replaceAll("{vendedora}", bonito(o.vendedora || "") || "nossa equipe")
     .replaceAll("{recebidoPor}", String(o.recebidoPor || "")).replaceAll("{notaLinha}", nota ? `Número da nota: ${nota}\n` : "")

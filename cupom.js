@@ -38,7 +38,7 @@
     var rodape = (c.mensagemRodape||'').trim();
     var viaCliente = !!TIPO_POR_TITULO[titulo] || /grava[cç][aã]o/i.test(String(titulo||''));   // 07/11: convite para o cliente chamar no WhatsApp de atendimento (conversa iniciada por ele)
     var alturaCss = c.alturaMm > 0 ? 'height:'+c.alturaMm+'mm; overflow:hidden;' : '';
-    var codigoHtml = codigoVia ? '<div class="linha"></div><div class="barcode-wrap"><svg id="barcodeSvg"></svg></div><div class="sub" style="text-align:center; font-weight:800; letter-spacing:.04em; margin-top:2px;">'+esc(codigoVia)+'</div>' : '';
+    var codigoHtml = codigoVia ? '<div class="linha"></div><div class="barcode-wrap"><svg id="barcodeSvg"></svg></div><div style="text-align:center; font-weight:900; letter-spacing:.06em; font-size:22px; line-height:1.15; margin-top:4px;">VIA '+esc(codigoVia)+'</div>' : '';
     return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>'+esc(titulo)+'</title>'
       + (codigoVia ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>' : '')
       + '<style>@page{ margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }'
@@ -90,7 +90,7 @@
     var on = function(k){ return campos[k] !== false; };
     var L = [];
     var T = { os:'ORDEM DE SERVIÇO', vendas:'VENDA', orcamentos:'ORÇAMENTO', reservas:'RESERVA' }[tipo] || 'VIA';
-    L.push('<div class="titulo">'+T+'</div><div class="sub">REFORMA JOIAS · Via RJ123'+({os:'P',vendas:'V',orcamentos:'O',reservas:'R'}[tipo]||'')+'</div><div class="sub">01/11/2026</div><div class="linha"></div>');
+    L.push('<div class="titulo">'+T+'</div><div class="sub">REFORMA JOIAS</div><div class="sub">01/11/2026</div><div class="linha"></div>');
     if(on('cliente')) L.push('<div><b>Cliente:</b> MARIA APARECIDA SILVA</div>');
     if(on('telefone')) L.push('<div><b>Telefone:</b> (32) 99999-0000</div>');
     if(tipo==='os' && on('servico')) L.push('<div><b>Serviço:</b> SERVIÇO SEM CRAVAÇÃO</div>');
