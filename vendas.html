@@ -4759,20 +4759,26 @@ function desenharPosVenda(){
       if(t>limite && !/sem mensagem/.test(String(v.posVendaPor||''))) env.push({ v, em:t });
       return;
     }
-    if(!c.auto || !desdeMs || Number(v.criadoEm||0) < desdeMs) return;
+    const idade = dif(String(v.data).slice(0,10), hojeBR);
+    if(!v.telefone && !(c.auto && desdeMs && Number(v.criadoEm||0) >= desdeMs)) return;
+    if(!c.auto || !desdeMs || Number(v.criadoEm||0) < desdeMs){   // vendas anteriores ao envio automático: com o prazo vencido entram na lista para envio manual
+      if(idade >= c.dias && idade <= c.dias+23) prog.push({ v, em: 9e15, manual:true });
+      return;
+    }
     const ag = v.autoAgenda;
     if(ag && ag.dia >= hojeBR) prog.push({ v, em: Number(ag.em)||9e15 });
     else if(dif(String(v.data).slice(0,10), hojeBR) >= c.dias) prog.push({ v, em: 9e15 });
   });
   prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
-  const linha = (x, tempo, cls) => `<li class="ac-item" data-acvenda="${escapeHtml(x.v.id)}" title="Abrir a venda"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.v.codigoVia||'—')}</b><span class="ac-nome">${escapeHtml(x.v.cliente||'—')}</span></span><span class="muted ac-sub">Pós-venda · ${escapeHtml(vendedoraCurta(x.v))} · ${fmtMoeda(x.v.valorTotal)}</span></span></li>`;
+  const linha = (x, tempo, cls) => `<li class="ac-item" data-acvenda="${escapeHtml(x.v.id)}" title="Abrir a venda"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.v.codigoVia||'—')}</b><span class="ac-nome">${escapeHtml(x.v.cliente||'—')}</span></span><span class="muted ac-sub">Pós-venda · ${escapeHtml(vendedoraCurta(x.v))} · ${fmtMoeda(x.v.valorTotal)}</span></span>${x.manual ? `<button type="button" class="btn btn-accent btn-sm" data-posvenda="${escapeHtml(x.v.id)}" title="Enviar o pós-venda agora pelo WhatsApp">${ic('whatsapp',14)} Enviar</button>` : ''}</li>`;
   el.innerHTML = `<div class="page-head" style="margin-top:14px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
       <p class="page-sub">${c.auto ? `Pós-venda automático LIGADO: o sistema manda sozinho ${c.dias} dias depois da venda, das 9h às 18h; o que não couber hoje entra na fila do dia seguinte.` : 'Pós-venda automático DESLIGADO: nada é enviado sozinho.'} À esquerda o que está programado; à direita o que já foi enviado (últimos 3 dias).</p></div>
       ${gestao ? `<button type="button" class="btn btn-ghost btn-sm" id="btnCfgPosVenda">${ic('engrenagem',14)} Pós-venda automático</button>` : ''}</div>
     <div class="ac-colunas">
-      <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, x.em>=9e14 ? 'em breve' : quando(x.em), '')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}</section>
+      <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, x.manual ? 'prazo vencido' : (x.em>=9e14 ? 'em breve' : quando(x.em)), '')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}</section>
       <section class="card ac-col"><h3>Já enviados <span class="badge badge-aprovado">${env.length}</span></h3>${env.length ? `<ul class="ac-lista">${env.map(x=>linha(x, quando(x.em), 'ok')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>`}</section>
     </div>`;
+  el.querySelectorAll('[data-posvenda]').forEach(b=> b.addEventListener('click', async e=>{ e.stopPropagation(); b.disabled = true; await enviarPosVenda(b.dataset.posvenda); desenharPosVenda(); }));
   el.querySelectorAll('[data-acvenda]').forEach(li=> li.addEventListener('click', ()=>{ const v = (vendas||[]).find(x=>x.id===li.dataset.acvenda); if(v) abrirDetalheVenda(v); }));
   const cfgb = document.getElementById('btnCfgPosVenda'); if(cfgb) cfgb.addEventListener('click', abrirConfigPosVenda);
 }
