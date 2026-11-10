@@ -13,6 +13,7 @@
 <script src="cupom.js"></script>
 <script src="condicoes-pagamento.js"></script>
 <script src="vilaca-extras.js"></script>
+<script src="acompanhamento-ui.js"></script>
 <script>
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
    Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11). ===== */
@@ -6095,6 +6096,27 @@ function renderPainel(main){
 
   /** 10/11: AÇÕES DE ACOMPANHAMENTO (no fim da tela, igual ao Orçamento): à esquerda o que está programado (fila automática: PRONTO e PÓS-VENDA de 7 dias),
    *  à direita o que já foi enviado (visto de mensagem de qualquer status, últimos 3 dias). */
+  /** pós-venda do pedido enviado agora (antes do horário da fila): mesmo texto e mesmos registros do envio automático */
+  async function enviarPosVendaOS(o){
+    if(!o || !o.telefone){ showToast('Este pedido não tem telefone.'); return false; }
+    if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return false;
+    const lj = (config.lojas||[]).find(l=>l.id===o.lojaId);
+    const nomeLoja = (lj && (lj.nomePublico||lj.nomeFantasia||lj.nome)) || 'Vilaça Joias';
+    const av = lj && lj.googleReviewUrl ? 'Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n'+lj.googleReviewUrl : '';
+    const p = String(o.cliente||'').trim().split(/\s+/)[0]||''; const nome = p ? p.charAt(0).toUpperCase()+p.slice(1).toLowerCase() : 'cliente';
+    const modelo = ((config.pedidoAcoes||{}).mensagemPosVenda||'').trim() || 'Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você retirou o seu pedido {via} e queremos saber: ficou tudo certo? Se precisar de qualquer ajuste, estamos à disposição.\n\n{avaliacao}\n\nObrigado por escolher a Vilaça Joias!\n\nCaso precise falar conosco, clique no link:\nhttps://wa.me/5532988307617';
+    const texto = modelo.replaceAll('{cliente}', nome).replaceAll('{loja}', nomeLoja).replaceAll('{via}', viaTxt(o)).replaceAll('{avaliacao}', av).replace(/\n{3,}/g,'\n\n').trim();
+    const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'posvenda', registroId:o.id, via:viaTxt(o) });
+    if(ok!==true) return false;
+    const agora = new Date().toISOString();
+    o.posVendaEnviadoEm = agora; o.posVendaPor = (currentUser&&currentUser.nome)||'';
+    o.msgEnviadas = o.msgEnviadas || {}; o.msgEnviadas.posvenda = agora;
+    (o.acoesLog = o.acoesLog || []).push({ em:agora, passo:'os_posvenda', nome:'Pós-venda', por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
+    delete o.autoAgenda;
+    await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:o.id, payload:o, updated_at:new Date().toISOString() } } });
+    renderTable();
+    return true;
+  }
   function desenharAcompanhamentoOS(){
     const el = document.getElementById('acompanhamentoOS'); if(!el) return;
     if(currentUser && currentUser.nivel==='oficina'){ el.innerHTML = ''; return; }
@@ -6117,15 +6139,13 @@ function renderPainel(main){
       Object.entries(o.msgEnviadas||{}).forEach(([k, iso])=>{ const t = Date.parse(iso); if(t>limite) env.push({ o, em:t, acao: k==='posvenda' ? 'Pós-venda' : statusLabel(k) }); });
     });
     prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
-    const linha = (x, tempo, cls) => `<li class="ac-item" data-acabrir="${escapeHtml(x.o.id)}" title="Abrir o pedido"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.o.codigoVia||viaTxt(x.o)||'—')}</b><span class="ac-nome">${escapeHtml(x.o.cliente||'—')}</span></span><span class="muted ac-sub">${escapeHtml(x.acao)} · ${escapeHtml(nomeLojaOrder(x.o)||'')}</span></span></li>`;
-    const tProg = x => x.em>=9e14 ? 'em breve' : (x.previsto ? 'dia ' + fmtDate(dia(x.em)) : quando(x.em));
-    el.innerHTML = `<div class="page-head" style="margin-top:18px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
-      <p class="page-sub">À esquerda o que está programado (a fila automática sai das 9h às 18h; o aviso de PRONTO entra na fila ao mudar o status e o pós-venda sai ${diasPV} dias depois de ENTREGUE). À direita o que já foi enviado nos últimos 3 dias. O botão do WhatsApp envia na hora, em qualquer status.</p></div></div>
-      <div class="ac-colunas">
-        <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, tProg(x), '')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}</section>
-        <section class="card ac-col"><h3>Já enviados <span class="badge badge-aprovado">${env.length}</span></h3>${env.length ? `<ul class="ac-lista">${env.map(x=>linha(x, quando(x.em), 'ok')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>`}</section>
-      </div>`;
-    el.querySelectorAll('[data-acabrir]').forEach(li=> li.addEventListener('click', ()=> openEditModal(li.dataset.acabrir, false)));
+    const item = x => ({ id:x.o.id, em:x.em, previsto:!!x.previsto, via:viaTxt(x.o), cliente:String(x.o.cliente||'').trim().split(/\s+/)[0], acao:x.acao, loja:nomeLojaOrder(x.o)||'', vendedora:String(x.o.vendedora||'').trim().split(/\s+/)[0] });
+    AcompUI.desenhar(el, {
+      sub: `À esquerda, quando será enviado (a fila automática sai das 9h às 18h; o aviso de PRONTO entra na fila ao mudar o status e o pós-venda sai ${diasPV} dias depois de ENTREGUE). À direita, quando foi enviado (últimos 3 dias).`,
+      prog: prog.map(item), env: env.map(item),
+      onAbrir: id=> openEditModal(id, false),
+      onEnviar: async it=>{ const o = orders.find(x=>x.id===it.id); if(!o) return; if(it.acao==='Pós-venda') await enviarPosVendaOS(o); else await sendWhatsApp(o); }
+    });
   }
   window.__renderTabelaOS = ()=> renderTable();
 

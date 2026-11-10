@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
 <script src="vilaca-extras.js"></script>
+<script src="acompanhamento-ui.js"></script>
 <script>
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
    Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11). ===== */
@@ -4772,18 +4773,16 @@ function desenharPosVenda(){
     else { const d = new Date(Date.parse(String(v.data).slice(0,10)+'T12:00:00-03:00') + c.dias*86400000).toLocaleDateString('en-CA', tz); prog.push({ v, em: Date.parse(d+'T09:00:00-03:00'), previsto:true }); }   // ainda no prazo: dia previsto
   });
   prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
-  const zap = ok => `<span class="ac-zap${ok?' ok':''}" title="${ok?'Pós-venda enviado por WhatsApp':'Pós-venda por WhatsApp'}">${ic('whatsapp',17)}${ok?`<span class="ac-visto">${ic('check',10)}</span>`:''}</span>`;
-  const linha = (x, tempo, cls, ok) => `<li class="ac-item" data-acvenda="${escapeHtml(x.v.id)}" title="Abrir a venda"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.v.codigoVia||'—')}</b><span class="ac-nome">${escapeHtml(String(x.v.cliente||'—').trim().split(/\s+/)[0])}</span></span><span class="muted ac-sub">Pós-venda · ${escapeHtml(vendedoraCurta(x.v))} · ${fmtMoeda(x.v.valorTotal)}</span></span>${zap(ok)}</li>`;
-  const tProg = x => x.previsto ? 'dia ' + fmtDate(dia(x.em)) : (x.em>=9e14 ? 'em breve' : quando(x.em));
-  el.innerHTML = `<div class="page-head" style="margin-top:14px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
-      <p class="page-sub">${c.auto ? `Pós-venda automático LIGADO: o sistema manda sozinho ${c.dias} dias depois da venda, das 9h às 18h; o que não couber hoje entra na fila do dia seguinte.` : 'Pós-venda automático DESLIGADO: nada é enviado sozinho.'} À esquerda, quando será enviado; à direita, quando foi enviado (últimos 3 dias).</p></div>
-      ${gestao ? `<button type="button" class="btn btn-ghost btn-sm" id="btnCfgPosVenda">${ic('engrenagem',14)} Pós-venda automático</button>` : ''}</div>
-    <div class="ac-colunas">
-      <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, tProg(x), '', false)).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}</section>
-      <section class="card ac-col"><h3>Já enviados <span class="badge badge-aprovado">${env.length}</span></h3>${env.length ? `<ul class="ac-lista">${env.map(x=>linha(x, quando(x.em), 'ok', true)).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>`}</section>
-    </div>`;
-  el.querySelectorAll('[data-acvenda]').forEach(li=> li.addEventListener('click', ()=>{ const v = (vendas||[]).find(x=>x.id===li.dataset.acvenda); if(v) abrirDetalheVenda(v); }));
-  const cfgb = document.getElementById('btnCfgPosVenda'); if(cfgb) cfgb.addEventListener('click', abrirConfigPosVenda);
+  const lojaNomeAc = id => { const l = (config.lojas||[]).find(x=>x.id===id); return l ? (l.abreviacao || l.nome) : ''; };
+  const item = (x, enviado) => ({ id:x.v.id, em:x.em, previsto:!!x.previsto, via:x.v.codigoVia||'', cliente:String(x.v.cliente||'').trim().split(/\s+/)[0], acao:'Pós-venda', loja:lojaNomeAc(x.v.lojaId), vendedora:vendedoraCurta(x.v) });
+  AcompUI.desenhar(el, {
+    sub: (c.auto ? `Pós-venda automático LIGADO: o sistema manda sozinho ${c.dias} dias depois da venda, das 9h às 18h; o que não couber hoje entra na fila do dia seguinte.` : 'Pós-venda automático DESLIGADO: nada é enviado sozinho.') + ' À esquerda, quando será enviado; à direita, quando foi enviado (últimos 3 dias).',
+    botaoHtml: gestao ? `<button type="button" class="btn btn-ghost btn-sm" data-acbotao="1">${ic('engrenagem',14)} Pós-venda automático</button>` : '',
+    onBotao: abrirConfigPosVenda,
+    prog: prog.map(x=>item(x,false)), env: env.map(x=>item(x,true)),
+    onAbrir: id=>{ const v = (vendas||[]).find(x=>x.id===id); if(v) abrirDetalheVenda(v); },
+    onEnviar: async it=>{ await enviarPosVenda(it.id); desenharPosVenda(); }
+  });
 }
 async function enviarPosVenda(id){
   const v = (vendas||[]).find(x=>x.id===id); if(!v) return;
