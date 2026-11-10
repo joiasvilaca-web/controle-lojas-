@@ -119,6 +119,7 @@
       if(ox !== 'auto' && ox !== 'scroll') continue;
       if(!marcados.has(el)){
         marcados.add(el);
+        if(getComputedStyle(el).position==='static') el.style.position='relative';   // filho absoluto (ex.: .sr-only) não escapa da rolagem e alarga a página no tablet
         el.addEventListener('scroll', function(){ atualizar(this); }, { passive:true });
       }
       atualizar(el);
