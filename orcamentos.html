@@ -770,10 +770,20 @@ function reiniciarAutoAposMudancaManual(o){
 }
 /** Mudança manual de status (arrastar no Quadro, popup, bloco ou detalhe): troca o status e DISPARA na hora a mensagem do novo status,
  * sem fila, horário ou espera. Status que encerra (Aprovado/Recusado) não envia. Se o envio falhar, o status muda mesmo assim. */
+/** Orçamento RECUSADO ou APROVADO/convertido fica na coluna, mas não se edita nem muda de status. Devolve o aviso, ou '' se pode. */
+function avisoOrcTravado(o){
+  if(!o || o.rascunho) return '';
+  const info = statusInfoDe(o.status);
+  if(o.convertidoEm || (info && info.encerra && o.status!=='recusado')) return 'Este orçamento já foi APROVADO e virou pedido/venda. Não é possível editar nem mudar o status.';
+  if(o.status==='recusado') return 'Este orçamento foi RECUSADO e não pode mais ser editado: o valor mudou ou o cliente não fechou. Inicie um novo orçamento.';
+  return '';
+}
+function orcTravado(o){ const m = avisoOrcTravado(o); if(m){ alert(m); return true; } return false; }
 let __mudandoStatusOrc = false;
 async function mudarStatusManual(o, novoId){
   if(!o || !novoId || __mudandoStatusOrc) return false;
   if(novoId===o.status && !o.rascunho) return true;
+  if(orcTravado(o)) return false;
   const inf = statusInfoDe(novoId);
   if(inf && inf.encerra && !confirm('Marcar este orçamento como "'+inf.nome+'"? Ele sai da lista de ações.')) return false;
   __mudandoStatusOrc = true;
@@ -2285,7 +2295,6 @@ function renderLista(main){
       const lh = document.getElementById('fHoje'); if(lh && lh.closest('label')) lh.closest('label').style.display = quadroOn ? 'none' : '';
       if(quadroOn){
         const baseQ = orcamentos.filter(o=>{
-          if(!mostrarConv && o.convertidoEm) return false;
           if(de || ate){ const dia = diaCriacao(o); if(!dia || (de && dia<de) || (ate && dia>ate)) return false; }
           if(lojaFiltro && o.lojaId!==lojaFiltro) return false;
           if(vendedoraFiltro && o.vendedora!==vendedoraFiltro) return false;
@@ -2416,6 +2425,7 @@ function renderLista(main){
 async function mudarStatusOrcRapido(orcId){
   const o = orcamentos.find(x=>x.id===orcId);
   if(!o) return;
+  if(orcTravado(o)) return;
   openModal(`
     <h3>Mudar status</h3>
     <p class="modal-sub">${escapeHtml(o.cliente||'—')}${o.codigoVia?' · '+escapeHtml(o.codigoVia):''} · ${fmtMoeda(o.valorTotal)}</p>
@@ -2775,6 +2785,7 @@ function abrirDetalheOrcamento(o){
   }); }
   document.getElementById('btnImprimirOrc').addEventListener('click', ()=> printOrcamento(o));
   document.getElementById('btnEditarOrc').addEventListener('click', ()=>{
+    if(orcTravado(o)) return;
     orcamentoEmEdicao = o;
     closeModal();
     currentTab = 'novo';
