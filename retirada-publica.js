@@ -74,10 +74,12 @@
         +(rot?'<div class="rp-rot" aria-label="Código de retirada" aria-live="off">'+esc(agrupar(rot))+'</div><div class="rp-barra"><i data-barra></i></div><div class="rp-seg" data-seg></div>':'<p>Gerando o código…</p>')
         +'<div class="rp-row" style="justify-content:center;"><button class="rp-btn sec" data-btnterc></button></div>';
       var bt=boxRot.querySelector('[data-btnterc]');
-      bt.onclick=function(){ abertoTerc=!abertoTerc; mostrarTerc(); };
+      bt.onclick=function(){ abertoTerc=!abertoTerc; mostrarTerc(); if(abertoTerc) rolarPara(boxTerc); };
       desenharTerc(); mostrarTerc(); tick();
     }
     // a seção de terceiro só aparece pelo botão (ou sozinha, se já existe um código de terceiro ativo)
+    /** 10/11: abriu a retirada por terceiro / gerou o código → a tela desce até a parte de baixo, onde estão os dados para preencher. */
+    function rolarPara(el){ if(!el) return; setTimeout(function(){ try{ el.scrollIntoView({ behavior:'smooth', block:'start' }); var i=el.querySelector('[data-nome]'); if(i && !(window.matchMedia && matchMedia('(pointer:coarse)').matches)) i.focus({ preventScroll:true }); }catch(e){ try{ el.scrollIntoView(); }catch(_){} } }, 80); }
     function mostrarTerc(){
       if(encerrada){ boxTerc.style.display='none'; return; }
       var ativo=ret&&ret.status==='ativo'&&codTerc;
@@ -121,11 +123,11 @@
         if(st==='ativo' && !confirm('Gerar um novo código? O anterior deixa de valer.')) return;
         this.disabled=true; this.textContent='Gerando…';
         var r=await chamar({acao:'gerar',nome:nome});
-        erro=r.error||''; aviso2=''; if(r.retirada) ret=r.retirada; if(r.codigo) codTerc=r.codigo; desenharTerc(); mostrarTerc();
+        erro=r.error||''; aviso2=''; if(r.retirada) ret=r.retirada; if(r.codigo) codTerc=r.codigo; desenharTerc(); mostrarTerc(); rolarPara(boxTerc);
       }; }
       if(f && f.style.display!=='none'){ f.innerHTML=formHtml(); }
       var b;
-      if((b=boxTerc.querySelector('[data-novo]'))) b.onclick=function(){ f.style.display=''; f.innerHTML=formHtml(); this.style.display='none'; ligGerar(); };
+      if((b=boxTerc.querySelector('[data-novo]'))) b.onclick=function(){ f.style.display=''; f.innerHTML=formHtml(); this.style.display='none'; ligGerar(); rolarPara(f); };
       ligGerar();
       if((b=boxTerc.querySelector('[data-copy]'))) b.onclick=function(){ try{ navigator.clipboard.writeText(codTerc); this.textContent='Copiado ✓'; }catch(e){ prompt('Copie o código:',codTerc); } };
       if((b=boxTerc.querySelector('[data-cancelar]'))) b.onclick=async function(){
