@@ -207,6 +207,17 @@
   .selo{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap;line-height:1.3;}
   .selo::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;flex-shrink:0;}
   .st-aguardando{background:var(--wait-soft);color:var(--wait);}
+  .visto-msg{color:var(--ok);display:inline-flex;vertical-align:middle;margin-left:5px;} .visto-msg svg{stroke:var(--ok);stroke-width:3;}
+  .ac-colunas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start;margin:0 0 14px;}
+  @media (max-width:760px){.ac-colunas{grid-template-columns:minmax(0,1fr);}}
+  .ac-col{margin:0 !important;padding:0;min-width:0;overflow:hidden;}
+  .ac-col h3{margin:0 !important;padding:12px 16px;font-size:15px;line-height:1.2;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);}
+  .ac-lista{list-style:none;margin:0 !important;padding:0 !important;max-height:420px;overflow-y:auto;} .ac-lista>li{margin:0 !important;}
+  .ac-item{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);cursor:pointer;} .ac-item:last-child{border-bottom:0;} .ac-item:hover{background:var(--primary-soft,#e8f0f6);}
+  .ac-hora{font-family:var(--mono,monospace);font-weight:700;font-size:13px;flex:0 0 74px;align-self:center;line-height:1.2;color:var(--wait,#a15c00);} .ac-hora.ok{color:var(--ok);}
+  .ac-corpo{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;} .ac-l1{display:flex;align-items:baseline;gap:8px;min-width:0;} .ac-via{font-family:var(--mono,monospace);flex:none;}
+  .ac-nome{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;} .ac-sub{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  @media (max-width:760px){.ac-item{padding:10px 12px;gap:10px;}.ac-hora{flex-basis:64px;font-size:12.5px;}.ac-col h3{padding:11px 12px;}}
   .st-enviado_fabrica{background:var(--st-roxo-soft);color:var(--st-roxo);}
   .st-pendencia{background:var(--st-laranja-soft);color:var(--st-laranja);}
   .st-em_producao{background:var(--st-roxo-soft);color:var(--st-roxo);}
@@ -717,15 +728,33 @@ const STATUS_OCUPA_VAGA = ['aguardando','enviado_fabrica','em_producao','pendenc
 /* Nomes (sempre em MAIÚSCULAS). As chaves gravadas NÃO mudam: aguardando = APROVADO, oficina_pronto = PRODUZIDO. */
 const STATUS_ORDEM = ['rascunho','aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto','pronto','entregue','cancelado'];
 const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'PRODUZIDO', pronto:'PRONTO', entregue:'ENTREGUE', cancelado:'CANCELADO' };
-/* Quem pode colocar cada status: Oficina → EM PRODUÇÃO / PENDÊNCIA / PRODUZIDO; Vendedora, Gerente e Diretoria → todos
-   (04/11, Felipe: vendedora = gerente — muda todos os status e edita as vias das lojas dela). */
-const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'] };
+/* Quem pode colocar cada status (10/11, Felipe):
+   Vendedora e Gerente → APROVADO, ENVIADO P/ FÁBRICA, PRONTO, ENTREGUE e CANCELADO — e NÃO mudam o status de via EM PRODUÇÃO ou PENDÊNCIA (só a Oficina; o resto da via continua editável);
+   Oficina → EM PRODUÇÃO / PENDÊNCIA / PRODUZIDO, e só enquanto a via está ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA; Diretoria → todos. */
+const STATUS_LOJA = ['aguardando','enviado_fabrica','pronto','entregue','cancelado'];
+const STATUS_TRAVADOS_LOJA = ['em_producao','pendencia'];
+const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'], gerente:STATUS_LOJA, vendedora:STATUS_LOJA };
 function statusPermitidos(){
   const n = currentUser && currentUser.nivel;
-  if(n==='diretoria' || n==='gerente' || n==='vendedora') return STATUS_ORDEM;
+  if(n==='diretoria') return STATUS_ORDEM;
   return STATUS_POR_NIVEL[n] || [];
 }
 function podeColocarStatus(st){ return statusPermitidos().includes(st); }
+function viaTravadaParaLoja(o){ const n = currentUser && currentUser.nivel; return !!o && (n==='gerente' || n==='vendedora') && STATUS_TRAVADOS_LOJA.includes(o.status); }
+/** De um status para outro: respeita o que o perfil pode colocar e os status que travam a troca. */
+function podeMudarStatus(de, para){
+  if(de===para) return true;
+  if(!podeColocarStatus(para)) return false;
+  const n = currentUser && currentUser.nivel;
+  if(n==='oficina') return ['enviado_fabrica','em_producao','pendencia'].includes(de);
+  if(n==='gerente' || n==='vendedora') return !STATUS_TRAVADOS_LOJA.includes(de);
+  return true;
+}
+function motivoSemMudarStatus(de){
+  if(currentUser && currentUser.nivel==='oficina') return 'A Oficina só muda o status de via ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA.';
+  if(STATUS_TRAVADOS_LOJA.includes(de)) return 'Via ' + statusLabel(de) + ': só a Oficina muda o status (o resto da via você pode editar).';
+  return 'Seu perfil não pode colocar esse status.';
+}
 /** 04/11: Lista ou Quadro (kanban) — lembrado neste aparelho. */
 function modoListaOS(){ try{ return localStorage.getItem('vilaca_modo_os')==='quadro' ? 'quadro' : 'lista'; }catch(e){ return 'lista'; } }
 function quadroAbertas(){ try{ return new Set(JSON.parse(localStorage.getItem('vilaca_quadro_abertas')||'[]')); }catch(e){ return new Set(); } }
@@ -742,7 +771,7 @@ const STATUS_FABRICA_OFICINA = ['enviado_fabrica','em_producao','pendencia','ofi
 /** <option>s do status: os que o perfil não pode colocar ficam desabilitados (o atual sempre aparece). */
 function statusOptionsHtml(atual, comRascunho){
   return STATUS_ORDEM.filter(st=> st!=='rascunho' || comRascunho || atual==='rascunho').map(st=>{
-    const bloqueado = st!==atual && !podeColocarStatus(st);
+    const bloqueado = st!==atual && !podeMudarStatus(atual, st);
     return `<option value="${st}" ${st===atual?'selected':''} ${bloqueado?'disabled':''}>${STATUS_NOMES[st]}${bloqueado?' (SEM PERMISSÃO)':''}</option>`;
   }).join('');
 }
@@ -1149,6 +1178,7 @@ function montarConfigLegadoApartirDoUnificado(u){
     categoriasProdutos: (u.produtosOtica && u.produtosOtica.categorias) || [],
     subcategoriasProdutos: (u.produtosOtica && u.produtosOtica.subcategorias) || [],
     produtos: (u.produtosOtica && u.produtosOtica.produtos) || [],
+    pedidoAcoes: u.pedidoAcoes || null,   // 10/11: config.pedidoAcoes {auto, desde, posVendaDias} (fila automática de PRONTO e pós-venda)
     mensagemPadrao: (u.mensagens && u.mensagens.padrao) || DEFAULT_TEMPLATE,
     mensagemPronto: (u.mensagens && u.mensagens.pronto) || DEFAULT_TEMPLATE_PRONTO,
     mensagemEntregue: (u.mensagens && u.mensagens.entregue) || DEFAULT_TEMPLATE_ENTREGUE,
@@ -3036,7 +3066,7 @@ async function entregarComCodigo(ord, saldoConferido){
 }
 /* Marca a O.S. como entregue e arquiva na própria via quem recebeu e como foi liberado. */
 function aplicarEntregaNaOrdem(ord, ret){
-  ord.status = 'entregue';
+  ord.status = 'entregue'; ord.statusEm = Date.now();
   ord.recebidoPor = ret.recebidoPor || ord.recebidoPor || '';
   ord.recebidoEm = Date.now();
   ord.retirada = { metodo: ret.metodo || '', recebidoPor: ret.recebidoPor || '', portadorAutorizado: ret.portador || '', conferidoPor: ret.usadoPor || '', em: ret.usadoEm || new Date().toISOString(), loja: ret.loja || '', motivoSemCodigo: ret.metodo==='sem_codigo' ? (ret.motivo||'') : '' };
@@ -3748,6 +3778,24 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
 }
 
 /* 09/11: via PRONTA avisada ao cliente (WhatsApp ou e-mail) sai de "avise o cliente" e vai para "Já avisados". Grava em order.avisoCliente. */
+/** Visto de mensagem enviada (10/11): `msgEnviadas {status: data}` — vale para TODOS os status; o envio pelo botão é instantâneo (nunca entra na fila). */
+async function marcarMsgEnviadaOS(order){
+  try{
+    if(!order) return;
+    const agora = new Date().toISOString();
+    order.msgEnviadas = order.msgEnviadas || {}; order.msgEnviadas[order.status] = agora;
+    (order.acoesLog = order.acoesLog || []).push({ em:agora, nome:statusLabel(order.status), por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
+    const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
+    if(rr && rr.error) console.error('erro ao gravar visto de mensagem', order.id, rr.error);
+    if(typeof window.__renderTabelaOS==='function') window.__renderTabelaOS();
+  }catch(e){ console.error('marcarMsgEnviadaOS', e); }
+}
+function vistoMsgHtml(o){
+  const t = o && o.msgEnviadas && o.msgEnviadas[o.status];
+  if(!t) return '';
+  const d = new Date(t); const txt = isNaN(d) ? '' : d.toLocaleString('pt-BR', { timeZone:'America/Sao_Paulo', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  return `<span class="visto-msg" title="Mensagem deste status enviada${txt?' em '+txt:''}">${ico('check',14)}</span>`;
+}
 async function marcarAvisado(order, meio){
   try{
     if(!order || order.status!=='pronto') return;
@@ -3760,15 +3808,16 @@ async function marcarAvisado(order, meio){
   }catch(e){ console.error('marcarAvisado', e); }
 }
 async function sendWhatsApp(order){
-  if(!order){ showToast('Ordem não encontrada.'); return; }
-  if(!order.telefone){ showToast('Este pedido não tem telefone salvo.'); return; }
-  if(!(await MarketingOff.permitir({ telefone:order.telefone, nome:order.cliente }))) return;
+  if(!order){ showToast('Ordem não encontrada.'); return false; }
+  if(!order.telefone){ showToast('Este pedido não tem telefone salvo.'); return false; }
+  if(!(await MarketingOff.permitir({ telefone:order.telefone, nome:order.cliente }))) return false;
   const template = order.status==='pronto'
     ? (config.mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
     : order.status==='entregue'
     ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
     : (config.mensagemPadrao||DEFAULT_TEMPLATE);
-  if(window.WhatsAuto){ const okEnvio = await WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:order.via||'' }); if(okEnvio===true) await marcarAvisado(order,'WhatsApp'); return; }
+  if(window.WhatsAuto){ const okEnvio = await WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:order.via||'' }); if(okEnvio===true) await marcarMsgEnviadaOS(order);
+    if(okEnvio===true) await marcarAvisado(order,'WhatsApp'); return okEnvio===true; }
   showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
 }
 async function sendEmail(order){
@@ -5306,6 +5355,7 @@ function renderNovaOrdem(main){
     await upsertClienteFromOrder(cli);
     if(novaOrdem.cashback){ const _cb = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'gravar', null, novaOrdem.cashback.clienteId); if(!_cb.ok) showToast('Pedido lançado, mas o cashback não foi gravado: '+_cb.erro); }
     if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'os', id:novaOrdem.id, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'' }); if(_rt && _rt.error) showToast('Pedido lançado, mas a retirada por terceiros não foi liberada: '+_rt.error); }
+    if(novaOrdem.telefone){ try{ await sendWhatsApp(novaOrdem); }catch(e){ console.error('mensagem de aprovado', e); } }   // 10/11: salvar = APROVADO + mensagem na hora (sem fila)
     showToast(pendenciaReq ? 'Pedido lançado com pendência de autorização. A Oficina foi avisada.' : (encaixe ? 'Pedido lançado como encaixe autorizado.' : 'Pedido lançado.'));
     await sincronizarReservasOrdem(novaOrdem, planoNova);
     if(orcamentoOrigem) await marcarOrcamentoConvertido(orcamentoOrigem, novaOrdem);
@@ -5661,7 +5711,7 @@ function openEditModalCompleto(order, opts){
         return;
       }
     }
-    if(status !== order.status && !podeColocarStatus(status)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(status) + '.'); return; }
+    if(status !== order.status && !podeMudarStatus(order.status, status)){ showToast(motivoSemMudarStatus(order.status)); return; }
     // Cancelamento pedido pelo dropdown de status desta tela (via alternativa ao
     // botão "Cancelar O.S." da lista): exige motivo e reverte fiado/crédito igual.
     if(status === 'cancelado' && order.status !== 'cancelado'){
@@ -5763,7 +5813,7 @@ function openEditModalCompleto(order, opts){
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
       via, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja, status,
       serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
-      encaixe, autorizadoPor, recebidoPor, recebidoEm,
+      encaixe, autorizadoPor, recebidoPor, recebidoEm, statusEm: (status!==order.status ? Date.now() : order.statusEm),
       // Itens e pagamento — pegados dos holders se existirem
       itens: editItensHolder ? itensOsParaSalvar(editItensHolder) : order.itens,
       valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal,
@@ -5859,12 +5909,14 @@ function renderPainel(main){
     <div id="resumoValores" class="resumo-os"></div>
     <div class="card tabela-card">
       <div id="tabelaWrap" class="tabela-scroll"></div>
+      <div id="acompanhamentoOS"></div>
     </div>
   `;
 
   let mostrarAvisados = false;
   function renderProntosCard(){
     const card = document.getElementById('prontosCard');
+    if(card){ card.innerHTML = ''; return; }   // 10/11: o aviso de PRONTO agora sai pela fila automática (Ações de acompanhamento)
     const todos = orders.filter(o=>o.status==='pronto').sort((a,b)=>a.data.localeCompare(b.data));
     const jaAv = (o)=> !!(o.avisoCliente && o.avisoCliente.em);
     const pendentes = todos.filter(o=>!jaAv(o));
@@ -5920,7 +5972,7 @@ function renderPainel(main){
     desfazer = desfazer || (()=>renderTable());
     const previous = ord.status;
     if(novo===previous) return;
-    if(!podeColocarStatus(novo)){ showToast('Seu perfil não pode colocar o status ' + statusLabel(novo) + '.'); desfazer(); return; }
+    if(!podeMudarStatus(previous, novo)){ showToast(motivoSemMudarStatus(previous)); desfazer(); return; }
     if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
       if(bloqueioSaldoEntrega(ord)){ desfazer(); return; }
@@ -5943,7 +5995,7 @@ function renderPainel(main){
       renderTable();
       return;
     }
-    ord.status = novo;
+    ord.status = novo; ord.statusEm = Date.now();
     sincronizarLocalPorStatus(ord);
     await saveOrders();
     // Pedido reativado (saiu de cancelado/rascunho): volta a reservar as peças
@@ -5981,10 +6033,11 @@ function renderPainel(main){
       const atraso = estaAtrasada(o);
       return `<div class="quadro-card${pode?'':' travado'}" data-qid="${escapeHtml(o.id)}" ${pode?'draggable="true"':''} title="${pode?'Arraste para mudar o status · toque para abrir':'Toque para ver'}">
         <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||o.via||'—')}</span>${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
-        <div class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}</div>
-        <span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}</span>
+        <div class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}${vistoMsgHtml(o)}</div>
+        <span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}${vistoMsgHtml(o)}</span>
         <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(o.data)}${atraso?' (atrasado)':''}</span>`:''}</div>
         ${falta>0.009 && o.status!=='cancelado' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
+        ${(pode && o.telefone && o.status!=='rascunho') ? `<button type="button" class="btn-icone wa" data-qwa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status agora pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(16)}</button>` : ''}
         ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho')}</select>` : ''}
       </div>`;
     };
@@ -6009,7 +6062,7 @@ function renderPainel(main){
     }));
     let arrastandoId = null;
     quadro.querySelectorAll('.quadro-card').forEach(c=>{
-      c.addEventListener('click', e=>{ if(e.target.closest('select')) return; const pode = !c.classList.contains('travado'); openEditModal(c.dataset.qid, !pode); });
+      c.addEventListener('click', e=>{ if(e.target.closest('select') || e.target.closest('[data-qwa]')) return; const pode = !c.classList.contains('travado'); openEditModal(c.dataset.qid, !pode); });
       c.addEventListener('dragstart', e=>{ arrastandoId = c.dataset.qid; c.classList.add('arrastando'); try{ e.dataTransfer.setData('text/plain', arrastandoId); e.dataTransfer.effectAllowed = 'move'; }catch(_){} });
       c.addEventListener('dragend', ()=>{ c.classList.remove('arrastando'); quadro.querySelectorAll('.quadro-col.alvo').forEach(x=>x.classList.remove('alvo')); });
     });
@@ -6023,6 +6076,7 @@ function renderPainel(main){
         await trocarStatusOrdem(ord, col.dataset.qcol, ()=> renderTable());
       });
     });
+    quadro.querySelectorAll('[data-qwa]').forEach(b=> b.addEventListener('click', e=>{ e.stopPropagation(); sendWhatsApp(orders.find(x=>x.id===b.dataset.qwa)); }));
     quadro.querySelectorAll('select[data-qstatus]').forEach(sel=>{
       applyStatusClass(sel);
       sel.addEventListener('click', e=> e.stopPropagation());
@@ -6034,7 +6088,44 @@ function renderPainel(main){
     });
   }
 
+  /** 10/11: AÇÕES DE ACOMPANHAMENTO (no fim da tela, igual ao Orçamento): à esquerda o que está programado (fila automática: PRONTO e PÓS-VENDA de 7 dias),
+   *  à direita o que já foi enviado (visto de mensagem de qualquer status, últimos 3 dias). */
+  function desenharAcompanhamentoOS(){
+    const el = document.getElementById('acompanhamentoOS'); if(!el) return;
+    if(currentUser && currentUser.nivel==='oficina'){ el.innerHTML = ''; return; }
+    const tz = { timeZone:'America/Sao_Paulo' };
+    const hojeBR = new Date().toLocaleDateString('en-CA', tz);
+    const dia = ms => new Date(ms).toLocaleDateString('en-CA', tz);
+    const hora = ms => new Date(ms).toLocaleTimeString('pt-BR', { ...tz, hour:'2-digit', minute:'2-digit' });
+    const quando = ms => { const d = dia(ms); return d===hojeBR ? hora(ms) : fmtDate(d)+' '+hora(ms); };
+    const cfgP = (config && config.pedidoAcoes) || {};
+    const desdeMs = cfgP.desde ? Date.parse(cfgP.desde+'T00:00:00-03:00') : 0;
+    const diasPV = Number(cfgP.posVendaDias) || 7;
+    const lojaF = (document.getElementById('filtroLoja')||{}).value || '';
+    const lista = orders.filter(o=> o && !o.rascunho && (!lojaF || o.lojaId===lojaF));
+    const prog = [], env = [], limite = Date.now() - 3*86400000;
+    lista.forEach(o=>{
+      const ag = o.autoAgenda;
+      if(ag && ag.dia >= hojeBR){ prog.push({ o, em: Number(ag.em)||9e15, acao: ag.tipo==='os_posvenda' ? 'Pós-venda' : 'Aviso de PRONTO' }); }
+      else if(cfgP.auto && o.status==='pronto' && Number(o.statusEm||0)>=desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto)) prog.push({ o, em: 9e15, acao:'Aviso de PRONTO' });
+      else if(cfgP.auto && o.status==='entregue' && Number(o.recebidoEm||0)>=desdeMs && !o.posVendaEnviadoEm){ const prev = Number(o.recebidoEm) + diasPV*86400000; prog.push({ o, em: prev, acao:'Pós-venda', previsto:true }); }
+      Object.entries(o.msgEnviadas||{}).forEach(([k, iso])=>{ const t = Date.parse(iso); if(t>limite) env.push({ o, em:t, acao: k==='posvenda' ? 'Pós-venda' : statusLabel(k) }); });
+    });
+    prog.sort((a,b)=>a.em-b.em); env.sort((a,b)=>b.em-a.em);
+    const linha = (x, tempo, cls) => `<li class="ac-item" data-acabrir="${escapeHtml(x.o.id)}" title="Abrir o pedido"><span class="ac-hora ${cls}">${tempo}</span><span class="ac-corpo"><span class="ac-l1"><b class="ac-via">${escapeHtml(x.o.codigoVia||x.o.via||'—')}</b><span class="ac-nome">${escapeHtml(x.o.cliente||'—')}</span></span><span class="muted ac-sub">${escapeHtml(x.acao)} · ${escapeHtml(nomeLojaOrder(x.o)||'')}</span></span></li>`;
+    const tProg = x => x.em>=9e14 ? 'em breve' : (x.previsto ? 'dia ' + fmtDate(dia(x.em)) : quando(x.em));
+    el.innerHTML = `<div class="page-head" style="margin-top:18px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2>
+      <p class="page-sub">À esquerda o que está programado (a fila automática sai das 9h às 18h; o aviso de PRONTO entra na fila ao mudar o status e o pós-venda sai ${diasPV} dias depois de ENTREGUE). À direita o que já foi enviado nos últimos 3 dias. O botão do WhatsApp envia na hora, em qualquer status.</p></div></div>
+      <div class="ac-colunas">
+        <section class="card ac-col"><h3>Programados <span class="badge badge-pendente">${prog.length}</span></h3>${prog.length ? `<ul class="ac-lista">${prog.map(x=>linha(x, tProg(x), '')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>`}</section>
+        <section class="card ac-col"><h3>Já enviados <span class="badge badge-aprovado">${env.length}</span></h3>${env.length ? `<ul class="ac-lista">${env.map(x=>linha(x, quando(x.em), 'ok')).join('')}</ul>` : `<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>`}</section>
+      </div>`;
+    el.querySelectorAll('[data-acabrir]').forEach(li=> li.addEventListener('click', ()=> openEditModal(li.dataset.acabrir, false)));
+  }
+  window.__renderTabelaOS = ()=> renderTable();
+
   function renderTable(){
+    try{ desenharAcompanhamentoOS(); }catch(e){ console.error('acompanhamento', e); }
     // no Quadro, "status" e "só gerados hoje" não se aplicam (as colunas já são os status)
     { const q = modoListaOS()==='quadro'; fStatus.style.display = q ? 'none' : ''; const lh = fHoje.closest('label'); if(lh) lh.style.display = q ? 'none' : ''; }
     if(modoListaOS()==='quadro'){ renderProntosCard(); renderQuadro(); return; }
@@ -6185,7 +6276,7 @@ function renderPainel(main){
               : `<select class="status-select" data-id="${o.id}" aria-label="Status do pedido ${escapeHtml(o.via||'')}">
                   ${statusOptionsHtml(o.status, false)}
                 </select>`
-          }</div>
+          }${vistoMsgHtml(o)}</div>
         </td>
         <td class="acoes">
           <div class="acoes-linha">
@@ -6264,7 +6355,7 @@ function abrirEnviarParaFabrica(aoConcluir){
     if(!ids.length) return;
     const btn = document.getElementById('efEnviar'); btn.disabled = true;
     let n = 0;
-    ids.forEach(id=>{ const o = orders.find(x=>x.id===id); if(o && o.status==='aguardando'){ o.status = 'enviado_fabrica'; sincronizarLocalPorStatus(o); n++; } });
+    ids.forEach(id=>{ const o = orders.find(x=>x.id===id); if(o && o.status==='aguardando'){ o.status = 'enviado_fabrica'; o.statusEm = Date.now(); sincronizarLocalPorStatus(o); n++; } });
     try{ await saveOrders(); }catch(e){ console.error(e); showToast('Não foi possível salvar. Tente de novo.'); btn.disabled = false; return; }
     closeModal();
     showToast(n + (n===1 ? ' pedido enviado' : ' pedidos enviados') + ' para a fábrica.');
@@ -6327,7 +6418,7 @@ function abrirReceberDaFabrica(aoConcluir){
     if(!ids.length) return;
     const btn = document.getElementById('rfReceber'); btn.disabled = true;
     let n = 0;
-    ids.forEach(id=>{ const o = orders.find(x=>x.id===id); if(o && o.status==='oficina_pronto'){ o.status = 'pronto'; sincronizarLocalPorStatus(o); n++; } });
+    ids.forEach(id=>{ const o = orders.find(x=>x.id===id); if(o && o.status==='oficina_pronto'){ o.status = 'pronto'; o.statusEm = Date.now(); sincronizarLocalPorStatus(o); n++; } });
     try{ await saveOrders(); }catch(e){ console.error(e); showToast('Não foi possível salvar. Tente de novo.'); btn.disabled = false; return; }
     closeModal();
     showToast(n + (n===1 ? ' via recebida' : ' vias recebidas') + '. Já pode avisar o cliente para retirar.');

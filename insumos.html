@@ -146,6 +146,19 @@
   .mat-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;gap:8px;margin:6px 0;align-items:center;}
   .busca-vias{margin:0 0 14px;} .busca-vias input{min-height:46px;font-size:16px;padding:10px 14px;}
   .sec-tit{font-size:13px;font-weight:700;padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;}
+  .qd-grade{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:12px;align-items:start;}
+  @media (max-width:980px){.qd-grade{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  @media (max-width:560px){.qd-grade{grid-template-columns:minmax(0,1fr);}}
+  .qd-col{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;min-width:0;display:flex;flex-direction:column;max-height:calc(100vh - 300px);min-height:90px;}
+  .qd-col.alvo{outline:2px dashed var(--accent);outline-offset:-2px;background:var(--accent-soft);}
+  .qd-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);}
+  .qd-n{font-weight:800;font-size:13px;color:var(--muted);}
+  .qd-body{padding:8px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;}
+  .qd-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 10px;cursor:grab;min-width:0;}
+  .qd-card.fixo{cursor:pointer;opacity:.9;} .qd-card:hover{border-color:var(--accent);} .qd-card.arrastando{opacity:.45;}
+  .qd-l1{display:flex;align-items:center;gap:8px;min-width:0;} .qd-via{font-family:var(--mono,monospace);flex:none;}
+  .qd-nome{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
+  .qd-vazio{color:var(--muted);text-align:center;padding:8px 0;font-size:13px;}
   .acoes-via{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;}
   .acoes-via .btn{min-height:36px;font-weight:700;}
   .via-modal{position:fixed;inset:0;background:rgba(15,20,25,.55);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:20px 12px;overflow:auto;}
@@ -507,7 +520,7 @@ async function buscarVias(){
 }
 function botoesVia(v){
   // 04/11: via que a loja não marcou "ENVIADO P/ FÁBRICA" (ficou em APROVADO) também pode ser recebida pela Oficina ao ler o código
-  if(v.status==='enviado_fabrica' || v.status==='aguardando') return `<button class="btn btn-accent" type="button" data-acao="recebido" data-id="${escapeHtml(v.id)}">RECEBIDO</button>`;
+  if(v.status==='enviado_fabrica') return `<button class="btn btn-accent" type="button" data-acao="recebido" data-id="${escapeHtml(v.id)}">RECEBIDO</button>`;
   if(v.status==='em_producao') return `<button class="btn btn-ghost" type="button" data-acao="pendencia" data-id="${escapeHtml(v.id)}">PENDÊNCIA</button><button class="btn btn-accent" type="button" data-acao="produzido" data-id="${escapeHtml(v.id)}">PRODUZIDO</button>`;
   if(v.status==='pendencia') return `<button class="btn btn-ghost" type="button" data-acao="recebido" data-id="${escapeHtml(v.id)}">EM PRODUÇÃO</button><button class="btn btn-accent" type="button" data-acao="produzido" data-id="${escapeHtml(v.id)}">PRODUZIDO</button>`;
   return '';
@@ -534,12 +547,51 @@ function ligarLinhas(box){
   });
   box.querySelectorAll('[data-acao]').forEach(b=> b.addEventListener('click', e=>{ e.stopPropagation(); acaoVia(b.dataset.acao, b.dataset.id, b); }));
 }
+/* ===== QUADRO DA OFICINA (10/11): uma coluna por status; arrastar o cartão ou tocar no nome para mudar ===== */
+const COLUNAS_OF = [['enviado_fabrica','ENVIADO P/ FÁBRICA'],['em_producao','EM PRODUÇÃO'],['pendencia','PENDÊNCIA'],['oficina_pronto','PRODUZIDO']];
+function quadroVias(){
+  const hoje = new Date().toISOString().slice(0,10);
+  const cartao = v=>{
+    const atras = v.data && v.data<hoje && STATUS_ACAO.includes(v.status);
+    const arrasta = v.status!=='oficina_pronto';
+    const prim = String(v.cliente||'Sem cliente').trim().split(/\s+/)[0];
+    return `<div class="qd-card${arrasta?'':' fixo'}" data-via="${escapeHtml(v.id)}" ${arrasta?'draggable="true"':''} tabindex="0" title="${arrasta?'Arraste para outra coluna ou toque para abrir':'Toque para ver (via já produzida)'}">
+      <div class="qd-l1"><b class="qd-via">${escapeHtml(v.codigoVia||'—')}</b><span class="qd-nome">${escapeHtml(prim)}</span>${dotLoja(v.lojaId)}</div>
+      <div class="sub-linha">${escapeHtml(v.serviceTypeName||'')}${v.data?(v.serviceTypeName?' · ':'')+'<span class="'+(atras?'atrasada':'')+'">'+fmtDia(v.data)+(atras?' (atrasada)':'')+'</span>':''}</div>
+      ${v.status==='pendencia' && ultimaObsOficina(v) ? `<div class="sub-linha">${escapeHtml(ultimaObsOficina(v))}</div>`:''}
+    </div>`;
+  };
+  return `<div class="qd-grade">${COLUNAS_OF.map(([st,nome])=>{
+    const l = viasCache.filter(v=>v.status===st).sort((a,b)=>String(a.data||'9999').localeCompare(String(b.data||'9999')));
+    return `<section class="qd-col" data-qcol="${st}" aria-label="${nome}"><header class="qd-head"><span class="st st-${st}">${nome}</span><span class="qd-n">${l.length}</span></header>
+      <div class="qd-body">${l.length ? l.map(cartao).join('') : '<div class="qd-vazio">—</div>'}</div></section>`;
+  }).join('')}</div>`;
+}
+function ligarArrastar(box){
+  box.querySelectorAll('.qd-card[draggable="true"]').forEach(c=>{
+    c.addEventListener('dragstart', e=>{ try{ e.dataTransfer.setData('text/plain', c.dataset.via); e.dataTransfer.effectAllowed='move'; }catch(_){} c.classList.add('arrastando'); });
+    c.addEventListener('dragend', ()=>{ c.classList.remove('arrastando'); box.querySelectorAll('.qd-col.alvo').forEach(x=>x.classList.remove('alvo')); });
+  });
+  box.querySelectorAll('.qd-col').forEach(col=>{
+    col.addEventListener('dragover', e=>{ e.preventDefault(); col.classList.add('alvo'); });
+    col.addEventListener('dragleave', e=>{ if(!col.contains(e.relatedTarget)) col.classList.remove('alvo'); });
+    col.addEventListener('drop', e=>{ e.preventDefault(); col.classList.remove('alvo'); let id=''; try{ id = e.dataTransfer.getData('text/plain'); }catch(_){} soltarVia(id, col.dataset.qcol); });
+  });
+}
+async function soltarVia(id, destino){
+  const v = viasCache.find(x=>x.id===id); if(!v || v.status===destino) return;
+  if(v.status==='oficina_pronto'){ showToast('Via já PRODUZIDA: daqui em diante é só a loja.', 3500); return; }
+  if(destino==='enviado_fabrica'){ showToast('A Oficina não devolve a via para ENVIADO P/ FÁBRICA.', 3500); return; }
+  if(destino==='pendencia'){ abrirPendencia(v); return; }          // pede a descrição da pendência
+  if(destino==='oficina_pronto'){ abrirProduzido(v); return; }     // pede o material e finaliza (a pendência sai sozinha)
+  try{ const r = await api('viaAtualizar', { id: v.id, status:'em_producao', avisarLoja:false }); showToast('Via ' + (v.codigoVia||'') + ' → EM PRODUÇÃO.'); aposMovimento(v, r.via); }
+  catch(e){ showToast(e.message, 4500); }
+}
 function desenharVias(){
-  const acao = viasCache.filter(v=>STATUS_ACAO.includes(v.status));
   const boxA = document.getElementById('viasAcao');
-  boxA.innerHTML = `<div class="sec-tit"><span>Prontas para movimentação da Oficina</span><span class="muted small">${acao.length} ${acao.length===1?'via':'vias'}</span></div>` +
-    (acao.length ? tabelaVias(acao) : estadoVazio('ferramenta', 'Nenhuma via para movimentar agora', 'Quando a loja enviar uma via para a fábrica ela aparece aqui.'));
+  boxA.innerHTML = quadroVias();
   ligarLinhas(boxA);
+  ligarArrastar(boxA);
   const q = semAcento(document.getElementById('vBusca').value).trim();
   const boxB = document.getElementById('viasBusca');
   if(!q){ boxB.style.display = 'none'; boxB.innerHTML = ''; return; }

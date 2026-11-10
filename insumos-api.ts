@@ -1,4 +1,5 @@
 // insumos-api v12 (09/11: Envio Felipe com escolha das lojas, inclui Reforma Joias; 06/11: Envio Felipe) — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
+// v13 (10/11): a Oficina só muda o status de via ENVIADA P/ FÁBRICA / EM PRODUÇÃO / PENDÊNCIA (aguardando saiu); grava statusEm.
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
 // v3: status da Oficina = oficina_pronto ou pendencia; serviço × fabricação vem do tipo da via.
 // v5: quebra padrão (insumos._config.quebraPadraoPct, padrão 5%) e contagem real da Oficina (insumos_contagens):
@@ -423,10 +424,11 @@ Deno.serve(async (req: Request) => {
       if (p.status !== undefined && p.status !== o.status) {
         // a Oficina só marca Oficina pronto ou Pendência (em vias ainda abertas); pronto/entregue/cancelado são da loja
         // aguardando também é aceito: a peça chegou na Oficina sem a loja ter marcado "Enviado p/ fábrica"
-        if (!["em_producao", "pendencia", "oficina_pronto"].includes(p.status) || ![...STATUS_OFICINA, "aguardando"].includes(o.status))
-          return json({ error: "Pela Oficina, a via só pode ir para EM PRODUÇÃO, PENDÊNCIA ou PRODUZIDO." }, 400);
+        // 10/11 (v13): a Oficina só mexe em via ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA (PRODUZIDO e os demais status são só leitura para ela)
+        if (!["em_producao", "pendencia", "oficina_pronto"].includes(p.status) || !["enviado_fabrica", "em_producao", "pendencia"].includes(o.status))
+          return json({ error: "Pela Oficina, a via só muda de status quando está ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA (e só para EM PRODUÇÃO, PENDÊNCIA ou PRODUZIDO)." }, 400);
         hist.push({ em: agora, por: quem.nome, de: o.status, para: p.status });
-        o.status = p.status; mudou.push("status");
+        o.status = p.status; o.statusEm = agora; mudou.push("status");
         if ((o.localAtual || "loja") !== "fabrica") {
           o.localAtual = "fabrica"; o.historicoLocal = Array.isArray(o.historicoLocal) ? o.historicoLocal : [];
           o.historicoLocal.push({ local: "fabrica", em: agora, por: quem.nome });

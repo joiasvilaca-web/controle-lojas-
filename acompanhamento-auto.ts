@@ -1,3 +1,7 @@
+// acompanhamento-auto v7 (10/11/2026) — PEDIDOS (ordens_servico) entram na fila automática (config.pedidoAcoes {auto, desde, posVendaDias, mensagemPronto?, mensagemPosVenda?}):
+//   (a) status PRONTO (marcado depois de `desde`, `statusEm`) → mensagem de pronto na fila do dia (9h–18h, horário sorteado, o que não couber vai para o dia seguinte);
+//   (b) PÓS-VENDA `posVendaDias` (padrão 7) dias depois de ENTREGUE (`recebidoEm`) → mensagem de pós-venda na mesma fila. Visto em `msgEnviadas.pronto` / `msgEnviadas.posvenda`; `autoAgenda.tipo` mostra o que é.
+//   A mensagem do status APROVADO sai na hora, pela tela (sem fila). Mesmas checagens do orçamento (celular válido, MARKETING OFF, número com WhatsApp, pausa do número).
 // acompanhamento-auto v6 (10/11/2026) — {link}: toda mensagem de orçamento leva o link do orçamento completo (via.html?t=orc&id=…, com fotos dos itens); o parágrafo do wa.me continua indo para o TOPO
 //   (waMePrimeiro) para o WhatsApp mostrar o botão "Iniciar conversa".
 // acompanhamento-auto v5 (10/11/2026) — op `abertoAgora` (com sessão do app): ao SALVAR o orçamento a tela chama esta op e a mensagem do status inicial (ação 0) sai NA HORA (sem esperar o minuto do
@@ -127,6 +131,24 @@ function preencher(txt: string, cfg: any, reg: any, descPerc = 0, link = "") {
   if (link && !String(txt || "").includes("{link}")) t = t.trimEnd() + `\n\nVeja o seu orçamento completo, com fotos:\n${link}`;
   return t.replace(/\n{3,}/g, "\n\n").trim();
 }
+// ---------- PEDIDOS (O.S.) ----------
+const MSG_OS_PRONTO = `Olá, {cliente}! 💛\n\nSeu pedido {via} está *PRONTO* para retirada na {loja}.\n\nAcompanhe e veja o código de retirada pelo link:\n{linkAcompanhamento}`;
+const MSG_OS_POSVENDA = `Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você retirou o seu pedido {via} e queremos saber: ficou tudo certo? Se precisar de qualquer ajuste, estamos à disposição.\n\n{avaliacao}\n\nObrigado por escolher a Vilaça Joias!`;
+const STATUS_OS_NOME: Record<string, string> = { aguardando: "APROVADO", enviado_fabrica: "ENVIADO P/ FÁBRICA", em_producao: "EM PRODUÇÃO", pendencia: "PENDÊNCIA", oficina_pronto: "PRODUZIDO", pronto: "PRONTO", entregue: "ENTREGUE" };
+function preencherOS(txt: string, cfg: any, o: any) {
+  const lj = lojaDe(cfg, o.lojaId);
+  const nomeLoja = (lj && (lj.nomePublico || lj.nomeFantasia || lj.nome)) || "Vilaça Joias";
+  const av = lj && lj.googleReviewUrl ? `Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n${lj.googleReviewUrl}` : "";
+  const nota = o.codigoVia || o.via || "";
+  let t = String(txt || "")
+    .replaceAll("{cliente}", bonito(o.cliente || "") || "cliente").replaceAll("{via}", String(o.via || o.codigoVia || ""))
+    .replaceAll("{status}", STATUS_OS_NOME[o.status] || String(o.status || "")).replaceAll("{servico}", String(o.serviceTypeName || ""))
+    .replaceAll("{data}", fmtData(o.data)).replaceAll("{loja}", nomeLoja).replaceAll("{vendedora}", bonito(o.vendedora || "") || "nossa equipe")
+    .replaceAll("{recebidoPor}", String(o.recebidoPor || "")).replaceAll("{notaLinha}", nota ? `Número da nota: ${nota}\n` : "")
+    .replaceAll("{linkAcompanhamento}", `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(o.id || "")}`).replaceAll("{avaliacao}", av);
+  if (!/wa\.me\//.test(t)) t = t.trimEnd() + `\n\n${RODAPE}`;
+  return t.replace(/\n{3,}/g, "\n\n").trim();
+}
 const linkOrc = (id: string) => `https://vilaca.app/via.html?t=orc&id=${encodeURIComponent(id)}`;
 
 let cacheSeg: Record<string, string> | null = null;
@@ -192,7 +214,7 @@ async function abertoAgora(body: any) {
   return json({ ok: true, enviado: true, autoMensagensEnviadas: 1, msgEnviadas: reg.msgEnviadas, acoesLog: reg.acoesLog });
 }
 
-type Item = { tipo: "orcamento" | "posvenda"; tabela: string; id: string; reg: any; passo: number; tel: string | null; texto: string; statusDestino: string; nomeAcao: string; pulados: number; agenda: any };
+type Item = { tipo: "orcamento" | "posvenda" | "os_pronto" | "os_posvenda"; tabela: string; id: string; reg: any; passo: number; tel: string | null; texto: string; statusDestino: string; nomeAcao: string; pulados: number; agenda: any };
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -211,7 +233,8 @@ Deno.serve(async (req: Request) => {
     // simulação: `assumirAuto` finge que o envio automático está ligado (só para conferir o que sairia; nada é enviado nem gravado)
     const acoes = dryRun && body.assumirAuto ? { ...(cfg.orcamentoAcoes || {}), auto: true, desde: "2000-01-01" } : (cfg.orcamentoAcoes || {});
     const pv = dryRun && body.assumirAuto ? { ...(cfg.posVendaAuto || {}), auto: true, desde: "2000-01-01" } : (cfg.posVendaAuto || {});
-    if (!dryRun && !(acoes.auto && acoes.desde) && !(pv.auto && pv.desde)) return json({ ok: true, desligado: true });
+    const po = dryRun && body.assumirAuto ? { ...(cfg.pedidoAcoes || {}), auto: true, desde: "2000-01-01" } : (cfg.pedidoAcoes || {});
+    if (!dryRun && !(acoes.auto && acoes.desde) && !(pv.auto && pv.desde) && !(po.auto && po.desde)) return json({ ok: true, desligado: true });
     // pausa do número de disparo (mesma da fila do Marketing)
     if (!dryRun) { const { data: pz } = await admin.from("marketing_disparo_estado").select("pausado_motivo").eq("id", 1).maybeSingle(); if (pz && pz.pausado_motivo) return json({ ok: true, pausado: true, motivo: pz.pausado_motivo }); }
     // trava: só uma execução por vez (roda a cada minuto)
@@ -276,6 +299,27 @@ Deno.serve(async (req: Request) => {
         if (!data || data.length < 1000) break;
       }
     }
+    // ---------- 3) pedidos (O.S.): aviso de PRONTO e pós-venda de ENTREGUE ----------
+    if (po.auto && po.desde) {
+      const diasPV = Number(po.posVendaDias) || 7;
+      const desdeMs = Date.parse(po.desde + "T00:00:00-03:00");
+      for (let from = 0; from < 20000; from += 1000) {
+        const { data } = await admin.from("ordens_servico").select("id,payload").gte("updated_at", new Date(Date.now() - 60 * 86400000).toISOString()).range(from, from + 999);
+        for (const r of (data || [])) {
+          const o = r.payload || {};
+          if (o.rascunho || o.status === "cancelado") continue;
+          const jaLog = (k: string) => (Array.isArray(o.acoesLog) ? o.acoesLog : []).some((a: any) => a && a.passo === k);
+          if (o.status === "pronto" && Number(o.statusEm || 0) >= desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
+            cand.push({ tipo: "os_pronto", tabela: "ordens_servico", id: r.id, reg: o, passo: 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: "aviso de pronto", agenda: o.autoAgenda || null,
+              texto: preencherOS((po.mensagemPronto && po.mensagemPronto.trim()) || (cfg.mensagens && cfg.mensagens.pronto) || MSG_OS_PRONTO, cfg, o) });
+          } else if (o.status === "entregue" && Number(o.recebidoEm || 0) >= desdeMs && !o.posVendaEnviadoEm && diasEntre(diaDe(Number(o.recebidoEm)), agora.dia) >= diasPV) {
+            cand.push({ tipo: "os_posvenda", tabela: "ordens_servico", id: r.id, reg: o, passo: 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: "pós-venda", agenda: o.autoAgenda || null,
+              texto: preencherOS((po.mensagemPosVenda && po.mensagemPosVenda.trim()) || MSG_OS_POSVENDA, cfg, o) });
+          }
+        }
+        if (!data || data.length < 1000) break;
+      }
+    }
     if (dryRun) return json({ ok: true, simulacao: true, enviaria: cand.map((f) => ({ tipo: f.tipo, id: f.id, cliente: f.reg.cliente, acao: f.nomeAcao, passo: f.passo + 1, pulados: f.pulados, statusDestino: f.statusDestino, tel: f.tel ? "…" + f.tel.slice(-4) : "SEM TELEFONE VÁLIDO", texto: f.texto })), fecharia: fechar });
 
     const agoraIso0 = new Date().toISOString();
@@ -296,7 +340,7 @@ Deno.serve(async (req: Request) => {
     const gravarAgenda = async (it: Item, em: number) => {
       const { data: row } = await admin.from(it.tabela).select("payload").eq("id", it.id).maybeSingle();
       const reg = row && row.payload; if (!reg) return;
-      reg.autoAgenda = { dia: agora.dia, em, passo: it.passo, tent: 0 };
+      reg.autoAgenda = { dia: agora.dia, em, passo: it.passo, tent: 0, tipo: it.tipo };
       await admin.from(it.tabela).update({ payload: reg, updated_at: new Date().toISOString() }).eq("id", it.id);
       it.agenda = reg.autoAgenda; it.reg = reg; agendadosAgora++;
     };
@@ -356,6 +400,8 @@ Deno.serve(async (req: Request) => {
       const reg = row && row.payload; if (!reg) continue;
       if (f.tipo === "orcamento" && (Number(reg.autoMensagensEnviadas || 0) > f.passo || reg.convertidoEm || reg.rascunho)) continue;
       if (f.tipo === "posvenda" && reg.posVendaEnviadoEm) continue;
+      if (f.tipo === "os_pronto" && (reg.status !== "pronto" || (reg.msgEnviadas && reg.msgEnviadas.pronto))) continue;   // mudou de status ou o botão já enviou na hora
+      if (f.tipo === "os_posvenda" && (reg.status !== "entregue" || reg.posVendaEnviadoEm)) continue;
       if (f.tel && !(await aberta(inst))) continue;   // WhatsApp fora do ar: fica para o próximo minuto / dia seguinte
       let motivoSem = "", ok = false, status = 0;
       if (!f.tel) motivoSem = "sem celular válido";
@@ -394,6 +440,13 @@ Deno.serve(async (req: Request) => {
         if (f.statusDestino) { reg.status = f.statusDestino; reg.statusAtualizadoEm = agoraIso; }
         if (!motivoSem) { reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas[f.statusDestino || reg.status] = agoraIso; }   // visto de mensagem enviada deste status
         (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: passos[f.passo].id, nome: passos[f.passo].nome, por: "sistema", via: motivoSem ? "sem mensagem (" + motivoSem + ")" : "whatsapp", auto: true, pulou: f.pulados || 0 });
+      } else if (f.tipo === "os_pronto") {
+        if (!motivoSem) { reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas.pronto = agoraIso; }
+        (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: "os_pronto", nome: "Aviso de PRONTO", por: "sistema", via: motivoSem ? "sem mensagem (" + motivoSem + ")" : "whatsapp", auto: true });
+      } else if (f.tipo === "os_posvenda") {
+        reg.posVendaEnviadoEm = agoraIso; reg.posVendaPor = motivoSem ? "sistema (sem mensagem: " + motivoSem + ")" : "sistema";
+        if (!motivoSem) { reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas.posvenda = agoraIso; }
+        (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: "os_posvenda", nome: "Pós-venda", por: "sistema", via: motivoSem ? "sem mensagem (" + motivoSem + ")" : "whatsapp", auto: true });
       } else { reg.posVendaEnviadoEm = agoraIso; reg.posVendaPor = motivoSem ? "sistema (sem mensagem: " + motivoSem + ")" : "sistema"; }
       await admin.from(f.tabela).update({ payload: reg, updated_at: agoraIso }).eq("id", f.id);
       if (!motivoSem) enviados++;
