@@ -2,13 +2,13 @@
 const semEstouro = async (t, p, nome) => { const r = await p.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]); t.ok(r[0] <= r[1] + 1, `${nome}: página com ${r[0]}px numa tela de ${r[1]}px`); };
 module.exports = { casos: [
   { nome: 'Pedido e Venda no tablet (768px) não alargam a página', bug: '.sr-only absoluto escapava da rolagem da tabela', rodar: async ({ t, abrir }) => {
-    for (const f of ['painel-ordens.html', 'vendas.html']) { const p = await abrir(f, { w: 768, h: 1024, ls: { vilaca_modo_os: 'lista' } }); await semEstouro(t, p, f + ' @768'); }
+    for (const f of ['painel-ordens.html', 'vendas.html']) { const p = await abrir(f, { w: 768, h: 1024, ls: { vilaca_modo_os_v2: 'lista' } }); await semEstouro(t, p, f + ' @768'); }
   } },
   { nome: 'Orçamento no celular (320 e 360px) sem estouro nos filtros', bug: 'filtros e barra de abas passavam da tela', rodar: async ({ t, abrir }) => {
     for (const w of [320, 360, 390]) { const p = await abrir('orcamentos.html', { w, h: 800 }); await semEstouro(t, p, 'orcamentos @' + w); }
   } },
   { nome: 'Pedido (lista no celular): número da via não é espremido pelo status', bug: 'via aparecia cortada ("MC")', rodar: async ({ t, abrir }) => {
-    const p = await abrir('painel-ordens.html', { w: 360, h: 800, ls: { vilaca_modo_os: 'lista' } });
+    const p = await abrir('painel-ordens.html', { w: 360, h: 800, ls: { vilaca_modo_os_v2: 'lista' } });
     const r = await p.evaluate(() => { const td = document.querySelector('.tabela-os td.c-via'); if (!td) return null; const b = td.getBoundingClientRect(); const txt = td.querySelector('.via'); return { w: b.width, txt: txt ? txt.scrollWidth : 0, cortado: txt ? txt.getBoundingClientRect().width < txt.scrollWidth - 1 : false }; });
     t.ok(r, 'linha da lista encontrada'); if (r) t.ok(!r.cortado, 'via cortada');
   } },
