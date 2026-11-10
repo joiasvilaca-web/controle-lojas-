@@ -2469,13 +2469,18 @@ function abrirConfigAcoes(){
   const abertos = statusList().filter(x=>!x.encerra), encerram = statusList().filter(x=>x.encerra);
   const diasValidade = prazosAutoMsg().diasValidade;
   let autoAntes = !!a.auto;
+  let incluirExist = a.incluirExistentes !== false;
+  function statusOpcoesHtml(sel){
+    const ab = statusList().filter(x=>!x.encerra), en = statusList().filter(x=>x.encerra);
+    return `<option value="">(não muda de status)</option><optgroup label="Em andamento">${ab.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===sel?'selected':''}>${escapeHtml(x.nome)}</option>`).join('')}</optgroup><optgroup label="Encerram o orçamento">${en.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===sel?'selected':''}>${escapeHtml(x.nome)}</option>`).join('')}</optgroup><option value="__novo__">+ Criar um status novo…</option>`;
+  }
   function passoHtml(p,i){
     const msg = textoPassoOrc(p, i);
     return `<div class="card" style="padding:12px;margin:10px 0;" data-passo="${i}">
       <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
         <div class="field" style="flex:2;min-width:160px;"><label>Nome da ação</label><input type="text" data-f="nome" value="${escapeHtml(p.nome)}"></div>
         <div class="field" style="width:110px;"><label>Dias depois</label><input type="number" min="1" data-f="dias" value="${Number(p.dias)||1}"></div>
-        <div class="field" style="flex:2;min-width:160px;"><label>Passa para o status</label><select data-f="statusId"><option value="">(não muda)</option>${abertos.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===p.statusId?'selected':''}>${escapeHtml(x.nome)}</option>`).join('')}</select></div>
+        <div class="field" style="flex:2;min-width:160px;"><label>Depois desta ação, passa para o status</label><select data-f="statusId">${statusOpcoesHtml(p.statusId)}</select></div>
         <button type="button" class="btn btn-ghost btn-sm" data-rem="${i}" ${passos.length<=1?'disabled':''}>Remover</button>
       </div>
       <div class="field" style="margin-top:8px;"><label>Mensagem de WhatsApp <span class="muted">({cliente} {loja} {valor} {validade} {vendedora})</span></label>
@@ -2485,11 +2490,12 @@ function abrirConfigAcoes(){
   }
   function desenhar(){
     openModal(`<h3>Ações automáticas de orçamento</h3>
-      <p class="modal-sub">Cada ação é enviada por WhatsApp depois de X dias do orçamento. A mensagem sempre leva o botão “Iniciar conversa” para o WhatsApp de atendimento.</p>
+      <p class="modal-sub">Passo a passo: quando o orçamento completa X dias, o sistema envia a mensagem da ação e muda para o status escolhido. Orçamento convertido em venda ou pedido sai de tudo isso. A mensagem leva o botão “Iniciar conversa”.</p>
       <label class="check-filtro" style="margin:10px 0;display:flex;gap:8px;align-items:center;"><input type="checkbox" id="acAuto" ${autoAntes?'checked':''}> <b>Enviar automaticamente, sem ação humana</b> (o sistema manda sozinho entre 9h e 18h)</label>
-      <p class="muted" style="margin:0 0 6px;font-size:12.5px;">Ao ligar, só valem os orçamentos criados a partir de hoje; os anteriores continuam nos blocos, para envio manual. Desligado, as ações aparecem nos blocos para você enviar.</p>
+      <label class="check-filtro" style="margin:4px 0 6px;display:flex;gap:8px;align-items:center;"><input type="checkbox" id="acExist" ${incluirExist?'checked':''}> Valer também para os orçamentos já registrados (mesmo atrasados: recebem a ação certa para os dias que têm e vão para o status dela)</label>
+      <p class="muted" style="margin:0 0 6px;font-size:12.5px;">As mensagens seguem as regras do aniversário: das 9h às 18h, espalhadas ao longo do dia em horários sorteados; só celular válido; se não der para enviar no dia (WhatsApp fora do ar, muitas mensagens), passa para o dia seguinte. Desligado, as ações aparecem nos blocos para você enviar.</p>
       <div id="acPassos">${passos.map(passoHtml).join('')}</div>
-      <button type="button" class="btn btn-ghost btn-sm" id="acAdd">+ Adicionar ação</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="acAdd">+ Adicionar ação</button> <button type="button" class="btn btn-ghost btn-sm" id="acMontar" title="Cria uma ação para cada status em andamento que ainda não tem ação (depois do inicial)">Criar uma ação para cada status</button>
       <div class="card" style="padding:12px;margin:12px 0;">
         <label class="check-filtro" style="display:flex;gap:8px;align-items:center;"><input type="checkbox" id="acFinAtivo" ${fin.ativo?'checked':''}> Encerrar sozinho se não houver resposta</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
@@ -2502,17 +2508,40 @@ function abrirConfigAcoes(){
       <div class="modal-actions"><button class="btn btn-ghost" id="acCancelar">Cancelar</button><button class="btn btn-accent" id="acSalvar">${ic('check')} Salvar</button></div>`);
     document.getElementById('acCancelar').addEventListener('click', closeModal);
     document.getElementById('acAdd').addEventListener('click', ()=>{ ler(); passos.push({ id:'p'+Date.now().toString(36), nome:'Nova ação', dias:(Number((passos[passos.length-1]||{}).dias)||0)+3, statusId:'', mensagem:'' }); desenhar(); });
+    document.getElementById('acMontar').addEventListener('click', ()=>{
+      ler();
+      const usados = new Set(passos.map(p=>p.statusId).filter(Boolean));
+      let dias = Number((passos[passos.length-1]||{}).dias)||0, n = 0;
+      statusList().filter(x=>!x.encerra && !x.inicial && !usados.has(x.id)).forEach(x=>{ dias += 2; passos.push({ id:'p'+Date.now().toString(36)+n, nome:x.nome, dias, statusId:x.id, mensagem:'' }); n++; });
+      if(!n) showToast('Todos os status em andamento já têm uma ação.');
+      desenhar();
+    });
+    document.querySelectorAll('select[data-f=statusId]').forEach(sel=> sel.addEventListener('change', async ()=>{
+      if(sel.value!=='__novo__') return;
+      const nome = (prompt('Nome do novo status (ex.: Última chance):')||'').trim();
+      ler();
+      if(!nome){ desenhar(); return; }
+      const novo = { id:'status_'+Date.now().toString(36), nome, encerra:false, inicial:false, mensagemWhatsapp:'', mensagemEmail:'', assuntoEmail:'' };
+      const lista = JSON.parse(JSON.stringify(statusList())).concat([novo]);
+      const r = await gatewayCall({ op:'mergeConfigKey', params:{ key:'statusOrcamento', value: lista } });
+      if(r && r.error){ showToast('Não foi possível criar o status: '+r.error); desenhar(); return; }
+      config.statusOrcamento = lista;
+      const i = Number(sel.closest('[data-passo]').dataset.passo); if(passos[i]) passos[i].statusId = novo.id;
+      showToast('Status criado. A mensagem dele fica em Configurações › Cadastro › Status e Mensagens.');
+      desenhar();
+    }));
     document.querySelectorAll('[data-rem]').forEach(b=> b.addEventListener('click', ()=>{ ler(); passos.splice(Number(b.dataset.rem),1); desenhar(); }));
     document.querySelectorAll('[data-padrao]').forEach(b=> b.addEventListener('click', ()=>{ ler(); const i=Number(b.dataset.padrao); passos[i].mensagem=''; const st=statusList().find(x=>x.id===passos[i].statusId); passos[i].mensagem = MSG_ACAO_PADRAO[Math.min(i,MSG_ACAO_PADRAO.length-1)]; desenhar(); }));
     document.getElementById('acSalvar').addEventListener('click', salvar);
   }
   function ler(){
     autoAntes = document.getElementById('acAuto').checked;
+    incluirExist = document.getElementById('acExist').checked;
     document.querySelectorAll('[data-passo]').forEach(box=>{
       const i = Number(box.dataset.passo), p = passos[i]; if(!p) return;
       p.nome = box.querySelector('[data-f=nome]').value.trim() || ('Ação '+(i+1));
       p.dias = Math.max(1, Number(box.querySelector('[data-f=dias]').value)||1);
-      p.statusId = box.querySelector('[data-f=statusId]').value;
+      { const sv = box.querySelector('[data-f=statusId]').value; if(sv!=='__novo__') p.statusId = sv; }
       p.mensagem = box.querySelector('[data-f=mensagem]').value;
     });
     fin.ativo = document.getElementById('acFinAtivo').checked;
@@ -2525,7 +2554,7 @@ function abrirConfigAcoes(){
     for(let i=1;i<passos.length;i++){ if(!(Number(passos[i].dias) > Number(passos[i-1].dias))){ showToast('Os dias precisam crescer de uma ação para a próxima.'); return; } }
     if(fin.ativo && !(Number(fin.dias) > Number(passos[passos.length-1].dias))){ showToast('O encerramento precisa vir depois da última ação.'); return; }
     const hoje = todayStr();
-    const novo = { auto: autoAntes, desde: (autoAntes ? (a.auto && a.desde ? a.desde : hoje) : (a.desde||'')), passos, final: fin };
+    const novo = { auto: autoAntes, desde: (autoAntes ? (a.auto && a.desde ? a.desde : hoje) : (a.desde||'')), incluirExistentes: incluirExist, passos, final: fin };
     const r1 = await gatewayCall({ op:'mergeConfigKey', params:{ key:'orcamentoAcoes', value: novo } });
     if(r1 && r1.error){ showToast('Não foi possível salvar: '+r1.error); return; }
     // mantém os prazos antigos coerentes (e a validade padrão) para quem ainda lê o formato anterior
