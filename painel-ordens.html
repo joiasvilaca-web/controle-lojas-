@@ -329,7 +329,7 @@
   .modo-os button{border:none;background:transparent;color:var(--ink-soft);font:600 13px/1 inherit;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
   .modo-os button.ativo{background:var(--primary-soft,#e8f0f6);color:var(--primary,#1f5f7a);}
   .quadro-os{display:flex;gap:12px;overflow-x:auto;padding:4px 2px 14px;align-items:flex-start;scroll-snap-type:x proximity;}
-  .quadro-col{flex:0 0 260px;background:var(--surface-2,#f3f5f7);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;max-height:calc(100vh - 230px);scroll-snap-align:start;}
+  .quadro-col{flex:0 0 150px;transition:flex-basis .18s ease;background:var(--surface-2,#f3f5f7);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;max-height:calc(100vh - 230px);scroll-snap-align:start;}
   .quadro-col.alvo{outline:2px dashed var(--primary,#1f5f7a);outline-offset:-4px;background:var(--primary-soft,#e8f0f6);}
   .quadro-col-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;font-weight:700;font-size:12.5px;letter-spacing:.04em;border-bottom:1px solid var(--line);}
   .quadro-col-head .qtd{font-weight:700;font-size:12px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:2px 8px;}
@@ -345,6 +345,20 @@
   .quadro-card .qc-atraso{color:var(--danger);font-weight:700;}
   .quadro-card select{width:100%;margin-top:7px;min-height:30px;font-size:12px;}
   .quadro-vazio{color:var(--muted);font-size:12px;text-align:center;padding:10px 4px;}
+  /* 10/11: colunas fechadas = só status no topo + via e 1º nome; ao tocar no status a coluna abre para o lado com o cartão completo */
+  .quadro-col-head{cursor:pointer;user-select:none;width:100%;background:transparent;border-left:0;border-right:0;border-top:0;color:inherit;font-family:inherit;text-align:left;}
+  .quadro-col-head:hover{background:var(--primary-soft,#e8f0f6);border-radius:14px 14px 0 0;}
+  .quadro-col-head .qseta{display:inline-flex;transition:transform .18s;opacity:.6;}
+  .quadro-col.aberta .quadro-col-head .qseta{transform:rotate(90deg);}
+  .quadro-col.aberta{flex-basis:300px;}
+  .quadro-card .qc-cli-curto{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .quadro-card .qc-cli{display:none;}
+  .quadro-card .qc-sub,.quadro-card select,.quadro-card .qc-top .sigla-loja,.quadro-card .qc-top > :not(.qc-via){display:none;}
+  .quadro-col.aberta .quadro-card .qc-cli{display:block;}
+  .quadro-col.aberta .quadro-card .qc-cli-curto{display:none;}
+  .quadro-col.aberta .quadro-card .qc-sub{display:block;}
+  .quadro-col.aberta .quadro-card select{display:block;}
+  .quadro-col.aberta .quadro-card .qc-top > :not(.qc-via){display:inline-flex;}
   /* 04/11 (Felipe): editar a via abre a VIA DE VERDADE em tela cheia (não um popup); os botões ficam presos embaixo */
   #modalOverlay.tela-cheia{padding:0;align-items:stretch;background:var(--page,#f4f6f8) !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}
   #modalOverlay.tela-cheia #modalBox{max-width:1100px;width:100%;max-height:none;min-height:100%;border:none;border-radius:0;margin:0 auto;padding:22px 28px 0;box-shadow:none;overflow:visible;animation:none;}
@@ -702,6 +716,8 @@ function statusPermitidos(){
 function podeColocarStatus(st){ return statusPermitidos().includes(st); }
 /** 04/11: Lista ou Quadro (kanban) — lembrado neste aparelho. */
 function modoListaOS(){ try{ return localStorage.getItem('vilaca_modo_os')==='quadro' ? 'quadro' : 'lista'; }catch(e){ return 'lista'; } }
+function quadroAbertas(){ try{ return new Set(JSON.parse(localStorage.getItem('vilaca_quadro_abertas')||'[]')); }catch(e){ return new Set(); } }
+function salvarQuadroAbertas(set){ try{ localStorage.setItem('vilaca_quadro_abertas', JSON.stringify(Array.from(set))); }catch(e){} }
 function definirModoListaOS(m){ try{ localStorage.setItem('vilaca_modo_os', m==='quadro'?'quadro':'lista'); }catch(e){} }
 document.addEventListener('click', e=>{
   const b = e.target.closest && e.target.closest('[data-modo-os]'); if(!b) return;
@@ -5954,21 +5970,31 @@ function renderPainel(main){
       return `<div class="quadro-card${pode?'':' travado'}" data-qid="${escapeHtml(o.id)}" ${pode?'draggable="true"':''} title="${pode?'Arraste para mudar o status · toque para abrir':'Toque para ver'}">
         <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||o.via||'—')}</span>${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
         <div class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}</div>
+        <span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}</span>
         <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(o.data)}${atraso?' (atrasado)':''}</span>`:''}</div>
         ${falta>0.009 && o.status!=='cancelado' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
         ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho')}</select>` : ''}
       </div>`;
     };
+    const abertas = quadroAbertas();
     wrap.innerHTML = `<div class="quadro-os" id="quadroOS">${colunas.map(st=>{
       let doStatus = list.filter(o=>o.status===st);
       if(st==='entregue' || st==='cancelado') doStatus = doStatus.filter(fimRecente);
       doStatus.sort((a,b)=> String(a.data||'').localeCompare(String(b.data||'')) || (b.criadoEm||0)-(a.criadoEm||0));
-      return `<section class="quadro-col" data-qcol="${st}" aria-label="${escapeHtml(statusLabel(st))}">
-        <div class="quadro-col-head">${seloStatusHtml(st)}<span class="qtd">${doStatus.length}</span></div>
+      return `<section class="quadro-col${abertas.has(st)?' aberta':''}" data-qcol="${st}" aria-label="${escapeHtml(statusLabel(st))}">
+        <button type="button" class="quadro-col-head" data-qtoggle="${st}" aria-expanded="${abertas.has(st)}" title="Toque para abrir ou fechar esta coluna">${seloStatusHtml(st)}<span style="display:inline-flex;align-items:center;gap:6px;"><span class="qtd">${doStatus.length}</span><span class="qseta">${ico('direita',14)}</span></span></button>
         <div class="quadro-col-body">${doStatus.length ? doStatus.map(cartao).join('') : `<div class="quadro-vazio">${st==='entregue'||st==='cancelado'?'Últimos 3 dias':'Solte aqui'}</div>`}</div>
       </section>`;
     }).join('')}</div>`;
     const quadro = document.getElementById('quadroOS');
+    quadro.querySelectorAll('[data-qtoggle]').forEach(h=> h.addEventListener('click', ()=>{
+      const col = h.closest('.quadro-col'), set = quadroAbertas(), st = h.dataset.qtoggle;
+      const abre = !col.classList.contains('aberta');
+      col.classList.toggle('aberta', abre); h.setAttribute('aria-expanded', abre);
+      if(abre) set.add(st); else set.delete(st);
+      salvarQuadroAbertas(set);
+      if(abre) try{ col.scrollIntoView({ behavior:'smooth', inline:'nearest', block:'nearest' }); }catch(e){}
+    }));
     let arrastandoId = null;
     quadro.querySelectorAll('.quadro-card').forEach(c=>{
       c.addEventListener('click', e=>{ if(e.target.closest('select')) return; const pode = !c.classList.contains('travado'); openEditModal(c.dataset.qid, !pode); });
