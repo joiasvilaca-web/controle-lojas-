@@ -1123,22 +1123,27 @@
   function avisosDadosIncompletos(){
     const avisos = [];
     orders.forEach(o=>{
-      if(!o.telefone) avisos.push({ tipo:"O.S.", ref:o.codigoVia||o.via||o.id, problema:"Sem telefone do cliente" });
+      if(o.status==="rascunho" || o.status==="cancelado") { /* rascunho/cancelado não cobram dado */ }
+      const ref = o.codigoVia||o.id, add = p=> avisos.push({ tipo:"O.S.", ref, id:o.id, alvo:"os", problema:p });
+      if(!o.telefone) add("Sem telefone do cliente");
       if(o.emissaoNota==="sim"){
-        if(!o.numeroNota) avisos.push({ tipo:"O.S.", ref:o.codigoVia||o.via||o.id, problema:"Marcou nota mas não tem número" });
-        if(!o.lojaSaidaId || !o.lojaPagamentoId || !o.lojaNotaId) avisos.push({ tipo:"O.S.", ref:o.codigoVia||o.via||o.id, problema:"Nota sem as 3 empresas preenchidas" });
-        else if(o.lojaPagamentoId !== o.lojaNotaId) avisos.push({ tipo:"O.S.", ref:o.codigoVia||o.via||o.id, problema:"Empresa do pagamento diferente da empresa da nota" });
+        if(!o.numeroNota) add("Marcou nota mas não tem número");
+        if(!o.lojaSaidaId || !o.lojaPagamentoId || !o.lojaNotaId) add("Nota sem as 3 empresas preenchidas");
+        else if(o.lojaPagamentoId !== o.lojaNotaId) add("Empresa do pagamento diferente da empresa da nota");
       }
     });
     vendas.forEach(v=>{
+      const ref = v.codigoVia||v.id, add = p=> avisos.push({ tipo:"Venda", ref, id:v.id, alvo:"vendas", problema:p });
       if(v.emissaoNota==="sim"){
-        if(!v.numeroNota) avisos.push({ tipo:"Venda", ref:v.id, problema:"Marcou nota mas não tem número" });
-        if(!v.lojaSaidaId || !v.lojaPagamentoId || !v.lojaNotaId) avisos.push({ tipo:"Venda", ref:v.id, problema:"Nota sem as 3 empresas preenchidas" });
-        else if(v.lojaPagamentoId !== v.lojaNotaId) avisos.push({ tipo:"Venda", ref:v.id, problema:"Empresa do pagamento diferente da empresa da nota" });
+        if(!v.numeroNota) add("Marcou nota mas não tem número");
+        if(!v.lojaSaidaId || !v.lojaPagamentoId || !v.lojaNotaId) add("Nota sem as 3 empresas preenchidas");
+        else if(v.lojaPagamentoId !== v.lojaNotaId) add("Empresa do pagamento diferente da empresa da nota");
       }
     });
     return avisos;
   }
+  /** "Ver via": abre a via no card dela (Pedido/Venda), onde dá para editar e corrigir o que falta. */
+  function abrirViaDoAviso(alvo, id){ if(EMBEDDED) parent.postMessage({ type:"irParaModulo", modulo:"dashboard", alvo, registroId:id }, "*"); else if(typeof showToast==="function") showToast("Abra a via pelo menu do sistema."); }
 
   /* 06/11: "recebido no mês" = o que ENTROU no mês pela data do pagamento (regra única do caixa-calc.js), menos as devoluções de cancelamento. */
   function dadosCaixaDash(){ return { vendas, ordens: orders, gastos: [], formas: (configCompleto && configCompleto.formasPagamento) || [], lojas: (configCompleto && configCompleto.lojas) || [] }; }
@@ -1668,14 +1673,15 @@
         ${avisos.length===0 ? `<div class="empty" style="color:var(--ok);"><b style="color:var(--ok);">Tudo certo.</b>Nenhum lançamento com dado faltando.</div>` : `
           <div class="tabela-wrap">
           <table class="tbl">
-            <thead><tr><th>Tipo</th><th>Referência</th><th>O que falta</th></tr></thead>
-            <tbody>${avisos.slice(0,30).map(a=>`<tr><td data-label="Tipo">${escapeHtml(a.tipo)}</td><td class="forte" data-label="Referência">${escapeHtml(String(a.ref))}</td><td data-label="O que falta" style="white-space:normal;">${escapeHtml(a.problema)}</td></tr>`).join("")}</tbody>
+            <thead><tr><th>Tipo</th><th>Via</th><th>O que falta</th><th></th></tr></thead>
+            <tbody>${avisos.slice(0,30).map(a=>`<tr><td data-label="Tipo">${escapeHtml(a.tipo)}</td><td class="forte" data-label="Referência">${escapeHtml(String(a.ref))}</td><td data-label="O que falta" style="white-space:normal;color:var(--danger,#c0392b);font-weight:600;">${escapeHtml(a.problema)}</td><td data-label="" class="num"><button type="button" class="btn btn-sm" data-verviaaviso="${escapeHtml(a.id||"")}" data-alvoaviso="${escapeHtml(a.alvo||"os")}">Ver via</button></td></tr>`).join("")}</tbody>
           </table>
           </div>
           ${avisos.length>30?`<div class="tbl-nota">Mostrando 30 de ${avisos.length} avisos.</div>`:""}
         `}
       </div>
     `;
+    el.querySelectorAll("[data-verviaaviso]").forEach(b=> b.addEventListener("click", ()=> abrirViaDoAviso(b.dataset.alvoaviso, b.dataset.verviaaviso)));
 
     function renderMetasLista(){
       const wrap = document.getElementById("metasLista");

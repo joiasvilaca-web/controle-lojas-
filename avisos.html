@@ -118,6 +118,7 @@ button{font-family:inherit;cursor:pointer;}
   .mais{padding:12px 14px;}
 }
 @media (max-width:360px){ .resumo{grid-template-columns:1fr;} }
+  .item .sub.falha{color:var(--danger,#c0392b) !important;font-weight:600;display:flex;gap:6px;align-items:flex-start;margin-top:2px;white-space:normal;} .item .sub.falha svg{flex:none;margin-top:2px;}
 </style>
 </head>
 <body>
@@ -218,7 +219,22 @@ async function calcularAvisos(){
       .sort((a,b)=> (a.data||'').localeCompare(b.data||''));
     const prontas = ordens.filter(o=> o.status==='pronto' && o.data && (diasDesde(o.data)||0) >= DIAS_PRONTO_SEM_RETIRADA)
       .sort((a,b)=> (a.data||'').localeCompare(b.data||''));
+    // 10/11: vias EM PENDÊNCIA (a Oficina parou por um problema): mostra em vermelho o que falta e abre a via para editar
+    const pendentes = ordens.filter(o=> o.status==='pendencia')
+      .sort((a,b)=> (a.data||'').localeCompare(b.data||''));
+    const motivoPendencia = o=>{
+      const obs = (o.observacoes||[]).filter(x=> x && x.origem==='oficina').sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0))[0];
+      return obs ? String(obs.descricao||'').replace(/^\[OFICINA\]\s*/,'').trim() : '';
+    };
     const grupos = [];
+    if(pendentes.length) grupos.push({ titulo:'Vias em pendência', tipo:'danger', itens: pendentes.map(o=>({
+      titulo: `${o.codigoVia ? o.codigoVia+' — ' : ''}${o.cliente||'Sem cliente'}`,
+      sub: `${o.serviceTypeName||o.descricao||'Serviço'} · entrega prevista ${fmtDate(o.data)}${o.loja?' · '+o.loja:''}${o.vendedora?' · '+o.vendedora:''}`,
+      falha: motivoPendencia(o) || 'Pendência sem motivo registrado — abra a via e confira a observação da Oficina.',
+      tag: 'pendência', tagTipo:'danger',
+      verVia: true,
+      abrir:{ alvo:'os', registroId:o.id },
+    }))});
     if(vencidas.length) grupos.push({ titulo:'Vencidos ainda na oficina', tipo:'danger', itens: vencidas.map(o=>({
       titulo: `${o.codigoVia ? o.codigoVia+' — ' : ''}${o.cliente||'Sem cliente'}`,
       sub: `${o.serviceTypeName||o.descricao||'Serviço'} · entrega prevista ${fmtDate(o.data)}${o.loja?' · '+o.loja:''}${o.vendedora?' · '+o.vendedora:''}`,
@@ -353,9 +369,9 @@ function htmlItem(it, aba, escondido){
   const tipo = it.tagTipo || 'wait';
   const icoTag = tipo==='danger' ? ico('alerta') : (tipo==='wait' ? ico('relogio') : '');
   return `<div class="item"${escondido?' hidden':''} data-abrir='${escapeHtml(JSON.stringify(it.abrir||{alvo:aba.alvo}))}'>
-      <div class="txt"><b>${escapeHtml(it.titulo)}</b><span class="sub">${escapeHtml(it.sub||'')}</span></div>
+      <div class="txt"><b>${escapeHtml(it.titulo)}</b><span class="sub">${escapeHtml(it.sub||'')}</span>${it.falha?`<span class="sub falha">${ico('alerta')} ${escapeHtml(it.falha)}</span>`:''}</div>
       ${it.tag ? `<span class="tag tag-${tipo}">${icoTag}${escapeHtml(cap(it.tag))}</span>` : '<span></span>'}
-      <button class="btn btn-sm item-ver" type="button" aria-label="Abrir ${escapeHtml(it.titulo)}"><span class="ver-txt">Ver</span>${ico('direita')}</button>
+      <button class="btn btn-sm item-ver" type="button" aria-label="Abrir ${escapeHtml(it.titulo)}"><span class="ver-txt">${it.verVia?'Ver via':'Ver'}</span>${ico('direita')}</button>
     </div>`;
 }
 function renderEsqueleto(){
