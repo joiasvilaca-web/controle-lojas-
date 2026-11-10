@@ -101,4 +101,16 @@ module.exports = { casos: [
     t.ok(/Aniversário já está na fila de hoje/.test(m), 'não duplica no mesmo dia');
     const h = ler('marketing.html'); t.ok(/desenharAcompAniversario/.test(h) && /acompanhamento-ui\.js/.test(h), 'seção Ações de acompanhamento no Marketing');
   } },
+  { nome: 'Número de disparo trocável: instância vem de DISPARO_INSTANCIA (padrão "vilaca"), sem texto fixo nas funções', bug: 'o nome da instância estava fixo no código; trocar de número exigia redeploy', rodar: async ({ t, ler }) => {
+    const mock = (valor) => ({ from: () => { const q = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: valor == null ? null : { valor } }) }; return q; } });
+    for (const arq of ['acompanhamento-auto.ts', 'enviar-via.ts']) {
+      t.igual(await pegar(arq, ['cacheInst', 'instanciaDisparo'], { admin: mock('vila') }).instanciaDisparo(), 'vila', arq + ': usa o segredo');
+      t.igual(await pegar(arq, ['cacheInst', 'instanciaDisparo'], { admin: mock(null) }).instanciaDisparo(), 'vilaca', arq + ': sem segredo = vilaca');
+      t.igual(await pegar(arq, ['cacheInst', 'instanciaDisparo'], { admin: mock('  ') }).instanciaDisparo(), 'vilaca', arq + ': segredo vazio = vilaca');
+    }
+    const a = ler('acompanhamento-auto.ts'); t.ok(!/inst === "vilaca"|=== "vilaca"/.test(a), 'acompanhamento-auto sem comparação fixa com "vilaca"');
+    t.ok(/INSTANCIA = String\(seg\.DISPARO_INSTANCIA/.test(ler('marketing-disparo.ts')), 'marketing-disparo usa o segredo');
+    t.ok(/INSTANCIA_PADRAO = await instanciaDisparo\(\)/.test(ler('enviar-via.ts')), 'enviar-via usa o segredo');
+    t.ok(/seg\.DISPARO_INSTANCIA/.test(ler('qr-instancia.ts')), 'qr-instancia usa o segredo');
+  } },
 ] };

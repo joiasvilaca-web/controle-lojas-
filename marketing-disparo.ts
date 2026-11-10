@@ -1,3 +1,4 @@
+// marketing-disparo v6 (10/11/2026): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
 // marketing-disparo v5 (10/11/2026) — FILA ÚNICA DO NÚMERO DE DISPARO (vilaca), junto com o acompanhamento-auto:
 //   (1) das 9h às 20h (19h–20h de reserva); entre duas mensagens automáticas no mínimo 5 min (5–7 min sorteados; com poucas, espalhadas no dia) — a vez é
 //       pega no banco (disparo_vez); Venda/Pedido/Orçamento vencidos passam na frente; (2) tipo "via" = mensagem feita por pessoa quando o WhatsApp estava
@@ -24,7 +25,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
-const INSTANCIA = "vilaca";
+let INSTANCIA = "vilaca";   // v6: processar() troca pelo valor de DISPARO_INSTANCIA
 const HORA_INI = 9, HORA_FIM = 20, MIN_FIM_PLANO = 19 * 60;
 const TIPOS = ["aniversario", "posVenda", "campanha", "chamar"];
 const TIPOS_LIMITE = ["aniversario", "posVenda", "campanha"];   // contam no aquecimento do número
@@ -39,7 +40,7 @@ const PALAVRAS_SAIR = ["sair", "parar", "cancelar", "descadastrar", "remover", "
 let cacheSeg: { em: number; v: Record<string, string> } | null = null;
 async function segredos() {
   if (cacheSeg && Date.now() - cacheSeg.em < 60000) return cacheSeg.v;
-  const { data } = await admin.from("atendimento_segredos").select("chave, valor").in("chave", ["EVOLUTION_URL", "EVOLUTION_API_KEY", "MARKETING_CRON_TOKEN", "MARKETING_LIMITE_DIA"]);
+  const { data } = await admin.from("atendimento_segredos").select("chave, valor").in("chave", ["EVOLUTION_URL", "EVOLUTION_API_KEY", "MARKETING_CRON_TOKEN", "MARKETING_LIMITE_DIA", "DISPARO_INSTANCIA"]);
   const v: Record<string, string> = {}; for (const r of data || []) v[r.chave] = r.valor;
   if (v.EVOLUTION_URL) v.EVOLUTION_URL = v.EVOLUTION_URL.replace(/\/+$/, "");
   cacheSeg = { em: Date.now(), v }; return v;
@@ -204,6 +205,7 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
   const est: any = trava;
   if (est.dia !== hoje.dia) { est.dia = hoje.dia; est.enviados_dia = 0; est.ultimo_tipo = null; }
   const seg = await segredos();
+  INSTANCIA = String(seg.DISPARO_INSTANCIA || "vilaca").trim() || "vilaca";
   const H = { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY };
   let enviados = 0, pausar = "", anivNovos = 0, conectado: boolean | null = null;
   try {

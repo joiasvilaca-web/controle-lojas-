@@ -1,3 +1,4 @@
+// acompanhamento-auto v11 (10/11/2026): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca"), sem redeploy para trocar de número.
 // acompanhamento-auto v10 (10/11/2026) — FILA ÚNICA DO NÚMERO DE DISPARO (vilaca): planejamento das 9h às 19h (19h–20h fica de reserva para o que
 //   atrasou/interrupções; nada sai depois das 20h); entre duas mensagens automáticas, no mínimo 5 min (5–7 min sorteados; com poucas mensagens, espalhadas pelo
 //   dia) — a vez é pega no banco (disparo_vez), dividida com o Marketing; Venda/Pedido/Orçamento têm prioridade sobre aniversário/mala direta. Envio feito por
@@ -37,6 +38,15 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 const MIN_INI = 9 * 60, MIN_FIM = 19 * 60, MIN_FIM_ENVIO = 20 * 60, LIMITE_MS = 50000, PISO_SEG_MS = 5 * 60000, FALHAS_PARA_PAUSAR = 3;
 const RODAPE_SAIR = "\n\nPara não receber mais mensagens, responda SAIR.";
 const WA_ATENDIMENTO = "https://wa.me/5532988307617";
+/** Instância do WhatsApp usada como número de DISPARO: atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca"). Trocar o valor troca o número sem redeploy (cache de 60 s). */
+let cacheInst: { em: number; v: string } | null = null;
+async function instanciaDisparo(): Promise<string> {
+  if (cacheInst && Date.now() - cacheInst.em < 60000) return cacheInst.v;
+  let v = "vilaca";
+  try { const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", "DISPARO_INSTANCIA").maybeSingle(); if (data && data.valor && String(data.valor).trim()) v = String(data.valor).trim(); } catch (_) {}
+  cacheInst = { em: Date.now(), v };
+  return v;
+}
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const semAcento = (s: string) => String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim();
 const fone8 = (t: string) => String(t || "").replace(/\D/g, "").slice(-8);
@@ -228,17 +238,18 @@ async function abertoAgora(body: any) {
   await admin.from("orcamentos").update({ payload: o, updated_at: new Date().toISOString() }).eq("id", id);
   const liberar = async (motivo: string) => { const { data: r2 } = await admin.from("orcamentos").select("payload").eq("id", id).maybeSingle(); const x = r2 && r2.payload; if (x && x.autoAgenda && x.autoAgenda.imediato) { delete x.autoAgenda; await admin.from("orcamentos").update({ payload: x, updated_at: new Date().toISOString() }).eq("id", id); } return nao(motivo); };
   const H = { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY };
-  const inst = o.lojaId === "loja_rj" ? "reformajoias" : "vilaca";
+  const instD = await instanciaDisparo();
+  const inst = o.lojaId === "loja_rj" ? "reformajoias" : instD;
   try { const rs = await fetch(`${seg.EVOLUTION_URL}/instance/connectionState/${inst}`, { headers: H, signal: AbortSignal.timeout(8000) }); const js = await rs.json().catch(() => ({})); if (String((js && js.instance && js.instance.state) || js.state || "") !== "open") return await liberar("WhatsApp fora do ar (o sistema tenta de novo em seguida)"); } catch (_) { return await liberar("WhatsApp fora do ar (o sistema tenta de novo em seguida)"); }
   const tagOff = ((cfg.tagsClientes || []).find((x: any) => semAcento(x.nome) === "marketing off") || {}).id || "";
   if (tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(tel), p_tag: tagOff }); if (off === true) return await liberar("cliente com a tag MARKETING OFF"); } catch (_) {} }
   try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) return await liberar("número sem WhatsApp"); } catch (_) {}
   const t0 = varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0), linkOrc(id)));
-  const texto = inst === "vilaca" ? waMePrimeiro(ajustaTextoDisparo(t0)) + RODAPE_SAIR : waMePrimeiro(t0);
+  const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) + RODAPE_SAIR : waMePrimeiro(t0);
   let ok = false, status = 0;
   try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
   try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: o.lojaId || null, acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Acompanhamento automático", tabela: "orc_acao", registro_id: id, resumo: `${ok ? "Enviou" : "Falhou ao enviar"} ${p0.nome} (orçamento salvo) por WhatsApp (${inst}) para …${tel.slice(-4)}`, detalhe: { instancia: inst, status, botao: "auto", rotulo: p0.nome, imediato: true } }); } catch (_) {}
-  if (ok && inst === "vilaca") { try { await admin.rpc("disparo_manual"); } catch (_) {} await registrarEnvio(tel, o, "orc_acao", id, "manual"); }
+  if (ok && inst === instD) { try { await admin.rpc("disparo_manual"); } catch (_) {} await registrarEnvio(tel, o, "orc_acao", id, "manual"); }
   const { data: r3 } = await admin.from("orcamentos").select("payload").eq("id", id).maybeSingle();
   const reg = (r3 && r3.payload) || o;
   const agoraIso = new Date().toISOString();
@@ -412,7 +423,8 @@ Deno.serve(async (req: Request) => {
 
     // ---------- envio ----------
     const H = { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY };
-    const instanciaDe = (lojaId: string) => (lojaId === "loja_rj" ? "reformajoias" : "vilaca");
+    const INST_D = await instanciaDisparo();
+    const instanciaDe = (lojaId: string) => (lojaId === "loja_rj" ? "reformajoias" : INST_D);
     const estados: Record<string, boolean> = {};
     const aberta = async (inst: string) => {
       if (inst in estados) return estados[inst];
@@ -425,7 +437,7 @@ Deno.serve(async (req: Request) => {
     let enviados = 0, semMensagem = 0, falhasSeguidas = 0, pausar = "";
     const feitos = new Set<string>();
     // conta para a fila única: o que já venceu (prioridade sobre o Marketing) e o que ainda sai hoje
-    const pendHoje = cand.filter((it) => validos(it) && Number(it.agenda.em) < 9e14 && instanciaDe(String(it.reg.lojaId || "")) === "vilaca");
+    const pendHoje = cand.filter((it) => validos(it) && Number(it.agenda.em) < 9e14 && instanciaDe(String(it.reg.lojaId || "")) === INST_D);
     const devidos0 = pendHoje.filter((it) => Number(it.agenda.em) <= Date.now() && it.tel).length;
     if (!dryRun) await admin.from("marketing_disparo_estado").update({ cards_devidos: devidos0, cards_restantes: pendHoje.length, cards_em: new Date().toISOString() }).eq("id", 1);
     let usouVez = false;   // no número de disparo sai no máximo 1 automática por rodada (a próxima só daqui a ≥ 5 min)
@@ -447,7 +459,7 @@ Deno.serve(async (req: Request) => {
       if (!f.tel) motivoSem = "sem celular válido";
       if (!motivoSem && tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(f.tel!), p_tag: tagOff }); if (off === true) motivoSem = "cliente com a tag MARKETING OFF"; } catch (_) {} }
       if (!motivoSem) { try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [f.tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) motivoSem = "número sem WhatsApp"; } catch (_) {} }
-      if (!motivoSem && inst === "vilaca") {
+      if (!motivoSem && inst === INST_D) {
         // fila única: pega a vez (≥ 5 min da última; cards na frente do Marketing)
         if (usouVez) break;
         const { data: est } = await admin.from("marketing_disparo_estado").select("mkt_restantes, cards_restantes").eq("id", 1).maybeSingle();
@@ -458,7 +470,7 @@ Deno.serve(async (req: Request) => {
       }
       if (!motivoSem) {
         try {
-          const texto = inst === "vilaca" ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) + RODAPE_SAIR : waMePrimeiro(varia(f.texto));
+          const texto = inst === INST_D ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) + RODAPE_SAIR : waMePrimeiro(varia(f.texto));
           const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: f.tel, text: texto, delay: 2500 + Math.floor(Math.random() * 5500) }), signal: AbortSignal.timeout(25000) });
           status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key);
         } catch (_) {}
@@ -477,7 +489,7 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         falhasSeguidas = 0;
-        if (inst === "vilaca") await registrarEnvio(String(f.tel), reg, f.tipo, f.id, "auto");
+        if (inst === INST_D) await registrarEnvio(String(f.tel), reg, f.tipo, f.id, "auto");
       } else {
         semMensagem++;
         try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: reg.lojaId || null, acao: "orcamento_status_auto", modulo: "Acompanhamento automático", tabela: f.tipo === "orcamento" ? "orcamentos" : "vendas_pdv", registro_id: f.id, resumo: `Não enviou ${f.nomeAcao}: ${motivoSem}`, detalhe: { botao: "auto", motivo: motivoSem } }); } catch (_) {}

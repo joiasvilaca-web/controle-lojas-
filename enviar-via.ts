@@ -1,3 +1,4 @@
+// v8 (10/11): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
 // v7 (10/11): número de disparo (vilaca) — (1) fora do ar: a mensagem (feita por pessoa) entra na FILA (marketing_fila tipo "via") e sai
 //   sozinha quando o número voltar, pelas regras da fila única (9h–20h, 5 min entre automáticas); (2) cada envio fica em disparo_envios (telefone, loja,
 //   vendedora) para a resposta automática dizer com quem falar; (3) envio feito na hora empurra o próximo automático 5 min (disparo_manual);
@@ -13,7 +14,15 @@ const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
 const INSTANCIA_POR_LOJA: Record<string, string> = { loja_rj: "reformajoias" };
-const INSTANCIA_PADRAO = "vilaca";
+/** Instância do WhatsApp usada como número de DISPARO: atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca"). Trocar o valor troca o número sem redeploy (cache de 60 s). */
+let cacheInst: { em: number; v: string } | null = null;
+async function instanciaDisparo(): Promise<string> {
+  if (cacheInst && Date.now() - cacheInst.em < 60000) return cacheInst.v;
+  let v = "vilaca";
+  try { const { data } = await admin.from("atendimento_segredos").select("valor").eq("chave", "DISPARO_INSTANCIA").maybeSingle(); if (data && data.valor && String(data.valor).trim()) v = String(data.valor).trim(); } catch (_) {}
+  cacheInst = { em: Date.now(), v };
+  return v;
+}
 
 async function segredos(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
@@ -138,6 +147,7 @@ Deno.serve(async (req: Request) => {
     const loja = lojaId ? (Array.isArray(config.lojas) ? config.lojas : []).find((l: any) => l && l.id === lojaId) : null;
     if (loja && lojaId === "loja_rj" && user.nivel !== "diretoria" && !lojasDaSessao(user, senha).includes(lojaId)) return json({ error: "sem acesso a esta loja" }, 403);
 
+    const INSTANCIA_PADRAO = await instanciaDisparo();
     const instancia = (loja && INSTANCIA_POR_LOJA[lojaId]) || INSTANCIA_PADRAO;
     const seg = await segredos();
     if (!seg.EVOLUTION_URL || !seg.EVOLUTION_API_KEY) return json({ ok: false, fallback: true, erro: "Servidor de WhatsApp não configurado." });

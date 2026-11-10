@@ -1,18 +1,19 @@
-// qr-instancia v1 (05/11/2026) — mostra o QR da instância "vilaca" numa página (qr.html) com token de uso único e curto (15 min).
+// qr-instancia v2 (10/11/2026) — mostra o QR da instância de disparo (atendimento_segredos.DISPARO_INSTANCIA, padrão "vilaca") numa página (qr.html) com token de uso único e curto (15 min).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
-const INSTANCIA = "vilaca";
+const INSTANCIA_DEFAULT = "vilaca";   // v2: o nome real vem de atendimento_segredos.DISPARO_INSTANCIA
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   try {
     const t = new URL(req.url).searchParams.get("t") || "";
-    const { data } = await admin.from("atendimento_segredos").select("chave, valor").in("chave", ["QR_TOKEN", "EVOLUTION_URL", "EVOLUTION_API_KEY"]);
+    const { data } = await admin.from("atendimento_segredos").select("chave, valor").in("chave", ["QR_TOKEN", "EVOLUTION_URL", "EVOLUTION_API_KEY", "DISPARO_INSTANCIA"]);
     const seg: Record<string, string> = {}; for (const r of data || []) seg[r.chave] = r.valor;
     const [tok, exp] = String(seg.QR_TOKEN || "").split("|");
     if (!t || !tok || t !== tok || Number(exp) < Date.now()) return json({ error: "link vencido" }, 401);
+    const INSTANCIA = String(seg.DISPARO_INSTANCIA || INSTANCIA_DEFAULT).trim();
     const base = String(seg.EVOLUTION_URL || "").replace(/\/+$/, "");
     const H = { apikey: seg.EVOLUTION_API_KEY };
     const st = await (await fetch(`${base}/instance/connectionState/${INSTANCIA}`, { headers: H, signal: AbortSignal.timeout(8000) })).json().catch(() => ({}));
