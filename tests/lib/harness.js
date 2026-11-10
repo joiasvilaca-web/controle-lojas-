@@ -24,17 +24,19 @@ const linhas = {
 };
 
 /** Abre uma tela do app com o servidor falso (login ok, config e algumas linhas). Retorna a página já dentro do app. */
-async function abrir(browser, arquivo, { w = 1300, h = 900, entrar = true, semClip = true, ls = null } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: w, height: h }, hasTouch: w < 800, isMobile: w < 800 });
+async function abrir(browser, arquivo, { w = 1300, h = 900, entrar = true, semClip = true, ls = null, servidor = null } = {}) {
+  const ctx = await browser.newContext({ viewport: { width: w, height: h }, hasTouch: w < 800, isMobile: w < 800, timezoneId: 'America/Sao_Paulo', locale: 'pt-BR' });
   if (ls) await ctx.addInitScript(o => { for (const k in o) try { localStorage.setItem(k, o[k]); } catch (e) { } }, ls);
   const page = await ctx.newPage();
   page.errosJs = []; page.on('pageerror', e => page.errosJs.push(e.message));
   await page.route(/functions\/v1\//, async r => {
     let body = {}; try { body = JSON.parse(r.request().postData() || '{}'); } catch (e) { }
     let res = { ok: true, data: [] };
+    const custom = servidor ? servidor(body) : undefined;
     if (body.op === 'login' || body.op === 'validarSessao') res = { ok: true, user: { id: 'u1', nome: 'TESTE', apelido: 'TESTE', nivel: 'diretoria', lojas: ['loja_mc', 'loja_jn'], permissoes: null } };
     else if (body.op === 'getConfig') res = { ok: true, data: cfg };
     else if (body.op === 'selectPage' || body.op === 'selectAll') res = { ok: true, data: linhas[body.table] || [], fim: true };
+    if (custom !== undefined) res = custom;
     await r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(res) });
   });
   await page.route(/rest\/v1\//, r => r.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));

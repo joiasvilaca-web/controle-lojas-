@@ -644,7 +644,8 @@
     });
   }
   preencherIconesEstaticos(document);
-  function todayISO(){ return new Date().toISOString().slice(0,10); }
+  /** Data de HOJE no fuso do aparelho (AAAA-MM-DD). toISOString() devolvia a data em UTC: depois das 21h (Brasília) já era "amanhã". */
+  function todayISO(){ const d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
   function escapeHtml(str){
     if(str === null || str === undefined) return "";
     return String(str).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
@@ -1580,18 +1581,19 @@ function ajudaPonto(texto){
       const { data, error } = await supabaseClient.from("transferencias_controle").select("id,payload").order("created_at", { ascending: true });
       if(error) throw error;
       state.transferencias = (data || []).map(row => normalizeTransfer(row.payload));
-    }catch(e){ console.error("Erro ao carregar transferências:", e); state.transferencias = []; }
+    }catch(e){ console.error("Erro ao carregar transferências:", e); state.transferencias = []; state.erroCarga = true; }
     try{
       const { data, error } = await supabaseClient.from("reposicao_controle").select("id,payload").order("created_at", { ascending: true });
       if(error) throw error;
       state.reposicao = (data || []).map(row => normalizeReposicao(row.payload));
-    }catch(e){ console.error("Erro ao carregar reposições:", e); state.reposicao = []; }
+    }catch(e){ console.error("Erro ao carregar reposições:", e); state.reposicao = []; state.erroCarga = true; }
     try{
       const { data, error } = await supabaseClient.from("envio_diretoria_controle").select("id,payload").order("created_at", { ascending: true });
       if(error) throw error;
       state.envio = (data || []).map(row => normalizeEnvioDiretoria(row.payload));
-    }catch(e){ console.error("Erro ao carregar envios pra diretoria:", e); state.envio = []; }
-    atribuirNumerosRetroativos();
+    }catch(e){ console.error("Erro ao carregar envios pra diretoria:", e); state.envio = []; state.erroCarga = true; }
+    if(state.erroCarga) setTimeout(()=>showToast("Não consegui carregar os registros. A lista pode estar incompleta: confira a internet e recarregue a tela antes de criar algo novo."), 600);
+    else atribuirNumerosRetroativos();
   }
 
   /* ================= NÚMERO SEQUENCIAL DA TRANSAÇÃO (T-/S-/R-) ================= */
@@ -1649,18 +1651,28 @@ function ajudaPonto(texto){
      - a sequência é por loja E por tipo, senão duas lojas repetem o mesmo número;
      - se a loja ainda não foi escolhida, getLojaAbrevTR devolve "XX" — nesse caso
        NÃO congelamos o número (ver chamada em concluirEdicao). */
-  function proximoNumeroTransacao(tab, r){
+  function proximoNumeroTransacao(tab, r, numerosServidor){
     const sigla = getLojaAbrevTR(tab === "transferencias" ? (r.lojaOrigemId||r.loja||'') : (r.lojaId||r.loja||''));
     const sufixo = sufixoTipoTransf(tab, r);
     const arr = tab === "transferencias" ? state.transferencias : tab === "envio" ? state.envio : state.reposicao;
     let maxN = 0;
-    arr.forEach(x=>{
+    // junta o que está na tela com o que o servidor já tem (outro aparelho pode ter criado números depois que esta tela abriu)
+    const todos = arr.concat((numerosServidor||[]).map(n=>({ numero:n })));
+    todos.forEach(x=>{
       if(!x.numero) return;
       // Conta só os da MESMA loja e do MESMO tipo
       const m = new RegExp('^' + sigla + '(\\d+)' + sufixo + '$').exec(x.numero);
       if(m){ const n = parseInt(m[1],10); if(!isNaN(n) && n > maxN) maxN = n; }
     });
     return sigla + (maxN + 1) + sufixo;
+  }
+  /** Lê do servidor os números já usados na tabela (id + numero). Falha de rede devolve null (aí vale só o que está na tela). */
+  async function numerosDoServidor(tab){
+    try{
+      const { data, error } = await supabaseClient.from(tableName(tab)).select("id,payload").order("created_at", { ascending: true });
+      if(error) throw error;
+      return (data||[]).map(row=>({ id: row.id, numero: row.payload && row.payload.numero })).filter(x=>x.numero);
+    }catch(e){ console.error("não consegui conferir os números no servidor", e); return null; }
   }
   // Dá número sequencial pros registros já existentes (que ainda não têm), respeitando
   // a ordem de criação (created_at) já usada em loadData(). Roda uma vez a cada carregamento;
@@ -1941,10 +1953,19 @@ function ajudaPonto(texto){
     const lojaId = (tipoMovimento==="baixa" ? r.lojaOrigemId : r.lojaDestinoId)
       || lojaIdPorAbreviacao(tipoMovimento==="baixa" ? r.lojaOrigem : r.lojaDestino);
     if(!lojaId){ showToast(`Não achei a loja de "${tipoMovimento==="baixa"?r.lojaOrigem:r.lojaDestino}" no cadastro — o estoque não foi ajustado automaticamente. Confira manualmente.`); return false; }
+    let falhou = false;
     for(const item of (r.transferItens||[])){
       if(!item.produtoEstoqueId) continue;
       const qtd = Number(item.quantidade)||0;
       if(qtd<=0) continue;
+      // Cada item guarda se o movimento já foi feito (movEstoque.baixa / .entrada): numa nova tentativa depois de uma
+      // falha parcial, só repete o que ainda não foi movido (antes, repetir duplicava o item que já tinha passado).
+      item.movEstoque = item.movEstoque || {};
+      const direto = (tipoMovimento === "baixa" && sinal < 0) || (tipoMovimento === "entrada" && sinal > 0);   // false = estorno (desfazer)
+      const marca = item.movEstoque[tipoMovimento];
+      const jaMovido = marca !== undefined ? !!marca : !direto;   // registro antigo sem marca: estorno assume que moveu (a flag do registro só chega aqui se moveu)
+      if(direto && jaMovido) continue;
+      if(!direto && !jaMovido) continue;
       const produto = produtosEstoqueCache.find(p=>p.id===item.produtoEstoqueId);
       if(!produto) continue;
       if(!produto.estoquePorLoja) produto.estoquePorLoja = {};
@@ -1955,11 +1976,15 @@ function ajudaPonto(texto){
       }});
       if(resp && !resp.error && typeof resp.saldoNovo === "number"){
         produto.estoquePorLoja[lojaId] = resp.saldoNovo;
+        item.movEstoque[tipoMovimento] = direto;
       }else{
+        // Falha de verdade: NÃO finge que moveu (antes somava no cache local e o registro ficava marcado como "estoque movido").
         console.error("erro ao mover estoque da transferência", item.produtoEstoqueId, resp && resp.error);
-        produto.estoquePorLoja[lojaId] = (Number(produto.estoquePorLoja[lojaId])||0) + sinal*qtd;
+        falhou = true;
+        showToast(`Não consegui ajustar o estoque de "${nomeProdutoCatalogo(item.produtoEstoqueId)}" (${(resp && resp.error) || "sem resposta"}). Tente de novo ou ajuste pelo Cadastro.`);
       }
     }
+    return falhou ? false : true;
   }
 
   /* ================= ESTOQUE: catálogo obrigatório, reservas e disponível =================
@@ -2163,16 +2188,19 @@ function ajudaPonto(texto){
     if(r.tipoTransf !== "SAÍDA") return false;
     let mudou = false;
     const baixaAntes = !!(antes && antes.mercadoriaBaixadaC1);
-    if(r.mercadoriaBaixadaC1 && !baixaAntes && !r.estoqueBaixaMovida){
-      if(await moverEstoqueTransferencia(r, "baixa", -1) !== false){ r.estoqueBaixaMovida = true; mudou = true; }
+    // Falha ao mover o estoque deixa "pendente": a próxima gravação tenta de novo (sem a flag, a tentativa só acontecia na transição do botão e a baixa ficava perdida).
+    if(r.mercadoriaBaixadaC1 && !r.estoqueBaixaMovida && (!baixaAntes || r.estoqueBaixaPendente)){
+      if(await moverEstoqueTransferencia(r, "baixa", -1) !== false){ r.estoqueBaixaMovida = true; r.estoqueBaixaPendente = false; mudou = true; }
+      else if(!r.estoqueBaixaPendente){ r.estoqueBaixaPendente = true; mudou = true; }
     }else if(!r.mercadoriaBaixadaC1 && baixaAntes && r.estoqueBaixaMovida){
-      if(await moverEstoqueTransferencia(r, "baixa", +1) !== false){ r.estoqueBaixaMovida = false; mudou = true; }
+      if(await moverEstoqueTransferencia(r, "baixa", +1) !== false){ r.estoqueBaixaMovida = false; r.estoqueBaixaPendente = false; mudou = true; }
     }
     const entradaAntes = !!(antes && antes.mercadoriaBaixadaC2);
-    if(r.mercadoriaBaixadaC2 && !entradaAntes && !r.estoqueEntradaMovida){
-      if(await moverEstoqueTransferencia(r, "entrada", +1) !== false){ r.estoqueEntradaMovida = true; mudou = true; }
+    if(r.mercadoriaBaixadaC2 && !r.estoqueEntradaMovida && (!entradaAntes || r.estoqueEntradaPendente)){
+      if(await moverEstoqueTransferencia(r, "entrada", +1) !== false){ r.estoqueEntradaMovida = true; r.estoqueEntradaPendente = false; mudou = true; }
+      else if(!r.estoqueEntradaPendente){ r.estoqueEntradaPendente = true; mudou = true; }
     }else if(!r.mercadoriaBaixadaC2 && entradaAntes && r.estoqueEntradaMovida){
-      if(await moverEstoqueTransferencia(r, "entrada", -1) !== false){ r.estoqueEntradaMovida = false; mudou = true; }
+      if(await moverEstoqueTransferencia(r, "entrada", -1) !== false){ r.estoqueEntradaMovida = false; r.estoqueEntradaPendente = false; mudou = true; }
     }
     return mudou;
   }
@@ -2330,6 +2358,7 @@ function ajudaPonto(texto){
   if(btnStartConfirmOk){
     btnStartConfirmOk.addEventListener("click", ()=>{
       if(!pendingStart) return;
+      if(state.erroCarga){ document.getElementById("startConfirmOverlay").style.display = "none"; pendingStart = null; showToast("Os registros não carregaram. Recarregue a tela antes de criar um novo (senão os números podem repetir)."); return; }
       const {kind, tipoTransf} = pendingStart;
       document.getElementById("startConfirmOverlay").style.display = "none";
       pendingStart = null;
@@ -4042,8 +4071,13 @@ function ajudaPonto(texto){
           // getLojaAbrevTR devolveria "XX" e esse "XX" ficaria gravado pra sempre.
           // Também regeneramos um número antigo que tenha nascido com XX.
           const lojaDefinida = getLojaAbrevTR(state.tab === "transferencias" ? (r.lojaOrigemId||r.loja||'') : (r.lojaId||r.loja||'')) !== 'XX';
-          if(lojaDefinida && (!r.numero || /^XX/.test(r.numero))){
-            r.numero = proximoNumeroTransacao(state.tab, r);
+          if(lojaDefinida){
+            // Confere no servidor: número em branco, antigo com "XX" ou IGUAL ao de outro registro (dois aparelhos criando ao mesmo tempo) ganha um número novo, sem repetir.
+            const srv = await numerosDoServidor(state.tab);
+            const usadosPorOutros = (srv||[]).filter(x=>x.id!==r.id).map(x=>x.numero);
+            if(!r.numero || /^XX/.test(r.numero) || usadosPorOutros.includes(r.numero)){
+              r.numero = proximoNumeroTransacao(state.tab, r, usadosPorOutros);
+            }
           }
           const salvouOk = await saveRecord(state.tab, r); // só salva ao clicar em "Concluir edição"
           if(!salvouOk){
@@ -4166,6 +4200,8 @@ function ajudaPonto(texto){
     }
     await loadConfig(); await loadData(); await loadProdutosEstoque(); render();
   }
+  // Gancho só para os testes automáticos (tests/regressao/08): não muda nada na tela.
+  window.__trTeste = { state, todayISO, moverEstoqueTransferencia, aplicarMovimentosEstoqueTransf, proximoNumeroTransacao, numerosDoServidor, setProdutos(a){ produtosEstoqueCache = a; } };
   init();
 
 })();
