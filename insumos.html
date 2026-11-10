@@ -162,6 +162,7 @@
   .qd-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 10px;cursor:grab;min-width:0;}
   .qd-card.fixo{cursor:pointer;opacity:.9;} .qd-card:hover{border-color:var(--accent);} .qd-card.arrastando{opacity:.45;}
   .qd-l1{display:flex;align-items:center;gap:8px;min-width:0;} .qd-via{font-family:var(--mono,monospace);flex:none;}
+  .qd-wa{flex:none;min-height:0 !important;width:24px;height:24px;padding:2px !important;display:inline-flex !important;align-items:center;justify-content:center;}
   .qd-nome{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
   .qd-vazio{color:var(--muted);text-align:center;padding:8px 0;font-size:13px;}
   .acoes-via{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;}
@@ -561,7 +562,7 @@ function quadroVias(){
     const arrasta = v.status!=='oficina_pronto';
     const prim = String(v.cliente||'Sem cliente').trim().split(/\s+/)[0];
     return `<div class="qd-card${arrasta?'':' fixo'}" data-via="${escapeHtml(v.id)}" ${arrasta?'draggable="true"':''} tabindex="0" title="${arrasta?'Arraste para outra coluna ou toque para abrir':'Toque para ver (via já produzida)'}">
-      <div class="qd-l1"><b class="qd-via">${escapeHtml(v.codigoVia||'—')}</b><span class="qd-nome">${escapeHtml(prim)}</span>${dotLoja(v.lojaId)}</div>
+      <div class="qd-l1"><b class="qd-via">${escapeHtml(v.codigoVia||'—')}</b><span class="qd-nome">${escapeHtml(prim)}</span>${v.telefone ? `<button type="button" class="btn-icone wa qd-wa" data-zap="${escapeHtml(v.id)}" title="Enviar a via ao cliente pelo WhatsApp" aria-label="Enviar WhatsApp"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.48 1.32 4.99L2.05 22l5.25-1.38a9.9 9.9 0 0 0 4.74 1.21h.01c5.46 0 9.91-4.45 9.91-9.92 0-2.65-1.03-5.14-2.9-7.01A9.85 9.85 0 0 0 12.04 2m0 1.67a8.24 8.24 0 0 1 8.23 8.24c0 4.54-3.7 8.23-8.24 8.23a8.2 8.2 0 0 1-4.19-1.15l-.3-.18-3.12.82.83-3.04-.2-.31a8.18 8.18 0 0 1-1.26-4.38c0-4.54 3.7-8.23 8.25-8.23m-3.5 3.66c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.88 1.22 3.08c.15.2 2.1 3.2 5.08 4.49 2.5 1.08 3 .87 3.54.82.54-.05 1.74-.71 1.98-1.4.25-.7.25-1.29.17-1.41-.07-.12-.27-.2-.57-.35-.3-.15-1.74-.86-2.01-.96-.27-.1-.47-.15-.67.15-.2.3-.77.96-.94 1.16-.17.2-.35.22-.64.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.6.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.62-.92-2.21-.24-.58-.48-.5-.67-.5z"/></svg></button>` : ''}${dotLoja(v.lojaId)}</div>
       <div class="sub-linha">${escapeHtml(v.serviceTypeName||'')}${v.data?(v.serviceTypeName?' · ':'')+'<span class="'+(atras?'atrasada':'')+'">'+fmtDia(v.data)+(atras?' (atrasada)':'')+'</span>':''}</div>
       ${v.status==='pendencia' && ultimaObsOficina(v) ? `<div class="sub-linha">${escapeHtml(ultimaObsOficina(v))}</div>`:''}
     </div>`;
@@ -572,7 +573,20 @@ function quadroVias(){
       <div class="qd-body">${l.length ? l.map(cartao).join('') : '<div class="qd-vazio">—</div>'}</div></section>`;
   }).join('')}</div>`;
 }
+async function enviarZapVia(v){
+  if(!v || !v.telefone){ showToast('Esta via não tem telefone.'); return; }
+  if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ showToast('TREINAMENTO: o envio de WhatsApp fica desligado aqui.', 4000); return; }
+  if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:v.telefone, nome:v.cliente }))) return;
+  showToast('Enviando pelo WhatsApp da loja…');
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/enviar-via', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
+      body: JSON.stringify({ senha:__senha, lojaId:v.lojaId||'', telefone:v.telefone, texto:'', tipo:'os', registroId:v.id, via:v.codigoVia||'' }) });
+    const j = await r.json().catch(()=>({}));
+    if(j && j.ok) showToast('Enviado pelo WhatsApp ✓'); else showToast((j && (j.erro||j.error)) || 'Não foi possível enviar. A via NÃO foi enviada.', 5000);
+  }catch(e){ showToast('Sem conexão com o envio automático. A via NÃO foi enviada.', 5000); }
+}
 function ligarArrastar(box){
+  box.querySelectorAll('[data-zap]').forEach(b=>{ b.setAttribute('draggable','false'); b.addEventListener('click', e=>{ e.stopPropagation(); enviarZapVia(viasCache.find(x=>x.id===b.dataset.zap)); }); });
   box.querySelectorAll('.qd-card[draggable="true"]').forEach(c=>{
     c.addEventListener('dragstart', e=>{ try{ e.dataTransfer.setData('text/plain', c.dataset.via); e.dataTransfer.effectAllowed='move'; }catch(_){} c.classList.add('arrastando'); });
     c.addEventListener('dragend', ()=>{ c.classList.remove('arrastando'); box.querySelectorAll('.qd-col.alvo').forEach(x=>x.classList.remove('alvo')); });
