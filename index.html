@@ -4540,51 +4540,67 @@ async function abrirHistoricoCliente(cli){
     <div class="modal-actions"><button class="btn btn-ghost" id="histFechar">Fechar</button></div>`);
   document.getElementById('histFechar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
   const tel=onlyDigitsCli(cli.telefone||'');
+  const cpf=onlyDigitsCli(cli.cpf||'');
   const nomeL=(cli.nome||'').trim().toLowerCase();
+  // 12/11: também acha pelo CPF e pelo vínculo do cashback/cliente (antes só celular e nome)
   const bate=(item)=>{
     const mesmoTel = tel && onlyDigitsCli(item.telefone||'')===tel;
     const mesmoNome = nomeL && (item.cliente||'').trim().toLowerCase()===nomeL;
-    return mesmoTel||mesmoNome;
+    const mesmoCpf = cpf.length>=11 && onlyDigitsCli(item.cpf||'')===cpf;
+    const mesmoId = cli.id && (item.clienteId===cli.id || (item.cashback && item.cashback.clienteId===cli.id));
+    return mesmoTel||mesmoNome||mesmoCpf||mesmoId;
   };
+  const formaNome=(id)=>{ const f=(config.formasPagamento||[]).find(x=>x.id===id); return f?f.nome:''; };
+  const pagTxt=(pgs)=> (Array.isArray(pgs)?pgs:[]).map(pg=>{ const n=formaNome(pg.formaId)||'Pagamento'; const par=Number(pg.parcelas)||0; return n+(par>1?' '+par+'x':''); }).filter(Boolean).join(' + ');
+  const prodTxt=(itens)=> (Array.isArray(itens)?itens:[]).map(it=>{ const nome=it.produto||it.produtoNome||it.nome||''; const q=Number(it.quantidade!=null?it.quantidade:it.qtd)||1; return nome?((q>1?q+'× ':'')+nome):''; }).filter(Boolean).join('; ');
+  const cbTxt=(r)=>{ const out=[]; const c=r.cashback; if(c && Number(c.gerado)>0) out.push('+'+cadBrl(c.gerado)+' gerado'); if(c && Number(c.usado)>0) out.push('−'+cadBrl(c.usado)+' usado'); if(Number(r.creditoUsado)>0) out.push('crédito −'+cadBrl(r.creditoUsado)); if(Number(r.creditoGerado)>0) out.push('crédito +'+cadBrl(r.creditoGerado)); return out.join(' · '); };
   const linhas=[];
   try{
     const rV = await gatewayCall({ op:'selectAll', table:'vendas_pdv' });
     const vendas=(rV.data||[]).map(r=>r.payload).filter(Boolean).filter(bate);
     for(const v of vendas){
-      const itens=Array.isArray(v.itens)&&v.itens.length>0?v.itens:[{ produtoNome:(v.tipo==='recargaCredito'?'Recarga de crédito':v.tipo==='recebimentoFiado'?'Recebimento fiado':'Venda'), qtd:1, valor:v.valorTotal }];
-      for(const it of itens){
-        linhas.push({ tipo:v.tipo==='recargaCredito'?'Crédito':v.tipo==='recebimentoFiado'?'Fiado (pgto)':'Venda', numero:String(v.id||'').slice(-8), data:v.data||'', valor:(Number(it.valor)||0)*(Number(it.qtd)||1), produto:it.produtoNome||it.produto||it.nome||'—', loja:v.loja||'—' });
-      }
+      const rot = v.tipo==='recargaCredito'?'Crédito':v.tipo==='recebimentoFiado'?'Fiado (pgto)':'Venda';
+      const prod = prodTxt(v.itens) || (v.tipo==='recargaCredito'?'Recarga de crédito':v.tipo==='recebimentoFiado'?'Recebimento fiado':'Venda');
+      linhas.push({ tipo:rot, abre:'venda', id:v.id, numero:String(v.codigoVia||v.via||String(v.id||'').slice(-8)), data:v.data||'', valor:Number(v.valorTotal)||0, produto:prod, pagto:pagTxt(v.pagamentos), cb:cbTxt(v), loja:v.loja||'—', cancelada:/cancel/i.test(v.status||'') });
     }
   }catch(e){}
   try{
     const rO = await gatewayCall({ op:'selectAll', table:'ordens_servico' });
-    const orders=((rO&&rO.data)||[]).map(row=>row.payload);
+    const orders=((rO&&rO.data)||[]).map(row=>row.payload).filter(Boolean);
     for(const o of orders.filter(bate)){
       const lj = (config.lojas||[]).find(x=>x.id===o.lojaId);
-      linhas.push({ tipo:'O.S.', numero:String(o.codigoVia||o.via||o.id||'').slice(0,12), data:o.data||'', valor:Number(o.valorTotal)||0, produto:o.descricao||o.produtoNome||'Serviço', loja:(lj?lj.nome:'')||o.loja||o.lojaNome||'—' });
+      linhas.push({ tipo:'O.S.', abre:'pedido', id:o.id, numero:String(o.codigoVia||o.via||o.id||'').slice(0,12), data:o.data||'', valor:Number(o.valorTotal)||0, produto:prodTxt(o.itens)||o.descricao||o.produtoNome||'Serviço', pagto:pagTxt(o.pagamentos), cb:cbTxt(o), loja:(lj?lj.nome:'')||o.loja||o.lojaNome||'—', cancelada:/cancel/i.test(o.status||'') });
     }
   }catch(e){}
   linhas.sort((a,b)=>(b.data||'').localeCompare(a.data||''));
-  const total=linhas.reduce((a,l)=>a+l.valor,0);
+  const total=linhas.filter(l=>!l.cancelada).reduce((a,l)=>a+l.valor,0);
   const body=document.getElementById('histCliBody');
   if(!body) return;
-  if(linhas.length===0){ body.innerHTML=cadVazio('Nenhuma compra ou O.S. encontrada','A busca usa o celular e o nome do cliente. Se ele comprou com outro número, atualize o cadastro.'); return; }
+  if(linhas.length===0){ body.innerHTML=cadVazio('Nenhuma compra ou O.S. encontrada','A busca usa o celular, o CPF e o nome do cliente. Se ele comprou com outro número, atualize o cadastro.'); return; }
   body.innerHTML=`
-    <div class="muted" style="font-size:12.5px;margin-bottom:8px;">${linhas.length} movimentação(ões) · total <b style="color:var(--ink);">${cadBrl(total)}</b></div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:8px;">${linhas.length} movimentação(ões) · total <b style="color:var(--ink);">${cadBrl(total)}</b> · clique na linha para abrir a via</div>
     <div class="cad-card" style="max-height:360px;overflow:auto;margin:0;">
       <table class="cad-tab cartoes">
-        <thead><tr><th>Tipo</th><th>Número</th><th>Data</th><th>Produto</th><th>Loja</th><th class="r">Valor</th></tr></thead>
-        <tbody>${linhas.map(l=>`<tr>
-          <td class="cel-principal"><span class="selo ${l.tipo==='O.S.'?'info':l.tipo==='Venda'?'ok':''}">${escapeHtml(l.tipo)}</span></td>
-          <td data-r="Número" class="nowrap cad-cod">${escapeHtml(l.numero)}</td>
+        <thead><tr><th>Tipo</th><th>Via</th><th>Data</th><th>Produto</th><th>Pagamento</th><th>Cashback / crédito</th><th>Loja</th><th class="r">Valor</th></tr></thead>
+        <tbody>${linhas.map((l,i)=>`<tr data-abrir="${i}" style="cursor:pointer;" title="Abrir a via">
+          <td class="cel-principal"><span class="selo ${l.cancelada?'':(l.tipo==='O.S.'?'info':l.tipo==='Venda'?'ok':'')}">${escapeHtml(l.tipo)}${l.cancelada?' · cancelada':''}</span></td>
+          <td data-r="Via" class="nowrap cad-cod">${escapeHtml(l.numero)}</td>
           <td data-r="Data" class="nowrap">${cadData(l.data)}</td>
           <td data-r="Produto">${escapeHtml(l.produto)}</td>
+          <td data-r="Pagamento">${escapeHtml(l.pagto||'—')}</td>
+          <td data-r="Cashback / crédito">${escapeHtml(l.cb||'—')}</td>
           <td data-r="Loja">${escapeHtml(l.loja)}</td>
-          <td data-r="Valor" class="r" style="font-weight:600;">${cadBrl(l.valor)}</td>
+          <td data-r="Valor" class="r" style="font-weight:600;${l.cancelada?'text-decoration:line-through;opacity:.6;':''}">${cadBrl(l.valor)}</td>
         </tr>`).join('')}</tbody>
       </table>
     </div>`;
+  body.querySelectorAll('tr[data-abrir]').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      const l=linhas[Number(tr.getAttribute('data-abrir'))]; if(!l||!l.id) return;
+      closeModal();
+      abrirRegistroEncontrado(l.abre, { id:l.id, codigoVia:l.numero });
+    });
+  });
 }
 
 function openClienteModalCadastro(cli, somenteVer){
