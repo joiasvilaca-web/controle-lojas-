@@ -1,4 +1,4 @@
-// v10 (11/11): com o número de disparo fora do ar, a mensagem na fila é uma por via e por tipo (antes uma por botão: o cliente podia receber a mesma via 2–3 vezes quando o número voltava).
+// v10 (11/11): o visto da fila vai para o status DESTINO da mensagem (statusDestino) e não para o status anterior da via; com o número de disparo fora do ar, a mensagem na fila é uma por via e por tipo (antes uma por botão: o cliente podia receber a mesma via 2–3 vezes quando o número voltava).
 // v9 (11/11): o texto do número de disparo não leva mais "responda SAIR" (ajustaTextoDisparo retira o aviso antigo).
 // v8 (10/11): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
 // v7 (10/11): número de disparo (vilaca) — (1) fora do ar: a mensagem (feita por pessoa) entra na FILA (marketing_fila tipo "via") e sai
@@ -171,7 +171,7 @@ Deno.serve(async (req: Request) => {
       const tipo = String(body.tipo || ""), regId = String(body.registroId || ""), botao = String(body.botao || "").slice(0, 40);
       let marcar: any = null;
       const TB: Record<string, string> = { os: "ordens_servico", orcamento: "orcamentos", orc_acao: "orcamentos" };
-      if (TB[tipo] && regId) { const { data: rw } = await admin.from(TB[tipo]).select("payload").eq("id", regId).maybeSingle(); const st = rw && rw.payload && rw.payload.status; if (st) marcar = { tabela: TB[tipo], chave: String(st) }; }
+      if (TB[tipo] && regId) { const { data: rw } = await admin.from(TB[tipo]).select("payload").eq("id", regId).maybeSingle(); const st = String(body.statusDestino || "").trim() || (rw && rw.payload && rw.payload.status); if (st) marcar = { tabela: TB[tipo], chave: String(st) }; }
       const linha: any = { tipo: "via", campanha: "VIA (WhatsApp fora do ar)", cliente_nome: String((body.padrao && body.padrao.cliente) || body.cliente || "").slice(0, 160), telefone: numero, texto: waMePrimeiro(texto),
         loja_id: lojaReg || null, criado_por: user.apelido || user.nome || "", dia_criacao: new Date().toISOString().slice(0, 10), status: "pendente",
         registro_tabela: tipo || null, registro_id: regId || null, botao, rotulo: String(body.rotulo || "").slice(0, 60), vendedora: vendedora || null, marcar, atualizado_em: new Date().toISOString() };

@@ -177,7 +177,7 @@
       var r = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', {
         method:'POST', signal: ctl ? ctl.signal : undefined,
         headers:{ 'Content-Type':'application/json', 'apikey':window.SUPABASE_ANON_KEY, 'Authorization':'Bearer '+window.SUPABASE_ANON_KEY },
-        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, padrao:opts.padrao||null, botao:botao, rotulo:m0?m0[1].trim():'' })
+        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, padrao:opts.padrao||null, statusDestino:opts.statusDestino||'', botao:botao, rotulo:m0?m0[1].trim():'' })
       });
       if(tmo) clearTimeout(tmo);
       var j = await r.json().catch(function(){ return {}; });

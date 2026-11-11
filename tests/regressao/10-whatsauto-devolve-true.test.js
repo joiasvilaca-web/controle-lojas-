@@ -113,5 +113,7 @@ module.exports = { casos: [
     t.ok(i > 0 && /eq\("registro_id", regId\)/.test(linha), 'procura a pendente pela via');
     t.ok(!/eq\("botao"/.test(linha), 'não separa por botão');
     t.ok(/registro_tabela", tipo/.test(linha), 'separa por tipo de mensagem (via × pós-venda)');
+    t.ok(/body\.statusDestino/.test(s), 'visto da fila vai para o status destino da mensagem');
+    t.ok(/statusDestino/.test(ler('vilaca-extras.js')) && /statusDestino:novoId/.test(ler('orcamentos.html')), 'a tela manda o status destino');
   } },
 ] };
