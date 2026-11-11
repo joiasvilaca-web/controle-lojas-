@@ -3,10 +3,6 @@
 const { pegar } = require('../lib/ts-func');
 const ARQS_TEXTO = ['acompanhamento-auto.ts', 'marketing-disparo.ts', 'enviar-via.ts'];
 const NOMES_TEXTO = ['WA_ATENDIMENTO', 'LINHA_JOINHA', 'ajustaTextoDisparo'];
-function mockAdmin(linha) {   // admin.from().select().eq().gte().order().limit() → { data:[linha] }
-  const q = { select: () => q, eq: () => q, gte: () => q, order: () => q, limit: async () => ({ data: linha ? [linha] : [] }) };
-  return { from: () => q };
-}
 module.exports = { casos: [
   { nome: 'Resposta automática NÃO responde curtida, figurinha, aviso do sistema, 👍 e "ok/obrigada"', bug: 'respondia até reação (curtida) com o texto de atendimento', rodar: async ({ t }) => {
     const { soReacao } = pegar('disparo-webhook.ts', ['semAcento', 'TIPOS_SILENCIO', 'PALAVRAS_OK', 'soReacao']);
@@ -22,21 +18,68 @@ module.exports = { casos: [
     t.ok(!soReacao({ messageType: 'audioMessage' }, { audioMessage: {} }), 'áudio responde');
     t.ok(!soReacao({ messageType: 'imageMessage' }, { imageMessage: {} }), 'foto responde');
   } },
-  { nome: 'Resposta automática: loja do último disparo + vendedora; sem loja (aniversário/marketing) mostra as 3', rodar: async ({ t }) => {
-    const nomes = ['LOJAS_MENU', 'bonito', 'textoResposta'];
-    const comLoja = pegar('disparo-webhook.ts', nomes, { admin: mockAdmin({ loja_id: 'loja_jb', vendedora: 'ANA PAULA SILVA', tipo: 'os' }) });
-    const a = await comLoja.textoResposta('5532999998888');
-    t.ok(/wa\.me\/5532988307617/.test(a), 'link do atendimento');
-    t.ok(a.includes('2 - LOJA JOÃO BERALDO') && !a.includes('1 - LOJA MARECHAL') && !a.includes('3 - LOJA JARDIM'), 'só a loja do disparo');
-    t.ok(a.includes('Ana Paula'), 'vendedora do disparo');
-    const semLoja = pegar('disparo-webhook.ts', nomes, { admin: mockAdmin({ loja_id: null, vendedora: null, tipo: 'aniversario' }) });
-    const b = await semLoja.textoResposta('5532999998888');
-    t.ok(b.includes('1 - LOJA MARECHAL CENTER') && b.includes('2 - LOJA JOÃO BERALDO') && b.includes('3 - LOJA JARDIM NORTE'), 'as 3 lojas');
-    const rj = pegar('disparo-webhook.ts', nomes, { admin: mockAdmin({ loja_id: 'loja_rj', vendedora: 'X', tipo: 'os' }) });
-    const c = await rj.textoResposta('5532999998888');
-    t.ok(c.includes('1 - LOJA MARECHAL CENTER') && c.includes('3 - LOJA JARDIM NORTE') && !/Reforma|Ecommerce/i.test(c), 'Reforma/Ecommerce fora: mostra as 3');
-    const nada = pegar('disparo-webhook.ts', nomes, { admin: mockAdmin(null) });
-    t.ok((await nada.textoResposta('5532999998888')).includes('3 - LOJA JARDIM NORTE'), 'sem registro: as 3');
+  // 11/11: a regra mudou a pedido do dono (o cliente compra nas duas lojas): a resposta depende só do que o CLIENTE mandou, sem menu de lojas
+  // e sem vendedora. O caso antigo ("loja do último disparo + vendedora") foi substituído por estes, não enfraquecido.
+  { nome: 'Resposta automática: "reforma"/"RJ" no texto ou legenda → Instagram da Reforma; resto → WhatsApp da Vilaça (sem menu)', rodar: async ({ t }) => {
+    const f = pegar('disparo-webhook.ts', ['semAcento', 'textoDoCliente', 'falaDeReforma', 'TEXTO_VILACA', 'TEXTO_REFORMA']);
+    for (const x of ['Minha reforma ficou pronta?', 'REFORMA JOIAS', 'vi no @reformajoias', 'comprei na RJ', 'RJ', 'rj!', 'Quero reformar meu anel'])
+      t.ok(f.falaDeReforma(x), 'Reforma: ' + x);
+    for (const x of ['Quero saber da minha aliança', 'Jardim Norte', 'Oi, tudo bem?', 'nrj', 'rjx', ''])
+      t.ok(!f.falaDeReforma(x), 'Vilaça: ' + x);
+    t.igual(f.textoDoCliente({ imageMessage: { caption: 'peça da RJ' } }), 'peça da RJ', 'legenda da foto');
+    t.igual(f.textoDoCliente({ extendedTextMessage: { text: 'oi' } }), 'oi', 'texto longo');
+    t.ok(/https:\/\/wa\.me\/5532988307617$/.test(f.TEXTO_VILACA) && /Vamos conversar/.test(f.TEXTO_VILACA), 'Vilaça: link sozinho no fim (botão Iniciar conversa)');
+    t.ok(/instagram\.com\/reformajoias/.test(f.TEXTO_REFORMA) && /Vamos conversar por lá\?/.test(f.TEXTO_REFORMA), 'Reforma: Instagram');
+    for (const x of [f.TEXTO_VILACA, f.TEXTO_REFORMA]) t.ok(!/SAIR|LOJA MARECHAL|JOÃO BERALDO|JARDIM NORTE/i.test(x), 'sem SAIR e sem menu de lojas');
+    const src = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'disparo-webhook.ts'), 'utf8');
+    t.ok(!/disparo_envios/.test(src.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')), 'não decide pelo histórico de disparos');
+  } },
+  { nome: 'Resposta automática: FOTO com a logo REFORMA JOIAS/RJ (IA) → Reforma; foto sem logo ou erro → Vilaça', rodar: async ({ t }) => {
+    let chamadas = 0;
+    function mk(respostaIA, falhar) {
+      return pegar('disparo-webhook.ts', ['semAcento', 'textoDoCliente', 'falaDeReforma', 'fotoDaReforma', 'assuntoDaMensagem'], {
+        Deno: { env: { get: (k) => (k === 'GEMINI_API_KEY' ? 'x' : undefined) } },
+        AbortSignal: { timeout: () => undefined }, encodeURIComponent,
+        fetch: async (url) => {
+          chamadas++;
+          if (falhar) throw new Error('rede');
+          if (/getBase64FromMediaMessage/.test(url)) return { ok: true, json: async () => ({ base64: 'A'.repeat(500), mimetype: 'image/jpeg' }) };
+          return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: respostaIA }] } }] }) };
+        },
+      });
+    }
+    const seg = { EVOLUTION_URL: 'https://evo', EVOLUTION_API_KEY: 'k' };
+    const foto = { key: { id: '1' }, message: { imageMessage: { mimetype: 'image/jpeg' } } };
+    t.igual(await mk('SIM').assuntoDaMensagem(seg, 'vila', foto, foto.message), 'reforma', 'logo na foto');
+    t.igual(await mk('NAO').assuntoDaMensagem(seg, 'vila', foto, foto.message), 'vilaca', 'foto sem logo');
+    t.igual(await mk('SIM', true).assuntoDaMensagem(seg, 'vila', foto, foto.message), 'vilaca', 'erro na IA = Vilaça');
+    chamadas = 0;
+    const comLegenda = { key: {}, message: { imageMessage: { caption: 'reforma' } } };
+    t.igual(await mk('NAO').assuntoDaMensagem(seg, 'vila', comLegenda, comLegenda.message), 'reforma', 'legenda decide sem IA');
+    t.igual(chamadas, 0, 'não chama a IA quando o texto já diz');
+    t.igual(await mk('SIM').assuntoDaMensagem(seg, 'vila', { key: {}, message: { conversation: 'oi' } }, { conversation: 'oi' }), 'vilaca', 'texto comum');
+  } },
+  { nome: 'SAIR: sai da lista em silêncio; nenhuma mensagem fala em SAIR; pós-venda sem pedido de avaliação', bug: 'mandava "responda SAIR", confirmação do SAIR e link de avaliação no pós-venda', rodar: async ({ t }) => {
+    const fs = require('fs'), path = require('path'), ler = (a) => fs.readFileSync(path.join(__dirname, '..', '..', a), 'utf8');
+    const wh = ler('disparo-webhook.ts');
+    const blocoSair = wh.slice(wh.indexOf('PALAVRAS_SAIR.includes(txt)'), wh.indexOf('soReacao(d, m)) continue'));
+    t.ok(/sairDaLista\(numero\)/.test(blocoSair), 'SAIR continua tirando da lista');
+    t.ok(!/sendText/.test(blocoSair), 'SAIR não recebe mensagem');
+    for (const arq of ['acompanhamento-auto.ts', 'marketing-disparo.ts']) {
+      const src = ler(arq);
+      t.ok(!/RODAPE_SAIR/.test(src), arq + ': sem rodapé SAIR');
+    }
+    for (const arq of ARQS_TEXTO) {
+      const { ajustaTextoDisparo } = pegar(arq, NOMES_TEXTO);
+      t.ok(!/SAIR/.test(ajustaTextoDisparo('Oi!\n\nPara não receber mais mensagens, responda SAIR.')), arq + ': tira o aviso SAIR antigo');
+    }
+    const a = pegar('acompanhamento-auto.ts', ['WA_ATENDIMENTO', 'RODAPE', 'MSG_POSVENDA_PADRAO', 'MSG_OS_POSVENDA']);
+    t.ok(!/\{avaliacao\}/.test(a.MSG_POSVENDA_PADRAO) && !/\{avaliacao\}/.test(a.MSG_OS_POSVENDA), 'textos padrão sem avaliação');
+    const aa = ler('acompanhamento-auto.ts');
+    t.ok(!/googleReviewUrl/.test(aa), 'servidor não põe o link do Google no pós-venda');
+    t.ok(!/googleReviewUrl/.test(ler('vendas.html').slice(ler('vendas.html').indexOf('function preencherMsgPv'), ler('vendas.html').indexOf('function preencherMsgPv') + 1500)), 'Venda: sem link de avaliação');
+    const po = ler('painel-ordens.html'), i = po.indexOf('function enviarPosVendaOS');
+    t.ok(i > 0 && !/googleReviewUrl/.test(po.slice(i, i + 2500)), 'Pedido: sem link de avaliação');
   } },
   { nome: 'Texto do número de disparo: sem "Não responda", com o link e o pedido do 👍 (nas 3 funções)', rodar: async ({ t }) => {
     for (const arq of ARQS_TEXTO) {

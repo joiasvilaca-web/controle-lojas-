@@ -1,3 +1,4 @@
+// acompanhamento-auto v12 (11/11/2026): sem "responda SAIR" nas mensagens (quem escreve SAIR continua saindo da lista pelo disparo-webhook) e pós-venda SEM pedido de avaliação ({avaliacao} vira vazio).
 // acompanhamento-auto v11 (10/11/2026): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca"), sem redeploy para trocar de número.
 // acompanhamento-auto v10 (10/11/2026) — FILA ÚNICA DO NÚMERO DE DISPARO (vilaca): planejamento das 9h às 19h (19h–20h fica de reserva para o que
 //   atrasou/interrupções; nada sai depois das 20h); entre duas mensagens automáticas, no mínimo 5 min (5–7 min sorteados; com poucas mensagens, espalhadas pelo
@@ -36,7 +37,6 @@ const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
 const MIN_INI = 9 * 60, MIN_FIM = 19 * 60, MIN_FIM_ENVIO = 20 * 60, LIMITE_MS = 50000, PISO_SEG_MS = 5 * 60000, FALHAS_PARA_PAUSAR = 3;
-const RODAPE_SAIR = "\n\nPara não receber mais mensagens, responda SAIR.";
 const WA_ATENDIMENTO = "https://wa.me/5532988307617";
 /** Instância do WhatsApp usada como número de DISPARO: atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca"). Trocar o valor troca o número sem redeploy (cache de 60 s). */
 let cacheInst: { em: number; v: string } | null = null;
@@ -133,7 +133,7 @@ const MSG_ACAO_PADRAO = [
   `Oi, {cliente}! Tudo bem? 💛\n\nSeu orçamento de {valor} na {loja} continua reservado para você. Podemos seguir com o serviço? Se precisar de mais prazo ou de alguma condição, é só nos dizer.\n\n${RODAPE}`,
   `Olá, {cliente}! Esta é a nossa última lembrança do seu orçamento de {valor} na {loja}. Se ainda tiver interesse, será um prazer atender você — é só responder pelo link abaixo.\n\n${RODAPE}`,
 ];
-const MSG_POSVENDA_PADRAO = `Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você levou a sua joia e queremos saber: está tudo certo? Se precisar de qualquer ajuste, limpeza ou tiver alguma dúvida, estamos à disposição.\n\n{avaliacao}\n\nObrigado por escolher a Vilaça Joias!\n\n${RODAPE}`;
+const MSG_POSVENDA_PADRAO = `Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você levou a sua joia e queremos saber: está tudo certo? Se precisar de qualquer ajuste, limpeza ou tiver alguma dúvida, estamos à disposição.\n\nObrigado por escolher a Vilaça Joias!\n\n${RODAPE}`;
 
 type Passo = { id: string; nome: string; dias: number; statusId: string; mensagem: string };
 function passosEfetivos(cfg: any): Passo[] {
@@ -164,7 +164,7 @@ function lojaDe(cfg: any, id: string) { return (cfg.lojas || []).find((l: any) =
 function preencher(txt: string, cfg: any, reg: any, descPerc = 0, link = "") {
   const lj = lojaDe(cfg, reg.lojaId);
   const nomeLoja = (lj && (lj.nomePublico || lj.nomeFantasia || lj.nome)) || reg.loja || "Vilaça Joias";
-  const av = lj && lj.googleReviewUrl ? `Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n${lj.googleReviewUrl}` : "";
+  const av = "";   // 11/11: pós-venda não pede mais avaliação
   let t = String(txt || "")
     .replaceAll("{cliente}", bonito(String(reg.cliente || "").split(/\s+/)[0] || "cliente"))
     .replaceAll("{loja}", nomeLoja).replaceAll("{vendedora}", bonito(reg.vendedora || "") || "nossa equipe")
@@ -178,12 +178,12 @@ function preencher(txt: string, cfg: any, reg: any, descPerc = 0, link = "") {
 }
 // ---------- PEDIDOS (O.S.) ----------
 const MSG_OS_PRONTO = `Olá, {cliente}! 💛\n\nSeu pedido {via} está *PRONTO* para retirada na {loja}.\n\nAcompanhe e veja o código de retirada pelo link:\n{linkAcompanhamento}`;
-const MSG_OS_POSVENDA = `Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você retirou o seu pedido {via} e queremos saber: ficou tudo certo? Se precisar de qualquer ajuste, estamos à disposição.\n\n{avaliacao}\n\nObrigado por escolher a Vilaça Joias!`;
+const MSG_OS_POSVENDA = `Olá, {cliente}! 💛\n\nAqui é da {loja}. Já faz alguns dias que você retirou o seu pedido {via} e queremos saber: ficou tudo certo? Se precisar de qualquer ajuste, estamos à disposição.\n\nObrigado por escolher a Vilaça Joias!`;
 const STATUS_OS_NOME: Record<string, string> = { aguardando: "APROVADO", enviado_fabrica: "ENVIADO P/ FÁBRICA", em_producao: "EM PRODUÇÃO", pendencia: "PENDÊNCIA", oficina_pronto: "PRODUZIDO", pronto: "PRONTO", entregue: "ENTREGUE" };
 function preencherOS(txt: string, cfg: any, o: any) {
   const lj = lojaDe(cfg, o.lojaId);
   const nomeLoja = (lj && (lj.nomePublico || lj.nomeFantasia || lj.nome)) || "Vilaça Joias";
-  const av = lj && lj.googleReviewUrl ? `Se puder, conte como foi a sua experiência — a sua opinião ajuda muito:\n${lj.googleReviewUrl}` : "";
+  const av = "";   // 11/11: pós-venda não pede mais avaliação
   const nota = o.codigoVia || o.via || "";
   let t = String(txt || "")
     .replaceAll("{cliente}", bonito(o.cliente || "") || "cliente").replaceAll("{via}", String(o.codigoVia || o.via || ""))
@@ -245,7 +245,7 @@ async function abertoAgora(body: any) {
   if (tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(tel), p_tag: tagOff }); if (off === true) return await liberar("cliente com a tag MARKETING OFF"); } catch (_) {} }
   try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) return await liberar("número sem WhatsApp"); } catch (_) {}
   const t0 = varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0), linkOrc(id)));
-  const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) + RODAPE_SAIR : waMePrimeiro(t0);
+  const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) : waMePrimeiro(t0);
   let ok = false, status = 0;
   try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
   try { await admin.from("auditoria_log").insert({ usuario_nome: "SISTEMA (automático)", nivel: "sistema", loja_sessao: o.lojaId || null, acao: ok ? "via_whatsapp_enviada" : "via_whatsapp_falhou", modulo: "Acompanhamento automático", tabela: "orc_acao", registro_id: id, resumo: `${ok ? "Enviou" : "Falhou ao enviar"} ${p0.nome} (orçamento salvo) por WhatsApp (${inst}) para …${tel.slice(-4)}`, detalhe: { instancia: inst, status, botao: "auto", rotulo: p0.nome, imediato: true } }); } catch (_) {}
@@ -470,7 +470,7 @@ Deno.serve(async (req: Request) => {
       }
       if (!motivoSem) {
         try {
-          const texto = inst === INST_D ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) + RODAPE_SAIR : waMePrimeiro(varia(f.texto));
+          const texto = inst === INST_D ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) : waMePrimeiro(varia(f.texto));
           const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: f.tel, text: texto, delay: 2500 + Math.floor(Math.random() * 5500) }), signal: AbortSignal.timeout(25000) });
           status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key);
         } catch (_) {}
