@@ -164,8 +164,8 @@
 
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
-    if(emAndamento && Date.now()-emAndamento < 35000){ aviso('Já tem um envio em andamento — aguarde alguns segundos.'); return; }
-    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return; }
+    if(emAndamento && Date.now()-emAndamento < 35000){ aviso('Já tem um envio em andamento — aguarde alguns segundos.'); return false; }
+    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return false; }
     emAndamento = Date.now();
     var clicado = (ultimo.el && Date.now()-ultimo.t < 15000) ? ultimo.el : null;
     var botao = botaoId(clicado);
@@ -188,11 +188,11 @@
         marcar(clicado, m); agendar();
         return true;
       }
-      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return; }
-      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');
+      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return false; }
+      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.'); return false;
     }catch(e){
       console.error('WhatsAuto:', e);
-      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.');
+      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.'); return false;
     }finally{ emAndamento = 0; }
   }
   /* Mensagem padrão ao cliente (08/11): sem dados da via — só quem atendeu, a loja e o link com tudo. O texto é montado no servidor (enviar-via). */
