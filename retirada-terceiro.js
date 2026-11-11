@@ -72,7 +72,7 @@
              +'<div data-fluxo></div>'
              +'<div class="rt-row">'+(tel?'<button class="rt-btn" type="button" data-wa>Reenviar link ao cliente</button>':'')+'</div>')
          +(msg?'<div class="rt-msg '+(cls||'')+'">'+esc(msg)+'</div>':'')
-         +'<div class="rt-row" style="justify-content:space-between;margin-top:14px;">'+(!usado&&podeSem?'<button class="rt-btn perigo" data-sem>Entregar sem código…</button>':'<span></span>')+'<span style="display:inline-flex;gap:8px;"><button class="rt-btn" data-comp>Comprovante completo</button><button class="rt-btn" data-x>Fechar</button></span></div>'
+         +'<div class="rt-row" style="justify-content:space-between;margin-top:14px;">'+(!usado?'<button class="rt-btn perigo" data-sem>Liberar sem código (senha da gerência)</button>':'<span></span>')+'<span style="display:inline-flex;gap:8px;"><button class="rt-btn" data-comp>Comprovante completo</button><button class="rt-btn" data-x>Fechar</button></span></div>'
          +((r.historico||[]).length?'<div class="rt-hist"><b>Registro</b>'+r.historico.slice().reverse().map(function(h){ return '<div>'+dh(h.em)+' — '+esc(h.acao)+(h.por?' · '+esc(h.por):'')+'</div>'; }).join('')+'</div>':'');
         box.querySelector('[data-x]').onclick=fechar;
         var b;
@@ -122,16 +122,33 @@
           inp.disabled=true; this.style.display='none';
           pedirNome(fl, v, cod);
         };
-        if((b=box.querySelector('[data-sem]'))) b.onclick=async function(){
-          var motivo=(prompt('Entregar SEM o código — explique o motivo (fica registrado no pedido):')||'').trim();
-          if(motivo.length<5){ return; }
-          var nome=(prompt('Nome de quem está recebendo:')||'').trim();
-          if(nome.length<3) return;
-          var y=await chamar(Object.assign({acao:'semcodigo',motivo:motivo,recebidoPor:nome,lojaId:o.lojaId},base));
-          if(y.error){ desenhar(y.error,'err'); return; }
-          resultado={ retirada:y.retirada };
-          try{ if(typeof o.aoConcluir==='function') await o.aoConcluir(y.retirada); }catch(e){ console.error(e); }
-          desenhar('Entrega registrada sem código.','ok');
+        if((b=box.querySelector('[data-sem]'))) b.onclick=function(){
+          var fl=box.querySelector('[data-fluxo]');
+          var campo='width:100%;box-sizing:border-box;min-height:38px;padding:0 10px;border-radius:8px;border:1px solid var(--t-line-strong,#bcc);background:var(--t-field,#fff);color:inherit;font:inherit;margin-top:6px;';
+          fl.innerHTML='<div class="rt-estado" style="margin-top:12px;"><b>Liberar SEM o código do cliente</b><span>'+(podeSem?'Você é da gerência: informe o motivo e quem recebe.':'Peça a senha de um gerente ou da diretoria. Fica registrado no LOG com o nome de quem autorizou.')+'</span>'
+            +'<input class="rt-sm" maxlength="300" placeholder="Motivo (cliente sem celular, link perdido…)" aria-label="Motivo" style="'+campo+'">'
+            +'<input class="rt-sn" maxlength="80" placeholder="Nome de quem está recebendo" aria-label="Nome de quem recebe" style="'+campo+'text-transform:uppercase;">'
+            +(podeSem?'':'<input class="rt-sp" type="password" autocomplete="off" placeholder="Senha de gerente ou diretoria" aria-label="Senha de gerente ou diretoria" style="'+campo+'">')
+            +'<div class="rt-row"><button class="rt-btn perigo" data-sgo>Liberar entrega</button></div><div class="rt-msg err" data-serr></div></div>';
+          var erro=fl.querySelector('[data-serr]'), go=fl.querySelector('[data-sgo]');
+          setTimeout(function(){ fl.querySelector('.rt-sm').focus(); },30);
+          go.onclick=async function(){
+            var motivo=fl.querySelector('.rt-sm').value.trim(), nome=fl.querySelector('.rt-sn').value.trim(), sp=fl.querySelector('.rt-sp');
+            if(motivo.length<5){ erro.textContent='Explique o motivo (mín. 5 letras).'; return; }
+            if(nome.length<3){ erro.textContent='Informe o nome de quem está recebendo.'; return; }
+            if(sp && !sp.value){ erro.textContent='Digite a senha de um gerente ou da diretoria.'; return; }
+            go.disabled=true; erro.textContent='';
+            var y;
+            if(podeSem) y=await chamar(Object.assign({acao:'semcodigo',motivo:motivo,recebidoPor:nome,lojaId:o.lojaId},base));
+            else {
+              try{ var rr=await fetch(URL_FN.replace('/retirada-terceiro','/retirada-liberar'),{ method:'POST', headers:{'Content-Type':'application/json', apikey:anon(), Authorization:'Bearer '+anon()}, body:JSON.stringify(Object.assign({motivo:motivo,recebidoPor:nome,lojaId:o.lojaId,senhaGestor:sp.value},base)) }); y=await rr.json(); }
+              catch(e){ y={ error:'Sem conexão com o servidor. Tente de novo.' }; }
+            }
+            if(y.error){ erro.textContent=y.error; go.disabled=false; if(sp){ sp.value=''; sp.focus(); } return; }
+            resultado={ retirada:y.retirada };
+            try{ if(typeof o.aoConcluir==='function') await o.aoConcluir(y.retirada); }catch(e){ console.error(e); }
+            desenhar('Entrega registrada sem código'+(y.autorizadoPor?' (autorizada por '+y.autorizadoPor+')':'')+'.','ok');
+          };
         };
       }
       desenhar();
