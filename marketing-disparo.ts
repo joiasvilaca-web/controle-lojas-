@@ -1,3 +1,4 @@
+// marketing-disparo v8 (11/11/2026): pós-venda feito à mão que ficou na fila grava posVendaEnviadoEm ao sair (e é cancelado se o pós-venda já foi enviado).
 // marketing-disparo v7 (11/11/2026): as mensagens não levam mais "responda SAIR" (o texto antigo guardado na fila é retirado na hora do envio); quem escreve SAIR continua saindo da lista pelo disparo-webhook.
 // marketing-disparo v6 (10/11/2026): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
 // marketing-disparo v5 (10/11/2026) — FILA ÚNICA DO NÚMERO DE DISPARO (vilaca), junto com o acompanhamento-auto:
@@ -259,6 +260,9 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
           if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) cancelarMotivo = "Número sem WhatsApp";
         } catch (_) { /* conferência indisponível: segue o envio */ }
       }
+      if (!cancelarMotivo && ehVia && item.marcar && item.marcar.posVenda && item.registro_id) {   // 11/11: pós-venda já enviado (pelo robô ou à mão) não sai de novo
+        try { const { data: rv } = await admin.from(item.marcar.tabela).select("payload").eq("id", item.registro_id).maybeSingle(); if (rv && rv.payload && rv.payload.posVendaEnviadoEm) cancelarMotivo = "Pós-venda já enviado"; } catch (_) {}
+      }
       if (cancelarMotivo) { await admin.from("marketing_fila").update({ status: "cancelado", tentativas: Number(item.tentativas || 0) + 1, erro: cancelarMotivo, atualizado_em: new Date().toISOString() }).eq("id", item.id); continue; }
       // fila única: pega a vez (≥ 5 min da última; via passa na frente; Marketing espera os cards vencidos)
       const { data: vez } = await admin.rpc("disparo_vez", { p_cards: ehVia, p_gap_seg: gapSeg(Math.max(0, restantes - 1) + cardsRest) });
@@ -289,7 +293,7 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
             try {
               const { data: rw } = await admin.from(mc.tabela).select("payload").eq("id", item.registro_id).maybeSingle();
               const pl = rw && rw.payload;
-              if (pl) { pl.msgEnviadas = pl.msgEnviadas || {}; if (!pl.msgEnviadas[mc.chave]) { pl.msgEnviadas[mc.chave] = agoraIso; await admin.from(mc.tabela).update({ payload: pl, updated_at: agoraIso }).eq("id", item.registro_id); } }
+              if (pl) { pl.msgEnviadas = pl.msgEnviadas || {}; if (mc.posVenda) { pl.posVendaEnviadoEm = agoraIso; pl.posVendaPor = item.criado_por || "sistema"; delete pl.autoAgenda; pl.msgEnviadas[mc.chave] = agoraIso; await admin.from(mc.tabela).update({ payload: pl, updated_at: agoraIso }).eq("id", item.registro_id); } else if (!pl.msgEnviadas[mc.chave]) { pl.msgEnviadas[mc.chave] = agoraIso; await admin.from(mc.tabela).update({ payload: pl, updated_at: agoraIso }).eq("id", item.registro_id); } }
             } catch (_) {}
           }
         }

@@ -183,11 +183,13 @@
       var j = await r.json().catch(function(){ return {}; });
       if(j && j.ok){
         aviso('Enviado pelo WhatsApp da loja ✓');
+        window.WhatsAuto.ultimo = { ok:true, fila:false };
         var m={ em:new Date().toISOString(), por:'', rotulo:m0?m0[1].trim():'' };
         if(opts.registroId) marcas[opts.registroId+'|'+botao]=m;
         marcar(clicado, m); agendar();
         return true;
       }
+      window.WhatsAuto.ultimo = { ok:false, fila: !!(j && j.enfileirado) };
       if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return false; }
       aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.'); return false;
     }catch(e){

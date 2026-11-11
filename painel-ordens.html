@@ -3862,10 +3862,10 @@ async function sendEmail(order){
     showToast('Falha ao enviar e-mail. Verifique a conexão.');
   }
 }
-function openNotifyModal(order){
+function openNotifyModal(order, falhou){
   openModal(`
     <h3>Avisar o cliente?</h3>
-    <p>O pedido de <b>${escapeHtml(order.cliente)}</b> foi lançado. Envie a confirmação com a mensagem padrão.</p>
+    <p>O pedido de <b>${escapeHtml(order.cliente)}</b> foi lançado. ${falhou ? '<b>A mensagem automática não foi enviada.</b> Tente de novo ou envie por e-mail.' : 'Envie a confirmação com a mensagem padrão.'}</p>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="notifyClose" data-fechar>Agora não</button>
       <span class="espaco"></span>
@@ -5372,7 +5372,10 @@ function renderNovaOrdem(main){
     await upsertClienteFromOrder(cli);
     if(novaOrdem.cashback){ const _cb = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'gravar', null, novaOrdem.cashback.clienteId); if(!_cb.ok) showToast('Pedido lançado, mas o cashback não foi gravado: '+_cb.erro); }
     if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'os', id:novaOrdem.id, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'' }); if(_rt && _rt.error) showToast('Pedido lançado, mas a retirada por terceiros não foi liberada: '+_rt.error); }
-    if(novaOrdem.telefone){ try{ await sendWhatsApp(novaOrdem); }catch(e){ console.error('mensagem de aprovado', e); } }   // 10/11: salvar = APROVADO + mensagem na hora (sem fila)
+    let avisoEnviado = false;   // 11/11: se a mensagem automática saiu (ou ficou na fila do WhatsApp), não pergunta de novo
+    if(window.WhatsAuto) WhatsAuto.ultimo = null;
+    if(novaOrdem.telefone){ try{ avisoEnviado = (await sendWhatsApp(novaOrdem)) === true; }catch(e){ console.error('mensagem de aprovado', e); } }
+    const avisoNaFila = !!(window.WhatsAuto && WhatsAuto.ultimo && WhatsAuto.ultimo.fila);   // 10/11: salvar = APROVADO + mensagem na hora (sem fila)
     showToast(pendenciaReq ? 'Pedido lançado com pendência de autorização. A Oficina foi avisada.' : (encaixe ? 'Pedido lançado como encaixe autorizado.' : 'Pedido lançado.'));
     await sincronizarReservasOrdem(novaOrdem, planoNova);
     if(orcamentoOrigem) await marcarOrcamentoConvertido(orcamentoOrigem, novaOrdem);
@@ -5381,7 +5384,7 @@ function renderNovaOrdem(main){
     modoNovaOrdem = false;
     renderTabs(); renderView();
     renderAlerts();
-    openNotifyModal(novaOrdem);
+    if(!avisoEnviado && !avisoNaFila) openNotifyModal(novaOrdem, !!novaOrdem.telefone);   // só pergunta se a mensagem automática falhou (ou não há telefone)
   }
   document.getElementById('btnSalvarOrdem').addEventListener('click', travarCliqueDuplo(()=>lancarPedido()));
 }
