@@ -72,7 +72,7 @@ const EMBEDDED = window.parent !== window;
 function mensagemConfiavel(ev){ try{ if(ev.origin && ev.origin !== 'null' && ev.origin !== window.location.origin) return false; return true; }catch(e){ return false; } }
 const SUPABASE_URL = window.SUPABASE_URL, SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;
 const API = SUPABASE_URL + '/functions/v1/modelos-api';
-let __senha = null, currentUser = null, modelos = [], tarifas = {}, custoLinhas = [], periodoSel = 'mes';
+let __senha = null, currentUser = null, modelos = [], tarifas = {}, custoLinhas = [], periodoSel = 'mes', refData = new Date();
 const $ = id => document.getElementById(id);
 const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const brl = v => 'R$ ' + (Number(v)||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -146,27 +146,49 @@ async function carregar(){
 const pad = n => String(n).padStart(2,'0');
 const isoDia = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 function intervalo(sel){
-  const h = new Date(), ini = new Date(h), fim = new Date(h);
-  if(sel==='hoje'){ }
-  else if(sel==='7d'){ ini.setDate(h.getDate()-6); }
-  else if(sel==='mes'){ ini.setDate(1); }
-  else if(sel==='mespassado'){ ini.setMonth(h.getMonth()-1, 1); fim.setDate(0); }
-  else { return { de: $('cDe').value, ate: $('cAte').value }; }
-  return { de: isoDia(ini), ate: isoDia(fim) };
+  const r = new Date(refData), y = r.getFullYear(), m = r.getMonth();
+  if(sel==='dia') return { de: isoDia(r), ate: isoDia(r) };
+  if(sel==='ano') return { de: `${y}-01-01`, ate: `${y}-12-31` };
+  return { de: isoDia(new Date(y,m,1)), ate: isoDia(new Date(y,m+1,0)) };
+}
+const MESES = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+function rotuloPeriodo(){
+  const r = new Date(refData), h = new Date();
+  if(periodoSel==='dia'){
+    const d0 = new Date(h.getFullYear(),h.getMonth(),h.getDate()), d1 = new Date(r.getFullYear(),r.getMonth(),r.getDate()), dif = Math.round((d0-d1)/86400000);
+    const nome = dif===0?'Hoje':dif===1?'Ontem':dif===-1?'Amanhã':['domingo','segunda','terça','quarta','quinta','sexta','sábado'][r.getDay()];
+    return `${nome} · ${pad(r.getDate())}/${pad(r.getMonth()+1)}/${r.getFullYear()}`;
+  }
+  if(periodoSel==='ano') return String(r.getFullYear());
+  return `${MESES[r.getMonth()]} de ${r.getFullYear()}`;
+}
+function ehAtual(){
+  const r = new Date(refData), h = new Date();
+  if(periodoSel==='dia') return isoDia(r)===isoDia(h);
+  if(periodoSel==='ano') return r.getFullYear()===h.getFullYear();
+  return r.getFullYear()===h.getFullYear() && r.getMonth()===h.getMonth();
+}
+function mover(n){
+  const r = new Date(refData);
+  if(periodoSel==='dia') r.setDate(r.getDate()+n);
+  else if(periodoSel==='ano') r.setFullYear(r.getFullYear()+n);
+  else { r.setDate(1); r.setMonth(r.getMonth()+n); }
+  refData = r;
 }
 function desenharCustosEsqueleto(){
   const op = (v,t)=> `<button class="btn btn-sm ${periodoSel===v?'btn-accent':''}" data-per="${v}" type="button">${t}</button>`;
-  const h = isoDia(new Date());
   $('abaCustos').innerHTML = `
-    <div class="card"><div class="acoes">${op('hoje','Hoje')}${op('7d','Últimos 7 dias')}${op('mes','Este mês')}${op('mespassado','Mês passado')}${op('livre','Período')}
-      <span id="livreBox" style="display:${periodoSel==='livre'?'inline-flex':'none'};gap:6px;align-items:center;"><input type="date" id="cDe" value="${h.slice(0,8)}01"> até <input type="date" id="cAte" value="${h}"><button class="btn btn-sm" id="cOk" type="button">Ver</button></span>
+    <div class="card"><div class="acoes">${op('dia','Dia')}${op('mes','Mês')}${op('ano','Ano')}
+      <span style="display:inline-flex;gap:6px;align-items:center;margin-left:8px;"><button class="btn btn-sm" id="cAnt" type="button" aria-label="Anterior" title="Anterior">◀</button><b id="cRot" style="min-width:150px;text-align:center;text-transform:capitalize;">${esc(rotuloPeriodo())}</b><button class="btn btn-sm" id="cProx" type="button" aria-label="Próximo" title="Próximo">▶</button><button class="btn btn-sm" id="cHoje" type="button" ${ehAtual()?'disabled':''}>${periodoSel==='dia'?'Hoje':periodoSel==='mes'?'Este mês':'Este ano'}</button></span>
       <button class="btn btn-sm" id="cCsv" type="button" style="margin-left:auto;">Exportar CSV</button></div></div>
     <div id="custoCorpo"><div class="card muted">Carregando…</div></div>
     <div class="card"><b>Valores por mensagem (editáveis)</b>
       <p class="small muted" style="margin:4px 0 10px;">São estimativas: a Meta cobra por mensagem entregue, na categoria em que ela classificou o modelo. Confira a tabela de preços da Meta para o Brasil e ajuste aqui. Mensagem de utilidade enviada dentro de uma conversa aberta (cliente falou com você nas últimas 24h) é grátis na Meta — aqui ela é contada como paga, então o total é um teto.</p>
       <div class="grid" id="tarifasBox"></div></div>`;
   $('abaCustos').querySelectorAll('[data-per]').forEach(b=> b.addEventListener('click', ()=>{ periodoSel = b.dataset.per; desenharCustosEsqueleto(); carregarCustos(); }));
-  if($('cOk')) $('cOk').addEventListener('click', carregarCustos);
+  $('cAnt').addEventListener('click', ()=>{ mover(-1); desenharCustosEsqueleto(); carregarCustos(); });
+  $('cProx').addEventListener('click', ()=>{ mover(1); desenharCustosEsqueleto(); carregarCustos(); });
+  $('cHoje').addEventListener('click', ()=>{ refData = new Date(); desenharCustosEsqueleto(); carregarCustos(); });
   $('cCsv').addEventListener('click', csv);
   desenharTarifas();
 }
