@@ -18,6 +18,8 @@
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
    Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11). ===== */
 (function(){
+  // 11/11: a versão completa (vilaca-extras.js: devolve true quando envia, visto ✓ por botão, mensagem padrão) já foi carregada — esta cópia é só reserva
+  if(window.WhatsAuto && typeof window.WhatsAuto.padrao==='function') return;
   var emAndamento = false;
   function aviso(m){ try{ if(typeof showToast==='function') showToast(m); }catch(e){} }
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
@@ -823,7 +825,7 @@ async function mudarStatusManual(o, novoId){
       if(!o.telefone) aviso = 'sem WhatsApp do cliente';
       else if(!window.WhatsAuto) aviso = 'envio indisponível';
       else if(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente })){
-        enviado = (await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(texto, o, descontoStatus(inf)), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' })) === true;
+        enviado = (await WhatsAuto.enviar({ telefone:o.telefone, texto:preencherMsgOrc(texto, o, descontoStatus(inf)), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'', statusDestino:novoId })) === true;
         if(!enviado) aviso = 'mensagem não enviada';
       } else aviso = 'cliente marcado como MARKETING OFF';
     }
@@ -2485,7 +2487,7 @@ async function executarAcaoOrc(orcId, idx){
   if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return false;
   if(!window.WhatsAuto){ showToast('Envio automático indisponível. Recarregue a página e tente de novo.'); return false; }
   const texto = preencherMsgOrc(textoPassoOrc(p, idx), o, descontoStatus(statusList().find(x=>x.id===p.statusId)));
-  const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'' });
+  const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orc_acao', registroId:o.id, via:o.codigoVia||'', statusDestino:(p.statusId && statusList().some(x=>x.id===p.statusId)) ? p.statusId : o.status });
   if(ok!==true) return false;
   const agora = new Date().toISOString();
   o.autoMensagensEnviadas = idx+1;
@@ -2719,8 +2721,18 @@ async function enviarWhatsAppOrcId(orcId){
   if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
   const info = statusInfoDe(o.status);
   const template = (info && info.mensagemWhatsapp) || MENSAGEM_WHATSAPP_PADRAO;
-  if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:o.telefone, texto:montarMensagemStatus(o, template), lojaId:o.lojaId, senha:__gatewaySenha, tipo:'orcamento', padrao:(WhatsAuto.padrao||function(){return null;})('orcamento',o), registroId:o.id, via:o.via||o.codigoVia||'' }); return; }
+  if(window.WhatsAuto){ const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto:montarMensagemStatus(o, template), lojaId:o.lojaId, senha:__gatewaySenha, tipo:'orcamento', padrao:(WhatsAuto.padrao||function(){return null;})('orcamento',o), registroId:o.id, via:o.via||o.codigoVia||'' }); if(ok===true) await gravarVistoOrc(o); return ok===true; }
   showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
+}
+/** 11/11: envio pelo botão do WhatsApp (Quadro/detalhe) também deixa o visto ✓ do status atual (msgEnviadas) e entra em "Já enviados". */
+async function gravarVistoOrc(o){
+  try{
+    if(!o || o.rascunho) return;
+    const st = o.status, agora = new Date().toISOString();   // status cuja mensagem acabou de sair
+    // relê o orçamento do servidor e grava só a marca: não desfaz avanço do robô nem conversão em venda/pedido feitos depois que a tela abriu
+    await gravarMarcaEnvio('orcamentos', o.id, o, p=>{ p.msgEnviadas = p.msgEnviadas || {}; p.msgEnviadas[st] = agora; });
+    if(typeof renderView==='function') renderView();
+  }catch(e){ console.error('gravarVistoOrc', e); }
 }
 async function enviarEmailOrcId(orcId){
   const o = orcamentos.find(x=>x.id===orcId);
@@ -2865,7 +2877,7 @@ function abrirDetalheOrcamento(o){
     btnWhatsapp.addEventListener('click', async ()=>{
       if(!(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
       const template = (infoAtual && infoAtual.mensagemWhatsapp) || MENSAGEM_WHATSAPP_PADRAO;
-      if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:o.telefone, texto:montarMensagemStatus(o, template), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orcamento', padrao:(WhatsAuto.padrao||function(){return null;})('orcamento',o), registroId:o.id, via:o.via||o.codigoVia||'' }); return; }
+      if(window.WhatsAuto){ const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto:montarMensagemStatus(o, template), lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'orcamento', padrao:(WhatsAuto.padrao||function(){return null;})('orcamento',o), registroId:o.id, via:o.via||o.codigoVia||'' }); if(ok===true) await gravarVistoOrc(o); return; }
       showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
     });
   }

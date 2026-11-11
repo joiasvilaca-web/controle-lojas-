@@ -18,12 +18,14 @@
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
    Sempre pelo número de atendimento cadastrado; se estiver desconectado, avisa e NÃO abre o WhatsApp comum (regra 09/11). ===== */
 (function(){
+  // 11/11: a versão completa (vilaca-extras.js: devolve true quando envia, visto ✓ por botão, mensagem padrão) já foi carregada — esta cópia é só reserva
+  if(window.WhatsAuto && typeof window.WhatsAuto.padrao==='function') return;
   var emAndamento = false;
   function aviso(m){ try{ if(typeof showToast==='function') showToast(m); }catch(e){} }
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
-    if(emAndamento) return;
-    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return; }
+    if(emAndamento) return false;
+    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return false; }
     emAndamento = true;
     aviso('Enviando pelo WhatsApp da loja…');
     try{
@@ -33,12 +35,12 @@
         body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via })
       });
       var j = await r.json().catch(function(){ return {}; });
-      if(j && j.ok){ aviso('Enviado pelo WhatsApp da loja ✓'); return; }
-      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return; }
-      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');
+      if(j && j.ok){ aviso('Enviado pelo WhatsApp da loja ✓'); return true; }
+      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return false; }
+      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.'); return false;
     }catch(e){
       console.error('WhatsAuto:', e);
-      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.');
+      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.'); return false;
     }finally{ emAndamento = false; }
   }
   window.WhatsAuto = { enviar: enviar };
@@ -3795,10 +3797,13 @@ async function marcarMsgEnviadaOS(order){
   try{
     if(!order) return;
     const agora = new Date().toISOString();
-    order.msgEnviadas = order.msgEnviadas || {}; order.msgEnviadas[order.status] = agora;
-    (order.acoesLog = order.acoesLog || []).push({ em:agora, nome:statusLabel(order.status), por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
-    const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
-    if(rr && rr.error) console.error('erro ao gravar visto de mensagem', order.id, rr.error);
+    const st = order.status, quem = (currentUser&&currentUser.nome)||'';
+    // 11/11: relê a via do servidor e grava só a marca (gravarMarcaEnvio, vilaca-extras.js) — não grava por cima mudança feita depois pela Oficina/robô
+    const gravouMarca = await gravarMarcaEnvio('ordens_servico', order.id, order, p=>{
+      p.msgEnviadas = p.msgEnviadas || {}; p.msgEnviadas[st] = agora;
+      (p.acoesLog = p.acoesLog || []).push({ em:agora, nome:statusLabel(st), por:quem, via:'whatsapp', auto:false });
+    });
+    if(gravouMarca) snapOrdem(order);   // a cópia da tela já está igual ao servidor: o saveOrders não regrava a via por cima
     if(typeof window.__renderTabelaOS==='function') window.__renderTabelaOS();
   }catch(e){ console.error('marcarMsgEnviadaOS', e); }
 }
@@ -6111,12 +6116,14 @@ function renderPainel(main){
     const texto = modelo.replaceAll('{cliente}', nome).replaceAll('{loja}', nomeLoja).replaceAll('{via}', viaTxt(o)).replaceAll('{avaliacao}', av).replace(/\n{3,}/g,'\n\n').trim();
     const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'posvenda', registroId:o.id, via:viaTxt(o) });
     if(ok!==true) return false;
-    const agora = new Date().toISOString();
-    o.posVendaEnviadoEm = agora; o.posVendaPor = (currentUser&&currentUser.nome)||'';
-    o.msgEnviadas = o.msgEnviadas || {}; o.msgEnviadas.posvenda = agora;
-    (o.acoesLog = o.acoesLog || []).push({ em:agora, passo:'os_posvenda', nome:'Pós-venda', por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
-    delete o.autoAgenda;
-    await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:o.id, payload:o, updated_at:new Date().toISOString() } } });
+    const agora = new Date().toISOString(), quem = (currentUser&&currentUser.nome)||'';
+    const gravouPv = await gravarMarcaEnvio('ordens_servico', o.id, o, p=>{   // 11/11: relê a via antes (não grava por cima mudança feita depois)
+      p.posVendaEnviadoEm = agora; p.posVendaPor = quem;
+      p.msgEnviadas = p.msgEnviadas || {}; p.msgEnviadas.posvenda = agora;
+      (p.acoesLog = p.acoesLog || []).push({ em:agora, passo:'os_posvenda', nome:'Pós-venda', por:quem, via:'whatsapp', auto:false });
+      delete p.autoAgenda;
+    });
+    if(gravouPv) snapOrdem(o);
     renderTable();
     return true;
   }
@@ -6149,6 +6156,7 @@ function renderPainel(main){
     });
   }
   window.__renderTabelaOS = ()=> renderTable();
+  window.__enviarPosVendaOS = enviarPosVendaOS;   // usado pelos testes de regressão (10-whatsauto)
 
   function renderTable(){
     try{ desenharAcompanhamentoOS(); }catch(e){ console.error('acompanhamento', e); }

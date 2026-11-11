@@ -164,8 +164,8 @@
 
   /* opts: { telefone, texto, lojaId, senha, tipo:'venda'|'os'|'orcamento', registroId, via } */
   async function enviar(opts){
-    if(emAndamento && Date.now()-emAndamento < 35000){ aviso('Já tem um envio em andamento — aguarde alguns segundos.'); return; }
-    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return; }
+    if(emAndamento && Date.now()-emAndamento < 35000){ aviso('Já tem um envio em andamento — aguarde alguns segundos.'); return false; }
+    if(String(window.SUPABASE_URL||'').indexOf('mpgkvstzigeaimuynpxc')>=0){ aviso('TREINAMENTO: o envio de WhatsApp fica desligado aqui — nada sai para clientes. Na versão oficial a via é enviada normalmente.'); return false; }
     emAndamento = Date.now();
     var clicado = (ultimo.el && Date.now()-ultimo.t < 15000) ? ultimo.el : null;
     var botao = botaoId(clicado);
@@ -177,7 +177,7 @@
       var r = await fetch(window.SUPABASE_URL + '/functions/v1/enviar-via', {
         method:'POST', signal: ctl ? ctl.signal : undefined,
         headers:{ 'Content-Type':'application/json', 'apikey':window.SUPABASE_ANON_KEY, 'Authorization':'Bearer '+window.SUPABASE_ANON_KEY },
-        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, padrao:opts.padrao||null, botao:botao, rotulo:m0?m0[1].trim():'' })
+        body: JSON.stringify({ senha:opts.senha, lojaId:opts.lojaId, telefone:opts.telefone, texto:opts.texto, tipo:opts.tipo, registroId:opts.registroId, via:opts.via, padrao:opts.padrao||null, statusDestino:opts.statusDestino||'', botao:botao, rotulo:m0?m0[1].trim():'' })
       });
       if(tmo) clearTimeout(tmo);
       var j = await r.json().catch(function(){ return {}; });
@@ -188,11 +188,11 @@
         marcar(clicado, m); agendar();
         return true;
       }
-      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return; }
-      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.');
+      if(j && j.fallback){ aviso((j.erro||'O WhatsApp de atendimento está desconectado.')+' A via NÃO foi enviada — avise a diretoria para reconectar o número e tente de novo.'); return false; }
+      aviso((j && (j.erro||j.error)) || 'Não foi possível enviar.'); return false;
     }catch(e){
       console.error('WhatsAuto:', e);
-      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.');
+      aviso('Sem conexão com o envio automático. A via NÃO foi enviada — confira a internet e tente de novo.'); return false;
     }finally{ emAndamento = 0; }
   }
   /* Mensagem padrão ao cliente (08/11): sem dados da via — só quem atendeu, a loja e o link com tudo. O texto é montado no servidor (enviar-via). */
@@ -205,3 +205,22 @@
   }
   window.WhatsAuto = { enviar: enviar, padrao: padrao };
 })();
+
+/* 11/11: grava SÓ a marca de envio ("já enviado": msgEnviadas, posVendaEnviadoEm, acoesLog) na via.
+   Relê a via do servidor antes e aplica a marca nela: nunca grava por cima a cópia da tela, que pode estar velha
+   (o envio automático, a Oficina ou a conversão em venda/pedido podem ter mudado a via depois que a tela abriu).
+   A cópia da tela fica igual ao que foi gravado. Se o servidor não devolver a via (sem erro), usa a cópia da tela. */
+window.gravarMarcaEnvio = async function(tabela, id, local, aplicar){
+  try{
+    if(typeof window.gatewayCall!=='function' || !id || typeof aplicar!=='function') return false;
+    var r = await window.gatewayCall({ op:'selectOne', table:tabela, params:{ column:'id', value:id } });
+    if(r && r.error){ console.error('gravarMarcaEnvio: não foi possível reler a via', tabela, id, r.error); return false; }
+    var atual = (r && r.data && r.data.payload) || local;
+    if(!atual) return false;
+    aplicar(atual);
+    var w = await window.gatewayCall({ op:'upsert', table:tabela, params:{ row:{ id:id, payload:atual, updated_at:new Date().toISOString() } } });
+    if(w && w.error){ console.error('gravarMarcaEnvio: erro ao gravar', tabela, id, w.error); return false; }
+    if(local && local!==atual){ Object.keys(local).forEach(function(k){ if(!(k in atual)) delete local[k]; }); Object.assign(local, atual); }
+    return true;
+  }catch(e){ console.error('gravarMarcaEnvio', e); return false; }
+};
