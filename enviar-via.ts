@@ -1,3 +1,4 @@
+// v9 (11/11): o texto do número de disparo não leva mais "responda SAIR" (ajustaTextoDisparo retira o aviso antigo).
 // v8 (10/11): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
 // v7 (10/11): número de disparo (vilaca) — (1) fora do ar: a mensagem (feita por pessoa) entra na FILA (marketing_fila tipo "via") e sai
 //   sozinha quando o número voltar, pelas regras da fila única (9h–20h, 5 min entre automáticas); (2) cada envio fica em disparo_envios (telefone, loja,
@@ -91,6 +92,7 @@ function ajustaTextoDisparo(t: string): string {
   let s = String(t || "");
   s = s.replace(/N[ãa]o responda (a |esta |essa )?mensagem[.!]?\s*/gi, "");
   s = s.replace(/Caso precise falar conosco,?\s*clique no link:?/gi, "Para falar com a gente, é só clicar no link:");
+  s = s.replace(/Para não receber mais mensagens, responda SAIR\.?/gi, "");
   if (!/wa\.me\/5532988307617/.test(s)) s = s.trimEnd() + "\n\nPara falar com a gente, é só clicar no link:\n" + WA_ATENDIMENTO;
   if (!/Responda com 👍/.test(s)) s = s.trimEnd() + "\n\n" + LINHA_JOINHA;
   return s.replace(/\n{3,}/g, "\n\n").trim();

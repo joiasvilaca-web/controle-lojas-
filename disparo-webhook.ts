@@ -1,3 +1,8 @@
+// disparo-webhook v5 (11/11/2026): (1) a resposta nunca fala em SAIR: quem escreve SAIR (PARAR, CANCELAR…) continua saindo da lista (tag MARKETING OFF +
+//   pendentes canceladas), mas SEM receber mensagem; (2) a resposta depende só do que o CLIENTE mandou (não do histórico: o cliente compra nas duas lojas):
+//   texto/legenda com "reforma", "reforma joias" ou "RJ", ou FOTO com a logo/nome REFORMA JOIAS ou RJ (conferida pela IA Gemini) → Instagram @reformajoias;
+//   qualquer outra coisa → WhatsApp de atendimento da Vilaça (link wa.me sozinho = botão "Iniciar conversa"). Sem menu das lojas. Máx. 1 resposta a cada 12 h
+//   por número e por assunto. O trabalho roda depois de responder 200 à Evolution (EdgeRuntime.waitUntil).
 // disparo-webhook v3 (10/11/2026): (1) curtida/reação, figurinha, aviso do sistema, 👍 sozinho, "ok", "obrigado"… → NÃO responde nada;
 //   (2) qualquer outra mensagem → manda o link do atendimento e o menu das lojas. Se o último disparo para aquele telefone (disparo_envios, 30 dias) foi de
 //   Marechal Center, João Beraldo ou Jardim Norte, mostra só a opção dessa loja e o nome de quem atendeu; senão (aniversário, mala direta, Ecommerce,
@@ -11,7 +16,6 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const INTERVALO_MS = 12 * 60 * 60 * 1000;
-const TEXTO_PADRAO = "Olá! 😊 Este número da Vilaça Joias é usado apenas para envio automático de avisos e campanhas, e as mensagens enviadas para cá não são lidas.\n\nPara falar com a nossa equipe, chame no WhatsApp (32) 98830-7617:\nhttps://wa.me/5532988307617";
 
 let cache: { em: number; seg: Record<string, string> } | null = null;
 async function segredos(): Promise<Record<string, string>> {
@@ -25,7 +29,6 @@ async function segredos(): Promise<Record<string, string>> {
 const ok = () => new Response("ok", { status: 200 });
 const semAcento = (s: string) => String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
 const PALAVRAS_SAIR = ["sair", "parar", "pare", "cancelar", "descadastrar", "remover", "nao quero", "nao quero receber"];
-const TEXTO_SAIR = "Tudo certo! 👍 Você não receberá mais mensagens de campanhas da Vilaça Joias.\n\nSe precisar de algo, é só chamar no WhatsApp (32) 98830-7617.";
 async function sairDaLista(numero: string): Promise<void> {
   const f8 = numero.replace(/\D/g, "").slice(-8);
   const { data: cfg } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle();
@@ -55,24 +58,50 @@ function soReacao(d: any, m: any): boolean {
   }
   return false;
 }
-// ---------- v3: resposta com a loja e quem atendeu ----------
-const LOJAS_MENU: Record<string, string> = { loja_mc: "1 - LOJA MARECHAL CENTER", loja_jb: "2 - LOJA JOÃO BERALDO", loja_jn: "3 - LOJA JARDIM NORTE" };
-const bonito = (t: string) => String(t || "").trim().toLowerCase().replace(/(^|\s)\S/g, (x) => x.toUpperCase());
-async function textoResposta(numero: string): Promise<string> {
-  const f8 = numero.replace(/\D/g, "").slice(-8);
-  const desde = new Date(Date.now() - 30 * 86400000).toISOString();
-  const { data } = await admin.from("disparo_envios").select("loja_id, vendedora, tipo").eq("fone8", f8).gte("em", desde).order("em", { ascending: false }).limit(1);
-  const ult = data && data[0];
-  const linhaLoja = ult && ult.loja_id ? LOJAS_MENU[String(ult.loja_id)] : "";
-  const vend = ult && ult.vendedora ? bonito(String(ult.vendedora).split(/\s+/).slice(0, 2).join(" ")) : "";
-  let t = "Olá! 😊 Este número da Vilaça Joias só envia avisos e não recebe mensagens.\n\nPara falar com a gente, é só clicar no link:\nhttps://wa.me/5532988307617\n\n";
-  if (linhaLoja) {
-    t += "Quando o atendimento pedir a loja, digite:\n" + linhaLoja;
-    if (vend) t += "\n\nE peça para falar com *" + vend + "*.";
-  } else {
-    t += "Quando o atendimento pedir a loja, digite o número dela:\n" + Object.values(LOJAS_MENU).join("\n");
-  }
-  return t;
+// ---------- v5: resposta Reforma Joias × Vilaça (pelo que o cliente mandou) ----------
+const TEXTO_VILACA = "Olá! 😊 Este número só envia avisos. Vamos conversar pelo nosso WhatsApp de atendimento?\n\nhttps://wa.me/5532988307617";
+const TEXTO_REFORMA = "Olá! 😊 Tudo da Reforma Joias é atendido e vendido pelo nosso Instagram. Vamos conversar por lá?\n\nhttps://www.instagram.com/reformajoias";
+/** Texto que o cliente escreveu: mensagem, ou legenda de foto/vídeo/documento. */
+function textoDoCliente(m: any): string {
+  const doc = (m && m.documentWithCaptionMessage && m.documentWithCaptionMessage.message && m.documentWithCaptionMessage.message.documentMessage) || null;
+  return String((m && (m.conversation || (m.extendedTextMessage && m.extendedTextMessage.text) || (m.imageMessage && m.imageMessage.caption)
+    || (m.videoMessage && m.videoMessage.caption) || (m.documentMessage && m.documentMessage.caption))) || (doc && doc.caption) || "");
+}
+/** "reforma", "reformar", "reforma joias", "@reformajoias" ou a sigla "RJ" (sem vínculo com Rio de Janeiro, a pedido). */
+function falaDeReforma(t: string): boolean {
+  const s = " " + semAcento(t) + " ";
+  return / reforma/.test(s) || / rj /.test(s);
+}
+/** A foto mostra a logo/nome REFORMA JOIAS ou RJ? Baixa a imagem pela Evolution e pergunta à IA (Gemini). Na dúvida ou em erro: não. */
+async function fotoDaReforma(seg: Record<string, string>, instancia: string, d: any): Promise<boolean> {
+  const key = Deno.env.get("GEMINI_API_KEY");
+  if (!key || !d || !d.message || !d.message.imageMessage) return false;
+  try {
+    const rm = await fetch(`${seg.EVOLUTION_URL}/chat/getBase64FromMediaMessage/${encodeURIComponent(instancia)}`, {
+      method: "POST", headers: { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY },
+      body: JSON.stringify({ message: { key: d.key, message: d.message }, convertToMp4: false }), signal: AbortSignal.timeout(15000),
+    });
+    const jm = await rm.json().catch(() => null);
+    const b64 = jm && jm.base64 ? String(jm.base64).replace(/^data:[^,]*,/, "") : "";
+    if (!rm.ok || b64.length < 100 || b64.length > 7_000_000) return false;
+    const mime = String((jm && jm.mimetype) || d.message.imageMessage.mimetype || "image/jpeg").split(";")[0];
+    const modelo = Deno.env.get("GEMINI_TEXT_MODEL") || "gemini-flash-latest";
+    const pergunta = "Olhe a imagem com atenção. Em algum lugar dela (logo, marca d'água, etiqueta, embalagem, carimbo ou texto) aparece o nome \"REFORMA JOIAS\" ou a sigla/logo \"RJ\"? Responda apenas SIM ou NAO.";
+    const rg = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`, {
+      method: "POST", headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ inline_data: { mime_type: mime, data: b64 } }, { text: pergunta }] }], generationConfig: { temperature: 0 } }),
+      signal: AbortSignal.timeout(20000),
+    });
+    const jg = await rg.json().catch(() => null);
+    const resp = String((jg && jg.candidates && jg.candidates[0] && jg.candidates[0].content && jg.candidates[0].content.parts || []).map((x: any) => x.text || "").join(" "));
+    return /\bsim\b/.test(semAcento(resp));
+  } catch (e) { console.error("disparo-webhook foto", e); return false; }
+}
+/** Assunto da resposta: "reforma" pelo texto/legenda ou pela foto; senão "vilaca". */
+async function assuntoDaMensagem(seg: Record<string, string>, instancia: string, d: any, m: any): Promise<"reforma" | "vilaca"> {
+  if (falaDeReforma(textoDoCliente(m))) return "reforma";
+  if (m && m.imageMessage && await fotoDaReforma(seg, instancia, d)) return "reforma";
+  return "vilaca";
 }
 
 Deno.serve(async (req: Request) => {
@@ -86,6 +115,15 @@ Deno.serve(async (req: Request) => {
     if (evento !== "messages.upsert") return ok();
     const instancia = String(body.instance || "vilaca");
     const lista = Array.isArray(body.data) ? body.data : [body.data];
+    // conferir a foto pela IA pode levar alguns segundos: responde 200 na hora e trabalha em segundo plano
+    const tarefa = processar(seg, instancia, lista).catch((e) => console.error("disparo-webhook", e));
+    const er = (globalThis as any).EdgeRuntime;
+    if (er && typeof er.waitUntil === "function") er.waitUntil(tarefa); else await tarefa;
+    return ok();
+  } catch (e) { console.error("disparo-webhook", e); return ok(); }
+});
+
+async function processar(seg: Record<string, string>, instancia: string, lista: any[]): Promise<void> {
     for (const d of lista) {
       const key = (d && d.key) || {};
       const jid = String(key.remoteJid || "");
@@ -94,26 +132,22 @@ Deno.serve(async (req: Request) => {
       const m = (d && d.message) || {};
       const txt = semAcento(String(m.conversation || (m.extendedTextMessage && m.extendedTextMessage.text) || ""));
       if (txt && PALAVRAS_SAIR.includes(txt)) {
+        // sai da lista SEM receber mensagem (pedido do dono, 11/11); também não recebe a resposta automática nas próximas 12 h
         try { await sairDaLista(numero); } catch (e) { console.error("disparo-webhook sair", e); }
-        await fetch(`${seg.EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`, {
-          method: "POST", headers: { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY },
-          body: JSON.stringify({ number: numero, text: TEXTO_SAIR }), signal: AbortSignal.timeout(20000),
-        }).catch(() => {});
         await admin.from("disparo_respostas").upsert({ numero, respondido_em: new Date().toISOString(), instancia });
         continue;
       }
       if (soReacao(d, m)) continue;   // curtiu, figurinha, aviso do sistema, 👍, "ok"…: não responde
-      const { data: ult } = await admin.from("disparo_respostas").select("respondido_em").eq("numero", numero).maybeSingle();
+      const assunto = await assuntoDaMensagem(seg, instancia, d, m);
+      const chave = assunto === "reforma" ? numero + ":rj" : numero;   // 12 h por número E por assunto
+      const { data: ult } = await admin.from("disparo_respostas").select("respondido_em").eq("numero", chave).maybeSingle();
       if (ult && Date.now() - new Date(ult.respondido_em).getTime() < INTERVALO_MS) continue;
-      await admin.from("disparo_respostas").upsert({ numero, respondido_em: new Date().toISOString(), instancia });
-      let texto = TEXTO_PADRAO;
-      try { texto = await textoResposta(numero); } catch (e) { console.error("disparo-webhook resposta", e); }
+      await admin.from("disparo_respostas").upsert({ numero: chave, respondido_em: new Date().toISOString(), instancia });
+      const texto = assunto === "reforma" ? TEXTO_REFORMA : TEXTO_VILACA;
       const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`, {
         method: "POST", headers: { "Content-Type": "application/json", apikey: seg.EVOLUTION_API_KEY },
         body: JSON.stringify({ number: numero, text: texto }), signal: AbortSignal.timeout(20000),
       });
       if (!r.ok) console.error("disparo-webhook envio", r.status, await r.text().catch(() => ""));
     }
-    return ok();
-  } catch (e) { console.error("disparo-webhook", e); return ok(); }
-});
+}

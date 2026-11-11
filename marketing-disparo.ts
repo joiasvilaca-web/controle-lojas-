@@ -1,3 +1,4 @@
+// marketing-disparo v7 (11/11/2026): as mensagens não levam mais "responda SAIR" (o texto antigo guardado na fila é retirado na hora do envio); quem escreve SAIR continua saindo da lista pelo disparo-webhook.
 // marketing-disparo v6 (10/11/2026): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
 // marketing-disparo v5 (10/11/2026) — FILA ÚNICA DO NÚMERO DE DISPARO (vilaca), junto com o acompanhamento-auto:
 //   (1) das 9h às 20h (19h–20h de reserva); entre duas mensagens automáticas no mínimo 5 min (5–7 min sorteados; com poucas, espalhadas no dia) — a vez é
@@ -29,7 +30,6 @@ let INSTANCIA = "vilaca";   // v6: processar() troca pelo valor de DISPARO_INSTA
 const HORA_INI = 9, HORA_FIM = 20, MIN_FIM_PLANO = 19 * 60;
 const TIPOS = ["aniversario", "posVenda", "campanha", "chamar"];
 const TIPOS_LIMITE = ["aniversario", "posVenda", "campanha"];   // contam no aquecimento do número
-const RODAPE_SAIR = "\n\nPara não receber mais mensagens, responda SAIR.";
 const FALHAS_PARA_PAUSAR = 3, DIAS_ENTRE_CAMPANHAS = 30;
 /** {Olá|Oi|Bom dia} → sorteia uma opção (só chaves que têm "|"; {cliente} e outras ficam como estão). */
 const varia = (t: string) => String(t || "").replace(/\{([^{}|]+(?:\|[^{}|]+)+)\}/g, (_m, g) => { const o = String(g).split("|"); return o[Math.floor(Math.random() * o.length)].trim(); });
@@ -133,8 +133,7 @@ async function montarLinhas(itens: any[], user: any) {
   const invalidos: any[] = [], validos: any[] = [];
   for (const l of base) (normalizaTelefone(l.telefone) ? validos : invalidos).push(l);
   for (const l of invalidos) { l.status = "cancelado"; l.erro = ERRO_FONE; }
-  // toda mensagem da fila leva o aviso de como sair (menos denúncia e bloqueio)
-  for (const l of validos) if (!/responda SAIR/i.test(l.texto)) l.texto = l.texto.trimEnd() + RODAPE_SAIR;
+  // 11/11: sem rodapé "responda SAIR" (quem escrever SAIR continua saindo da lista pelo disparo-webhook)
   {
     const vistos = new Set<string>();
     const camp = validos.filter((l: any) => l.tipo === "campanha" || l.tipo === "posVenda");
@@ -266,7 +265,7 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
       if (vez !== true) break;
       let ok = false, erro = "", statusHttp = 0;
       try {
-        const texto = ehVia ? String(item.texto) : ajustaTextoDisparo(varia(item.texto)) + RODAPE_SAIR;
+        const texto = ehVia ? String(item.texto) : ajustaTextoDisparo(varia(item.texto));
         const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${INSTANCIA}`, { method: "POST", headers: H, body: JSON.stringify({ number: numero, text: texto, delay: 2500 + Math.floor(Math.random() * 5500) }), signal: AbortSignal.timeout(25000) });
         statusHttp = r.status;
         const rj = await r.json().catch(() => ({}));
