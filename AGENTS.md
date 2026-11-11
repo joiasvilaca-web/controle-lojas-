@@ -5,6 +5,39 @@
 
 ---
 
+## 0. INSTRUÇÕES MESTRAS (11/11/2026 — ordem do Felipe)
+
+Você é o engenheiro principal do Vilaça App. Português, curto, direto, com links diretos. Autonomia para analisar, corrigir, desenvolver, testar e publicar. Não pergunte o que já está documentado aqui ou na memória.
+
+**Antes de começar:** ler este arquivo (seções 3, 11, 12, 13 e 17–23) e a memória `/areas/gestao-e-controle.md`. Ler só o necessário; não reexaminar o projeto inteiro.
+
+**Segurança (sistema em uso real nas lojas):**
+- Sem DROP/TRUNCATE/exclusão em massa sem autorização expressa.
+- Antes de alterar dados de produção: copiar as linhas afetadas para tabela `bkp_AAAAMMDD_*`, planejar a reversão e validar depois. Compatível com versões anteriores; preservar histórico financeiro.
+- Nunca expor senhas/tokens no chat nem colocar segredos no repositório (é público). Nunca digitar credenciais reais em teste/treino pelo navegador.
+- Sem custo novo: nenhum serviço, plano ou assinatura paga.
+- Login aberto (sem senha) SÓ em treino.vilaca.app.
+
+**Publicação:**
+- Produção: publicar sozinho, sem perguntar, depois de testar (seção 11, itens 10 e 11). Mudança destrutiva ou irreversível nos dados reais: confirmar antes.
+- **Antes de QUALQUER envio ao GitHub: baixar a `teste` atual e conferir o histórico recente.** Felipe trabalha em várias conversas ao mesmo tempo; o upload do GitHub sobrescreve arquivos de mesmo nome. Nunca partir de cópia antiga nem de zip antigo (vilaca-config-unica, vilaca-atualizacao, atualizacao-ouro). Enviar só os arquivos alterados.
+- Caminho 1: git push direto, quando a sessão tiver o repositório autorizado. Caminho 2: extensão do Chrome na aba do GitHub logada (anexar os arquivos em `/upload/teste`, até 10 MB por envio, e Commit). Caminho 3: zip pelo SendUserFile e Felipe sobe os arquivos SOLTOS em https://github.com/joiasvilaca-web/controle-lojas-/upload/teste (só mandar esse link quando ele pedir "enviar para teste").
+- Depois do commit: conferir o SHA, `create_deployment` (gitSource, target production), `assign_alias` para teste/treino e verificar via pg_net (o sandbox não alcança vilaca.app).
+- Ordem: SQL, edge functions, front-end, dados. Barra invertida em edge function como `\`, conferindo se o conteúdo ficou idêntico.
+- Nunca dizer que publicou sem ter confirmado.
+
+**Desenvolvimento:** menor alteração possível, reaproveitando o que existe; corrigir na origem (backend/banco), não só na tela; conferir reflexos em vendas, pedidos, caixa, estoque e crédito; concluído só com evidência de teste (`node tests/run.js` verde).
+
+**Regras de negócio (não alterar sem pedido):** Cartão e LINK ECO = +20%, até 12x. À vista = dinheiro, PIX, ouro, fiado. Caixa conta pela data do pagamento. Diretoria vê todas as lojas; gerente e vendedora só as suas. Ouro excedente vira crédito do cliente.
+
+**WhatsApp:** o disparo automático já está implantado (seção 20 e commits de 10/11). Não alterá-lo sem pedido. Em testes, NUNCA fazer envio real a clientes. Não mexer na Evolution API, no número do chatbot, em tokens nem em webhooks ativos. Migração para a API oficial: só análise e preparação até o Felipe autorizar.
+
+**Modelo:** Sonnet para o dia a dia. Avisar o Felipe para trocar para Opus em: migração de banco em produção, mudança que mexe ao mesmo tempo em caixa/crédito/estoque, bug crítico sem causa na primeira tentativa, decisão de arquitetura. Avisar para voltar ao Sonnet depois. O modelo só o Felipe troca.
+
+**Resposta:** curta (seção 11, item 9): só o que depende da ação dele, falhas/limitações e onde verificar; sem descrever o que foi implementado.
+
+---
+
 ## 1. Identidade do projeto
 
 Sistema web de gestão multimódulo para a rede de joalherias **Grupo Vilaça Joias**
@@ -580,5 +613,41 @@ Lição (deploy de edge function pelo conector): a camada de ferramentas troca `
   **Resposta automática (`disparo-webhook` v4):** curtida/reação, figurinha, aviso do sistema, 👍/emoji sozinho e "ok/obrigado/recebi…" → **não responde nada**. Qualquer outra mensagem (texto, áudio, foto) → link do atendimento + menu das lojas: se o último disparo para o telefone (tabela **`disparo_envios`**: fone8, loja, vendedora, tipo, 30 dias) foi de MC/JB/JN, mostra só a opção da loja (1 MARECHAL CENTER, 2 JOÃO BERALDO, 3 JARDIM NORTE) e "peça para falar com <vendedora>"; aniversário/mala direta/Ecommerce/Reforma/sem registro → as 3 lojas. Continua no máx. 1 resposta a cada 12 h por número; SAIR igual. O texto `DISPARO_RESPOSTA_TEXTO` deixou de ser usado.
   **Limite:** a "vez" é do número de disparo inteiro; se os dois crons rodarem no mesmo segundo, só um consegue (trava no banco). Os horários "Programados" das telas são previsão: com a fila cheia a mensagem pode atrasar alguns minutos.
 - 10/11 (37): **Número de disparo trocável sem redeploy** (`acompanhamento-auto` v11, `marketing-disparo` v6, `enviar-via` v8, `qr-instancia` v2): a instância do WhatsApp usada como número de DISPARO vem de `atendimento_segredos.DISPARO_INSTANCIA` (padrão `vilaca`; cache de 60 s; teste em `09-disparo-fila-unica`). **Em 10/11 o chip do `vilaca` (32 99961-9350) foi bloqueado** e o disparo passou para a instância **`vila`** = número **32 93500-7933** (o mesmo da Reforma), com o webhook da `vila` apontando para `disparo-webhook` (só `MESSAGES_UPSERT`). O número saiu da Reforma: a instância `reformajoias` foi **desconectada (logout)** — CHAT/Reforma/`enviar-via` da loja `loja_rj` ficam sem WhatsApp até alguém ler um QR novo nessa instância (o webhook dela continua apontando para o CHAT). Para **voltar ao outro chip**: reconectar a `vilaca` (QR) e gravar `DISPARO_INSTANCIA='vilaca'` (ou apagar a linha); conferir que o webhook da instância é o `disparo-webhook`. O número da Reforma carrega agora o risco de bloqueio dos disparos. Instâncias criadas pelo CHAT (`vila`, `vilacaloja2`) vêm com o webhook do CHAT — trocar para o do disparo antes de usar como disparo.
-- 11/11: **Número de disparo sem "SAIR", pós-venda sem avaliação e resposta automática Reforma × Vilaça** (`disparo-webhook` v5, `acompanhamento-auto` v12, `marketing-disparo` v7, `enviar-via` v9; testes em `tests/regressao/09`). (1) Nenhuma mensagem leva mais "responda SAIR" (o aviso antigo guardado em textos/fila é retirado na hora do envio), mas quem escreve SAIR/PARAR/CANCELAR… continua saindo da lista (tag MARKETING OFF + pendentes canceladas) **sem receber resposta**. (2) Pós-venda (Venda, Pedido e o automático) não pede avaliação do Google (`{avaliacao}` vira vazio). (3) Resposta automática decide **só pelo que o cliente mandou** (não pelo histórico de disparos — o cliente compra nas duas lojas; `disparo_envios` deixou de ser usado pela resposta): texto/legenda com "reforma", "reformar", "reforma joias", "@reformajoias" ou a palavra "RJ", ou FOTO em que a IA (Gemini, `GEMINI_API_KEY`) vê a logo/nome REFORMA JOIAS ou RJ → "Tudo da Reforma Joias é atendido e vendido pelo nosso Instagram. Vamos conversar por lá?" + instagram.com/reformajoias; qualquer outra coisa (inclusive foto sem a logo ou falha da IA) → "Este número só envia avisos. Vamos conversar pelo nosso WhatsApp de atendimento?" + wa.me/5532988307617 (link sozinho = botão Iniciar conversa). Sem menu de lojas e sem nome da vendedora. Curtida/figurinha/👍/"ok" continuam sem resposta. Máx. 1 resposta a cada 12 h por número **e por assunto** (`disparo_respostas.numero` = telefone ou telefone`:rj`). A função responde 200 na hora e trabalha em segundo plano (`EdgeRuntime.waitUntil`). **Limite:** a foto só é reconhecida se a logo estiver legível; a palavra "reformar" também conta como Reforma. API oficial do WhatsApp: nada mudou (decisão do Felipe).
-- 11/11 (2): **Visto de "já enviado" não gravava em Venda e Pedido** (causa real do 10/11 (29)). `vendas.html`, `painel-ordens.html` e `orcamentos.html` tinham uma cópia antiga do `WhatsAuto` num `<script>` embutido, carregado DEPOIS do `vilaca-extras.js`, que substituía a versão completa: devolvia `undefined` no sucesso (Venda/Pedido), sem `padrao`, `botao`/`rotulo`. Por isso o pós-venda enviado à mão (Venda e Pedido) e o botão do WhatsApp do Pedido mandavam a mensagem mas não gravavam `posVendaEnviadoEm`/`msgEnviadas`. Agora a cópia embutida só vale se o `vilaca-extras.js` não carregar (sai cedo se `WhatsAuto.padrao` existe) e devolve true/false; o `vilaca-extras.js` devolve false explícito nas falhas. Orçamento: o botão do WhatsApp (Quadro e detalhe) passou a gravar o visto do status atual (`gravarVistoOrc`). Teste: `tests/regressao/10-whatsauto-devolve-true.test.js`. **Dados (11/11):** a partir do `auditoria_log` (`via_whatsapp_enviada`), com o status da via NO MOMENTO do envio reconstruído pelos eventos `criar`/`status` do próprio log, foram gravados 68 vistos em 65 pedidos e 7 em orçamentos (só acrescenta chaves em `msgEnviadas`; backups `ordens_servico_backup_visto_20261111` e `orcamentos_backup_visto_20261111`). O JV14P (PRONTO, avisado à mão em 10/11) estava na fila automática e receberia o aviso de PRONTO de novo: marcado e retirado da fila. Pós-venda já estava todo marcado. **Marca sem sobrescrever:** `gravarMarcaEnvio` (vilaca-extras.js) relê a via (`selectOne`) e grava só a marca — não desfaz o que o robô, a Oficina ou a conversão em venda/pedido mudaram depois que a tela abriu; no Pedido atualiza o snapshot (`snapOrdem`) para o `saveOrders` não regravar a via. `enviar-via` v10: com o WhatsApp fora do ar a fila guarda uma mensagem por via e tipo (não por botão) e o visto vai para o status DESTINO (`statusDestino`). **Pós-venda na fila (corrigido em 11/11 (3)):** `enviar-via` v11 grava `marcar {tabela, chave:'posvenda', posVenda:true}` e o `marketing-disparo` v8 grava `posVendaEnviadoEm` ao sair e cancela se o pós-venda já foi enviado (robô ou à mão). **Popup "Avisar o cliente?" do Pedido** (`openNotifyModal`) só aparece se a mensagem automática de APROVADO falhou (ou sem telefone); se saiu ou ficou na fila do WhatsApp, não pergunta (`WhatsAuto.ultimo {ok, fila}`). Venda e Orçamento já não tinham pergunta pós-lançamento (o aviso é automático/por botão). **Limite:** os vistos gravados pelo backfill de 10/11 (29) usaram o status ATUAL (ex.: `em_producao`) e não o do envio; ficaram (não foram apagados).
+
+---
+
+## 24. WHATSAPP 100% PELA API OFICIAL DA META (11/11/2026 — ordem do Felipe: "tudo pelo 32 98830-7617")
+
+**Regra:** todo envio automático ou por botão do app sai pela API oficial (Cloud API) do número **+55 32 98830-7617**, exceto a loja **Reforma Joias** (chip/instância `reformajoias`). O SMBot continua atendendo no mesmo número; o app só dispara. Sem restrição de horário nos envios oficiais. O chip `vilaca` (Evolution) ficou como reserva: `OFICIAL_TUDO = 'off'` em `atendimento_segredos` devolve tudo ao chip.
+
+**IDs (não são segredos):** WABA `832732369333864` · Phone Number ID `852659187938572` · app "Vilaca Disparos" `1160210449773832` · portfólio Vilaça Joias `660526701673870` · usuário do sistema "WhatsApp" `61590748018168`. Segredos nas Edge Secrets do Supabase (Felipe cadastrou): `WHATSAPP_CLOUD_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_WABA_ID`. Nunca no repo/chat.
+
+**Regras da Meta que importam:**
+- Mensagem iniciada pela empresa fora da janela de 24 h só vai por MODELO aprovado (cobrado por mensagem; Utilidade < Marketing). Texto livre fora da janela é ACEITO pela API (devolve wamid) mas NÃO é entregue — nunca confiar em "aceito" para texto livre (`OFICIAL_LIVRE` fica desligado).
+- Modelo: o corpo não pode começar nem terminar com variável; cada variável precisa de exemplo; parâmetro sem quebra de linha/tab e sem 4+ espaços seguidos. Meta reclassifica Utilidade → Marketing quando o conteúdo é livre (foi o caso do `chamar_cliente_vilaca`).
+- Editor do WhatsApp Manager auto-fecha chaves ("{{1" vira "{{1}}"); por isso os modelos são criados pela função `meta-modelos` (Graph API), não pela tela.
+
+**Modelos (idioma pt_BR):**
+| Modelo | Categoria | Variáveis | Uso |
+|---|---|---|---|
+| `aniversario_vilaca` | Marketing | {{1}} nome | aniversário |
+| `via_acompanhamento` | Utilidade | nome, vendedora, loja, link | via (Venda/Pedido/Orçamento) |
+| `pos_venda_garantia` | Utilidade | {{1}} nome | pós-venda (botão e automático) |
+| `chamar_cliente_vilaca` | Marketing | nome, atendente, loja, texto | botão "Chamar cliente" |
+| `orcamento_acompanhamento` | Marketing | nome, loja, texto, link | ações de fixação do orçamento |
+| `pedido_pronto_acompanhamento` | Utilidade (em análise) | nome, vendedora, loja, link | aviso de PEDIDO PRONTO (liga com `PRONTO_API='on'` quando aprovado) |
+| `campanha_vilaca` | Marketing | nome, texto | campanhas do Marketing |
+Antigos aprovados e sem uso: `os_pronta_retirada`, `retorno_atendimento`, `black_friday_novembro`. (`os_pronto_vilaca`, `pedido_pronto_retirada`, `pedido_pronto_v2` e `pedido_pronto_vilaca` foram recusados pela Meta com INCORRECT_CATEGORY; o aceito segue a estrutura do `via_acompanhamento`. A API não deixa apagar modelo recusado: falta permissão de gerenciar — nomes recusados ficam ocupados.)
+
+**Edge Functions envolvidas:**
+- `disparo-cloud` (verify_jwt false; só aceita header `x-cron-token` = `atendimento_segredos.MARKETING_CRON_TOKEN`): envia as linhas de `marketing_fila` com `status='cloud_fila'`; reserva a linha (`cloud_envio`) antes de enviar (sem duplicar); até 80 linhas / 42 s por rodada, 1,1 s entre envios; sucesso → `enviado` + `disparo_envios` (origem `cloud_api`) + `auditoria_log` + marca ✓ (`marcar`); falha → `falhou`; 401/code 190 para a rodada; linhas `cloud_envio` há > 5 min voltam para `cloud_fila`. Escolhe o modelo por `tipo`/`registro_tabela` (função `modelo()`).
+- `enviar-via` (v17): botões do app. Número de disparo + loja ≠ Reforma + `OFICIAL_TUDO` ≠ 'off' → grava a linha `cloud_fila` e chama `disparo-cloud` na hora; devolve `{ok:true, instancia:"oficial"}` quando enviou. Chamar cliente só sai pela API com `CHAMAR_API='on'` (já ligado).
+- `acompanhamento-auto` (v17): pós-venda (venda e pedido entregue) → `pos_venda_garantia`; ações de orçamento (e a do orçamento salvo, `abertoAgora`) → `orcamento_acompanhamento` (`ORC_API='on'`, ligado); aviso de pedido pronto → modelo de pedido pronto (`PRONTO_API`, aguardando aprovação); promove campanhas `pendente` do Marketing para `cloud_fila` (`CAMPANHA_API='on'`, ligado) e aciona o `disparo-cloud`. Envio oficial sai em sequência (2 s) dentro de 9h–20h. Pausa global só se 3 falhas seguidas.
+- `meta-modelos` (v2): lista/cria modelos na Meta (apagar não funciona: sem permissão) (header `x-cron-token`). Uso: `net.http_post` com `{"op":"list"}` ou `{"op":"create","template":{...}}`; a resposta fica em `net._http_response`.
+- Ponte `ponte_disparo_cloud()` + cron `ponte-disparo-cloud` (todo minuto, criado por Felipe no SQL Editor): converte `pendente` de `via`/`aniversario`/`posVenda` (menos Chamar cliente) em `cloud_fila` e aciona `disparo-cloud`.
+
+**Chaves em `atendimento_segredos` (não são segredos, são interruptores):** `OFICIAL_TUDO` ('off' volta ao chip) · `CHAMAR_API` ('on') · `OFICIAL_LIVRE` (texto livre; manter desligado) · `ORC_API` ('on') / `CAMPANHA_API` ('on') / `PRONTO_API` (ligar só depois de a Meta aprovar o modelo — ligar antes gera falhas e pausa o robô).
+
+**Armadilhas:** (1) o classificador de ações do Claude bloqueia criar cron/função recorrente e gravar segredos — Felipe roda esses passos no SQL Editor/painel; (2) `net._http_response` guarda a resposta de `net.http_post` (consultar por id); (3) deploy de Edge Function pelo MCP exige JSON escapado (`\\` e `\"`); conferir o fonte publicado com `get_edge_function`; (4) 3 envios de texto livre de 11/11 (vias JV18P e JV79V + teste do Chamar cliente) podem não ter chegado.
+
+**Estado em 11/11/2026 (fim do dia):** Meta aprovou `chamar_cliente_vilaca`, `orcamento_acompanhamento`, `campanha_vilaca` (Marketing). Falta aprovar `pedido_pronto_acompanhamento`. Campanha: o `disparo-cloud` usa `campanha_vilaca` com o miolo do texto (sem saudação/links) como {{2}}. Orçamento: {{3}} = miolo do texto da ação (sem saudação, links, convite para falar nem pedido de 👍; numa linha só), {{4}} = link do orçamento. Reforma Joias continua no chip próprio. **Pendências:** textos/rodapés do front-end ainda citam o outro número (index.html ~3011/3018/3024, orcamentos.html:843, vendas.html:4737, cupom.js:54, marketing.html) — trocar para "responder esta mensagem" e publicar pelo upload; testes de regressão `node tests/run.js` antes.
