@@ -52,25 +52,66 @@ module.exports = { casos: [
   { nome: 'Venda: pós-venda enviado à mão grava posVendaEnviadoEm', bug: BUG, rodar: async ({ t, abrir }) => {
     const p = await abrir('vendas.html', { servidor: b => (b.telefone ? { ok: true, instancia: 'vila' } : undefined) });
     const r = await p.evaluate(async () => {
-      const salvos = []; window.vendaSalvar = async v => { salvos.push(v.id); return true; };
+      const salvos = []; const g0 = window.gatewayCall;
+      window.gatewayCall = async b => { if (b.op === 'upsert') { salvos.push(b.params.row); return { ok: true }; } if (b.op === 'selectOne') return { data: null }; return g0(b); };
       window.MarketingOff = { permitir: async () => true };
       vendas.push({ id: 'vPV', codigoVia: 'JN9V', cliente: 'Joao', telefone: '32999990000', lojaId: 'loja_jn', data: '2026-11-01' });
       await enviarPosVenda('vPV');
       const v = vendas.find(x => x.id === 'vPV');
-      return { em: !!v.posVendaEnviadoEm, salvos };
+      return { em: !!v.posVendaEnviadoEm, salvo: salvos.some(x => x.id === 'vPV' && x.payload.posVendaEnviadoEm) };
     });
-    t.ok(r.em, 'posVendaEnviadoEm gravado'); t.ok(r.salvos.includes('vPV'), 'venda salva');
+    t.ok(r.em, 'posVendaEnviadoEm na tela'); t.ok(r.salvo, 'posVendaEnviadoEm gravado no servidor');
   } },
   { nome: 'Orçamento: botão do WhatsApp (Quadro) grava o visto do status atual', bug: 'botão do WhatsApp do Orçamento não marcava msgEnviadas', rodar: async ({ t, abrir }) => {
     const p = await abrir('orcamentos.html', { servidor: b => (b.telefone ? { ok: true, instancia: 'vila' } : undefined) });
     const r = await p.evaluate(async () => {
-      const salvos = []; window.orcamentoSalvar = async o => { salvos.push(o.id); return true; };
+      const salvos = []; const g0 = window.gatewayCall;
+      window.gatewayCall = async b => { if (b.op === 'upsert') { salvos.push(b.params.row); return { ok: true }; } if (b.op === 'selectOne') return { data: null }; return g0(b); };
       window.MarketingOff = { permitir: async () => true };
       orcamentos.push({ id: 'qW', codigoVia: 'MC9O', cliente: 'Carlos', telefone: '32999990000', status: 'pendente', lojaId: 'loja_mc', itens: [] });
       await enviarWhatsAppOrcId('qW');
       const o = orcamentos.find(x => x.id === 'qW');
-      return { visto: !!(o.msgEnviadas && o.msgEnviadas.pendente), salvos };
+      return { visto: !!(o.msgEnviadas && o.msgEnviadas.pendente), salvo: salvos.some(x => x.id === 'qW' && x.payload.msgEnviadas && x.payload.msgEnviadas.pendente) };
     });
-    t.ok(r.visto, 'msgEnviadas[status atual] gravado'); t.ok(r.salvos.includes('qW'), 'orçamento salvo');
+    t.ok(r.visto, 'msgEnviadas[status atual] na tela'); t.ok(r.salvo, 'gravado no servidor');
+  } },
+  { nome: 'Marca de "já enviado" relê a via do servidor e NÃO grava por cima mudança feita depois (robô, Oficina, conversão)', bug: 'o visto gravava a cópia velha da tela inteira: desfazia status/passo do robô e apagava convertidoEm', rodar: async ({ t, abrir }) => {
+    const casos = [
+      ['orcamentos.html', async () => {
+        const novo = { id: 'qS', codigoVia: 'MC5O', cliente: 'Ana', telefone: '32999990000', status: 'status_fix', autoMensagensEnviadas: 2, convertidoEm: '2026-11-11T10:00:00Z', lojaId: 'loja_mc', itens: [] };
+        const salvos = []; const g0 = window.gatewayCall;
+        window.gatewayCall = async b => { if (b.op === 'selectOne') return { data: { id: 'qS', payload: JSON.parse(JSON.stringify(novo)) } }; if (b.op === 'upsert') { salvos.push(b.params.row.payload); return { ok: true }; } return g0(b); };
+        window.MarketingOff = { permitir: async () => true };
+        orcamentos.push({ id: 'qS', codigoVia: 'MC5O', cliente: 'Ana', telefone: '32999990000', status: 'pendente', autoMensagensEnviadas: 1, lojaId: 'loja_mc', itens: [] });
+        await enviarWhatsAppOrcId('qS');
+        const g = salvos[salvos.length - 1] || {};
+        return { status: g.status, n: g.autoMensagensEnviadas, conv: g.convertidoEm, visto: g.msgEnviadas && g.msgEnviadas.pendente, tela: orcamentos.find(x => x.id === 'qS').status };
+      }, { status: 'status_fix', n: 2, conv: '2026-11-11T10:00:00Z', tela: 'status_fix' }],
+      ['painel-ordens.html', async () => {
+        const novo = { id: 'oS', codigoVia: 'MC4P', cliente: 'Bia', telefone: '32999990000', status: 'oficina_pronto', historicoOficina: [{ em: 1 }], lojaId: 'loja_mc' };
+        const salvos = [];
+        window.gatewayCall = async b => { if (b.op === 'selectOne') return { data: { id: 'oS', payload: JSON.parse(JSON.stringify(novo)) } }; if (b.op === 'upsert') salvos.push(b.params.row.payload); return { ok: true }; };
+        window.MarketingOff = { permitir: async () => true };
+        const o = { id: 'oS', codigoVia: 'MC4P', cliente: 'Bia', telefone: '32999990000', status: 'em_producao', lojaId: 'loja_mc' };
+        await sendWhatsApp(o);
+        const g = salvos[salvos.length - 1] || {};
+        return { status: g.status, hist: (g.historicoOficina || []).length, visto: g.msgEnviadas && g.msgEnviadas.em_producao, tela: o.status };
+      }, { status: 'oficina_pronto', hist: 1, tela: 'oficina_pronto' }],
+    ];
+    for (const [tela, fn, esp] of casos) {
+      const p = await abrir(tela, { servidor: b => (b.telefone ? { ok: true, instancia: 'vila' } : undefined) });
+      const r = await p.evaluate(fn);
+      for (const k of Object.keys(esp)) t.igual(r[k], esp[k], tela + ': ' + k + ' do servidor preservado');
+      t.ok(r.visto, tela + ': visto gravado');
+      await p.context().close();
+    }
+  } },
+  { nome: 'Fila (WhatsApp fora do ar): uma mensagem por via e por tipo, não por botão', bug: 'cada botão clicado criava outra linha na fila e o cliente recebia a mesma via 2–3 vezes', rodar: async ({ t, ler }) => {
+    const s = ler('enviar-via.ts');
+    const i = s.indexOf('if (regId) {', s.indexOf('let ja: any = null;'));
+    const linha = s.slice(i, s.indexOf('\n', i));
+    t.ok(i > 0 && /eq\("registro_id", regId\)/.test(linha), 'procura a pendente pela via');
+    t.ok(!/eq\("botao"/.test(linha), 'não separa por botão');
+    t.ok(/registro_tabela", tipo/.test(linha), 'separa por tipo de mensagem (via × pós-venda)');
   } },
 ] };

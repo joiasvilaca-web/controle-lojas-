@@ -3797,10 +3797,12 @@ async function marcarMsgEnviadaOS(order){
   try{
     if(!order) return;
     const agora = new Date().toISOString();
-    order.msgEnviadas = order.msgEnviadas || {}; order.msgEnviadas[order.status] = agora;
-    (order.acoesLog = order.acoesLog || []).push({ em:agora, nome:statusLabel(order.status), por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
-    const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
-    if(rr && rr.error) console.error('erro ao gravar visto de mensagem', order.id, rr.error);
+    const st = order.status, quem = (currentUser&&currentUser.nome)||'';
+    // 11/11: relê a via do servidor e grava só a marca (gravarMarcaEnvio, vilaca-extras.js) — não grava por cima mudança feita depois pela Oficina/robô
+    await gravarMarcaEnvio('ordens_servico', order.id, order, p=>{
+      p.msgEnviadas = p.msgEnviadas || {}; p.msgEnviadas[st] = agora;
+      (p.acoesLog = p.acoesLog || []).push({ em:agora, nome:statusLabel(st), por:quem, via:'whatsapp', auto:false });
+    });
     if(typeof window.__renderTabelaOS==='function') window.__renderTabelaOS();
   }catch(e){ console.error('marcarMsgEnviadaOS', e); }
 }
@@ -6113,12 +6115,13 @@ function renderPainel(main){
     const texto = modelo.replaceAll('{cliente}', nome).replaceAll('{loja}', nomeLoja).replaceAll('{via}', viaTxt(o)).replaceAll('{avaliacao}', av).replace(/\n{3,}/g,'\n\n').trim();
     const ok = await WhatsAuto.enviar({ telefone:o.telefone, texto, lojaId:o.lojaId||'', senha:__gatewaySenha, tipo:'posvenda', registroId:o.id, via:viaTxt(o) });
     if(ok!==true) return false;
-    const agora = new Date().toISOString();
-    o.posVendaEnviadoEm = agora; o.posVendaPor = (currentUser&&currentUser.nome)||'';
-    o.msgEnviadas = o.msgEnviadas || {}; o.msgEnviadas.posvenda = agora;
-    (o.acoesLog = o.acoesLog || []).push({ em:agora, passo:'os_posvenda', nome:'Pós-venda', por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
-    delete o.autoAgenda;
-    await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:o.id, payload:o, updated_at:new Date().toISOString() } } });
+    const agora = new Date().toISOString(), quem = (currentUser&&currentUser.nome)||'';
+    await gravarMarcaEnvio('ordens_servico', o.id, o, p=>{   // 11/11: relê a via antes (não grava por cima mudança feita depois)
+      p.posVendaEnviadoEm = agora; p.posVendaPor = quem;
+      p.msgEnviadas = p.msgEnviadas || {}; p.msgEnviadas.posvenda = agora;
+      (p.acoesLog = p.acoesLog || []).push({ em:agora, passo:'os_posvenda', nome:'Pós-venda', por:quem, via:'whatsapp', auto:false });
+      delete p.autoAgenda;
+    });
     renderTable();
     return true;
   }

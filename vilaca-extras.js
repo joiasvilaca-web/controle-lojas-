@@ -205,3 +205,22 @@
   }
   window.WhatsAuto = { enviar: enviar, padrao: padrao };
 })();
+
+/* 11/11: grava SÓ a marca de envio ("já enviado": msgEnviadas, posVendaEnviadoEm, acoesLog) na via.
+   Relê a via do servidor antes e aplica a marca nela: nunca grava por cima a cópia da tela, que pode estar velha
+   (o envio automático, a Oficina ou a conversão em venda/pedido podem ter mudado a via depois que a tela abriu).
+   A cópia da tela fica igual ao que foi gravado. Se o servidor não devolver a via (sem erro), usa a cópia da tela. */
+window.gravarMarcaEnvio = async function(tabela, id, local, aplicar){
+  try{
+    if(typeof window.gatewayCall!=='function' || !id || typeof aplicar!=='function') return false;
+    var r = await window.gatewayCall({ op:'selectOne', table:tabela, params:{ column:'id', value:id } });
+    if(r && r.error){ console.error('gravarMarcaEnvio: não foi possível reler a via', tabela, id, r.error); return false; }
+    var atual = (r && r.data && r.data.payload) || local;
+    if(!atual) return false;
+    aplicar(atual);
+    var w = await window.gatewayCall({ op:'upsert', table:tabela, params:{ row:{ id:id, payload:atual, updated_at:new Date().toISOString() } } });
+    if(w && w.error){ console.error('gravarMarcaEnvio: erro ao gravar', tabela, id, w.error); return false; }
+    if(local && local!==atual){ Object.keys(local).forEach(function(k){ if(!(k in atual)) delete local[k]; }); Object.assign(local, atual); }
+    return true;
+  }catch(e){ console.error('gravarMarcaEnvio', e); return false; }
+};
