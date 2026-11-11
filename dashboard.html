@@ -236,6 +236,13 @@
   .vg-head{ display:flex; justify-content:space-between; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
   .dash-painel label.f:has(> input[type="date"]), .dash-painel label.f:has(> input[type="month"]){ display:none !important; }
   .barra-periodo{ display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center; margin:4px 0 14px; padding:10px 12px; background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .sel-lojas{ position:relative; }
+  .sel-lojas summary{ list-style:none; cursor:pointer; border:1px solid var(--line); background:var(--surface-2); border-radius:10px; padding:6px 12px; min-height:32px; font-size:13px; font-weight:600; display:inline-flex; align-items:center; }
+  .sel-lojas summary::-webkit-details-marker{ display:none; }
+  .sel-lojas summary::after{ content:"▾"; margin-left:8px; }
+  .sel-lojas-box{ position:absolute; z-index:30; top:calc(100% + 6px); left:0; min-width:230px; max-height:60vh; overflow:auto; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:8px; box-shadow:var(--t-shadow-sm, 0 8px 24px rgba(0,0,0,.18)); display:flex; flex-direction:column; gap:2px; }
+  .sel-lojas-box label{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:8px; font-size:13.5px; cursor:pointer; }
+  .sel-lojas-box label:hover{ background:var(--surface-2); }
   .barra-periodo-txt{ font-size:12.5px; color:var(--ink-soft); }
   .vg-periodo button:disabled{ opacity:.45; cursor:default; }
   .vg-periodo{ display:inline-flex; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:3px; gap:2px; }
@@ -686,12 +693,42 @@
     if(!ids.length && !nomes.length) return true;   // registro antigo sem loja
     return ids.some(id=> lojasDashIds.has(id)) || nomes.some(n=> lojasDashNomes.has(n));
   }
+  /* SELETOR DE LOJAS (11/11): quais lojas entram em TODOS os números do módulo. lojasSelG = Set de ids (null = todas as que a pessoa pode ver). */
+  let lojasSelG = null, baseDash = null, abertoLojasG = false;
+  function regDaLojaSel(r){
+    if(!lojasSelG || !r) return true;
+    const ids = [r.lojaId, r.lojaOrigemId, r.lojaDestinoId].filter(Boolean);
+    const nomes = [r.loja, r.lojaOrigem, r.lojaDestino].filter(Boolean);
+    if(ids.some(id=> lojasSelG.has(id))) return true;
+    const lojas = (configCompleto && configCompleto.lojas) || [];
+    return nomes.some(n=> lojas.some(l=> lojasSelG.has(l.id) && (l.nome === n || l.abreviacao === n)));
+  }
+  function aplicarSelecaoLojas(){
+    if(!baseDash) return;
+    orders = baseDash.orders.filter(regDaLojaSel); vendas = baseDash.vendas.filter(regDaLojaSel); orcamentos = baseDash.orcamentos.filter(regDaLojaSel);
+    gastosDash = baseDash.gastosDash.filter(regDaLojaSel); transferencias = baseDash.transferencias.filter(regDaLojaSel); reposicoes = baseDash.reposicoes.filter(regDaLojaSel);
+  }
+  function rotuloLojasSel(){
+    const lojas = (configCompleto && configCompleto.lojas) || [];
+    if(!lojasSelG || lojasSelG.size === 0 || lojasSelG.size >= lojas.length) return "todas as lojas";
+    return lojas.filter(l=> lojasSelG.has(l.id)).map(l=> l.nome).join(", ");
+  }
+  function lojasSelHtml(){
+    const lojas = (configCompleto && configCompleto.lojas) || [];
+    if(lojas.length < 2) return "";
+    const todas = !lojasSelG || lojasSelG.size === 0 || lojasSelG.size >= lojas.length;
+    return `<details class="sel-lojas" id="selLojasG" ${abertoLojasG?"open":""}><summary title="Escolha quais lojas entram nos números">Lojas: ${escapeHtml(todas ? "Todas" : (lojasSelG.size===1 ? lojas.find(l=>lojasSelG.has(l.id)).nome : lojasSelG.size+" selecionadas"))}</summary>
+      <div class="sel-lojas-box"><label><input type="checkbox" data-loja-todas ${todas?"checked":""}> <b>Todas as lojas</b></label>
+      ${lojas.map(l=>`<label><input type="checkbox" data-loja-g="${escapeHtml(l.id)}" ${todas || lojasSelG.has(l.id) ? "checked":""}> ${escapeHtml(l.nome)}</label>`).join("")}</div></details>`;
+  }
   async function loadAllData(){
     await loadAllDataBruto();
     if(lojasDashIds){
       orders = orders.filter(regDaMinhaLoja); vendas = vendas.filter(regDaMinhaLoja); orcamentos = orcamentos.filter(regDaMinhaLoja);
       gastosDash = gastosDash.filter(regDaMinhaLoja); transferencias = transferencias.filter(regDaMinhaLoja); reposicoes = reposicoes.filter(regDaMinhaLoja);
     }
+    baseDash = { orders, vendas, orcamentos, gastosDash, transferencias, reposicoes };
+    aplicarSelecaoLojas();
   }
   async function loadAllDataBruto(){
     falhasCargaDash = [];
@@ -974,6 +1011,7 @@
     const mostraTransf = currentUser.nivel !== "oficina";
     const ehDiretoriaDash = currentUser.nivel === "diretoria";   // 04/11: Custo e margem é só da diretoria
     ultimaAtualizacaoDash = new Date();
+    aplicarSelecaoLojas();
 
     const abas = [];
     if(mostraFinanceiro) abas.push(["geral","Visão geral"], ["analises","Análises"], ["recebimentos","Recebimentos"], ["formas","Formas de pagamento"]);
@@ -1194,8 +1232,10 @@
     return `<div class="barra-periodo" id="barraPeriodoG" role="group" aria-label="Período do Dashboard">
       <div class="vg-periodo" role="group" aria-label="Tipo de período">${VG_PERIODOS.map(([k,rot])=>`<button type="button" data-per-g="${k}" class="${k===perG?"active":""}" aria-pressed="${k===perG}">${rot}</button>`).join("")}</div>
       <div class="vg-periodo" role="group" aria-label="Navegar no período" style="align-items:center;"><button type="button" data-nav-g="-1" aria-label="Anterior" title="Anterior">◀</button><span style="min-width:170px;text-align:center;font-size:13px;font-weight:700;text-transform:capitalize;padding:0 6px;" title="${escapeHtml(a===b?fmtDate(a):fmtDate(a)+" a "+fmtDate(b))}">${escapeHtml(vgRotulo(perG, refG))}</span><button type="button" data-nav-g="1" aria-label="Próximo" title="Próximo" ${atual?"disabled":""}>▶</button><button type="button" data-nav-g="0" ${atual?"disabled":""}>${rotAtual}</button></div>
+      ${lojasSelHtml()}
       <span class="barra-periodo-txt">${a===b?fmtDate(a):fmtDate(a)+" a "+fmtDate(b)}${atual && perG!=="dia" ? " (até hoje)" : ""}</span></div>`;
   }
+  document.addEventListener("click", e=>{ const d = document.getElementById("selLojasG"); if(d && d.open && !d.contains(e.target)){ d.open = false; abertoLojasG = false; } });
   function renderTudoPeriodo(){
     sincronizarPeriodoG();
     const bp = document.getElementById("barraPeriodoG"); if(bp) bp.outerHTML = barraPeriodoHtml(), ligarBarraPeriodoG();
@@ -1211,6 +1251,22 @@
   }
   function ligarBarraPeriodoG(){
     const bp = document.getElementById("barraPeriodoG"); if(!bp) return;
+    const det = bp.querySelector("#selLojasG");
+    if(det){
+      det.addEventListener("toggle", ()=>{ abertoLojasG = det.open; });
+      const lojas = (configCompleto && configCompleto.lojas) || [];
+      det.addEventListener("change", e=>{
+        const t = e.target; if(!t || t.type !== "checkbox") return;
+        if(t.hasAttribute("data-loja-todas")) lojasSelG = null;
+        else {
+          const marcadas = new Set([...det.querySelectorAll("[data-loja-g]")].filter(x=> x.checked).map(x=> x.getAttribute("data-loja-g")));
+          if(marcadas.size === 0){ t.checked = true; return; }   // pelo menos uma loja
+          lojasSelG = marcadas.size >= lojas.length ? null : marcadas;
+        }
+        abertoLojasG = true;
+        aplicarSelecaoLojas(); renderTudoPeriodo();
+      });
+    }
     bp.querySelectorAll("[data-per-g]").forEach(b=> b.addEventListener("click", ()=>{ perG = b.dataset.perG || "dia"; renderTudoPeriodo(); }));
     bp.querySelectorAll("[data-nav-g]").forEach(b=> b.addEventListener("click", ()=>{
       const n = Number(b.dataset.navG);
@@ -1334,7 +1390,7 @@
       <div class="vg-head">
         <div>
           <h2 class="section-title">Visão geral</h2>
-          <p class="section-sub">${ini === fim ? fmtDate(fim) : `${fmtDate(ini)} a ${fmtDate(fim)}`} · todas as lojas</p>
+          <p class="section-sub">${ini === fim ? fmtDate(fim) : `${fmtDate(ini)} a ${fmtDate(fim)}`} · ${escapeHtml(rotuloLojasSel())}</p>
         </div>
       </div>
       <div class="vg-kpis">
