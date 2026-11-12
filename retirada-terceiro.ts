@@ -300,11 +300,22 @@ Deno.serve(async (req) => {
     if (acao === "ciente") {
       const reg = await lerReg(tipo, id);
       const chave = cienteChave(via, reg);
-      const leituras = Array.isArray(via.leituras) ? via.leituras : [];
       // todo acesso gera um registro (log de acesso): não deduplica
-      leituras.push({ status: chave, confirmadoEm: new Date().toISOString(), ciente: true, ua: String(req.headers.get("user-agent") || "").slice(0, 160), ip: String(req.headers.get("x-forwarded-for") || "").split(",")[0].trim() });
+      const evento = { status: chave, confirmadoEm: new Date().toISOString(), ciente: true, ua: String(req.headers.get("user-agent") || "").slice(0, 160), ip: String(req.headers.get("x-forwarded-for") || "").split(",")[0].trim() };
+      // Acréscimo ATÔMICO (auditoria 11/11/2026): antes gravávamos o payload INTEIRO de volta
+      // (ler → alterar → escrever). Se a loja salvasse a mesma via no mesmo instante, uma das duas
+      // gravações era perdida em silêncio — inclusive um pagamento recém-lançado. A função SQL
+      // via_ciente_append faz o append numa só instrução UPDATE (o Postgres trava a linha).
+      // Se a função não existir ou falhar, cai no modo antigo: nunca deixa o cliente sem o Ciente.
+      let gravado = false;
+      try {
+        const { data, error } = await admin.rpc("via_ciente_append", { p_tabela: TABELA[tipo], p_id: id, p_evento: evento });
+        if (!error && data === true) gravado = true;
+      } catch (_e) { /* cai no modo antigo */ }
+      const leituras = Array.isArray(via.leituras) ? via.leituras : [];
+      leituras.push(evento);
       via.leituras = leituras.slice(-300);
-      { const { error } = await admin.from(TABELA[tipo]).update({ payload: via, updated_at: new Date().toISOString() }).eq("id", id); if (error) throw error; }
+      if (!gravado) { const { error } = await admin.from(TABELA[tipo]).update({ payload: via, updated_at: new Date().toISOString() }).eq("id", id); if (error) throw error; }
       return json({ ok: true, ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) });
     }
     if (acao === "cancelar") {
