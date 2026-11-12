@@ -2749,7 +2749,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
   }
 
   function nomeFormaPag(id){
-    if(id==='__cashback') return 'Cashback'; if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
+    if(id==='__cashback') return 'Cashback'; if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Saldo a pagar depois'; if(id==='__sem_custo') return 'Sem custo';
     const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||calcTotalItens(); }
@@ -2839,11 +2839,22 @@ function mountPagamentos(container, holder, getLojaVendaId){
       return;
     }
     if(saldo > 0.009){
-      hint.innerHTML = `<div class="aviso-linha falta">${ico('carteira')}<span>Falta lançar ${fmtMoeda(saldo)} <span class="fraco">(total ${fmtMoeda(total)} · lançado ${fmtMoeda(soma)})</span></span></div>`;
+      // 12/11: pagamento parcial — opção de deixar o SALDO para pagar depois (fica no cadastro do cliente; só entrega depois de pagar). Só no pedido novo.
+      const podeSaldoDepois = !holder.permitirPagarDepois && !temSemCusto && !holder.pagamentos.some(p=>p._modo==='editar');
+      hint.innerHTML = `<div class="aviso-linha falta">${ico('carteira')}<span>Falta lançar ${fmtMoeda(saldo)} <span class="fraco">(total ${fmtMoeda(total)} · lançado ${fmtMoeda(soma)})</span></span></div>`
+        + (podeSaldoDepois ? `<div style="margin-top:6px;"><button type="button" class="btn btn-ghost btn-sm" id="btnSaldoDepois">${ico('relogio',14)} Pagar o saldo de ${fmtMoeda(saldo)} depois</button> <span class="fraco" style="font-size:12px;">fica no cadastro do cliente · só entrega depois de pagar</span></div>` : '');
+      const bsd = hint.querySelector('#btnSaldoDepois');
+      if(bsd) bsd.addEventListener('click', ()=>{
+        holder.pagamentos.push({ formaId:'__fiado', valor:Math.round(saldo*100)/100, saldoDepois:true });
+        drawRows();
+      });
     } else if(saldo < -0.009){
       hint.innerHTML = `<div class="aviso-linha excede">${ico('alerta')}<span>Os pagamentos passam do total em ${fmtMoeda(Math.abs(saldo))}. Confira os valores.</span></div>`;
     } else {
-      hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + (temSemCusto ? 0 : acrescPag()))}</span></div>`;
+      const fi = holder.pagamentos.filter(p=>p.formaId==='__fiado' && p._modo!=='editar').reduce((a,p)=>a+(Number(p.valor)||0),0);
+      hint.innerHTML = (fi>0.009 && !holder.permitirPagarDepois)
+        ? `<div class="aviso-linha completo">${ico('check')}<span>Saldo de ${fmtMoeda(fi)} fica para pagar depois — vai para o cadastro do cliente e o pedido só é entregue depois de pagar.</span></div>`
+        : `<div class="aviso-linha completo">${ico('check')}<span>Pagamento completo — ${fmtMoeda(total + (temSemCusto ? 0 : acrescPag()))}</span></div>`;
     }
   }
 
@@ -2924,7 +2935,7 @@ function mountPagamentosEdicao(container, holder){
   }
 
   function nomeFormaPag(id){
-    if(id==='__cashback') return 'Cashback'; if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Fiado'; if(id==='__sem_custo') return 'Sem custo';
+    if(id==='__cashback') return 'Cashback'; if(id==='__credito') return 'Crédito cliente'; if(id==='__fiado') return 'Saldo a pagar depois'; if(id==='__sem_custo') return 'Sem custo';
     const f=(config.paymentTypes||[]).find(x=>x.id===id); return f ? f.nome : '—';
   }
   function totalPag(){ return Number(holder.valorTotal)||0; }
@@ -3025,7 +3036,7 @@ function mountPagamentosEdicao(container, holder){
 function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
   const formas = (config.paymentTypes||[]);
   let html = formas.map(pt=>`<option value="${pt.id}" ${formaIdAtual===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('');
-  const legado = { '__credito':'CRÉDITO CLIENTE', '__fiado':'Fiado', '__sem_custo':'Sem custo' };
+  const legado = { '__credito':'CRÉDITO CLIENTE', '__fiado':'Saldo a pagar depois', '__sem_custo':'Sem custo' };
   if(permitirCredito && window.__credCli.valor>0 && formaIdAtual!=='__credito') html += `<option value="__credito">CRÉDITO CLIENTE (disp. ${fmtMoeda(window.__credCli.valor)})</option>`;
   html += cbOpcaoHtml(formaIdAtual);
   if(legado[formaIdAtual]) html += `<option value="${formaIdAtual}" selected>${legado[formaIdAtual]}</option>`;
@@ -3034,9 +3045,38 @@ function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
 function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado/crédito não entram como recebido: fiado movimenta o caixa só quando as parcelas
    são pagas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
-function bloqueioSaldoEntrega(o){
-  const pend = valorAReceberDe({ valorTotal:o.valorTotal, pagamentos:(o.pagamentos||[]).filter(p=>p._modo!=='editar') });
-  if(pend > 0.009){ showToast('Há saldo a pagar de ' + fmtMoeda(pend) + '. Lance o pagamento antes de marcar como entregue.'); return true; }
+/* 12/11: quanto do "saldo a pagar depois" (fiado) desta via o cliente JÁ pagou no cadastro (Cadastro › Clientes › Fiado › Receber). */
+async function fiadoPagoDaOrdem(o){
+  try{
+    if(!o || !o.fiadoDebitoId) return 0;
+    const telD = onlyDigits(o.telefone||'');
+    let cli = null;
+    if(telD) cli = await buscarClientePorTelefoneOuCpf(o.telefone, '');
+    if(!cli && telD) cli = clientes.find(c=> onlyDigits(c.telefone||'')===telD) || null;
+    if(!cli && o.cliente){
+      const r = await gatewayCall({ op:'searchClients', params:{ termo: String(o.cliente).trim() } });
+      const nl = String(o.cliente).trim().toLowerCase();
+      cli = ((r&&r.data)||[]).find(c=>(c.nome||'').trim().toLowerCase()===nl) || null;
+    }
+    const d = cli && (cli.fiadoDebitos||[]).find(x=>x.id===o.fiadoDebitoId);
+    if(!d) return 0;
+    const noPedido = (o.pagamentos||[]).filter(p=>p.formaId==='__fiado').reduce((a,p)=>a+(Number(p.valor)||0),0);
+    return Math.min(Number(d.valorPago)||0, noPedido || (Number(d.valor)||0));
+  }catch(e){ console.error('fiadoPagoDaOrdem', e); return 0; }
+}
+async function saldoRealDaOrdem(o){
+  let pend = valorAReceberDe({ valorTotal:o.valorTotal, pagamentos:(o.pagamentos||[]).filter(p=>p._modo!=='editar') });
+  if(pend > 0.009 && o.fiadoDebitoId) pend = Math.max(0, pend - await fiadoPagoDaOrdem(o));
+  return pend;
+}
+async function bloqueioSaldoEntrega(o){
+  const pend = await saldoRealDaOrdem(o);
+  if(pend > 0.009){
+    showToast(o && o.fiadoDebitoId
+      ? 'Falta pagar ' + fmtMoeda(pend) + ' (saldo que ficou para depois). Receba em Cadastro › Clientes › Fiado antes de marcar como entregue.'
+      : 'Há saldo a pagar de ' + fmtMoeda(pend) + '. Lance o pagamento antes de marcar como entregue.');
+    return true;
+  }
   return false;
 }
 /** Valor ainda pendente (nunca negativo). */
@@ -3074,6 +3114,7 @@ function promptCiente(callback){
 /* 09/11: a entrega só sai com o CÓDIGO que o cliente mostra no link (rotativo) ou o de terceiro — ou liberada pela gerência com motivo.
  * Devolve o registro da retirada ({recebidoPor, metodo, portador, usadoPor, usadoEm…}) ou null se não concluiu. */
 async function entregarComCodigo(ord, saldoConferido){
+  if(!saldoConferido && ord && ord.fiadoDebitoId && (await saldoRealDaOrdem(ord)) <= 0.009) saldoConferido = true;   // 12/11: saldo que ficou para depois já foi pago no cadastro
   if(!window.RetiradaTerceiro){ showToast('Não foi possível abrir a conferência do código. Recarregue a página.'); return null; }
   const r = await RetiradaTerceiro.abrir({ tipo:'os', id:ord.id, via:viaTxt(ord), cliente:ord.cliente, telefone:ord.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||ord.lojaId, retomar:true, saldoConferido:!!saldoConferido });
   return r && r.retirada ? r.retirada : null;
@@ -5752,7 +5793,7 @@ function openEditModalCompleto(order, opts){
     let recebidoPor = order.recebidoPor || null;
     let recebidoEm = order.recebidoEm || null;
     if(status === 'entregue'){
-      if(bloqueioSaldoEntrega({ valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal, pagamentos: editPagHolder ? editPagHolder.pagamentos : order.pagamentos })) return;
+      if(await bloqueioSaldoEntrega({ fiadoDebitoId: order.fiadoDebitoId, telefone: order.telefone, cliente: order.cliente, valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal, pagamentos: editPagHolder ? editPagHolder.pagamentos : order.pagamentos })) return;
       if(order.status !== 'entregue'){
         const ret = await entregarComCodigo(order, true);
         if(!ret){ showToast('Entrega não confirmada: falta conferir o código do cliente.'); return; }
@@ -5999,7 +6040,7 @@ function renderPainel(main){
     if(!podeMudarStatus(previous, novo)){ showToast(motivoSemMudarStatus(previous)); desfazer(); return; }
     if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
-      if(bloqueioSaldoEntrega(ord)){ desfazer(); return; }
+      if(await bloqueioSaldoEntrega(ord)){ desfazer(); return; }
       const ret = await entregarComCodigo(ord);
       if(!ret){ showToast('Entrega não confirmada: falta conferir o código do cliente.'); desfazer(); return; }
       aplicarEntregaNaOrdem(ord, ret);
@@ -6246,10 +6287,10 @@ function renderPainel(main){
       b.addEventListener('click', ()=> sendEmail(orders.find(x=>x.id===b.dataset.mail)) );
     });
     wrap.querySelectorAll('[data-retirada]').forEach(b=>{
-      b.addEventListener('click', ()=>{
+      b.addEventListener('click', async ()=>{
         const o = orders.find(x=>x.id===b.dataset.retirada); if(!o || !window.RetiradaTerceiro) return;
-        if(bloqueioSaldoEntrega(o)) return;
-        RetiradaTerceiro.abrir({ tipo:'os', id:o.id, via:viaTxt(o), cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId, retomar:true,
+        if(await bloqueioSaldoEntrega(o)) return;
+        RetiradaTerceiro.abrir({ saldoConferido: !!o.fiadoDebitoId, tipo:'os', id:o.id, via:viaTxt(o), cliente:o.cliente, telefone:o.telefone, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'', nivel:(currentUser&&currentUser.nivel)||'', lojaId:(window.__lojaAtual&&window.__lojaAtual.id)||o.lojaId, retomar:true,
           aoConcluir: async (ret)=>{
             if(o.status==='entregue') return;
             aplicarEntregaNaOrdem(o, ret||{});
