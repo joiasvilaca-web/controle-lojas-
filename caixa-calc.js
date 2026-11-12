@@ -53,14 +53,18 @@
     return isFinite(n) ? n : 0;
   }
 
-  /** Valor que ENTROU no caixa por um pagamento. Ouro entregue a mais que a compra: entra o valor TOTAL entregue (valorEntregue);
-   *  a sobra fica de crédito do cliente (creditoSobra) e depois, quando o crédito for usado, não movimenta mais caixa nem comissão. */
-  function valorEntrada(p){
-    var v = valorDe(p), e = p && p.valorEntregue;
-    e = (e === '' || e == null) ? NaN : Number(e);
-    return (isFinite(e) && e > v + 0.004) ? e : v;
+  /** Valor que ENTROU no caixa por um pagamento. 12/11 (Felipe): ouro entregue a mais que a compra — a SOBRA vira crédito do cliente
+   *  e NÃO entra no caixa nem na comissão no dia da entrega; entra só quando o crédito for usado (pagamento __credito com creditoOuro). */
+  function valorEntrada(p){ return valorDe(p); }
+  function creditoSobra(p){
+    var e = p && p.valorEntregue; e = (e === '' || e == null) ? NaN : Number(e);
+    return (isFinite(e) && e > valorDe(p) + 0.004) ? e - valorDe(p) : 0;
   }
-  function creditoSobra(p){ return Math.max(0, valorEntrada(p) - valorDe(p)); }
+  /** Parte de um pagamento com CRÉDITO DO CLIENTE que veio de sobra de ouro: entra no caixa/comissão no dia do uso. */
+  function creditoOuroUsado(p){
+    if(!p || p.formaId !== '__credito') return 0;
+    var c = Number(p.creditoOuro); return isFinite(c) && c > 0 ? Math.min(c, valorDe(p)) : 0;
+  }
 
   function movimentos(dados, de, ate, lojaId){
     var formas = dados.formas || [], lojas = dados.lojas || [];
@@ -75,11 +79,17 @@
       (r.pagamentos || []).forEach(function(p){
         var v = valorEntrada(p); if(!v) return;
         var dia = String((p && p.data) || base || '').slice(0, 10); if(!dentro(dia)) return;
-        var sobra = creditoSobra(p), usado = valorDe(p);
+        var sobra = creditoSobra(p), usado = valorDe(p), ouroCred = creditoOuroUsado(p);
         var obsMov = obs;
-        if(sobra > 0.004) obsMov = (obs ? obs + ' · ' : '') + 'inclui ' + moeda(sobra) + ' que ficou de CRÉDITO do cliente (via ' + (r.codigoVia || r.via || '') + '): entrou no caixa agora; usar esse crédito depois não movimenta mais caixa nem comissão';
-        if(p.formaId === '__credito') obsMov = (obs ? obs + ' · ' : '') + 'crédito do cliente usado como forma de pagamento: o valor já entrou no caixa quando o crédito foi gerado (não movimenta caixa nem comissão)';
+        if(sobra > 0.004) obsMov = (obs ? obs + ' · ' : '') + 'o cliente entregou ' + moeda(usado + sobra) + ' em ouro; ' + moeda(sobra) + ' ficou de CRÉDITO (via ' + (r.codigoVia || r.via || '') + ') e só entra no caixa e na comissão quando o crédito for usado';
         var mov = { dia: dia, lojaId: r.lojaId || '', tipo: tipoVia(r, ehOS), via: r.codigoVia || r.via || '', cliente: r.cliente || '', forma: nomeForma(p, formas), formaId: p.formaId || '', valor: v, usado: usado, creditoSobra: sobra, reg: r, ehOS: !!ehOS, obs: obsMov };
+        if(p.formaId === '__credito'){
+          if(ouroCred > 0.004){
+            entradas.push(Object.assign({}, mov, { forma: 'OURO (CRÉDITO USADO)', valor: ouroCred, usado: ouroCred, creditoSobra: 0, creditoOuro: ouroCred, obs: (obs ? obs + ' · ' : '') + 'crédito de sobra de ouro usado agora: entra no caixa e na comissão neste dia' }));
+            if(v - ouroCred > 0.004) naoDinheiro.push(Object.assign({}, mov, { valor: v - ouroCred, usado: v - ouroCred, obs: (obs ? obs + ' · ' : '') + 'crédito do cliente (cancelamento/recarga) usado como forma de pagamento: não movimenta caixa nem comissão' }));
+          } else naoDinheiro.push(Object.assign(mov, { obs: (obs ? obs + ' · ' : '') + 'crédito do cliente usado como forma de pagamento: não movimenta caixa nem comissão' }));
+          return;
+        }
         if(NAO_DINHEIRO.indexOf(p.formaId) >= 0) naoDinheiro.push(mov); else entradas.push(mov);
       });
       // devolução de cancelamento: sai no dia do cancelamento
@@ -107,7 +117,7 @@
     return { entradas: entradas, saidas: saidas, naoDinheiro: naoDinheiro, creditosGerados: entradas.filter(function(m){ return m.creditoSobra > 0.004; }), totEntradas: soma(entradas), totSaidas: soma(saidas) };
   }
 
-  var api = { movimentos: movimentos, nomeForma: nomeForma, diaDeTs: diaDeTs, diaLancamento: diaLancamento, valorDe: valorDe, valorEntrada: valorEntrada, creditoSobra: creditoSobra, ehCanc: ehCanc, lojaIdDoGasto: lojaIdDoGasto, NAO_DINHEIRO: NAO_DINHEIRO };
+  var api = { movimentos: movimentos, nomeForma: nomeForma, diaDeTs: diaDeTs, diaLancamento: diaLancamento, valorDe: valorDe, valorEntrada: valorEntrada, creditoSobra: creditoSobra, creditoOuroUsado: creditoOuroUsado, ehCanc: ehCanc, lojaIdDoGasto: lojaIdDoGasto, NAO_DINHEIRO: NAO_DINHEIRO };
   if(typeof window !== 'undefined') window.CaixaCalc = api;
   if(typeof module !== 'undefined') module.exports = api;
 })();

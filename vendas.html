@@ -4107,6 +4107,8 @@ function renderNovaVenda(main){
         showToast(`Crédito insuficiente: o cliente tem ${fmtMoeda(clienteCadastro.credito)}. Diminua o valor em crédito.`);
         return;
       }
+      // 12/11: parte do crédito que veio de sobra de ouro — entra no caixa/comissão agora (no uso)
+      if(totalCredito>0 && window.CreditoOuro){ venda.creditoOuroUsado = CreditoOuro.distribuir(venda.pagamentos, CreditoOuro.parteOuro(clienteCadastro, totalCredito)); }
     }
     const ok = await vendaSalvar(venda);
     if(ok){
@@ -4115,7 +4117,7 @@ function renderNovaVenda(main){
         if(totalCredito>0){
           clienteCadastro.credito = (Number(clienteCadastro.credito)||0) - totalCredito;
           if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
-          clienteCadastro.creditoMovimentos.push({ data: venda.data, valor: -totalCredito, tipo:'uso', obs:`Venda ${String(venda.id).slice(-8)}` });
+          clienteCadastro.creditoMovimentos.push({ data: venda.data, valor: -totalCredito, tipo:'uso', ouro: Number(venda.creditoOuroUsado)||0, obs:`Venda ${String(venda.id).slice(-8)}` });
         }
         if(creditoGerado>0){
           clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + creditoGerado;
@@ -4282,7 +4284,7 @@ async function reverterEfeitosVenda(venda, acao){
     if(venda.creditoUsado > 0){
       clienteCadastro.credito = (Number(clienteCadastro.credito)||0) + venda.creditoUsado;
       if(!clienteCadastro.creditoMovimentos) clienteCadastro.creditoMovimentos = [];
-      clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: venda.creditoUsado, tipo:'estorno', obs:`${acao} venda ${String(venda.id).slice(-8)}` });
+      clienteCadastro.creditoMovimentos.push({ data: hoje(), valor: venda.creditoUsado, tipo:'estorno', ouro: Number(venda.creditoOuroUsado)||0, obs:`${acao} venda ${String(venda.id).slice(-8)}` });
       mudou = true;
     }
     if(venda.creditoGerado > 0){
@@ -5270,7 +5272,7 @@ function abrirFormularioEdicaoCompleta(v){
       if(v.creditoUsado > 0){
         clienteAntigo.credito = (Number(clienteAntigo.credito)||0) + v.creditoUsado;
         if(!clienteAntigo.creditoMovimentos) clienteAntigo.creditoMovimentos = [];
-        clienteAntigo.creditoMovimentos.push({ data: hoje(), valor: v.creditoUsado, tipo:'estorno', obs:`Edição da venda ${String(v.id).slice(-8)}` });
+        clienteAntigo.creditoMovimentos.push({ data: hoje(), valor: v.creditoUsado, tipo:'estorno', ouro: Number(v.creditoOuroUsado)||0, obs:`Edição da venda ${String(v.id).slice(-8)}` });
         mudou = true;
       }
       if(v.creditoGerado > 0){
@@ -5335,6 +5337,7 @@ function abrirFormularioEdicaoCompleta(v){
         return;
       }
     }
+    const ouroEd = (clienteNovo && totalCredito>0 && window.CreditoOuro) ? CreditoOuro.parteOuro(clienteNovo, totalCredito) : 0;   // 12/11
 
     const loja = (config.lojas||[]).find(l=>l.id===lojaId);
     const novoFiadoDebitoId = totalFiado>0 ? ('fd_'+Math.random().toString(36).slice(2)+Date.now().toString(36)) : null;
@@ -5345,7 +5348,7 @@ function abrirFormularioEdicaoCompleta(v){
       if(totalCredito>0){
         clienteNovo.credito = (Number(clienteNovo.credito)||0) - totalCredito;
         if(!clienteNovo.creditoMovimentos) clienteNovo.creditoMovimentos = [];
-        clienteNovo.creditoMovimentos.push({ data: hoje(), valor: -totalCredito, tipo:'uso', obs:`Venda ${String(v.id).slice(-8)} (editada)` });
+        clienteNovo.creditoMovimentos.push({ data: hoje(), valor: -totalCredito, tipo:'uso', ouro: ouroEd, obs:`Venda ${String(v.id).slice(-8)} (editada)` });
       }
       if(totalFiado>0){
         if(!clienteNovo.fiadoDebitos) clienteNovo.fiadoDebitos = [];
@@ -5369,6 +5372,7 @@ function abrirFormularioEdicaoCompleta(v){
     const tinhaSaldo = valorAReceberDe(v) > 0.009;   // v.pagamentos ainda são os de antes da edição
     v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV, tinhaSaldo ? hoje() : null);
     OuroPag.liquidar(v.pagamentos, creditoGeradoEd, config);
+    v.creditoOuroUsado = window.CreditoOuro ? CreditoOuro.distribuir(v.pagamentos, ouroEd) : 0;   // 12/11
     delete v.valorAVista; delete v.acrescimoCartao; CondPag.fecharTotal(v, config);
     v.momentoPagamento = pagHolder.momentoPagamento;
     v.emissaoNota = pagHolder.emissaoNota;

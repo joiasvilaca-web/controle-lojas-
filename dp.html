@@ -1620,9 +1620,13 @@ async function comOrdensGet(){
   comCache.ordens = ((r && r.data)||[]).map(row=>row.payload); return comCache.ordens;
 }
 /** 06/11: ouro entregue a mais que a compra entra pelo valor TOTAL entregue (a sobra vira crédito do cliente e, depois, usar o crédito não gera comissão de novo). */
-function comValorEntrada(p){ const e = p && p.valorEntregue != null && p.valorEntregue !== '' ? comNumBR(p.valorEntregue) : 0; const v = comNumBR(p && p.valor); return e > v + 0.004 ? e : v; }
+/** 12/11 (Felipe): ouro entregue a mais — a SOBRA vira crédito do cliente e NÃO entra na comissão na entrega; entra quando o crédito
+ *  de ouro for usado (pagamento __credito com creditoOuro, na data do uso). Crédito de cancelamento/recarga usado continua fora. */
+function comCreditoOuro(p){ if(!p || p.formaId!=='__credito') return 0; const c = Number(p.creditoOuro); return isFinite(c) && c>0 ? Math.min(c, comNumBR(p.valor)) : 0; }
+function comValorEntrada(p){ return p && p.formaId==='__credito' ? comCreditoOuro(p) : comNumBR(p && p.valor); }
+function comConta(p){ return p && (!COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) || comCreditoOuro(p)>0); }
 function comValorRecebido(reg){
-  return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) ? 0 : comValorEntrada(p)), 0));
+  return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (comConta(p) ? comValorEntrada(p) : 0), 0));
 }
 function comValorAReceber(reg){
   return comR2((reg.pagamentos||[]).reduce((acc,p)=> acc + (p.formaId==='__fiado' ? comNumBR(p.valor) : 0), 0));
@@ -1677,7 +1681,7 @@ function comLancamentosDoMes(mes, vendas, ordens, produtos){
     return { origem, id:reg.id, codigo:reg.codigoVia||'', lojaId:reg.lojaId||'', vendedoraNome:reg.vendedora||'', funcId:comIdFunc(f), cliente:(reg.cliente||''), classes: comItensClassificados(reg, origem, produtos) }; };
   const entrada = (base, data, valor, extra)=>{ if(valor>0.004 && noMes(data)) lanc.push({ ...base, tipoMov:'entrada', data, valor:comR2(valor), ...(extra||{}) }); };
   const devol = (base, data, valor, motivo)=>{ if(valor>0.004 && noMes(data)) lanc.push({ ...base, tipoMov:'devolucao', data, valor:comR2(valor), motivo:motivo||'' }); };
-  const pagamentosEmDinheiro = reg=> (reg.pagamentos||[]).filter(p=>!COM_FORMAS_NAO_RECEBIDAS.includes(p.formaId) && comNumBR(p.valor)>0);
+  const pagamentosEmDinheiro = reg=> (reg.pagamentos||[]).filter(p=>comConta(p) && comValorEntrada(p)>0);
 
   (vendas||[]).forEach(v=>{
     if(!v) return;

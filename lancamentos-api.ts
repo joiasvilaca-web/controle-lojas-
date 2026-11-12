@@ -4,6 +4,7 @@
 // v18 (01/11): lista de vendedoras montada pelos logins do app (vendedora/gerente/diretoria, chave = 1º nome) + a lista antiga;
 //   quem for desligado no DP sai da lista de lançamento (inativos). A lista vai para a tela em `vendedoras`.
 //   Cashback usado (__cashback) não conta como recebido.
+// v26 (12/11): crédito de sobra de ouro conta na comissão só quando é usado (pagamento __credito com creditoOuro).
 // v25 (12/11): o FECHAMENTO DA LOJA (tipo 'loja') também é automático: bruto, devolução e valor por categoria vêm da MESMA conta das vendedoras
 //   (só entram movimentos atribuídos a uma vendedora, por isso a soma das vendedoras = a loja). Fechamento salvo à mão vence o automático.
 //   Categoria: Pedido/O.S. pelo tipo do pedido (ALIANÇA, FABRICAÇÃO, RELÓGIO; o resto = SERVIÇO); Venda pelo produto de cada item
@@ -186,8 +187,12 @@ function calcularAutoCompleto(mes: string, base: any) {
     if (tipo === "venda") a.bruto += valor; else a.devolucao += valor;
     for (const [c, f] of Object.entries(fx)) a.cat[c] = (a.cat[c] || 0) + sinal * valor * (f as number);
   };
-  const recebido = (reg: any) => r2((reg.pagamentos || []).reduce((a: number, p: any) => a + (NAO_RECEBIDAS.includes(p.formaId) ? 0 : nb(p.valor)), 0));
-  const emDinheiro = (reg: any) => (reg.pagamentos || []).filter((p: any) => !NAO_RECEBIDAS.includes(p.formaId) && nb(p.valor) > 0);
+  // v26 (12/11): crédito de SOBRA DE OURO usado (pagamento __credito com creditoOuro) conta como venda no dia do uso; a sobra não conta na entrega (já não contava: só p.valor)
+  const credOuro = (p: any) => (p && p.formaId === "__credito" && Number(p.creditoOuro) > 0) ? Math.min(Number(p.creditoOuro), nb(p.valor)) : 0;
+  const valorPg = (p: any) => p && p.formaId === "__credito" ? credOuro(p) : nb(p && p.valor);
+  const conta = (p: any) => !NAO_RECEBIDAS.includes(p.formaId) || credOuro(p) > 0;
+  const recebido = (reg: any) => r2((reg.pagamentos || []).reduce((a: number, p: any) => a + (conta(p) ? valorPg(p) : 0), 0));
+  const emDinheiro = (reg: any) => (reg.pagamentos || []).filter((p: any) => conta(p) && valorPg(p) > 0);
   const origemPorDebito: Record<string, any> = {};
   const ehOS = new Set<any>();
   for (const v of base.vendas) if (v.tipo !== "recebimentoFiado" && v.fiadoDebitoId) origemPorDebito[v.fiadoDebitoId] = v;
@@ -201,7 +206,7 @@ function calcularAutoCompleto(mes: string, base: any) {
       continue;
     }
     const dataVenda = dataLocal(v.data);
-    for (const p of emDinheiro(v)) somar(v, "venda", dataLocal(p.data) || dataVenda, nb(p.valor), "venda");
+    for (const p of emDinheiro(v)) somar(v, "venda", dataLocal(p.data) || dataVenda, valorPg(p), "venda");
     if (v.status === "cancelada") {
       const saiu = v.caixaSaidaCancelamento != null && v.caixaSaidaCancelamento !== "" ? nb(v.caixaSaidaCancelamento) : recebido(v);
       somar(v, "devolucao", dataLocal(v.canceladoEm), saiu, "venda");
@@ -222,7 +227,7 @@ function calcularAutoCompleto(mes: string, base: any) {
     let houveEntrada = false;
     for (const p of emDinheiro(o)) {
       const dt = naVolta ? dataEntrega : (dataLocal(p.data) || dataCriacao);
-      if (dt) { somar(o, "venda", dt, nb(p.valor), "os"); houveEntrada = true; }
+      if (dt) { somar(o, "venda", dt, valorPg(p), "os"); houveEntrada = true; }
     }
     if (cancelada && houveEntrada) {
       const saiu = o.caixaSaidaCancelamento != null && o.caixaSaidaCancelamento !== "" ? nb(o.caixaSaidaCancelamento) : recebido(o);

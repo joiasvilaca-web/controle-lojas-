@@ -226,3 +226,36 @@ window.gravarMarcaEnvio = async function(tabela, id, local, aplicar){
     return true;
   }catch(e){ console.error('gravarMarcaEnvio', e); return false; }
 };
+
+/* 12/11 (Felipe): crédito de SOBRA DE OURO só entra no caixa e na comissão quando é USADO.
+   O cadastro do cliente guarda um saldo único (credito); a parte que veio de ouro é calculada pelos movimentos:
+   'ouro' (+) − estorno "(sobra do ouro)" − usos já marcados (m.ouro) + estornos de uso (m.ouro). No uso, a parte de ouro é
+   consumida primeiro e fica marcada no pagamento (__credito.creditoOuro) e no movimento 'uso' (ouro). */
+window.CreditoOuro = (function(){
+  function r2(v){ return Math.round((Number(v)||0)*100)/100; }
+  function disponivel(cli){
+    if(!cli) return 0;
+    var d = 0;
+    (cli.creditoMovimentos||[]).forEach(function(m){
+      var v = Number(m && m.valor)||0, o = Number(m && m.ouro)||0;
+      if(m.tipo==='ouro') d += v;
+      else if(m.tipo==='estorno' && /sobra do ouro/i.test(m.obs||'') && v<0) d += v;
+      else if(m.tipo==='uso') d -= o;
+      else if(m.tipo==='estorno' && o>0) d += o;
+    });
+    return r2(Math.max(0, Math.min(Number(cli.credito)||0, d)));
+  }
+  /** Quanto do crédito usado (total) sai do ouro. */
+  function parteOuro(cli, totalCredito){ return r2(Math.min(Math.max(0, Number(totalCredito)||0), disponivel(cli))); }
+  /** Distribui a parte de ouro nos pagamentos __credito (marca creditoOuro). */
+  function distribuir(pagamentos, ouro){
+    var resto = r2(ouro);
+    (pagamentos||[]).forEach(function(p){
+      if(!p || p.formaId!=='__credito') return;
+      var v = Number(p.valor)||0, parte = r2(Math.min(v, resto));
+      if(parte>0.004){ p.creditoOuro = parte; resto = r2(resto - parte); } else delete p.creditoOuro;
+    });
+    return r2(ouro - resto);
+  }
+  return { disponivel: disponivel, parteOuro: parteOuro, distribuir: distribuir };
+})();
