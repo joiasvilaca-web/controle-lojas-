@@ -53,7 +53,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pedidos e O.S. — Gestão e Controle</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"></noscript></noscript>
 <link rel="stylesheet" href="tema.css">
@@ -719,7 +719,7 @@
 /* ============================================================
    ESTADO / STORAGE
    ============================================================ */
-let config = null;          // { serviceTypes:[], users:[], mensagemPadrao:'' }
+let config = {};            // { serviceTypes:[], users:[], mensagemPadrao:'' } — começa vazio (nunca null): tela que abre antes do loadAll não quebra
 let orders = [];
 let codes = [];
 let clientes = [];
@@ -1045,7 +1045,10 @@ const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;  // vem de supabase-config.j
 const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
 // Cliente real do Supabase, mantido só pra chamar as OUTRAS Edge Functions já existentes
 // (upload de foto pro Drive, envio de e-mail) — essas não mexem em tabela nenhuma direto.
-const realSupabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Se a biblioteca do Supabase (CDN) não carregar, fica null: a tela toda continua funcionando
+// (o gateway é chamado por fetch); só o upload de foto para o Drive avisa que está indisponível.
+const realSupabaseClient = (window.supabase && typeof window.supabase.createClient === 'function')
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 /**
  * A partir daqui o app NÃO fala mais direto com o banco usando a anon key.
@@ -1143,6 +1146,7 @@ async function storageSet(key, value, shared){
  * Retorna { fileId, url } em caso de sucesso, ou lança erro (o chamador deve tratar com fallback).
  */
 async function uploadFotoParaDrive(dataUrl, filename){
+  if(!realSupabaseClient) throw new Error('A biblioteca do Supabase (cdn.jsdelivr.net) não carregou — o envio de fotos está indisponível. Verifique a conexão ou tente outra rede.');
   const { data, error } = await realSupabaseClient.functions.invoke('upload-foto-drive', {
     body: { dataUrl, filename, senha: __gatewaySenha }
   });
@@ -3829,10 +3833,10 @@ async function sendWhatsApp(order){
   if(!order.telefone){ showToast('Este pedido não tem telefone salvo.'); return false; }
   if(!(await MarketingOff.permitir({ telefone:order.telefone, nome:order.cliente }))) return false;
   const template = order.status==='pronto'
-    ? (config.mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
+    ? ((config||{}).mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
     : order.status==='entregue'
-    ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
-    : (config.mensagemPadrao||DEFAULT_TEMPLATE);
+    ? ((config||{}).mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
+    : ((config||{}).mensagemPadrao||DEFAULT_TEMPLATE);
   if(window.WhatsAuto){ const okEnvio = await WhatsAuto.enviar({ telefone:order.telefone, texto:montarMensagemOS(order, template), lojaId:order.lojaId||'', senha:__gatewaySenha, tipo:'os', padrao:(WhatsAuto.padrao||function(){return null;})('os',order), registroId:order.id, via:viaTxt(order)||'' }); if(okEnvio===true) await marcarMsgEnviadaOS(order);
     if(okEnvio===true) await marcarAvisado(order,'WhatsApp'); return okEnvio===true; }
   showToast('Envio automático indisponível. Recarregue a página e tente de novo.');
@@ -3842,10 +3846,10 @@ async function sendEmail(order){
   if(!order.email){ showToast('Este pedido não tem e-mail salvo.'); return; }
   if(!(await MarketingOff.permitir({ telefone:order.telefone, nome:order.cliente }))) return;
   const template = order.status==='pronto'
-    ? (config.mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
+    ? ((config||{}).mensagemPronto||DEFAULT_TEMPLATE_PRONTO)
     : order.status==='entregue'
-    ? (config.mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
-    : (config.mensagemPadrao||DEFAULT_TEMPLATE);
+    ? ((config||{}).mensagemEntregue||DEFAULT_TEMPLATE_ENTREGUE)
+    : ((config||{}).mensagemPadrao||DEFAULT_TEMPLATE);
   const assunto = `Atualização do seu pedido — ${viaTxt(order)||''}`;
   const corpo = montarMensagemOS(order, template);
   try{

@@ -2,7 +2,10 @@
  * Cada teste recebe { browser, t, abrir, ler } e usa t.ok(cond, msg) / t.igual(a, b, msg). */
 const fs = require('fs'), path = require('path');
 const RAIZ = path.resolve(__dirname, '..', '..');
-const hoje = new Date().toISOString().slice(0, 10);
+// "Hoje" tem de ser o dia em BRASÍLIA, igual ao app. Com toISOString (UTC), depois das 21h
+// os dados de teste nasciam com a data de amanhã e as listas filtradas por hoje vinham vazias
+// (o teste da lista de Vendas falhava só à noite).
+const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
 
 const cfg = {
   lojas: [{ id: 'loja_mc', nome: 'Marechal Center', abreviacao: 'MC', cor: '#1f5f7a' }, { id: 'loja_jn', nome: 'Jardim Norte', abreviacao: 'JN', cor: '#8a4b00' }],
