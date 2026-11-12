@@ -803,10 +803,11 @@ function ic(nome, tam){ return window.Icone ? Icone(nome, tam ? { tam } : undefi
 /** Botão só de ícone, com título e aria-label (padrão do app para ações de linha). */
 function btnIcone(nome, titulo, attrs, perigo){ return `<button type="button" class="btn-icone${perigo?' perigo':''}" title="${escapeHtml(titulo)}" aria-label="${escapeHtml(titulo)}" ${attrs||''}>${ic(nome)}</button>`; }
 /* Envia o link da via ao cliente pelo WhatsApp (abre a conversa com a mensagem pronta; quem envia é a vendedora). O mesmo link mostra, sozinho, o botão da retirada por terceiros quando liberada. */
-function enviarViaWhatsApp(v){
+async function enviarViaWhatsApp(v, auto){
   if(!v) return;
   let tel = String(v.telefone||'').replace(/\D/g,'');
-  if(!tel){ showToast('Esta venda não tem telefone do cliente.'); return; }
+  if(!tel){ if(!auto) showToast('Esta venda não tem telefone do cliente.'); return; }
+  if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:v.telefone, nome:v.cliente }))) return;
   if(tel.length<=11) tel = '55'+tel;
   const link = (window.APP_URL || 'https://vilaca.app') + '/via.html?t=venda&id=' + encodeURIComponent(v.id);
   const nome = String(v.cliente||'').trim().split(/\s+/)[0].toLowerCase();
@@ -4136,6 +4137,8 @@ function renderNovaVenda(main){
       if(lojaEstoque) carregarReservadas(lojaEstoque);
       if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'venda', id:venda.id, senha:__gatewaySenha, usuario:currentUser.nome }); if(_rt && _rt.error) showToast('Venda lançada, mas a retirada por terceiros não foi liberada: '+_rt.error); }
       showToast('Venda lançada com sucesso.');
+      /* 12/11: venda nova com telefone manda a via sozinha ao salvar (falha só avisa; o botão continua para reenviar) */
+      if(venda.telefone && !venda.rascunho){ try{ await enviarViaWhatsApp(venda, true); }catch(_){} }
       currentTab = 'vendas';
       modoNovaVenda = false;
       renderTabs(); renderView();

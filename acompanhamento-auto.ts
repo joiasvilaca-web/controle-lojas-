@@ -359,7 +359,7 @@ Deno.serve(async (req: Request) => {
           const o = r.payload || {};
           if (o.rascunho || o.status === "cancelado") continue;
           const jaLog = (k: string) => (Array.isArray(o.acoesLog) ? o.acoesLog : []).some((a: any) => a && a.passo === k);
-          if (o.status === "pronto" && Number(o.statusEm || 0) >= desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
+          if (o.status === "pronto" && po.prontoAuto === true && Number(o.statusEm || 0) >= desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
             cand.push({ tipo: "os_pronto", tabela: "ordens_servico", id: r.id, reg: o, passo: 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: "aviso de pronto", agenda: o.autoAgenda || null,
               texto: preencherOS((po.mensagemPronto && po.mensagemPronto.trim()) || (cfg.mensagens && cfg.mensagens.pronto) || MSG_OS_PRONTO, cfg, o) });
           } else if (o.status === "entregue" && Number(o.recebidoEm || 0) >= desdeMs && !o.posVendaEnviadoEm && diasEntre(diaDe(Number(o.recebidoEm)), agora.dia) >= diasPV) {
