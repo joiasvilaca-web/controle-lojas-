@@ -14,6 +14,20 @@ module.exports = { casos: [
     t.ok(r.antes, 'o botão aparece quando falta pagar'); t.igual(r.fi, 60, 'lança o saldo de 60 como fiado');
     t.ok(/Saldo de .*60,00.* pagar depois/i.test(r.texto), 'mostra que o saldo fica para depois');
   } },
+  { nome: 'Valor digitado e ainda NÃO confirmado com OK: o botão "Lançar restante como a pagar depois" já aparece e lança o resto', bug: 'o botão só aparecia depois de apertar OK na forma de pagamento; o Felipe digitava e não via nada', rodar: async ({ t, abrir }) => {
+    const p = await abrir('painel-ordens.html');
+    const r = await p.evaluate(() => {
+      const c = document.createElement('div'); document.body.appendChild(c);
+      const holder = { valorTotal: 100, pagamentos: [{ formaId: 'din', valor: 40, _modo: 'editar' }], momentoPagamento: 'na_encomenda' };
+      mountPagamentos(c, holder);
+      const b = c.querySelector('#btnSaldoDepois'); const antes = !!b; const txt = b ? b.innerText : '';
+      if (b) b.click();
+      const din = holder.pagamentos.find(x => x.formaId === 'din'), fi = holder.pagamentos.find(x => x.formaId === '__fiado');
+      return { antes, txt, din: din && din._modo, fi: fi && fi.valor };
+    });
+    t.ok(r.antes, 'botão aparece com o valor só digitado'); t.ok(/60,00/.test(r.txt), 'mostra o restante');
+    t.ok(!r.din, 'a forma digitada foi confirmada'); t.igual(r.fi, 60, 'lança o restante de 60 como a pagar depois');
+  } },
   { nome: 'Edição de pedido não oferece o botão (saldo existente se paga lançando pagamento)', rodar: async ({ t, abrir }) => {
     const p = await abrir('painel-ordens.html');
     const r = await p.evaluate(() => { const c = document.createElement('div'); document.body.appendChild(c); mountPagamentos(c, { valorTotal: 100, pagamentos: [{ formaId: 'din', valor: 40 }], momentoPagamento: 'na_encomenda', permitirPagarDepois: true }); return !!c.querySelector('#btnSaldoDepois'); });

@@ -2840,12 +2840,24 @@ function mountPagamentos(container, holder, getLojaVendaId){
     }
     if(saldo > 0.009){
       // 12/11: pagamento parcial — opção de deixar o SALDO para pagar depois (fica no cadastro do cliente; só entrega depois de pagar). Só no pedido novo.
-      const podeSaldoDepois = !holder.permitirPagarDepois && !temSemCusto && !holder.pagamentos.some(p=>p._modo==='editar');
-      hint.innerHTML = `<div class="aviso-linha falta">${ico('carteira')}<span>Falta lançar ${fmtMoeda(saldo)} <span class="fraco">(total ${fmtMoeda(total)} · lançado ${fmtMoeda(soma)})</span></span></div>`
-        + (podeSaldoDepois ? `<div style="margin-top:6px;"><button type="button" class="btn btn-ghost btn-sm" id="btnSaldoDepois">${ico('relogio',14)} Pagar o saldo de ${fmtMoeda(saldo)} depois</button> <span class="fraco" style="font-size:12px;">fica no cadastro do cliente · só entrega depois de pagar</span></div>` : '');
+      // 12/11 (2): o botão também aparece com o valor ainda sendo digitado (linha não confirmada com OK) — conta o que já foi digitado
+      const digitando = p=> p._modo==='editar' && p.formaId && Number(p.valor)>0;
+      const somaDig = CondPag.somaBase(holder.pagamentos, config, digitando);
+      const saldoReal = total - soma - somaDig;
+      const podeSaldoDepois = !holder.permitirPagarDepois && !temSemCusto && (soma + somaDig) > 0.009 && saldoReal > 0.009;
+      hint.innerHTML = `<div class="aviso-linha falta">${ico('carteira')}<span>Falta lançar ${fmtMoeda(saldoReal > 0.009 ? saldoReal : saldo)} <span class="fraco">(total ${fmtMoeda(total)} · lançado ${fmtMoeda(soma + somaDig)})</span></span></div>`
+        + (podeSaldoDepois ? `<div style="margin-top:6px;"><button type="button" class="btn btn-accent btn-sm" id="btnSaldoDepois">${ico('relogio',14)} Lançar restante (${fmtMoeda(saldoReal)}) como a pagar depois</button> <span class="fraco" style="font-size:12px;">fica no cadastro do cliente · a via só é entregue depois de pagar</span></div>` : '');
       const bsd = hint.querySelector('#btnSaldoDepois');
       if(bsd) bsd.addEventListener('click', ()=>{
-        holder.pagamentos.push({ formaId:'__fiado', valor:Math.round(saldo*100)/100, saldoDepois:true });
+        // confirma as linhas já digitadas (como o botão OK) e descarta linhas vazias
+        for(const pg of holder.pagamentos.filter(x=>x._modo==='editar' && x.formaId && Number(x.valor)>0)){
+          if(formaEhPix(pg.formaId) && !pg.pessoa){ showToast('Confirme o pagamento em Pix (botão OK) antes de lançar o restante.'); return; }
+          { const _e = cbConferirLinha(holder, pg, totalPag()); if(_e){ showToast(_e); return; } }
+        }
+        holder.pagamentos = holder.pagamentos.filter(x=> x._modo!=='editar' || (x.formaId && Number(x.valor)>0));
+        holder.pagamentos.forEach(x=>{ delete x._modo; });
+        const resto = Math.round((totalPag() - somaConf())*100)/100;
+        if(resto > 0.009) holder.pagamentos.push({ formaId:'__fiado', valor:resto, saldoDepois:true });
         drawRows();
       });
     } else if(saldo < -0.009){
