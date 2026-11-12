@@ -407,8 +407,8 @@ function addMeses(dataISO, n){ const d=new Date(dataISO+'T12:00:00'); d.setMonth
 function addAnos(dataISO, n){ const d=new Date(dataISO+'T12:00:00'); d.setFullYear(d.getFullYear()+n); return d.toISOString().slice(0,10); }
 function recLabel(g){
   if(g.parcelaInfo) return `${g.parcelaInfo.numero}/${g.parcelaInfo.total}`;
-  if(g.recorrencia==='mensal') return 'Mensal';
-  if(g.recorrencia==='anual') return 'Anual';
+  if(g.recorrencia==='mensal') return g.repeticaoInfo ? `Mensal ${g.repeticaoInfo.numero}/${g.repeticaoInfo.total}` : 'Mensal';
+  if(g.recorrencia==='anual') return g.repeticaoInfo ? `Anual ${g.repeticaoInfo.numero}/${g.repeticaoInfo.total}` : 'Anual';
   return null;
 }
 
@@ -487,20 +487,24 @@ async function gerarInstanciasFixos(){
     if(f.ativo===false) continue;
     if(!['mensal','anual'].includes(f.recorrencia)) continue;
     let vc = f.dataInicio;
-    let seguranca=0;
+    let seguranca=0, idxRep=0;   // 12/11: idxRep = nº da repetição (0 = a 1ª); f.repeticoes = quantas vezes no total (vazio = sempre)
+    const totalRep = Number(f.repeticoes)>0 ? Number(f.repeticoes) : 0;
     const limite = addMeses(hj, 12);
     while(vc <= limite && seguranca<60){
       seguranca++;
+      if(totalRep && idxRep>=totalRep) break;   // acabou a quantidade escolhida
       if(vc >= f.dataInicio){
         const jaExiste = gastos.some(g=>g.fixoId===f.id && g.vencimento===vc);
         if(!jaExiste && vc >= addMeses(hj,-1)){
           const novo={ id:uid('g'), fixoId:f.id, nome:f.nome, categoria:f.categoria, valor:f.valor, lojaId:f.lojaId,
             vencimento:vc, formaPagamento:f.formaPagamento, obs:f.obs, responsavel:f.responsavel,
             status:'apagar', pago:false, recorrencia:f.recorrencia, criadoEm:hj };
+          if(totalRep) novo.repeticaoInfo={ numero:idxRep+1, total:totalRep };
           await gw({op:'upsert',table:'gastos',params:{row:{id:novo.id,payload:novo}}});
           gastos.push(novo);
         }
       }
+      idxRep++;
       vc = f.recorrencia==='mensal' ? addMeses(vc,1) : addAnos(vc,1);
     }
   }
@@ -769,6 +773,14 @@ function abrirModalGasto(g,onSave){
           <div class="rec-menu" id="gRecMenu" style="display:none;right:0;top:44px;"></div>
         </div>
         <div id="gRecInfo" class="muted" style="font-size:12.5px;"></div>
+        <div id="gRepWrap" style="display:none;margin-top:6px;">
+          <label for="gRepQtd" style="font-size:12px;font-weight:600;color:var(--ink-soft);">Quantas vezes repete</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="gRepModo" style="width:auto;"><option value="sempre">Sempre (sem fim)</option><option value="n">Só algumas vezes</option></select>
+            <input type="number" id="gRepQtd" min="2" max="120" value="12" style="width:90px;display:none;" aria-label="Total de vezes, contando esta">
+            <span id="gRepTxt" class="muted" style="font-size:12.5px;display:none;">vezes (contando esta)</span>
+          </div>
+        </div>
         <div id="gParcelasWrap" style="display:none;margin-top:6px;">
           <label for="gParcelas" style="font-size:12px;font-weight:600;color:var(--ink-soft);">Total de parcelas (contando esta)</label>
           <input type="number" id="gParcelas" min="2" max="120" value="2" style="width:100px;">
@@ -806,12 +818,14 @@ function abrirModalGasto(g,onSave){
     const info=document.getElementById('gRecInfo');
     const pw=document.getElementById('gParcelasWrap');
     pw.style.display = recorrenciaSel==='parcelas' ? '' : 'none';
+    const rw=document.getElementById('gRepWrap'); if(rw) rw.style.display = (recorrenciaSel==='mensal'||recorrenciaSel==='anual') && !isEdit ? '' : 'none';
     if(recorrenciaSel==='mensal') info.textContent='Repete todo mês (os lançamentos são criados sozinhos).';
     else if(recorrenciaSel==='anual') info.textContent='Repete todo ano.';
     else if(recorrenciaSel==='parcelas') info.textContent='Parcelado: as parcelas são criadas com vencimento a cada mês.';
     else info.textContent='';
   }
   renderRecMenu(); atualizarRecInfo();
+  document.getElementById('gRepModo').addEventListener('change',()=>{ const n=document.getElementById('gRepModo').value==='n'; document.getElementById('gRepQtd').style.display=n?'':'none'; document.getElementById('gRepTxt').style.display=n?'':'none'; });
   document.getElementById('gRecBtn').addEventListener('click',(e)=>{
     e.stopPropagation();
     renderRecMenu();
@@ -888,6 +902,11 @@ function abrirModalGasto(g,onSave){
         showToast('Lançamento atualizado!');
       } else if(recorrenciaSel==='mensal'||recorrenciaSel==='anual'){
         const fixo={ id:uid('f'), ...base, recorrencia:recorrenciaSel, dataInicio:venc, ativo:true, criadoEm:hoje() };
+        if(document.getElementById('gRepModo').value==='n'){   // 12/11: repete só N vezes (contando esta); sem isso, repete sempre
+          const q=parseInt(document.getElementById('gRepQtd').value);
+          if(!(q>=2)){ showToast('Informe quantas vezes repete (2 ou mais), ou escolha "Sempre".'); btnSalvar.disabled=false; btnSalvar.textContent=textoOriginalBtn; return; }
+          fixo.repeticoes=q;
+        }
         await gw({op:'upsert',table:'gastos_fixos',params:{row:{id:fixo.id,payload:fixo}}});
         fixos.push(fixo);
         await gerarInstanciasFixos();
