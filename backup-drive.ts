@@ -1,3 +1,10 @@
+// ATENÇÃO (auditoria 11/11/2026): este arquivo é a v5. O que está PUBLICADO no Supabase é a v8.
+// NÃO publique este arquivo como está — a v8 publicada tem, além do que está aqui:
+//   1) PASTA_RAIZ "1J2AHWmhJX_D62HvCTIi1KFVSTBiB0BXL" (BLINDADO › I.A. APP › BACKUP VILACA APP)
+//      e as funções moverParaRaiz()/e.raizMovida, que levaram PROGRAMACAO e DADOS para lá;
+//   2) o nome novo no resumo.json ("VILAÇA APP — Vilaça Joias");
+//   3) tolerância a cota ilimitada do Drive (limit = 0 não conta como "quase cheio").
+// Para republicar, copie a versão v8 do painel do Supabase (Edge Functions › backup-drive), não este arquivo.
 // backup-drive v5 — v5: grava pela conta joiasvilaca@gmail.com (google_contas), com a antiga como reserva.
 // backup-drive v4 — backup automático do Gestão e Controle no Google Drive.
 // Pastas (Drive de joiasvilaca@gmail.com › APP GESTAO › BACKUP, compartilhada com vilacajoias3 como editor):
