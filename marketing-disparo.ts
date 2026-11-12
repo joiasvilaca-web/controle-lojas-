@@ -1,3 +1,7 @@
+// marketing-disparo v9 (11/11/2026 — auditoria): a linha da fila é RESERVADA de forma atômica antes do envio
+//   (update status pendente→enviando ... select), em vez de "ler e depois marcar". Sem isso, dois processos
+//   (marketing-disparo e disparo-cloud) podiam ler a MESMA linha como pendente e mandar a mesma mensagem duas
+//   vezes. Linha que fica presa em "enviando" por mais de 5 min volta sozinha para "pendente" no início da rodada.
 // marketing-disparo v8 (11/11/2026): pós-venda feito à mão que ficou na fila grava posVendaEnviadoEm ao sair (e é cancelado se o pós-venda já foi enviado).
 // marketing-disparo v7 (11/11/2026): as mensagens não levam mais "responda SAIR" (o texto antigo guardado na fila é retirado na hora do envio); quem escreve SAIR continua saindo da lista pelo disparo-webhook.
 // marketing-disparo v6 (10/11/2026): a instância do número de disparo vem de atendimento_segredos.DISPARO_INSTANCIA (padrão "vilaca").
@@ -32,6 +36,7 @@ const HORA_INI = 9, HORA_FIM = 20, MIN_FIM_PLANO = 19 * 60;
 const TIPOS = ["aniversario", "posVenda", "campanha", "chamar"];
 const TIPOS_LIMITE = ["aniversario", "posVenda", "campanha"];   // contam no aquecimento do número
 const FALHAS_PARA_PAUSAR = 3, DIAS_ENTRE_CAMPANHAS = 30;
+const PRESO_MS = 5 * 60 * 1000;   // v9: linha reservada há mais de 5 min = processo caiu; volta para a fila
 /** {Olá|Oi|Bom dia} → sorteia uma opção (só chaves que têm "|"; {cliente} e outras ficam como estão). */
 const varia = (t: string) => String(t || "").replace(/\{([^{}|]+(?:\|[^{}|]+)+)\}/g, (_m, g) => { const o = String(g).split("|"); return o[Math.floor(Math.random() * o.length)].trim(); });
 const fone8 = (t: string) => String(t || "").replace(/\D/g, "").slice(-8);
@@ -191,6 +196,11 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
   const hoje = agoraBR();
   { const { data: pz } = await admin.from("marketing_disparo_estado").select("pausado_motivo").eq("id", 1).maybeSingle();
     if (pz && pz.pausado_motivo) return { ok: true, pausado: true, motivo: pz.pausado_motivo }; }
+  // v9: linha que ficou reservada ("enviando") e o processo caiu volta para a fila depois de 5 min
+  try {
+    await admin.from("marketing_fila").update({ status: "pendente", atualizado_em: new Date().toISOString() })
+      .eq("status", "enviando").lt("atualizado_em", new Date(Date.now() - PRESO_MS).toISOString());
+  } catch (_) {}
   // Aniversário só vale no dia: os de dias anteriores, ou todos depois das 20h, viram "expirado".
   {
     const { data: aniv } = await admin.from("marketing_fila").select("id, dia_criacao").eq("status", "pendente").eq("tipo", "aniversario");
@@ -246,7 +256,10 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
     const inicio = Date.now();
     for (const alvo of ordem) {
       if (Date.now() - inicio > 45000) break;
-      const { data: item } = await admin.from("marketing_fila").select("*").eq("id", alvo.id).eq("status", "pendente").maybeSingle();
+      // v9: RESERVA ATÔMICA — só um processo consegue tirar a linha de "pendente".
+      const { data: item } = await admin.from("marketing_fila")
+        .update({ status: "enviando", atualizado_em: new Date().toISOString() })
+        .eq("id", alvo.id).eq("status", "pendente").select("*").maybeSingle();
       if (!item) continue;
       const ehVia = item.tipo === "via";
       const numero = normalizaTelefone(item.telefone);
@@ -266,7 +279,8 @@ async function processar(ignorarHorario = false) {   // ignorarHorario: só para
       if (cancelarMotivo) { await admin.from("marketing_fila").update({ status: "cancelado", tentativas: Number(item.tentativas || 0) + 1, erro: cancelarMotivo, atualizado_em: new Date().toISOString() }).eq("id", item.id); continue; }
       // fila única: pega a vez (≥ 5 min da última; via passa na frente; Marketing espera os cards vencidos)
       const { data: vez } = await admin.rpc("disparo_vez", { p_cards: ehVia, p_gap_seg: gapSeg(Math.max(0, restantes - 1) + cardsRest) });
-      if (vez !== true) break;
+      // v9: não é a vez — devolve a linha para a fila antes de sair
+      if (vez !== true) { await admin.from("marketing_fila").update({ status: "pendente", atualizado_em: new Date().toISOString() }).eq("id", item.id).eq("status", "enviando"); break; }
       let ok = false, erro = "", statusHttp = 0;
       try {
         const texto = ehVia ? String(item.texto) : ajustaTextoDisparo(varia(item.texto));
