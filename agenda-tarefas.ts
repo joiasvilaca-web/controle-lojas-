@@ -5,6 +5,8 @@
 //   loja          → quem criou + gerente (das lojas dele; sem lojas = todas) + diretoria
 //   compartilhada → quem criou + participantes
 // Ops: init, listar, salvar, mover, excluir, lembretes, minhasVias
+// v9 (13/11): módulo AGENDA. minhasVias marca `naOficina` nos pedidos em poder da Oficina (enviado p/ fábrica, em produção, pendência, produzido) e,
+//   para o login da OFICINA, devolve esses pedidos de TODAS as lojas (a Oficina enxerga na agenda o que está com ela; a vendedora vê o dela marcado "Na Oficina").
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -159,6 +161,15 @@ Deno.serve(async (req: Request) => {
 
     // Vias com o meu nome (vendedora) em Orçamentos, Vendas e Pedidos
     if (b.op === "minhasVias") {
+      const ST_OFICINA = ["enviado_fabrica", "em_producao", "pendencia", "oficina_pronto"];
+      const lojaNome0 = (p: any) => { const l = (config.lojas || []).find((x: any) => x.id === p.lojaId); return l ? l.nome : (p.loja || ""); };
+      if (nivel === "oficina") {
+        const { data: ped0, error: e0 } = await admin.from("ordens_servico").select("id, payload").in("payload->>status", ST_OFICINA).limit(1000);
+        if (e0) throw e0;
+        const lista0 = (ped0 || []).map((r: any) => { const p = r.payload || {}; return { tipo: "pedido", id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null, valorTotal: 0, status: p.status || null, loja: lojaNome0(p), data: p.data || null, validade: null, vendedora: p.vendedora || null, naOficina: true }; })
+          .sort((a: any, c: any) => String(a.data || "9999").localeCompare(String(c.data || "9999")));
+        return json({ ok: true, data: lista0, oficina: true });
+      }
       const nomes = [...new Set([meuNome, user.nome, (funcs.find((f) => f.id === meuId) || {}).nome]
         .map((n) => String(n || "").trim().replace(/[,()"\\%_*]/g, "")).filter(Boolean))];
       if (!nomes.length) return json({ ok: true, data: [] });
@@ -178,7 +189,8 @@ Deno.serve(async (req: Request) => {
         return {
           tipo, id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null,
           valorTotal: Number(p.valorTotal) || 0, status: p.status || null, loja: lojaNome(p),
-          data: p.data || null, validade: p.validade || null,
+          data: p.data || null, validade: p.validade || null, vendedora: p.vendedora || null,
+          naOficina: tipo === "pedido" && ST_OFICINA.includes(String(p.status || "")),
         };
       }).filter((x) => x.status !== "rascunho");
       const lista = [...map("orcamento", orc.data!), ...map("venda", ven.data!), ...map("pedido", ped.data!)]
