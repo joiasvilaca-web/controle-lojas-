@@ -57,6 +57,8 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
 .cm-badge{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;white-space:nowrap;background:var(--surface);color:var(--ink);border:1px solid var(--line-strong);}
 .cm-badge.instagram{background:var(--accent-soft);color:var(--accent);border-color:transparent;} .cm-badge.facebook{background:var(--info-soft, var(--accent-soft));color:var(--info, var(--accent));border-color:transparent;} .cm-badge.google{background:var(--ok-soft);color:var(--ok);border-color:transparent;}
 .cm-item{padding:12px;border-top:1px solid var(--line);}
+.cm-item.pend{background:color-mix(in srgb, var(--danger) 5%, var(--surface));}
+.cm-aguarda{background:var(--danger-soft);color:var(--danger);font-weight:700;}
 .cm-item .cm-top{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;color:var(--ink);}
 .cm-item .cm-tx{margin:4px 0 8px;font-size:13.5px;white-space:pre-wrap;word-wrap:break-word;color:var(--ink);}
 .cm-item .cm-resp{display:flex;gap:6px;align-items:flex-start;font-size:12.5px;background:var(--ok-soft);border-radius:8px;padding:6px 8px;margin-bottom:8px;color:var(--ok);}
@@ -167,7 +169,9 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
     if(!__gatewaySenha || document.hidden) return;
     const r = await social({ op:'pendentes' });
     const el = document.getElementById('n_coment'); if(!el || !r || !r.ok) return;
-    el.textContent = r.total ? (r.total>99?'99+':String(r.total)) : '';
+    el.textContent = r.total ? (r.total>99?'99+':String(r.total)) : '0';
+    const chip = document.getElementById('btnComentarios'); if(chip) chip.classList.toggle('tem', !!r.total);
+    const tt = document.getElementById('t_coment'); if(tt) tt.innerHTML = r.total ? 'Comentários sem resposta<small>toque para responder</small>' : 'Comentários<small>tudo respondido</small>';
   }
 
   function abrirComentarios(){
@@ -179,8 +183,9 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
         <button class="btn btn-sm btn-accent" id="cmBuscar">${ic('busca')}Buscar</button>
         <button class="btn btn-sm" id="cmSync" title="Puxa os comentários recentes direto do Instagram, Facebook e Google">${ic('atualizar')}Sincronizar</button>
       </div>
-      <div id="cmCfg"></div><div id="cmRes"></div>
-      <div id="cmLista"><p class="muted">Escolha os filtros e clique em <b>Buscar</b>. Para puxar os comentários mais novos das redes, clique em <b>Sincronizar</b>.</p></div>
+      <div id="cmRes"></div>
+      <div id="cmLista"><p class="muted">Carregando os comentários sem resposta…</p></div>
+      <div id="cmCfg"></div>
       <div class="rodape"><button class="btn" id="cmFechar">Fechar</button></div>`);
     document.getElementById('modalBox').classList.add('largo');
     document.getElementById('cmFechar').onclick = fecharModal;
@@ -190,6 +195,7 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
     document.getElementById('cmBuscar').onclick = listar;
     document.getElementById('cmSync').onclick = sincronizar;
     carregarCfg();
+    listar();   // 13/11: abre já mostrando o que está sem resposta
   }
   window.abrirComentarios = abrirComentarios;
 
@@ -254,8 +260,8 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
   }
   function itemHtml(x, gestao){
     const e = escapeHtml; const google = x.plataforma==='google';
-    return `<div class="cm-item" data-id="${e(x.id)}">
-      <div class="cm-top"><b>${e(x.autor_nome||'Sem nome')}</b>${estrelas(x.nota)}<span class="muted">${quando(x.criado_em)}</span>${x.pai_externo_id?`<span class="cm-pill">${ic('devolver',11)}resposta a outro comentário</span>`:''}${x.oculto?`<span class="cm-pill">${ic('olho',11)}oculto</span>`:''}${x.privado_em?`<span class="cm-pill">${ic('cadeado',11)}respondido no privado</span>`:''}${!cm.bot&&nomeBot(x.bot_id)?`<span class="cm-pill">${ic('usuario',11)}${e(nomeBot(x.bot_id))}</span>`:''}</div>
+    return `<div class="cm-item ${x.respondido?'resp':'pend'}" data-id="${e(x.id)}">
+      <div class="cm-top"><b>${e(x.autor_nome||'Sem nome')}</b>${estrelas(x.nota)}${x.respondido ? `<span class="muted">${quando(x.criado_em)}</span>` : `<span class="cm-pill cm-aguarda">${ic('relogio',11)}Sem resposta · ${quando(x.criado_em)}</span>`}${x.pai_externo_id?`<span class="cm-pill">${ic('devolver',11)}resposta a outro comentário</span>`:''}${x.oculto?`<span class="cm-pill">${ic('olho',11)}oculto</span>`:''}${x.privado_em?`<span class="cm-pill">${ic('cadeado',11)}respondido no privado</span>`:''}${!cm.bot&&nomeBot(x.bot_id)?`<span class="cm-pill">${ic('usuario',11)}${e(nomeBot(x.bot_id))}</span>`:''}</div>
       <div class="cm-tx">${x.texto?e(x.texto):'<span class="muted">(sem texto)</span>'}</div>
       ${x.respondido?`<div class="cm-resp">${ic('check')}<span>Respondido${x.respondido_por?' por <b>'+e(x.respondido_por)+'</b>':''}${x.respondido_em?' '+quando(x.respondido_em):''}${x.resposta?': “'+e(x.resposta)+'”':''}</span></div>`:''}
       <textarea placeholder="${google?'Resposta pública à avaliação…':'Resposta pública ao comentário…'}"></textarea>
