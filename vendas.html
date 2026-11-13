@@ -2096,6 +2096,39 @@ function mountPagamentos(container, holder, getLojaVendaId){
     drawRows();
   }
 
+  /* 13/11: crédito e cashback do cliente viram botões ANTES da forma de pagamento: o que sobra do abatimento é o que se paga. */
+  function usadoEm(id){ return CondPag.r2(holder.pagamentos.filter(p=>p._modo!=='editar' && p.formaId===id).reduce((a,p)=>a+(Number(p.valor)||0),0)); }
+  function saldosCliente(){
+    const usadoCred = usadoEm('__credito'), usadoCb = usadoEm('__cashback');
+    const falta = Math.max(0, CondPag.r2(totalPag() - somaConf()));
+    const cred = Math.max(0, CondPag.r2(((window.__credCli && window.__credCli.valor)||0) - usadoCred));
+    cbAtualizarInfo();
+    const inf = window.__cbCli && window.__cbCli.info;
+    const cb = (inf && inf.disp>0 && window.Cashback) ? Math.max(0, CondPag.r2(Math.min(inf.disp - usadoCb, Cashback.maxUso(totalPag()) - usadoCb))) : 0;
+    return { cred: Math.min(cred, falta), credTotal: cred, cb: Math.min(cb, falta), cbTotal: cb, falta };
+  }
+  function renderSaldosCli(){
+    const box = container.querySelector('#pagSaldosCli'); if(!box) return;
+    const s = saldosCliente();
+    const bt = (id, rot, v)=> `<button type="button" class="btn btn-ghost" data-usarsaldo="${id}">${ic('carteira',14)} ${rot} <b>${fmtMoeda(v)}</b></button>`;
+    const partes = [];
+    if(s.cred>0.009) partes.push(bt('__credito','Usar crédito do cliente', s.cred));
+    if(s.cb>0.009) partes.push(bt('__cashback','Usar cashback', s.cb));
+    box.innerHTML = partes.length ? `<div class="pag-info-cel-label" style="margin-bottom:6px;">Saldo do cliente — use antes de escolher a forma</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">${partes.join('')}</div>` : '';
+    box.querySelectorAll('[data-usarsaldo]').forEach(b=> b.addEventListener('click', ()=> usarSaldoCliente(b.dataset.usarsaldo)));
+  }
+  function usarSaldoCliente(id){
+    const s = saldosCliente(); const v = CondPag.r2(id==='__credito' ? s.cred : s.cb);
+    if(!(v>0.009)){ showToast('Nada a abater: o valor já está coberto.'); return; }
+    const i = holder.pagamentos.findIndex(p=>p._modo==='editar');
+    const novo = { formaId:id, valor:v };
+    if(i<0) holder.pagamentos.push(novo); else holder.pagamentos.splice(i, 0, novo);
+    const ed = holder.pagamentos.find(p=>p._modo==='editar');
+    if(!ed && totalPag() - somaConf() > 0.009) holder.pagamentos.push({ formaId:'', valor:'', _modo:'editar' });
+    if(ed && ed.formaId && !ed._auto){ const f = Math.max(0, CondPag.r2(totalPag() - somaConf())); ed.valor = f>0.009 ? (CondPag.ehPrazo(ed.formaId, config, ed) ? CondPag.parcelado(f) : f) : ''; ed._auto = CondPag.ehPrazo(ed.formaId, config, ed); }
+    drawRows();
+  }
+
   function draw(){
     const agora = holder.momentoPagamento==='na_encomenda';
     const subtotal = calcTotalItens();
@@ -2130,6 +2163,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
       </div>
 
       ${agora ? `
+      <div id="pagSaldosCli"></div>
       <div class="pag-info-cel-label" style="margin-bottom:8px;">Formas de pagamento</div>
       <div id="pagRows"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="btnAddPagamento">${ic('mais',14)} Adicionar forma de pagamento</button>
@@ -2236,13 +2270,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
       </div>`).join('');
     wrap.innerHTML = editHtml + (okLista ? `<div class="pag-info-cel-label" style="margin:12px 0 0;">Lançado</div>${okLista}` : '');
     const ba = container.querySelector('#btnAddPagamento'); if(ba) ba.style.display = podeNovo ? '' : 'none';
+    renderSaldosCli();
     wrap.querySelectorAll('[data-pagform]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ const pg = holder.pagamentos[Number(sel.dataset.pagform)]; const eraCartao = CondPag.ehPrazo(pg.formaId, config, pg); pg.formaId = sel.value; if(!formaEhPix(pg.formaId)) delete pg.pessoa;
         // Cartão/Fiado: sempre 20% acima do à vista (até 12x sem acréscimo) — já sugere o valor
         const ehCart = CondPag.ehPrazo(pg.formaId, config, pg);
         if(ehCart !== eraCartao || pg.valor==='' || pg.valor==null){ const falta = Math.max(0, totalPag() - somaConf()); if(falta>0.009){ pg.valor = ehCart ? CondPag.parcelado(falta) : CondPag.r2(falta); pg._auto = ehCart; } }
         if(CondPag.ehCartao(pg.formaId, config, pg) && !pg.parcelas) pg.parcelas = 1;
-        drawRows(); oferecerAbatimento(pg); });
+        drawRows(); });
     });
     wrap.querySelectorAll('[data-pagparc]').forEach(sel=>{
       sel.addEventListener('change', ()=>{ holder.pagamentos[Number(sel.dataset.pagparc)].parcelas = parseInt(sel.value,10)||1; drawRows(); });
