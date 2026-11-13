@@ -5,6 +5,8 @@
 //   loja          → quem criou + gerente (das lojas dele; sem lojas = todas) + diretoria
 //   compartilhada → quem criou + participantes
 // Ops: init, listar, salvar, mover, excluir, lembretes, minhasVias
+// v10 (13/11): tarefa criada no CHAT (CRM) também aparece na Agenda (colunas origem='chat', conversa_id, crm_tarefa_id); listar devolve `conversa_ativa`;
+//   mover/sincCrm mantêm a tarefa do CRM e a da Agenda no mesmo andamento (feito ↔ feita).
 // v9 (13/11): módulo AGENDA. minhasVias marca `naOficina` nos pedidos em poder da Oficina (enviado p/ fábrica, em produção, pendência, produzido) e,
 //   para o login da OFICINA, devolve esses pedidos de TODAS as lojas (a Oficina enxerga na agenda o que está com ela; a vendedora vê o dela marcado "Na Oficina").
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -91,7 +93,14 @@ Deno.serve(async (req: Request) => {
 
     if (b.op === "listar") {
       const lista = await visiveis(dataOk(b.de), dataOk(b.ate));
-      return json({ ok: true, data: lista.map((t) => ({ ...t, posso_excluir: podeExcluir(t) })) });
+      // tarefas do CHAT: diz se a conversa ainda está ativa (o botão "ir para a conversa" só aparece nesse caso)
+      const convIds = [...new Set(lista.map((t: any) => t.conversa_id).filter(Boolean))];
+      const ativas = new Set<string>();
+      if (convIds.length) {
+        const { data: cs } = await admin.from("atendimento_conversas").select("id, status").in("id", convIds.slice(0, 200));
+        for (const c of cs || []) if (c.status !== "finalizado") ativas.add(c.id);
+      }
+      return json({ ok: true, data: lista.map((t: any) => ({ ...t, posso_excluir: podeExcluir(t), conversa_ativa: !!(t.conversa_id && ativas.has(t.conversa_id)) })) });
     }
 
     if (b.op === "salvar") {
@@ -102,6 +111,7 @@ Deno.serve(async (req: Request) => {
       const lojaId = tipo === "loja" ? texto(t.loja_id, 60) || null : null;
       if (tipo === "loja" && !lojaId) return json({ error: "Escolha a loja da tarefa." }, 400);
       const idsValidos = new Set(users.map((u) => u.funcionarioId || u.id));
+      const veioDoChat = t.origem === "chat";
       const participantes = tipo === "compartilhada"
         ? [...new Set((Array.isArray(t.participantes) ? t.participantes : []).map(String))].filter((id) => id !== meuId && idsValidos.has(id))
         : [];
@@ -124,6 +134,7 @@ Deno.serve(async (req: Request) => {
       }
       const { data: ult } = await admin.from("agenda_tarefas").select("ordem").eq("coluna", coluna).order("ordem", { ascending: false }).limit(1);
       campos.ordem = ((ult && ult[0] && Number(ult[0].ordem)) || 0) + 1;
+      if (veioDoChat) { campos.origem = "chat"; campos.conversa_id = texto(t.conversa_id, 80) || null; campos.crm_tarefa_id = texto(t.crm_tarefa_id, 80) || null; }
       const { data, error } = await admin.from("agenda_tarefas").insert({ ...campos, criador_id: meuId, criador_nome: meuNome }).select().single();
       if (error) throw error;
       return json({ ok: true, data });
@@ -138,7 +149,19 @@ Deno.serve(async (req: Request) => {
       if (coluna !== atual.coluna) campos.concluida_em = coluna === "feito" ? new Date().toISOString() : null;
       const { data, error } = await admin.from("agenda_tarefas").update(campos).eq("id", atual.id).select().single();
       if (error) throw error;
+      if (atual.crm_tarefa_id && coluna !== atual.coluna) {   // mantém a tarefa do CRM no mesmo andamento
+        const feita = coluna === "feito";
+        await admin.from("crm_tarefas").update({ status: feita ? "feita" : "aberta", concluida_em: feita ? new Date().toISOString() : null }).eq("id", atual.crm_tarefa_id);
+      }
       return json({ ok: true, data });
+    }
+
+    // o CRM (CHAT) concluiu/reabriu a tarefa dele: a tarefa ligada na Agenda acompanha
+    if (b.op === "sincCrm") {
+      const idc = texto(b.crm_tarefa_id, 80); if (!idc) return json({ ok: true });
+      const coluna = b.status === "feita" ? "feito" : "a_fazer";
+      await admin.from("agenda_tarefas").update({ coluna, concluida_em: coluna === "feito" ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq("crm_tarefa_id", idc);
+      return json({ ok: true });
     }
 
     if (b.op === "excluir") {
