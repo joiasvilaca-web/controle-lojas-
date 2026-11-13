@@ -14,6 +14,7 @@ module.exports = { casos: [
   { nome: 'Acha a via por parte do nome, em qualquer ordem, de qualquer data', bug: 'só achava a via do dia filtrado', rodar: async ({ t }) => {
     const c = carregar();
     const reg = (tipo, p) => c.BuscaVias._teste.montar(tipo, p);
+    t.ok(c.BuscaVias._teste.pareceCodigo('MC108V') && !c.BuscaVias._teste.pareceCodigo('maria silva'), 'reconhece código de via');
     const lista = [
       reg('venda', { id: 'v1', codigoVia: 'MC108V', cliente: 'MARIA APARECIDA SILVA', data: '2026-09-02', vendedora: 'GISLAINE CRISTINA', lojaId: 'loja_mc', itens: [{ produto: 'ALIANCA OURO 18K' }] }),
       reg('pedido', { id: 'o1', codigoVia: 'JN4P', cliente: 'JOSE LIMA', data: '2026-11-01', status: 'entregue' }),
@@ -28,17 +29,18 @@ module.exports = { casos: [
   } },
   { nome: 'Ficha tem Editar; entregue pede autorização; módulos recebem o pedido de editar', bug: 'busca não dava opção de editar', rodar: async ({ t, ler }) => {
     const bv = ler('busca-vias.js');
-    t.ok(/id="bvEditar"/.test(bv), 'botão Editar na ficha');
-    t.ok(/status\) === 'entregue' && !gestor\(\)/.test(bv.replace(/\s+/g, ' ').replace('String(p.status) === \'entregue\'', "String(p.status) === 'entregue'")) || /entregue && !gestor\(\)/.test(bv), 'entregue pede senha de gerente/diretor');
+    t.ok(/data-bv-editar/.test(bv), 'botão Editar na ficha');
+    t.ok(/entregue && !gestor\(\)/.test(bv), 'entregue pede senha de gerente/diretor');
     t.ok(/Autorizacao\.pedir/.test(bv), 'usa a autorização da gerência');
-    t.ok(/busca-vias\.js/.test(ler('index.html')) && /btnBuscaVias/.test(ler('index.html')), 'botão no PDV');
-    t.ok(/editar/.test(ler('vendas.html').slice(ler('vendas.html').indexOf("type === 'abrirRegistro'"), ler('vendas.html').indexOf("type === 'abrirRegistro'") + 600)), 'Venda recebe editar');
-    t.ok(/btnEditarDetVenda/.test(ler('vendas.html')), 'detalhe da venda tem Editar');
-    t.ok(/ev\.data\.editar/.test(ler('orcamentos.html')), 'Orçamento recebe editar');
-    // cada card tem a própria busca, só do seu tipo; o botão de fora (shell) busca em tudo
-    t.ok(/btnBuscarVendas[\s\S]{0,200}tipos:\['venda'\]/.test(ler('vendas.html')), 'Venda busca só vendas');
-    t.ok(/btnBuscarPedidos[\s\S]{0,200}tipos:\['pedido'\]/.test(ler('painel-ordens.html')), 'Pedido busca só pedidos');
-    t.ok(/btnBuscarOrcs[\s\S]{0,200}tipos:\['orcamento'\]/.test(ler('orcamentos.html')), 'Orçamento busca só orçamentos');
-    t.ok(/Buscar em tudo/.test(ler('index.html')) && /tipos: \['venda', 'pedido', 'orcamento'\]/.test(bv), 'botão de fora busca em tudo');
+    t.ok(/Leitor\.ligar\(campo/.test(bv) && /opts\.abrirVia\(alvo, false\)/.test(bv), 'leitor abre a via sozinho');
+    t.ok(/data-bv-buscar/.test(bv), 'campo com botão Buscar');
+    const vh = ler('vendas.html'), po = ler('painel-ordens.html'), oc = ler('orcamentos.html'), ix = ler('index.html');
+    t.ok(/type === 'abrirRegistro'[\s\S]{0,600}editar/.test(vh) && /btnEditarDetVenda/.test(vh), 'Venda: editar pelo shell e Editar no detalhe');
+    t.ok(/ev\.data\.editar/.test(oc), 'Orçamento recebe editar');
+    t.ok(/secao\(document\.getElementById\('bvSecaoVendas'\), \{ tipo:'venda'/.test(vh), 'Venda busca só vendas');
+    t.ok(/secao\(document\.getElementById\('bvSecaoPedidos'\), \{ tipo:'pedido'/.test(po), 'Pedido busca só pedidos');
+    t.ok(/secao\(document\.getElementById\('bvSecaoOrcs'\), \{ tipo:'orcamento'/.test(oc), 'Orçamento busca só orçamentos');
+    t.ok(/leitor-codigo\.js/.test(vh) && /leitor-codigo\.js/.test(oc) && /leitor-codigo\.js/.test(po), 'leitor carregado nos três cards');
+    t.ok(!/btnBuscaVias|busca-vias\.js/.test(ix), 'sem botão de busca fora dos cards (já existe BUSCAR VIA / PREÇO)');
   } },
 ] };
