@@ -35,5 +35,10 @@ module.exports = { casos: [
     t.ok(/editar/.test(ler('vendas.html').slice(ler('vendas.html').indexOf("type === 'abrirRegistro'"), ler('vendas.html').indexOf("type === 'abrirRegistro'") + 600)), 'Venda recebe editar');
     t.ok(/btnEditarDetVenda/.test(ler('vendas.html')), 'detalhe da venda tem Editar');
     t.ok(/ev\.data\.editar/.test(ler('orcamentos.html')), 'Orçamento recebe editar');
+    // cada card tem a própria busca, só do seu tipo; o botão de fora (shell) busca em tudo
+    t.ok(/btnBuscarVendas[\s\S]{0,200}tipos:\['venda'\]/.test(ler('vendas.html')), 'Venda busca só vendas');
+    t.ok(/btnBuscarPedidos[\s\S]{0,200}tipos:\['pedido'\]/.test(ler('painel-ordens.html')), 'Pedido busca só pedidos');
+    t.ok(/btnBuscarOrcs[\s\S]{0,200}tipos:\['orcamento'\]/.test(ler('orcamentos.html')), 'Orçamento busca só orçamentos');
+    t.ok(/Buscar em tudo/.test(ler('index.html')) && /tipos: \['venda', 'pedido', 'orcamento'\]/.test(bv), 'botão de fora busca em tudo');
   } },
 ] };
