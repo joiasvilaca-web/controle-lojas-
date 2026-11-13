@@ -259,3 +259,44 @@ window.CreditoOuro = (function(){
   }
   return { disponivel: disponivel, parteOuro: parteOuro, distribuir: distribuir };
 })();
+
+/* FuncAtivos (13/11): quem NÃO aparece na lista de vendedoras ao preencher a via — funcionário INATIVO (ficha do DP com status "desligado")
+ * e quem é da OFICINA (cargo oficina). Lê as fichas do DP uma vez (cache de 5 min); se a leitura falhar, só vale o cargo.
+ *   FuncAtivos.carregar()   FuncAtivos.pode(f) → true se pode ser escolhido como vendedora   FuncAtivos.inativo(f) */
+(function(){
+  var ids = {}, nomes = {}, quando = 0, indo = null;
+  function chave(t){ return String(t || '').trim().toLowerCase(); }
+  function carregar(){
+    if (indo) return indo;
+    if (Date.now() - quando < 300000) return Promise.resolve();
+    if (typeof gatewayCall !== 'function') return Promise.resolve();
+    indo = (async function(){
+      try {
+        var novosIds = {}, novosNomes = {}, from = 0;
+        for (var pg = 0; pg < 20; pg++) {
+          var r = await gatewayCall({ op: 'selectPage', table: 'dp_funcionarios', params: { from: from, tamanho: 1000 } });
+          if (!r || r.error) throw new Error('sem leitura');
+          var lote = r.data || [];
+          lote.forEach(function(l){ var p = l && l.payload; if (!p || p.status !== 'desligado') return;
+            if (p.funcionarioId) novosIds[p.funcionarioId] = 1; if (p.nome) novosNomes[chave(p.nome)] = 1; if (p.apelido) novosNomes[chave(p.apelido)] = 1; });
+          from += lote.length;
+          if (r.fim || !lote.length) break;
+        }
+        ids = novosIds; nomes = novosNomes; quando = Date.now();
+      } catch (e) { /* sem leitura: filtra só por cargo e pelo status do cadastro */ }
+      indo = null;
+    })();
+    return indo;
+  }
+  function inativo(f){
+    if (!f) return false;
+    if (f.status === 'desligado' || f.ativo === false) return true;
+    return !!(ids[f.id] || ids[f.funcionarioId] || nomes[chave(f.nome)] || (f.apelido && nomes[chave(f.apelido)]));
+  }
+  function pode(f){
+    if (!f || inativo(f)) return false;
+    var cargos = Array.isArray(f.cargos) ? f.cargos : [];
+    return cargos.indexOf('oficina') < 0;
+  }
+  window.FuncAtivos = { carregar: carregar, pode: pode, inativo: inativo };
+})();
