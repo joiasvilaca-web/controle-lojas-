@@ -169,13 +169,13 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
     if(!__gatewaySenha || document.hidden) return;
     const r = await social({ op:'pendentes' });
     const el = document.getElementById('n_coment'); if(!el || !r || !r.ok) return;
-    el.textContent = r.total ? (r.total>99?'99+':String(r.total)) : '0';
+    el.textContent = r.total ? (r.total>99?'99+':String(r.total)) : '';
     const chip = document.getElementById('btnComentarios'); if(chip) chip.classList.toggle('tem', !!r.total);
     const tt = document.getElementById('t_coment'); if(tt) tt.innerHTML = r.total ? 'Comentários sem resposta<small>toque para responder</small>' : 'Comentários<small>tudo respondido</small>';
   }
 
-  function abrirComentarios(){
-    abrirModal(`<h2 style="margin-top:0">Comentários e avaliações</h2>
+  function abrirComentarios(destino){
+    const html = `${destino?'':'<h2 style="margin-top:0">Comentários e avaliações</h2>'}
       <div class="cm-filtros">
         <select class="busca" id="cmBot" style="max-width:200px;margin:0"><option value="">Todos os bots</option>${(estado.bots||[]).map(b=>`<option value="${b.id}" ${cm.bot===b.id?'selected':''}>${escapeHtml(b.nome)}</option>`).join('')}</select>
         <div class="cm-seg" id="cmPlat">${[['','Todas'],['instagram','Instagram'],['facebook','Facebook'],['google','Google']].map(([v,t])=>`<button data-v="${v}" class="${cm.plat===v?'on':''}">${t}</button>`).join('')}</div>
@@ -186,9 +186,9 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
       <div id="cmRes"></div>
       <div id="cmLista"><p class="muted">Carregando os comentários sem resposta…</p></div>
       <div id="cmCfg"></div>
-      <div class="rodape"><button class="btn" id="cmFechar">Fechar</button></div>`);
-    document.getElementById('modalBox').classList.add('largo');
-    document.getElementById('cmFechar').onclick = fecharModal;
+      ${destino?'':'<div class="rodape"><button class="btn" id="cmFechar">Fechar</button></div>'}`;
+    if(destino){ destino.innerHTML = html; }   // 13/11: Comentários é uma aba da lista (sem popup)
+    else { abrirModal(html); document.getElementById('modalBox').classList.add('largo'); document.getElementById('cmFechar').onclick = fecharModal; }
     document.getElementById('cmBot').onchange = e=>{ cm.bot = e.target.value; if(cm.buscou) listar(); renderCfg(); };
     document.querySelectorAll('#cmPlat button').forEach(b=> b.onclick = ()=>{ cm.plat = b.dataset.v; document.querySelectorAll('#cmPlat button').forEach(x=>x.classList.toggle('on', x===b)); if(cm.buscou) listar(); });
     document.querySelectorAll('#cmSt button').forEach(b=> b.onclick = ()=>{ cm.status = b.dataset.v; document.querySelectorAll('#cmSt button').forEach(x=>x.classList.toggle('on', x===b)); if(cm.buscou) listar(); });
@@ -349,7 +349,7 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
   }
 
   /* ---------- botão + badge ---------- */
-  const btn = document.getElementById('btnComentarios'); if(btn) btn.addEventListener('click', abrirComentarios);
+  // 13/11: Comentários agora é uma aba da lista (atendimento.html chama abrirComentarios(destino))
   (function primeiro(){ if(typeof __gatewaySenha!=='undefined' && __gatewaySenha) atualizarBadge(); else setTimeout(primeiro, 5000); })();
   setInterval(atualizarBadge, 120000);
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) atualizarBadge(); });

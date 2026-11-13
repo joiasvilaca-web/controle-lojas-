@@ -5,8 +5,14 @@ module.exports = { casos: [
     const h = ler('atendimento.html');
     const menu = h.slice(h.indexOf('id="menuFerr"'), h.indexOf('id="filtros"'));
     ['btnAgenda', 'btnInterno', 'btnTarefas', 'btnFunil', 'btnModelos', 'btnFerr', 'btnPainel', 'btnConfig'].forEach((id) => t.ok(menu.includes('id="' + id + '"'), id + ' no menu'));
-    ['n_tarefas', 'n_ret'].forEach((id) => t.ok(menu.includes('id="' + id + '"'), 'contador ' + id));
-    t.ok(/id="btnComentarios"/.test(h) && /id="chipAguard"/.test(h), 'chips de comentários e aguardando');
+    t.ok(menu.includes('id="n_ret"'), 'contador n_ret');
+    ['tabComentarios', 'tabInterno', 'tabTarefas'].forEach((id) => t.ok(h.includes('id="' + id + '"'), 'aba ' + id));
+    ['n_coment', 'n_chat', 'n_tarefasTab', 'n_minhas', 'n_fila'].forEach((id) => t.ok(h.includes('id="' + id + '"'), 'balão ' + id));
+    t.ok(!/id="chipAguard"/.test(h), 'card Aguardando saiu (o botão Só não lidas faz o mesmo)');
+    t.ok(/id="redesChat"/.test(h) && /function renderRedes/.test(h), 'redes conectadas no topo');
+    t.ok(/id="btnSom"/.test(menu) && /id="btnTodas"/.test(menu), 'aviso de mensagem e Todas as conversas no menu Mais');
+    t.ok(/function verificarCadastro/.test(h) && /id="bannerCli"/.test(h), 'identifica cadastro de quem chamou');
+    t.ok(/id="nBusca"/.test(h), 'Nova conversa busca cliente do cadastro');
   } },
   { nome: 'Ações do cliente ficam no menu Ações da conversa, agrupadas, com as mesmas chaves', bug: 'ações soltas e só com ícone', rodar: async ({ t, ler }) => {
     const h = ler('atendimento.html');
