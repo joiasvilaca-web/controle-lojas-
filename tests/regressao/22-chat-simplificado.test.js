@@ -28,12 +28,19 @@ module.exports = { casos: [
   { nome: 'Abas Ativos e Potenciais; Todas as conversas com filtros, reabrir e transferir', bug: 'abas confusas (Minhas/Fila/Todas/Finalizadas)', rodar: async ({ t, ler }) => {
     const h = ler('atendimento.html');
     const abas = h.slice(h.indexOf('id="filtros"'), h.indexOf('id="linhaAtivo"'));
-    t.ok(/data-f="minhas"[^>]*>Ativos/.test(abas) && /data-f="fila"[^>]*>Potenciais/.test(abas), 'abas Ativos e Potenciais');
+    t.ok(/data-f="minhas"[^>]*>[\s\S]{0,80}Ativos/.test(abas) && /data-f="fila"[^>]*>[\s\S]{0,80}Potenciais/.test(abas), 'abas Ativos e Potenciais');
     t.ok(!/data-f="todas"|data-f="finalizadas"/.test(abas), 'Todas e Finalizadas saíram das abas');
     t.ok(/id="btnSoNaoLidas"/.test(h) && /estado\.soNaoLidas/.test(h), 'botão Só não lidas');
     t.ok(/id="btnTodas"/.test(h) && /function modalTodas/.test(h), 'botão Todas as conversas');
     ['tdQ', 'tdStatus', 'tdRede', 'tdAtend', 'tdPeriodo'].forEach((id) => t.ok(h.includes('id="' + id + '"'), 'filtro ' + id));
     t.ok(/data-td="reabrir"/.test(h) && /data-td="transferir"/.test(h), 'reabrir e transferir');
     t.ok(/filtro:'finalizadas'/.test(h), 'inclui as finalizadas');
+  } },
+  { nome: 'Redes só com o símbolo, engrenagem no lugar do Mais e as 5 abas sempre visíveis', bug: 'nome das redes, botão Mais e aba Tarefas escondida', rodar: async ({ t, ler }) => {
+    const h = ler('atendimento.html');
+    t.ok(/REDE_SVG/.test(h) && !/nomes\[k\]\}<\/button>/.test(h), 'botões de rede sem texto (só o símbolo)');
+    t.ok(/\.rede-btn\.off\{filter:grayscale/.test(h), 'rede desconectada fica cinza');
+    t.ok(/id="btnMaisFerr"[^>]*>\s*<span data-ic="engrenagem"/.test(h), 'engrenagem no lugar de "Mais"');
+    t.ok(/\.lista-top \.filtros-abas\{display:grid;grid-template-columns:repeat\(5/.test(h), 'abas em grade (nenhuma some)');
   } },
 ] };
