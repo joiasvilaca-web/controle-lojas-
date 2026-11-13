@@ -3056,6 +3056,8 @@ function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
   if(legado[formaIdAtual]) html += `<option value="${formaIdAtual}" selected>${legado[formaIdAtual]}</option>`;
   return html;
 }
+/* 13/11: a parte do crédito vinda de SOBRA DE OURO (creditoOuro) já é dinheiro recebido — o caixa e os lançamentos já a contam; a lista também. */
+function creditoOuroDe(o){ return (o.pagamentos||[]).reduce((a,p)=>{ if(!p||p.formaId!=='__credito') return a; const c=Number(p.creditoOuro); return (isFinite(c)&&c>0) ? a+Math.min(c, Number(p.valor)||0) : a; },0); }
 function valorRecebidoDe(o){ return (o.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado/crédito não entram como recebido: fiado movimenta o caixa só quando as parcelas
    são pagas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
@@ -3094,7 +3096,9 @@ async function bloqueioSaldoEntrega(o){
   return false;
 }
 /** Valor ainda pendente (nunca negativo). */
-function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - CondPag.somaBase(o.pagamentos, config, p=>!(p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback'))); }  // cartão quita pela base (valor/1,2)
+/** Só para EXIBIR na lista/ficha (cancelar/devolver continua usando valorRecebidoDe, que não conta o crédito). */
+function valorRecebidoExibir(o){ return valorRecebidoDe(o) + creditoOuroDe(o); }
+function valorAReceberDe(o){ return Math.max(0, (Number(o.valorTotal)||0) - creditoOuroDe(o) - CondPag.somaBase(o.pagamentos, config, p=>!(p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback'))); }  // cartão quita pela base (valor/1,2)
 /** true quando NENHUMA informação de pagamento foi lançada — dispara o aviso vermelho e o filtro. */
 function semPagamentoLancado(o){ if((o.itens||[]).length && o.itens.every(it=>it.semCobranca)) return false; return !o.valorTotal && (!o.pagamentos || o.pagamentos.length===0); }
 
@@ -3822,7 +3826,7 @@ function printOrder(order){
     (order.pagamentos||[]).filter(p=>p.formaId).forEach(p=>{
       linhas.push(`<div class="destaque">${escapeHtml(CondPag.rotuloPag(p, paymentTypesMap[p.formaId]||'—', config, fmtMoeda))}: ${fmtMoeda(p.valor||0)}</div>`);
     });
-    linhas.push(`<div class="destaque">Recebido: ${fmtMoeda(valorRecebidoDe(order))}</div>`);
+    linhas.push(`<div class="destaque">Recebido: ${fmtMoeda(valorRecebidoExibir(order))}</div>`);
     linhas.push(`<div class="destaque">A receber: ${fmtMoeda(valorAReceberDe(order))}</div>`);
   }
 
@@ -6109,7 +6113,7 @@ function renderPainel(main){
     if(fSemPagamento.checked) list = list.filter(o=>semPagamentoLancado(o));
     const fimRecente = o=> { const t = Number(o.recebidoEm || o.canceladoEm || o.atualizadoEm || o.criadoEm || 0); return t >= limite; };
     const colunas = STATUS_ORDEM.filter(st=> st!=='rascunho' || list.some(o=>o.status==='rascunho'));
-    const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
+    const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoExibir(o), 0);
     const totalAReceber = list.filter(o=>o.status!=='cancelado').reduce((acc,o)=> acc + valorAReceberDe(o), 0);
     document.getElementById('resumoValores').innerHTML = `<span><b>${list.filter(o=>!['entregue','cancelado'].includes(o.status)).length}</b> em andamento</span><span class="sep"></span><span class="ok">Recebido <b>${fmtMoeda(totalRecebido)}</b></span><span class="perigo">A receber <b>${fmtMoeda(totalAReceber)}</b></span>`;
     const cartao = o=>{
@@ -6260,7 +6264,7 @@ function renderPainel(main){
     else list.sort((a,b)=> a.data.localeCompare(b.data) || b.criadoEm-a.criadoEm );
     if(fBusca.value.trim()) list = list.map((o,i)=>({o,i,p:Busca.pontua([o.cliente,viaTxt(o),o.codigoVia].join(' '), fBusca.value.trim())})).sort((x,y)=>((x.p<0?9e9:x.p)-(y.p<0?9e9:y.p))||(x.i-y.i)).map(x=>x.o);   // mais parecido com o digitado primeiro
 
-    const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoDe(o), 0);
+    const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoExibir(o), 0);
     const totalAReceber = list.reduce((acc,o)=> acc + valorAReceberDe(o), 0);
     const semPagCount = list.filter(o=>semPagamentoLancado(o)).length;
     document.getElementById('resumoValores').innerHTML =
@@ -6340,7 +6344,7 @@ function renderPainel(main){
     const pendObs = (o.observacoes||[]).some(ob=>!ob.ciente && ob.notificarPara && ob.notificarPara.length>0);
     const isRascunho = o.status === 'rascunho';
     const semPag = semPagamentoLancado(o);
-    const recebido = valorRecebidoDe(o);
+    const recebido = valorRecebidoExibir(o);
     const aReceber = valorAReceberDe(o);
     const atrasada = estaAtrasada(o);
     const oficina = currentUser.nivel==='oficina';

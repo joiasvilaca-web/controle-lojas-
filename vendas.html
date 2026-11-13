@@ -2350,10 +2350,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
   window.__pagTotalAtual = ()=> calcTotalFinal(calcTotalItens());   // à vista final (itens + desconto/acréscimo), mesmo se o campo oculto ainda não foi preenchido
   return { redraw: window.__pagRedraw };
 }
+/* 13/11: a parte do crédito vinda de SOBRA DE OURO (creditoOuro) já é dinheiro recebido — o caixa e os lançamentos já a contam; a lista também. */
+function creditoOuroDe(v){ return (v.pagamentos||[]).reduce((a,p)=>{ if(!p||p.formaId!=='__credito') return a; const c=Number(p.creditoOuro); return (isFinite(c)&&c>0) ? a+Math.min(c, Number(p.valor)||0) : a; },0); }
 function valorRecebidoDe(v){ return (v.pagamentos||[]).reduce((acc,p)=> acc + ((p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback') ? 0 : (Number(p.valor)||0)), 0); }
 /* Fiado e crédito não movimentam o caixa na venda: fiado só entra quando as parcelas
    são recebidas (Cadastro → Clientes → Débitos); crédito entrou no caixa na recarga. */
-function valorAReceberDe(v){ return Math.max(0, (Number(v.valorTotal)||0) - CondPag.somaBase(v.pagamentos, config, p=>!(p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback'))); }  // cartão quita pela base (valor/1,2)
+/** Só para EXIBIR na lista/ficha (cancelar/devolver continua usando valorRecebidoDe, que não conta o crédito). */
+function valorRecebidoExibir(v){ return valorRecebidoDe(v) + creditoOuroDe(v); }
+function valorAReceberDe(v){ return Math.max(0, (Number(v.valorTotal)||0) - creditoOuroDe(v) - CondPag.somaBase(v.pagamentos, config, p=>!(p.formaId==='__fiado'||p.formaId==='__credito'||p.formaId==='__cashback'))); }  // cartão quita pela base (valor/1,2)
 function semPagamentoLancado(v){ return !v.valorTotal && (!v.pagamentos || v.pagamentos.length===0); }
 
 /* ============================================================
@@ -4942,7 +4946,7 @@ function renderVendas(main){
     list.sort((a,b)=> b.criadoEm - a.criadoEm);
     if(fBusca.value.trim()) list = Busca.filtrar(list, fBusca.value.trim(), v=>[v.cliente, v.vendedora, v.codigoVia, v.codigo]);   // mais parecido com o digitado primeiro
 
-    const totalRecebido = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorRecebidoDe(v), 0);
+    const totalRecebido = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorRecebidoExibir(v), 0);
     const totalAReceber = list.filter(v=>v.status!=='cancelada').reduce((acc,v)=> acc + valorAReceberDe(v), 0);
     const semPagCount = list.filter(v=>v.status!=='cancelada' && semPagamentoLancado(v)).length;
     const ativas = list.filter(v=>v.status!=='cancelada').length;
@@ -4969,7 +4973,7 @@ function renderVendas(main){
         <tbody>
           ${list.map(v=>{
             const semPag = semPagamentoLancado(v);
-            const recebido = valorRecebidoDe(v);
+            const recebido = valorRecebidoExibir(v);
             const aReceber = valorAReceberDe(v);
             const cancelada = v.status==='cancelada';
             const qtdItens = (v.itens||[]).length;
@@ -5490,7 +5494,7 @@ function abrirDetalheVenda(v){
       <tr><td class="muted" style="width:150px;">Quando paga</td><td>${v.momentoPagamento==='na_volta' ? 'Paga na volta' : 'Pago no ato da venda'}</td></tr>
       <tr><td class="muted">Valor total</td><td class="num" style="text-align:left;"><b>${fmtMoeda(v.valorTotal)}</b></td></tr>
       ${(v.pagamentos||[]).filter(p=>p.formaId).map(p=>`<tr><td class="muted">${escapeHtml(paymentTypesMap[p.formaId]||'—')}</td><td class="num" style="text-align:left;">${fmtMoeda(p.valor)}</td></tr>`).join('')}
-      <tr><td class="muted">Recebido</td><td class="num valor-ok" style="text-align:left;">${fmtMoeda(valorRecebidoDe(v))}</td></tr>
+      <tr><td class="muted">Recebido</td><td class="num valor-ok" style="text-align:left;">${fmtMoeda(valorRecebidoExibir(v))}</td></tr>
       <tr><td class="muted">A receber</td><td class="num ${valorAReceberDe(v)>0.009?'valor-falta':''}" style="text-align:left;">${fmtMoeda(valorAReceberDe(v))}</td></tr>
       <tr><td class="muted">Nota fiscal</td><td>${v.emissaoNota==='sim' ? `<span class="badge selo-ok">Com nota</span>${v.numeroNota?' nº '+escapeHtml(v.numeroNota):''}` : '<span class="badge selo-neutro">Sem nota</span>'}</td></tr>
       ${v.emissaoNota==='sim' ? `
