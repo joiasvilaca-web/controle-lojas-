@@ -3716,6 +3716,65 @@ async function notasMediasUi(tipo){
 }
 
 document.getElementById('btnFerr').addEventListener('click', ()=> modalFerr());
+/* ====== AJUSTES 13/11 — redes com a instância identificada + Potenciais com mensagem nova ====== */
+(function(){
+  const _apiOrig = window.api;
+  window.api = async function(body){
+    if(body && body.op === 'listarConversas' && body.filtro === 'fila'){
+      const r = await _apiOrig(Object.assign({}, body, { filtro: 'todas' }));
+      if(r && Array.isArray(r.data)) r.data = r.data.filter(c => c.status === 'aguardando' || (c.nao_lidas || 0) > 0);
+      return r;
+    }
+    return _apiOrig(body);
+  };
+  const st = document.createElement('style');
+  st.textContent =
+    '.rede-g{display:inline-flex;align-items:center;gap:3px;margin-right:8px;}' +
+    '.rede-tag{font-size:10px;font-weight:700;letter-spacing:.3px;padding:2px 7px;border-radius:999px;background:var(--accent-soft);color:var(--accent);white-space:nowrap;}' +
+    '.rede-tag.off{opacity:.55;text-decoration:line-through;}';
+  document.head.appendChild(st);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const fmtNum = n => {
+    n = String(n || '').replace(/\D/g, ''); if(n.length >= 12 && n.indexOf('55') === 0) n = n.slice(2);
+    return n.length === 11 ? '(' + n.slice(0, 2) + ') ' + n.slice(2, 7) + '-' + n.slice(7)
+         : n.length === 10 ? '(' + n.slice(0, 2) + ') ' + n.slice(2, 6) + '-' + n.slice(6) : n;
+  };
+  const curto = s => { s = String(s || '').trim(); const p = s.split(/\s+/)[0] || s; return p.charAt(0).toUpperCase() + p.slice(1).toLowerCase(); };
+  window.renderRedes = function renderRedes(){
+    const box = document.getElementById('redesChat'); if(!box) return;
+    const inst = estado.instancias || {};
+    const aberto = v => String((v && v.estado) || '').toLowerCase() === 'open';
+    const nomes = { whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Facebook' };
+    const lista = { whatsapp: [], instagram: [], messenger: [] };
+    const usadas = new Set();
+    (estado.bots || []).forEach(b => (b.canais || []).forEach(c => {
+      const k = c.tipo; if(!lista[k]) return;
+      const chave = k === 'whatsapp' ? c.instancia : k === 'instagram' ? 'ig_' + c.ig_id : 'fb_' + c.page_id;
+      const v = inst[chave] || null; usadas.add(chave);
+      lista[k].push({
+        rotulo: curto(b.nome), bot: b.nome, perfil: (v && v.perfil) || c.usuario || c.nome || '',
+        num: v && v.numero ? fmtNum(v.numero) : '', ligado: k === 'whatsapp' ? aberto(v) : (v ? aberto(v) : true)
+      });
+    }));
+    Object.keys(inst).forEach(chave => {
+      if(usadas.has(chave)) return; const v = inst[chave]; const k = v.canal || 'whatsapp'; if(!lista[k] || (estado.bots || []).length) return;
+      lista[k].push({ rotulo: chave, bot: chave, perfil: v.perfil || '', num: v.numero ? fmtNum(v.numero) : '', ligado: aberto(v) });
+    });
+    const on = {}; Object.keys(nomes).forEach(k => { on[k] = lista[k].some(x => x.ligado); });
+    box.innerHTML = Object.keys(nomes).map(k => {
+      const it = lista[k];
+      const det = it.length ? it.map(x => x.bot + (x.perfil ? ' · ' + x.perfil : '') + (x.num ? ' · ' + x.num : '') + ' — ' + (x.ligado ? 'conectado' : 'desconectado')).join('\n') : 'nenhuma conta cadastrada';
+      const t = nomes[k] + (on[k] ? ' conectado' : ' não está conectado') + '\n' + det + (on[k] ? '\nClique para ver só as conversas desta rede' : '');
+      const tags = it.map(x => '<span class="rede-tag' + (x.ligado ? '' : ' off') + '">' + esc(x.rotulo) + '</span>').join('');
+      return '<span class="rede-g"><button type="button" class="rede-btn ' + (on[k] ? '' : 'off') + '" data-rede="' + k + '" aria-pressed="' + (estado.canal === k ? 'true' : 'false') + '" aria-label="' + esc(t) + '" title="' + esc(t) + '">' + REDE_SVG[k] + '</button>' + tags + '</span>';
+    }).join('');
+    box.querySelectorAll('[data-rede]').forEach(b => b.addEventListener('click', () => {
+      const k = b.dataset.rede; if(!on[k]){ showToast(nomes[k] + ' não está conectado. A diretoria conecta em Administrar (engrenagem).'); return; }
+      estado.canal = estado.canal === k ? '' : k; const fc = document.getElementById('filtroCanal'); if(fc) fc.value = estado.canal;
+      renderRedes(); if(estado.view !== 'conversas') trocarView('conversas'); else carregarLista();
+    }));
+  };
+})();
 </script>
 <script src="atendimento-social.js"></script>
 <div id="bannerInt"></div>
