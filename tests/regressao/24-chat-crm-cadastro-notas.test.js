@@ -19,7 +19,9 @@ module.exports = { casos: [
   { nome: 'Nota privada, anexar (arquivo, via, produto), Produtos e Notas ao lado do anexo', bug: 'anexo só de arquivo e CRM escondido', rodar: async ({ t, ler }) => {
     const h = ler('atendimento.html');
     t.ok(/function icnPrivado/.test(h) && /icnPrivado\(18\)/.test(h), 'ícone de nota privada');
-    t.ok(/function abrirMenuAnexo/.test(h) && /function modalAnexoVia/.test(h) && /function modalAnexoProduto/.test(h), 'menu de anexo');
+    t.ok(/function abrirMenuAnexo/.test(h) && /function modalAnexoVia/.test(h) && /data-an="prod"/.test(h), 'menu de anexo');
+    t.ok(/function enviarFotoProduto/.test(h) && /data-fotos=/.test(h) && /Enviar todas/.test(h), 'fotos do produto salvo no CRM, com envio');
+    t.ok(/id="chRapidos"[\s\S]{0,600}id="btnProdutos"[\s\S]{0,500}id="btnNotas"[\s\S]{0,600}id="chAcoes"/.test(h), 'Produtos e Notas no topo, ao lado de Ações');
     t.ok(/id="btnProdutos"/.test(h) && /id="btnNotas"/.test(h) && /function modalProdutos/.test(h) && /function modalNotas/.test(h), 'Produtos e Notas');
     t.ok(/novo:'Olhando'/.test(h) && /Produtos \(\$\{f\.oportunidades\.length\}\)/.test(h), 'Oportunidades viraram Produtos');
     t.ok(/function popupVia/.test(h) && /data-via=/.test(h), 'vias do CRM abrem em popup');
