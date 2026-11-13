@@ -1604,16 +1604,6 @@
           <div id="metasLista"></div>
         </div>
 
-        <div class="card pad">
-          <div class="card-head"><div><span class="card-title">Perguntar à IA</span><span class="card-sub">A resposta usa os dados já carregados aqui (vendas, ordens, metas)</span></div></div>
-          <label for="perguntaIa" class="sub-titulo" style="display:block;">Sua pergunta</label>
-          <textarea id="perguntaIa" rows="3" placeholder="Ex.: qual loja mais vendeu este mês?"></textarea>
-          <div class="ia-acoes">
-            <button class="btn btn-accent" id="btnPerguntarIa">${ico("enviar")} Perguntar</button>
-            <span class="dica">Ctrl + Enter também envia</span>
-          </div>
-          <div id="respostaIa" aria-live="polite"></div>
-        </div>
       </div>
 
       <div class="grade-2">
@@ -1878,34 +1868,6 @@
       }
     }
 
-    document.getElementById("btnPerguntarIa").addEventListener("click", async ()=>{
-      const pergunta = document.getElementById("perguntaIa").value.trim();
-      const respostaEl = document.getElementById("respostaIa");
-      if(!pergunta){ document.getElementById("perguntaIa").focus(); return; }
-      respostaEl.textContent = "Consultando a IA…";
-      const resumoDados = {
-        curvaAbcTop10: abc.slice(0,10).map(x=>({produto:x.produto, faturamento:x.total, classe:x.classe})),
-        avisosDadosIncompletos: avisos.length,
-        metasDoMes: Object.keys(metas).filter(l=> !lojasDashNomes || lojasDashNomes.has(l)).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
-        totalDeVendasRegistradas: vendas.length,
-        totalDeOrdensRegistradas: orders.length,
-      };
-      try{
-        const res = await fetch(SUPABASE_URL + "/functions/v1/gemini-agente", {
-          method: "POST",
-          headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
-          body: JSON.stringify({ senha: __gatewaySenha, pergunta, resumoDados }),
-        });
-        const data = await res.json();
-        respostaEl.textContent = data.resposta || ("Não foi possível responder: " + (data.error||"erro desconhecido"));
-      }catch(e){
-        respostaEl.textContent = "Não foi possível falar com a IA agora. Confira a internet e tente de novo.";
-      }
-    });
-    document.getElementById("perguntaIa").addEventListener("keydown", e=>{
-      if(e.key==="Enter" && (e.ctrlKey || e.metaKey)){ e.preventDefault(); document.getElementById("btnPerguntarIa").click(); }
-    });
-
     document.getElementById("btnGraficoAbcProdutos").addEventListener("click", ()=>{
       const itens = abc.slice(0,15).map(item=>({ nome:item.produto, valor:item.total }));
       abrirGraficoBarras("Curva ABC de produtos", "Por faturamento nas vendas do PDV · 15 maiores", itens, fmtMoeda);
@@ -1988,56 +1950,6 @@
     });
 
     verificarAlertaDeMetas(metas, totaisMes, fracaoDoMes);
-    verificarMonitoramentoIA(abc, abcVend, avisos, metas, totaisMes);
-  }
-
-  /**
-   * Uma vez por dia (não a cada abertura do Dashboard, pra não gastar API à toa),
-   * manda um resumo amplo do sistema pra IA analisar e apontar, se houver, UM ponto
-   * que realmente mereça atenção da diretoria agora. Só roda pra quem tem acesso
-   * financeiro (ou seja, só diretoria — essa função só é chamada de dentro da
-   * seção de Inteligência, que já é diretoria-only).
-   */
-  async function verificarMonitoramentoIA(abc, abcVend, avisos, metas, totaisMes){
-    const hoje = new Date().toISOString().slice(0,10);
-    const chaveLocal = "vilaca_monitoramento_ia_ultimo_dia";
-    try{
-      if(localStorage.getItem(chaveLocal) === hoje) return; // já rodou hoje
-    }catch(e){ /* localStorage indisponível — segue sem cache, sem travar nada */ }
-
-    const metOrc = (typeof metricasOrcamentosPorVendedora === "function") ? metricasOrcamentosPorVendedora() : {};
-    const resumoAmplo = {
-      curvaAbcProdutosTop10: abc.slice(0,10).map(x=>({produto:x.produto, faturamento:x.total, classe:x.classe})),
-      curvaAbcVendedoras: abcVend.map(x=>({vendedora:x.vendedora, faturamento:x.total, classe:x.classe})),
-      avisosDadosIncompletos: { total: avisos.length, exemplos: avisos.slice(0,5) },
-      metasDoMes: Object.keys(metas).filter(l=> !lojasDashNomes || lojasDashNomes.has(l)).map(loja=>({ loja, meta: metas[loja], atual: totaisMes[loja]||0 })),
-      orcamentosPorVendedora: Object.keys(metOrc).map(nome=>({ vendedora:nome, ...metOrc[nome] })),
-      totalDeVendasRegistradas: vendas.length,
-      totalDeOrdensRegistradas: orders.length,
-      dataDeHoje: hoje,
-    };
-    try{
-      const res = await fetch(SUPABASE_URL + "/functions/v1/gemini-agente", {
-        method: "POST",
-        headers: { "Content-Type":"application/json", "apikey": SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY },
-        body: JSON.stringify({ senha: __gatewaySenha, modo:"monitoramento", resumoDados: resumoAmplo }),
-      });
-      const data = await res.json();
-      try{ localStorage.setItem(chaveLocal, hoje); }catch(e){}
-      if(data && data.temAlerta){
-        const popup = document.createElement("div");
-        popup.className = "alerta-meta-popup";
-        popup.innerHTML = `
-          <b>${ico("info")} ${escapeHtml(data.titulo || "A IA encontrou algo")}</b>
-          ${escapeHtml(data.mensagem || "")}
-          <br><button id="btnFecharAlertaIA">Entendi</button>
-        `;
-        document.body.appendChild(popup);
-        document.getElementById("btnFecharAlertaIA").addEventListener("click", ()=> popup.remove());
-      }
-    }catch(e){
-      console.error("monitoramento IA falhou (silencioso, não atrapalha o resto do dashboard):", e);
-    }
   }
 
   let alertaDeMetasJaMostrado = false;

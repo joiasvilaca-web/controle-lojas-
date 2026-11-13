@@ -43,18 +43,11 @@
       +'<div style="font-size:13px;margin-bottom:8px;">'+estrelas(a.estrelas)+(a.comentario?' — “'+esc(a.comentario)+'”':'')+'</div>'
       +'<textarea data-t maxlength="1500" style="width:100%;box-sizing:border-box;min-height:140px;padding:10px;border-radius:10px;border:1px solid var(--t-line-strong,#bcc);background:var(--t-field,#fff);color:inherit;font:inherit;" placeholder="Escreva a resposta que o cliente vai ver ao abrir a via">'+esc(a.resposta?a.resposta.texto:'')+'</textarea>'
       +'<div data-m style="font-size:13px;margin-top:6px;"></div>'
-      +'<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;margin-top:10px;"><span style="display:inline-flex;gap:8px;"><button class="av-b" data-ia>Corrigir com IA</button><button class="av-b" data-desf style="display:none;">Desfazer correção</button></span><span style="display:inline-flex;gap:8px;"><button class="av-b" data-x>Cancelar</button><button class="av-b pri" data-env>Enviar resposta</button></span></div></div>';
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;margin-top:10px;"><span></span><span style="display:inline-flex;gap:8px;"><button class="av-b" data-x>Cancelar</button><button class="av-b pri" data-env>Enviar resposta</button></span></div></div>';
     document.body.appendChild(ov);
     var t=ov.querySelector('[data-t]'), m=ov.querySelector('[data-m]'), antes='';
     function msg(x,erro){ m.style.color=erro?'var(--t-danger,#b3261e)':'var(--t-ok,#0f6b40)'; m.textContent=x; }
     ov.querySelector('[data-x]').onclick=function(){ ov.remove(); };
-    ov.querySelector('[data-ia]').onclick=async function(){
-      var b=this; b.disabled=true; msg('Corrigindo…'); antes=t.value;
-      var r=await chamar({acao:'avaliacaoCorrigir',senha:senha,texto:t.value}); b.disabled=false;
-      if(r.error){ msg(r.error,true); return; }
-      t.value=r.texto; msg('Texto corrigido pela IA. Leia antes de enviar.'); ov.querySelector('[data-desf]').style.display='';
-    };
-    ov.querySelector('[data-desf]').onclick=function(){ t.value=antes; this.style.display='none'; msg('Texto original restaurado.'); };
     ov.querySelector('[data-env]').onclick=async function(){
       if(t.value.trim().length<3){ msg('Escreva a resposta.',true); return; }
       this.disabled=true;
