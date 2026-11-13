@@ -19,4 +19,15 @@ module.exports = { casos: [
     t.ok(/listar\(\);\s*\/\/ 13\/11/.test(s), 'lista sozinho ao abrir');
     t.ok(/cm-aguarda/.test(s) && /Sem resposta/.test(s), 'selo "Sem resposta"');
   } },
+  { nome: 'Abas Ativos e Potenciais; Todas as conversas com filtros, reabrir e transferir', bug: 'abas confusas (Minhas/Fila/Todas/Finalizadas)', rodar: async ({ t, ler }) => {
+    const h = ler('atendimento.html');
+    const abas = h.slice(h.indexOf('id="filtros"'), h.indexOf('id="linhaAtivo"'));
+    t.ok(/data-f="minhas"[^>]*>Ativos/.test(abas) && /data-f="fila"[^>]*>Potenciais/.test(abas), 'abas Ativos e Potenciais');
+    t.ok(!/data-f="todas"|data-f="finalizadas"/.test(abas), 'Todas e Finalizadas saíram das abas');
+    t.ok(/id="btnSoNaoLidas"/.test(h) && /estado\.soNaoLidas/.test(h), 'botão Só não lidas');
+    t.ok(/id="btnTodas"/.test(h) && /function modalTodas/.test(h), 'botão Todas as conversas');
+    ['tdQ', 'tdStatus', 'tdRede', 'tdAtend', 'tdPeriodo'].forEach((id) => t.ok(h.includes('id="' + id + '"'), 'filtro ' + id));
+    t.ok(/data-td="reabrir"/.test(h) && /data-td="transferir"/.test(h), 'reabrir e transferir');
+    t.ok(/filtro:'finalizadas'/.test(h), 'inclui as finalizadas');
+  } },
 ] };
