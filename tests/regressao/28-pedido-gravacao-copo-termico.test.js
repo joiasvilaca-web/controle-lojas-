@@ -27,3 +27,7 @@ module.exports = { casos: [
     t.ok(/itemEhGravacaoDisparo\(it\) \? 1 : Math\.max\(1, Number\(it\.quantidade\)\|\|1\)/.test(h), 'ocupa 1 vaga, seja qual for a quantidade');
   } },
 ] };
+module.exports.casos.push({ nome: 'ADM: o cartão GRAVAÇÕES não aparece mais (a gravação é lançada no Pedido)', bug: 'módulo Gravações duplicava o lançamento', rodar: async ({ t, ler }) => {
+  const h = ler('index.html');
+  t.ok(!/out\.push\('grav'\)/.test(h), 'sub-tela grav fora dos cartões');
+} });
