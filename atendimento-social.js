@@ -196,6 +196,8 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
     document.getElementById('cmSync').onclick = sincronizar;
     carregarCfg();
     listar();   // 13/11: abre já mostrando o que está sem resposta
+    /* 16/11: a aba puxa os comentários sozinha ao abrir (no máx. 1 vez a cada 10 min) — antes só vinha quem clicava em Sincronizar. */
+    if(!cm.ultSync || Date.now() - cm.ultSync > 10*60*1000) sincronizar(true);
   }
   window.abrirComentarios = abrirComentarios;
 
@@ -215,11 +217,17 @@ html[data-ds] .ctx-card.ctx-citacao .ctx-lbl{color:var(--ok);}
     el.querySelectorAll('[data-g]').forEach(b=> b.onclick = ()=> configurarGoogle(b.dataset.g));
   }
 
-  async function sincronizar(){
-    const bt = document.getElementById('cmSync'); bt.disabled = true; bt.textContent = 'Sincronizando…';
-    const r = await social({ op:'sincronizar', botId: cm.bot || undefined, plataforma: cm.plat || undefined });
+  async function sincronizar(auto){
+    auto = auto === true;   // o clique passa o evento; só o chamado da abertura passa true
+    const bt = document.getElementById('cmSync'); if(!bt) return;
+    bt.disabled = true; bt.textContent = 'Sincronizando…';
+    cm.ultSync = Date.now();
+    /* 16/11: olha os 50 posts mais recentes (o máximo do servidor). Com 15, post antigo que ainda recebe comentário ficava de fora. */
+    const r = await social({ op:'sincronizar', botId: (auto ? undefined : cm.bot) || undefined, plataforma: (auto ? undefined : cm.plat) || undefined, limitePosts: 50 });
+    if(!document.getElementById('cmSync')) return;   // saiu da aba no meio
     bt.disabled = false; bt.innerHTML = ic('atualizar')+'Sincronizar';
     const res = document.getElementById('cmRes'); if(!res) return;
+    if(auto && (!r || !r.ok)){ cm.ultSync = 0; return; }   // falha na busca automática não polui a tela; o botão continua disponível
     if(!r || !r.ok){ res.innerHTML = `<div class="cm-res cm-erro">${ic('alerta')}<span>${escapeHtml((r&&r.error)||'Não foi possível sincronizar. Tente de novo em alguns minutos.')}</span></div>`; return; }
     res.innerHTML = `<div class="cm-res">${r.resultado.map(x=>`<div><span class="${x.status==='ok'?'cm-ok':x.status==='nao_configurado'?'cm-ne':'cm-at'}">${ic(x.status==='ok'?'check':x.status==='nao_configurado'?'menos':'alerta')}</span><span><b>${escapeHtml(x.bot)}</b> · ${PLAT[x.plataforma]||x.plataforma}: ${x.status==='ok'?`${x.comentarios} comentário(s) lidos${x.conta?' ('+escapeHtml(x.conta)+')':''}`:escapeHtml(x.motivo||'')}</span></div>`).join('')}</div>`;
     await listar(); atualizarBadge();
