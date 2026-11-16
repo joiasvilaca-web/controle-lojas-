@@ -37,3 +37,11 @@ module.exports.casos.push({ nome: 'Gravação copo: o botão Adicionar fica no f
   t.ok(/itemEhGravacaoDisparo\(it\) \? '' : `<button type="button" class="btn-add-item"/.test(h), 'some do topo neste serviço');
   t.ok(h.indexOf('class="grav-fim"') > h.indexOf('data-itfotobtn="${i}:cam"'), 'vem depois do arquivo do logo');
 } });
+module.exports.casos.push({ nome: 'Gravação copo: valor, desconto, acréscimo, cortesia e garantia ficam abaixo dos dados da gravação', bug: 'valor e desconto ficavam no topo, antes de escolher o tipo da gravação', rodar: async ({ t, ler }) => {
+  const h = ler('painel-ordens.html');
+  t.ok(/\$\{_grav \? '' : _valDescHtml\}/.test(h), 'saem do topo neste serviço');
+  t.ok(/\$\{_grav \? `<div class="item-row-topo grav-valores">\$\{_valDescHtml\}<\/div>` : ''\}/.test(h), 'entram abaixo da seção');
+  t.ok(h.indexOf('grav-valores">${_valDescHtml}') > h.indexOf('gravSecaoHtml(it, i) : `<div class="item-row-obs">'), 'depois dos dados da gravação');
+  const bloco = h.slice(h.indexOf('const _valDescHtml = `'), h.indexOf('__html+=`<div class="item-row" data-idx'));
+  t.ok(/data-itfield="valorUnitario"/.test(bloco) && /data-aidbtn="desconto"/.test(bloco) && /data-semcob="garantia"/.test(bloco) && /data-itfield="ajusteValR"/.test(bloco), 'o bloco leva valor, desc., acrés., cortesia, garantia, % e R$');
+} });

@@ -556,6 +556,7 @@
   .grav-orient-btn.active{background:var(--accent-soft);color:var(--accent);}
   .grav-aviso{font-size:12.5px;color:var(--ink-soft);}
   .grav-aviso svg{vertical-align:-2px;margin-right:4px;}
+  .grav-valores{margin-top:10px;flex-wrap:wrap;}
   .grav-fim{display:flex;justify-content:flex-end;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);}
   .item-row-obs input{width:100%;height:38px;padding:0 10px;border:1px solid var(--line-strong);border-radius:8px;font-size:13.5px;}
   .item-row-estoque{margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
@@ -4355,7 +4356,7 @@ function gravSecaoHtml(it, i){
           ${Object.keys(GRAV_ORIENT).map(o=>`<button type="button" class="grav-orient-btn ${g.orientacao===o?'active':''}" data-gravorient="${i}" data-val="${o}" aria-pressed="${g.orientacao===o}">${gravOrientSvg(o)} ${o==='vertical'?'Vertical':'Horizontal'}</button>`).join('')}
         </div></div>
     </div>
-    <div class="muted" style="font-size:12px;">O valor escolhido vai para o campo Valor acima e pode ser alterado à mão. Total deste item: <b data-gravtotal="${i}">${fmtMoeda((Number(it.valorUnitario)||0)*Math.max(1, Number(it.quantidade)||1))}</b></div>
+    <div class="muted" style="font-size:12px;">O valor escolhido vai para o campo Valor, logo abaixo, e pode ser alterado à mão. Total deste item: <b data-gravtotal="${i}">${fmtMoeda((Number(it.valorUnitario)||0)*Math.max(1, Number(it.quantidade)||1))}</b></div>
     ${gravTemNome(g)?`<label class="grav-campo grav-largo"><span>Nome ou frase para gravar</span><input type="text" data-gravnome="${i}" placeholder="Ex.: Maria, Sempre Juntos…" value="${escapeHtml(g.nome||'')}"></label>`:''}
     ${gravTemLogo(g)?`<div class="grav-aviso">${ico('imagem',14)} Envie o arquivo do logo em <b>Arquivo do logo</b>, logo abaixo.</div>`:''}
     <label class="grav-campo grav-largo"><span>Observações da gravação</span><textarea data-gravobs="${i}" rows="2" placeholder="Ex.: fonte cursiva, posição do logo, cor do copo…">${escapeHtml(g.observacoes||'')}</textarea></label>
@@ -4512,24 +4513,9 @@ function recalcularValorAjustado(it){
         const produtoAtual=it.produtoEstoqueId?vendaveis.find(p=>p.id===it.produtoEstoqueId):null;
         const estoqueAqui=produtoAtual?(Number((produtoAtual.estoquePorLoja||{})[lojaAtual])||0):null;
         const outras=produtoAtual?outrasLojasComEstoque(produtoAtual,lojaAtual):[];
-        __html+=`<div class="item-row" data-idx="${i}">
-          <div class="item-tipo" role="radiogroup" aria-label="Tipo do item" style="display:flex;gap:14px;margin-bottom:8px;font-size:13.5px;font-weight:600;">
-            <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="ittipo_${i}" data-ittipo="${i}" value="produto" ${it.tipoItem!=='servico'?'checked':''} style="width:auto;margin:0;"> Produto</label>
-            <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="ittipo_${i}" data-ittipo="${i}" value="servico" ${it.tipoItem==='servico'?'checked':''} style="width:auto;margin:0;"> Serviço</label>
-          </div>
-          <div class="item-row-topo">
-            <div class="prod-ac-wrap item-row-produto" id="pacWrap_${i}">
-              ${it.avulso
-                ?`<input type="text" data-itfield="produto" placeholder="Descrição do item avulso (ex: CONSERTO DE CORRENTE)" value="${escapeHtml(it.produto||'')}" style="text-transform:uppercase;">`
-                :produtoAtual
-                ?`<div class="prod-ac-sel">
-                     <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
-                     ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${escapeHtml(String(produtoAtual.fator))}</span>`:''}
-                     <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto" aria-label="Trocar produto">${ico('x',14)}</button>
-                   </div>`
-                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: digite o nome':'Produto: digite o nome (começam com 8, ou pedras)'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
-                   <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
-            </div>
+        /* 16/11: na gravação de copo, valor e desconto ficam ABAIXO dos dados da gravação (o valor nasce da escolha do tipo). */
+        const _grav = itemEhGravacaoDisparo(it);
+        const _valDescHtml = `
             <div class="item-row-valor">
               <input type="number" min="0" step="0.01" data-itfield="valorUnitario" placeholder="Valor" aria-label="Valor do item (R$)" title="Valor do item (R$)"
                 value="${(()=>{const v=valorBaseItem(it);return v===''?'':Number(v).toFixed(2);})()}" title="Valor original do item (o desconto/acréscimo é calculado em cima dele)" ${it.semCobranca?'disabled':''}>
@@ -4549,7 +4535,26 @@ function recalcularValorAjustado(it){
                 if(it.ajusteTipo!=='nenhum') return ajusteResumoEdicao(it);
                 return '';
               })()}</span>
+            </div>`;
+        __html+=`<div class="item-row" data-idx="${i}">
+          <div class="item-tipo" role="radiogroup" aria-label="Tipo do item" style="display:flex;gap:14px;margin-bottom:8px;font-size:13.5px;font-weight:600;">
+            <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="ittipo_${i}" data-ittipo="${i}" value="produto" ${it.tipoItem!=='servico'?'checked':''} style="width:auto;margin:0;"> Produto</label>
+            <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="ittipo_${i}" data-ittipo="${i}" value="servico" ${it.tipoItem==='servico'?'checked':''} style="width:auto;margin:0;"> Serviço</label>
+          </div>
+          <div class="item-row-topo">
+            <div class="prod-ac-wrap item-row-produto" id="pacWrap_${i}">
+              ${it.avulso
+                ?`<input type="text" data-itfield="produto" placeholder="Descrição do item avulso (ex: CONSERTO DE CORRENTE)" value="${escapeHtml(it.produto||'')}" style="text-transform:uppercase;">`
+                :produtoAtual
+                ?`<div class="prod-ac-sel">
+                     <b title="${escapeHtml(produtoAtual.nome)}">${escapeHtml(produtoAtual.nome)}</b>
+                     ${produtoAtual.fator!=null&&produtoAtual.fator!==''?`<span class="prod-ac-fator-inline">· Fator ${escapeHtml(String(produtoAtual.fator))}</span>`:''}
+                     <button type="button" class="pa-clr" data-paclear="${i}" title="Trocar produto" aria-label="Trocar produto">${ico('x',14)}</button>
+                   </div>`
+                :`<input class="prod-ac-input" id="pacInp_${i}" placeholder="${it.tipoItem==='servico'?'Serviço: digite o nome':'Produto: digite o nome (começam com 8, ou pedras)'}" aria-label="Produto" autocomplete="off" spellcheck="false" data-pac="${i}" value="${escapeHtml(it.produto||'')}">
+                   <div class="prod-ac-drop" id="pacDrop_${i}" style="display:none;"></div>`}
             </div>
+            ${_grav ? '' : _valDescHtml}
             ${itemEhGravacaoDisparo(it) ? '' : `<button type="button" class="btn-add-item" data-itadd="${i}" title="Confirmar este item e abrir uma linha para o próximo">${ico('check',14)} Adicionar</button>`}
             <button type="button" class="icon-btn perigo" data-itdel="${i}" title="Remover item" aria-label="Remover item">${ico('lixeira')}</button>
           </div>
@@ -4570,6 +4575,7 @@ function recalcularValorAjustado(it){
             <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)" aria-label="Observação do item"
               value="${escapeHtml(it.observacaoItem||'')}">
           </div>`}
+          ${_grav ? `<div class="item-row-topo grav-valores">${_valDescHtml}</div>` : ''}
           <div class="item-row-fotos" style="margin-top:8px;">
             <div class="foto-grid" data-itfotogrid="${i}" data-edit="1"></div>
             <input type="file" accept="image/*" multiple data-itfotoin="${i}" style="display:none;">
