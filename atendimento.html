@@ -396,6 +396,21 @@ html[data-theme=dark] .msgs.inst-reforma, html[data-theme=dark] .msgs.inst-vilac
 .lin{display:grid;grid-template-columns:56px 1fr 1fr 36px;gap:6px;margin-bottom:6px;align-items:center;}
 .lin input,.lin select{width:100%;min-height:36px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--ink);}
 .kw{border:1px dashed var(--line-strong);border-radius:10px;padding:10px;margin-bottom:8px;}
+/* v8: menu em árvore (submenu, lista de atendentes, informação), mensagem por departamento, localizações */
+.fmw{border:1px solid var(--line);border-radius:10px;padding:8px 8px 2px;margin-bottom:8px;}
+.fmw .fmw{background:var(--surface);}
+.lin .mt{grid-row:1;grid-column:2;}
+.fmx{margin:0 0 6px;}
+.fmx select.md,.fmx textarea.mx{width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--ink);}
+.fmx textarea.mx{min-height:54px;margin-bottom:6px;}
+.fmx .so-dep,.fmx .so-atd,.fmx .so-txt,.fmx .so-sub{display:none;}
+.fmw[data-tipo="departamento"]>.fmx>.so-dep{display:block;}
+.fmw[data-tipo="atendentes"]>.fmx>.so-atd,.fmw[data-tipo="atendentes"]>.fmx>.so-txt{display:block;}
+.fmw[data-tipo="info"]>.fmx>.so-txt{display:block;}
+.fmw[data-tipo="submenu"]>.fmx>.so-txt,.fmw[data-tipo="submenu"]>.fmx>.so-sub{display:block;}
+.fmx .so-atd label{display:inline-flex;gap:6px;align-items:center;font-weight:400;margin:0 12px 6px 0;}
+.fsub{margin:0 0 6px 14px;padding-left:8px;border-left:2px solid var(--line-strong);}
+.fl input{width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;margin-bottom:6px;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);color:var(--ink);}
 .kw input,.kw textarea,.kw select{border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;background:var(--surface);color:var(--ink);}
 .kw textarea{width:100%;min-height:60px;}
 .prev{white-space:pre-wrap;background:color-mix(in srgb, var(--ok) 13%, var(--surface));color:var(--ink);border-radius:12px;border-top-left-radius:4px;padding:10px 12px;font-size:13px;max-width:380px;}
@@ -1489,15 +1504,36 @@ function abaFluxo(){
   const optDep = (sel,vazio)=> (vazio?`<option value="">${vazio}</option>`:'') + deps.map(d=>`<option value="${d.id}" ${sel===d.id?'selected':''}>${escapeHtml(d.nome)}</option>`).join('');
   const menu = (f.menu && f.menu.length) ? f.menu : [];
   const pal = f.palavras || [];
-  const linMenu = (it)=>`<div class="lin fm"><input class="mn" value="${escapeHtml(it.n||'')}" placeholder="Nº" maxlength="3" aria-label="Número da opção"><select class="md" aria-label="Departamento">${optDep(it.departamento_id)}</select><input class="mr" value="${escapeHtml(it.rotulo||'')}" placeholder="Texto (vazio = nome do departamento)" aria-label="Texto da opção"><button type="button" class="btn-icone perigo" data-x="1" title="Remover opção" aria-label="Remover opção">${icn('lixeira',{tam:16})}</button></div>`;
+  /* v8: cada opção do menu tem um tipo. "departamento" é o formato antigo (número + departamento). */
+  const TIPOS_MENU = [['departamento','Vai para um departamento'],['submenu','Abre outro menu (sub-opções)'],['atendentes','Cliente escolhe a atendente'],['info','Só responde uma informação']];
+  const tipoDe = (it)=> (it && ['submenu','atendentes','info'].includes(it.tipo)) ? it.tipo : 'departamento';
+  const rotMenu = (i)=> i.rotulo || ((deps.find(d=>d.id===i.departamento_id)||{}).nome) || (i.tipo==='atendentes'?'Escolher atendente':(i.tipo?'Opção '+i.n:''));
+  const linMenu = (it, filho)=>{ it = it||{}; const tp = tipoDe(it); const marc = Array.isArray(it.departamentos) ? it.departamentos : [];
+    return `<div class="fmw" data-tipo="${tp}"><div class="lin fm"><input class="mn" value="${escapeHtml(it.n||'')}" placeholder="Nº" maxlength="3" aria-label="Número da opção"><select class="mt" aria-label="O que a opção faz">${TIPOS_MENU.filter(([k])=>!(filho&&k==='submenu')).map(([k,t])=>`<option value="${k}" ${k===tp?'selected':''}>${t}</option>`).join('')}</select><input class="mr" value="${escapeHtml(it.rotulo||'')}" placeholder="Texto da opção${filho?'':' (vazio = nome do departamento)'}" maxlength="80" aria-label="Texto da opção"><button type="button" class="btn-icone perigo" data-x="1" title="Remover opção" aria-label="Remover opção">${icn('lixeira',{tam:16})}</button></div>
+      <div class="fmx"><select class="md so-dep" aria-label="Departamento">${optDep(it.departamento_id,'Escolha o departamento')}</select>
+        <div class="so-atd"><div class="muted" style="margin-bottom:4px;">Listar as atendentes destes departamentos (o cliente escolhe o nome; a última opção é “Qualquer atendente”):</div>${deps.map(d=>`<label><input type="checkbox" class="mdc" value="${d.id}" ${marc.includes(d.id)?'checked':''}> ${escapeHtml(d.nome)}</label>`).join('')}</div>
+        <textarea class="mx so-txt" placeholder="Informação: o texto que o bot responde · Sub-opções / atendentes: frase antes da lista (opcional)" aria-label="Texto">${escapeHtml(it.texto||'')}</textarea>
+        ${filho?'':`<div class="so-sub"><div class="fsub">${(Array.isArray(it.itens)?it.itens:[]).map(x=>linMenu(x,true)).join('')}</div><button type="button" class="btn btn-sm" data-addsub="1">${icn('mais',{tam:14})}Sub-opção</button></div>`}</div></div>`; };
+  const lerItemMenu = (w)=>{ const row = w.querySelector(':scope > .fm'), x = w.querySelector(':scope > .fmx'); const tipo = row.querySelector('.mt').value; const it = { n:row.querySelector('.mn').value.trim(), rotulo:row.querySelector('.mr').value.trim() };
+    if(tipo==='departamento'){ it.departamento_id = x.querySelector(':scope > .md').value; return (it.n && it.departamento_id) ? { n:it.n, departamento_id:it.departamento_id, rotulo:it.rotulo } : null; }
+    it.tipo = tipo; it.texto = x.querySelector(':scope > .mx').value.trim();
+    if(tipo==='atendentes'){ it.departamentos = [...x.querySelectorAll(':scope > .so-atd .mdc:checked')].map(e=>e.value); return (it.n && it.departamentos.length) ? it : null; }
+    if(tipo==='info') return (it.n && it.texto) ? it : null;
+    it.itens = [...x.querySelectorAll(':scope > .so-sub > .fsub > .fmw')].map(lerItemMenu).filter(Boolean); return (it.n && it.itens.length) ? it : null; };
+  const lerMenuArvore = ()=> [...document.querySelectorAll('#flMenu > .fmw')].map(lerItemMenu).filter(Boolean);
+  const contarItens = (l)=> (l||[]).reduce((s,i)=> s + 1 + contarItens(i.itens), 0);
+  const linLocal = (l)=>{ l = l||{}; return `<div class="kw fl"><input class="ln" value="${escapeHtml(l.nome||'')}" placeholder="Nome (ex.: Loja Marechal Center)" maxlength="60"><input class="le" value="${escapeHtml(l.endereco||'')}" placeholder="Endereço completo" maxlength="300"><input class="lk" value="${escapeHtml(l.link||'')}" placeholder="Link do mapa (https://…) — opcional" maxlength="300"><div style="display:flex;gap:6px;"><input class="lh" value="${escapeHtml(l.horario||'')}" placeholder="Horário — opcional" maxlength="200" style="flex:1;margin-bottom:0;"><button type="button" class="btn-icone perigo" data-x="1" title="Remover localização" aria-label="Remover localização">${icn('lixeira',{tam:16})}</button></div></div>`; };
   const linPal = (it)=>`<div class="kw fp"><input class="pk" value="${escapeHtml((it.chaves||[]).join(', '))}" placeholder="Palavras separadas por vírgula (ex.: preço, valor, quanto custa)" style="width:100%;box-sizing:border-box;margin-bottom:6px;"><textarea class="pr" placeholder="Resposta automática">${escapeHtml(it.resposta||'')}</textarea><div style="display:flex;gap:6px;margin-top:6px;"><select class="pd" style="flex:1;">${optDep(it.departamento_id,'Só responder (não encaminhar)')}</select><button type="button" class="btn-icone perigo" data-x="1" title="Remover palavra-chave" aria-label="Remover palavra-chave">${icn('lixeira',{tam:16})}</button></div></div>`;
   c.innerHTML = `${estado.bots.length>1?`<div class="field"><label>Bot</label><select id="flBot">${estado.bots.map(b=>`<option value="${b.id}" ${b.id===fluxoBotId?'selected':''}>${escapeHtml(b.nome)}</option>`).join('')}</select></div>`:`<p class="muted" style="margin-top:0">Bot: <b>${escapeHtml(bot.nome)}</b></p>`}
     <label style="display:flex;gap:8px;align-items:center;font-weight:600;margin:6px 0 4px;"><input type="checkbox" id="flAtivo" ${f.ativo?'checked':''}> Atendimento automático ligado (boas-vindas + menu)</label>
     <p class="muted" style="margin:0 0 8px;">Desligado, o bot não envia nada: as conversas só caem na fila. Horário do bot: <b>${escapeHtml(resumoHorario(bot.horario))}</b> (muda em “Bots e canais”).</p>
     <div class="field"><label>Nome da empresa nas mensagens</label><input id="flEmp" value="${escapeHtml(f.empresa||'Vilaça Joias')}"></div>
-    <details class="sec" open><summary>Menu de opções (localidade / departamento)</summary><div><div id="flMenu">${menu.map(linMenu).join('')}</div><button class="btn btn-sm" id="flMenuAdd">${icn('mais',{tam:14})}Opção</button><p class="muted">O cliente digita o número e a conversa vai direto para o departamento escolhido, respeitando o horário dele.</p></div></details>
+    <details class="sec" open><summary>Menu de opções (localidade / departamento)</summary><div><div id="flMenu">${menu.map(x=>linMenu(x)).join('')}</div><button class="btn btn-sm" id="flMenuAdd">${icn('mais',{tam:14})}Opção</button><p class="muted">O cliente digita o número e a conversa vai direto para o departamento escolhido, respeitando o horário dele. Cada opção também pode abrir sub-opções (ex.: Juiz de Fora → lojas), listar as atendentes para o cliente escolher ou só responder uma informação. Dentro das sub-opções, o dígito de voltar reabre o menu principal.</p></div></details>
     <details class="sec"><summary>Mensagens</summary><div><p class="muted" style="margin-top:0">Variáveis: <b>{{empresa}}</b> <b>{{contato}}</b> <b>{{protocolo}}</b> <b>{{departamento}}</b> <b>{{atendente}}</b> <b>{{horario}}</b>. Também aceito {{client.name}}, {{contact.name}} e {{ticket.id}}.</p>
       ${MSG_ROTULO.map(([k,t,h])=>`<div class="field"><label>${t}</label><textarea data-m="${k}">${escapeHtml(m[k])}</textarea>${h?`<div class="muted">${h}</div>`:''}</div>`).join('')}</div></details>
+    <details class="sec"><summary>Mensagem ao encaminhar, por departamento</summary><div><p class="muted" style="margin-top:0">Texto enviado quando o cliente é encaminhado a cada departamento (ex.: com o horário da loja). Em branco, usa a mensagem geral “Ao escolher o departamento”. Aceita as mesmas variáveis.</p>
+      ${deps.map(d=>`<div class="field"><label>${escapeHtml(d.nome)}</label><textarea data-md="${d.id}" placeholder="Em branco = mensagem geral">${escapeHtml((f.msgs_dep||{})[d.id]||'')}</textarea></div>`).join('')}</div></details>
+    <details class="sec"><summary>Localizações (endereços das lojas)</summary><div><div id="flLoc">${(f.locais||[]).map(x=>linLocal(x)).join('')}</div><button class="btn btn-sm" id="flLocAdd">${icn('mais',{tam:14})}Localização</button><p class="muted">Endereços deste bot. A atendente envia pelo clipe do chat → “Localização da loja”. Bot sem loja física fica sem nenhuma.</p></div></details>
     <details class="sec"><summary>Palavras-chave</summary><div><div id="flPal">${pal.map(linPal).join('')}</div><button class="btn btn-sm" id="flPalAdd">${icn('mais',{tam:14})}Palavra-chave</button><p class="muted">Se a mensagem do cliente contiver uma das palavras, o bot responde na hora (e pode encaminhar ao departamento).</p></div></details>
     <details class="sec"><summary>Opções</summary><div>
       <div class="field"><label>Dígito para voltar ao menu</label><input id="flVoltar" value="${escapeHtml(f.voltar_digito||'9')}" maxlength="3" style="width:80px;"></div>
@@ -1511,23 +1547,30 @@ function abaFluxo(){
     <div class="rodape"><button class="btn btn-accent" id="flSalvar">Salvar</button></div>`;
   const ler0 = ()=>{
     const msgs = {}; c.querySelectorAll('[data-m]').forEach(t=>{ msgs[t.dataset.m] = t.value; });
-    const menu = [...c.querySelectorAll('.fm')].map(r=>({ n:r.querySelector('.mn').value.trim(), departamento_id:r.querySelector('.md').value, rotulo:r.querySelector('.mr').value.trim() })).filter(x=>x.n&&x.departamento_id);
+    const menu = lerMenuArvore();
     const palavras = [...c.querySelectorAll('.fp')].map(r=>({ chaves:r.querySelector('.pk').value.split(',').map(x=>x.trim()).filter(Boolean), resposta:r.querySelector('.pr').value, departamento_id:r.querySelector('.pd').value||null })).filter(x=>x.chaves.length&&(x.resposta||x.departamento_id));
     return { ativo:document.getElementById('flAtivo').checked, empresa:document.getElementById('flEmp').value, voltar_digito:document.getElementById('flVoltar').value, reenviar_apos_horas:Number(document.getElementById('flHoras').value)||12, enviar_encerramento:document.getElementById('flEnc').checked, enquete:{ ativa:document.getElementById('flEnq').checked }, avisar_assumiu:document.getElementById('flAss').checked, distribuicao:document.getElementById('flDist').value, msgs, menu, palavras };
   };
-  const ler = ()=> Object.assign(ler0(), lerExtraFluxo(c));
+  const lerV8 = ()=>{ const msgs_dep = {}; c.querySelectorAll('[data-md]').forEach(t=>{ const v = t.value.trim(); if(v) msgs_dep[t.dataset.md] = v; });
+    const locais = [...c.querySelectorAll('.fl')].map(r=>({ nome:r.querySelector('.ln').value.trim(), endereco:r.querySelector('.le').value.trim(), link:r.querySelector('.lk').value.trim(), horario:r.querySelector('.lh').value.trim() })).filter(l=>l.nome&&l.endereco);
+    return { msgs_dep, locais }; };
+  const ler = ()=> Object.assign(ler0(), lerExtraFluxo(c), lerV8());
   const prev = ()=>{
     const x = ler(); const v = t=> String(t||'').replace(/\{\{\s*(empresa|client\.name)\s*\}\}/g, x.empresa).replace(/\{\{\s*[\w.]+\s*\}\}/g,'…');
-    const lista = x.menu.map(i=>`${i.n} - ${i.rotulo || ((deps.find(d=>d.id===i.departamento_id)||{}).nome||'')}`).join('\n');
+    const lista = x.menu.map(i=>`${i.n} - ${rotMenu(i)}` + (i.itens ? i.itens.map(k=>`\n      ↳ ${k.n} - ${rotMenu(k)}`).join('') : '')).join('\n');
     document.getElementById('flPrev').textContent = [v(x.msgs.boasvindas), lista, v(x.msgs.escolha)].filter(Boolean).join('\n\n');
   };
-  const ligar = ()=>{ c.querySelectorAll('[data-x]').forEach(b=> b.onclick = ()=>{ b.closest('.fm,.fp').remove(); prev(); }); c.querySelectorAll('input,textarea,select').forEach(e=>{ e.oninput = prev; e.onchange = prev; }); };
-  document.getElementById('flMenuAdd').onclick = ()=>{ const n = c.querySelectorAll('.fm').length+1; document.getElementById('flMenu').insertAdjacentHTML('beforeend', linMenu({ n:String(n), departamento_id:'' })); ligar(); prev(); };
+  const ligar = ()=>{ c.querySelectorAll('[data-x]').forEach(b=> b.onclick = ()=>{ b.closest('.fmw,.fl,.fp').remove(); prev(); }); c.querySelectorAll('input,textarea,select').forEach(e=>{ e.oninput = prev; e.onchange = prev; });
+    c.querySelectorAll('.mt').forEach(sel=> sel.onchange = ()=>{ sel.closest('.fmw').dataset.tipo = sel.value; prev(); });
+    c.querySelectorAll('[data-addsub]').forEach(b=> b.onclick = ()=>{ const box = b.parentElement.querySelector('.fsub'); box.insertAdjacentHTML('beforeend', linMenu({ n:String(box.children.length+1), departamento_id:'' }, true)); ligar(); prev(); }); };
+  document.getElementById('flMenuAdd').onclick = ()=>{ const n = document.getElementById('flMenu').children.length+1; document.getElementById('flMenu').insertAdjacentHTML('beforeend', linMenu({ n:String(n), departamento_id:'' })); ligar(); prev(); };
   document.getElementById('flPalAdd').onclick = ()=>{ document.getElementById('flPal').insertAdjacentHTML('beforeend', linPal({})); ligar(); };
+  document.getElementById('flLocAdd').onclick = ()=>{ document.getElementById('flLoc').insertAdjacentHTML('beforeend', linLocal({})); ligar(); };
   if(document.getElementById('flBot')) document.getElementById('flBot').onchange = e=>{ fluxoBotId = e.target.value; abaFluxo(); };
   ligar(); prev();
   document.getElementById('flSalvar').onclick = async ()=>{
     const x = ler();
+    { const naTela = c.querySelectorAll('#flMenu .fmw').length, validas = contarItens(x.menu); if(naTela > validas && !confirm((naTela-validas)+' opção(ões) do menu estão incompletas (sem número, sem departamento, sem texto ou sem sub-opções) e NÃO serão salvas. Continuar mesmo assim?')) return; }
     if(x.ativo && !x.menu.length && !confirm('O menu está vazio: o bot só enviará a mensagem de boas-vindas. Continuar?')) return;
     const r = await botApi({ op:'fluxoSalvar', botId:fluxoBotId, fluxo:x });
     if(r&&r.ok){ showToast(x.ativo?'Salvo. Atendimento automático LIGADO.':'Salvo. Atendimento automático desligado.'); await carregarStatus(); abaFluxo(); } else showToast((r&&r.error)||'Erro ao salvar');
@@ -2409,9 +2452,22 @@ function fecharMenuAnexo(){ const m = document.getElementById('menuAnexo'); if(m
 function abrirMenuAnexo(){
   if(!estado.atual) return; if(document.getElementById('menuAnexo')){ fecharMenuAnexo(); return; }
   const m = document.createElement('div'); m.id = 'menuAnexo'; m.className = 'menu-anexo'; m.setAttribute('role','menu');
-  m.innerHTML = `<button type="button" role="menuitem" data-an="arq">${icn('clipe',{tam:17})}Foto ou arquivo do aparelho</button><button type="button" role="menuitem" data-an="via">${icn('recibo',{tam:17})}Via pelo número</button><button type="button" role="menuitem" data-an="prod">${icn('joia',{tam:17})}Fotos do produto que ela está olhando</button>`;
+  m.innerHTML = `<button type="button" role="menuitem" data-an="arq">${icn('clipe',{tam:17})}Foto ou arquivo do aparelho</button><button type="button" role="menuitem" data-an="via">${icn('recibo',{tam:17})}Via pelo número</button><button type="button" role="menuitem" data-an="prod">${icn('joia',{tam:17})}Fotos do produto que ela está olhando</button><button type="button" role="menuitem" data-an="loc">${icn('pin',{tam:17})}Localização da loja</button>`;
   document.getElementById('compose').appendChild(m);
-  m.querySelectorAll('[data-an]').forEach(b=> b.onclick = ()=>{ fecharMenuAnexo(); const k = b.dataset.an; if(k==='arq') document.getElementById('arquivo').click(); else if(k==='via') modalAnexoVia(); else modalProdutos(); });
+  m.querySelectorAll('[data-an]').forEach(b=> b.onclick = ()=>{ fecharMenuAnexo(); const k = b.dataset.an; if(k==='arq') document.getElementById('arquivo').click(); else if(k==='via') modalAnexoVia(); else if(k==='loc') modalLocais(); else modalProdutos(); });
+}
+/* v8: localizações cadastradas no bot da conversa (Administrar › Mensagens do bot › Localizações). O texto vai para a caixa de mensagem; a atendente confere e envia. */
+function textoLocal(l){ return ['📍 *'+l.nome+'*', l.endereco, l.horario ? ('Horário: '+l.horario) : '', l.link||''].filter(Boolean).join('\n'); }
+function modalLocais(){
+  const c = estado.atual; if(!c) return;
+  const bot = (estado.bots||[]).find(b=>b.id===c.bot_id) || null;
+  const locais = (bot && bot.config && bot.config.fluxo && Array.isArray(bot.config.fluxo.locais)) ? bot.config.fluxo.locais : [];
+  abrirModal(`<h2>Enviar localização</h2>` + (locais.length
+    ? `<p class="muted" style="margin-top:0">Escolha: o texto vai para a caixa de mensagem e você confere antes de enviar.</p>` + locais.map((l,i)=>`<button type="button" class="btn" data-loc="${i}" style="display:block;width:100%;text-align:left;margin-bottom:6px;white-space:pre-wrap;height:auto;">${escapeHtml(textoLocal(l))}</button>`).join('')
+    : `<p class="muted" style="margin-top:0">Nenhuma localização cadastrada para ${escapeHtml(bot ? bot.nome : 'este bot')}. A diretoria cadastra em Administrar › Mensagens do bot › Localizações.</p>`)
+    + `<div class="rodape"><button class="btn" id="mCancel">Fechar</button></div>`);
+  document.getElementById('mCancel').onclick = fecharModal;
+  document.querySelectorAll('[data-loc]').forEach(b=> b.onclick = ()=>{ const t = document.getElementById('texto'); const l = locais[Number(b.dataset.loc)]; if(!t || !l) return; t.value = (t.value ? t.value.replace(/\s+$/,'')+'\n\n' : '') + textoLocal(l); fecharModal(); t.dispatchEvent(new Event('input',{ bubbles:true })); t.focus(); });
 }
 document.addEventListener('click', e=>{ if(!e.target.closest('#menuAnexo') && !e.target.closest('#btnAnexo')) fecharMenuAnexo(); });
 function linkDaVia(tipo, id){

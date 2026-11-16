@@ -1,4 +1,4 @@
-// atendimento-bot v7 (v7: distribuição/carteira respeitam o perfil do DP — administrativo nunca recebe automático; instâncias liberadas) v6 (v6: Agente de IA fora do horário via atendimento-ia responderAuto, resumo automático ao finalizar, canal Messenger) v5 (v5: provedor duplo Evolution/Cloud API, menus interativos, blacklist, carteira, protocolo sequencial, nota 0-10, motivo/contato finaliza, agrupamento, recado, resolve bot_id) v3 (v3: distribuição entre online, aviso de atendente, KPIs, catálogo de etiquetas/modelos; v2: ops com sessão) — bot de pré-atendimento: boas-vindas, menu por localidade/departamento,
+// atendimento-bot v8 (v8: menu em árvore — submenu, lista de atendentes para o cliente escolher, opção só de informação —, mensagem de encaminhamento por departamento, localizações por bot) v7 (v7: distribuição/carteira respeitam o perfil do DP — administrativo nunca recebe automático; instâncias liberadas) v6 (v6: Agente de IA fora do horário via atendimento-ia responderAuto, resumo automático ao finalizar, canal Messenger) v5 (v5: provedor duplo Evolution/Cloud API, menus interativos, blacklist, carteira, protocolo sequencial, nota 0-10, motivo/contato finaliza, agrupamento, recado, resolve bot_id) v3 (v3: distribuição entre online, aviso de atendente, KPIs, catálogo de etiquetas/modelos; v2: ops com sessão) — bot de pré-atendimento: boas-vindas, menu por localidade/departamento,
 // palavras-chave, fora do expediente (recado), opção inválida, enquete de satisfação.
 // Chamado pelo webhook a cada mensagem recebida ({canal, instancia, contato_id}) e pela
 // atendimento-api ({acao:"finalizou", conversa_id}). verify_jwt false — protegido por x-bot-token.
@@ -33,12 +33,34 @@ function sessaoValida(u: any, senha: string): boolean {
   return (Array.isArray(u.sessoes) ? u.sessoes : []).some((s: any) => s && s.token === senha && (!s.exp || Number(s.exp) > agora));
 }
 const CHAVES_MSG = ["boasvindas", "escolha", "voltar", "invalida", "transferindo", "fora_bot", "fora_departamento", "recado_ok", "encerramento", "enquete", "enquete_invalida", "enquete_obrigado", "atendente_assumiu"];
+// v8: item do menu. Sem "tipo" = departamento (formato antigo, mantido). Tipos: submenu (itens filhos), atendentes (cliente escolhe a atendente dos departamentos marcados), info (só responde um texto).
+const TIPOS_MENU = ["departamento", "submenu", "atendentes", "info"];
+function itemMenuLimpo(m: any, nivel: number): any {
+  const str = (v: any, n = 1500) => String(v == null ? "" : v).slice(0, n);
+  if (!m || typeof m !== "object") return null;
+  const tipo = TIPOS_MENU.includes(m.tipo) ? m.tipo : "departamento";
+  const base: any = { n: str(m.n, 3).trim(), rotulo: str(m.rotulo, 80).trim() };
+  if (!base.n) return null;
+  if (tipo === "departamento") { const d = str(m.departamento_id, 40); return d ? { n: base.n, departamento_id: d, rotulo: base.rotulo } : null; }
+  if (tipo === "atendentes") {
+    const ds = [...new Set((Array.isArray(m.departamentos) && m.departamentos.length ? m.departamentos : [m.departamento_id]).map((d: any) => str(d, 40)).filter(Boolean))].slice(0, 20);
+    return ds.length ? { ...base, tipo, departamentos: ds, texto: str(m.texto, 1000).trim() } : null;
+  }
+  if (tipo === "info") { const t = str(m.texto, 1500).trim(); return t ? { ...base, tipo, texto: t } : null; }
+  if (nivel >= 2) return null; // submenu: até 2 níveis abaixo do menu principal
+  const itens = (Array.isArray(m.itens) ? m.itens : []).slice(0, 10).map((i: any) => itemMenuLimpo(i, nivel + 1)).filter(Boolean);
+  return itens.length ? { ...base, tipo, texto: str(m.texto, 1000).trim(), itens } : null;
+}
 function fluxoLimpo(x: any) {
   const str = (v: any, n = 1500) => String(v == null ? "" : v).slice(0, n);
   const msgs: any = {}; for (const k of CHAVES_MSG) if (x && x.msgs && typeof x.msgs[k] === "string") msgs[k] = str(x.msgs[k]);
-  const menu = (Array.isArray(x.menu) ? x.menu : []).slice(0, 20).map((m: any) => ({ n: str(m.n, 3).trim(), departamento_id: str(m.departamento_id, 40), rotulo: str(m.rotulo, 80).trim() })).filter((m: any) => m.n && m.departamento_id);
+  const menu = (Array.isArray(x.menu) ? x.menu : []).slice(0, 20).map((m: any) => itemMenuLimpo(m, 0)).filter(Boolean);
+  // v8: mensagem de encaminhamento própria de cada departamento (vazio = usa a geral "transferindo")
+  const msgs_dep: Record<string, string> = {}; for (const [k, v] of Object.entries((x && x.msgs_dep && typeof x.msgs_dep === "object") ? x.msgs_dep : {}).slice(0, 40)) { const t = str(v).trim(); if (t) msgs_dep[str(k, 40)] = t; }
+  // v8: localizações (endereços) deste bot, para a atendente enviar no chat
+  const locais = (Array.isArray(x.locais) ? x.locais : []).slice(0, 20).map((l: any) => ({ nome: str(l && l.nome, 60).trim(), endereco: str(l && l.endereco, 300).trim(), link: /^https?:\/\//i.test(str(l && l.link, 300).trim()) ? str(l && l.link, 300).trim() : "", horario: str(l && l.horario, 200).trim() })).filter((l: any) => l.nome && l.endereco);
   const palavras = (Array.isArray(x.palavras) ? x.palavras : []).slice(0, 50).map((p: any) => ({ chaves: (Array.isArray(p.chaves) ? p.chaves : String(p.chaves || "").split(",")).map((c: any) => str(c, 60).trim()).filter(Boolean).slice(0, 20), resposta: str(p.resposta), departamento_id: p.departamento_id ? str(p.departamento_id, 40) : null })).filter((p: any) => p.chaves.length && (p.resposta || p.departamento_id));
-  return { ativo: !!x.ativo, empresa: str(x.empresa, 80), voltar_digito: str(x.voltar_digito || "9", 3).trim() || "9", reenviar_apos_horas: Math.min(168, Math.max(1, Number(x.reenviar_apos_horas) || 12)), enviar_encerramento: !!x.enviar_encerramento, enquete: { ativa: !!(x.enquete && x.enquete.ativa), escala: x.enquete && x.enquete.escala === "10" ? "10" : "5", tempo_min: Math.min(1440, Math.max(0, Number(x.enquete && x.enquete.tempo_min) || 0)) }, enviar_nome_atendente: !!x.enviar_nome_atendente, motivo_obrigatorio: !!x.motivo_obrigatorio, motivos: (Array.isArray(x.motivos) ? x.motivos : String(x.motivos || "").split(/[\n,;]+/)).map((m: any) => str(m, 60).trim().toUpperCase()).filter(Boolean).slice(0, 40), contato_pode_finalizar: !!x.contato_pode_finalizar, palavras_finalizar: (Array.isArray(x.palavras_finalizar) ? x.palavras_finalizar : String(x.palavras_finalizar || "sair,encerrar").split(",")).map((m: any) => str(m, 30).trim()).filter(Boolean).slice(0, 10), agrupar_segundos: Math.min(20, Math.max(0, Number(x.agrupar_segundos) || 0)), recado_minutos: Math.min(1440, Math.max(0, Number(x.recado_minutos) || 0)), interativo: !!x.interativo, potenciais: { modo: ["nunca", "novos", "msg_sem_atendimento"].includes(x.potenciais && x.potenciais.modo) ? x.potenciais.modo : "nunca", minutos: Math.min(1440, Math.max(1, Number(x.potenciais && x.potenciais.minutos) || 10)) }, avisar_assumiu: !!x.avisar_assumiu, distribuicao: x.distribuicao === "online" ? "online" : "manual", msgs, menu, palavras };
+  return { ativo: !!x.ativo, empresa: str(x.empresa, 80), voltar_digito: str(x.voltar_digito || "9", 3).trim() || "9", reenviar_apos_horas: Math.min(168, Math.max(1, Number(x.reenviar_apos_horas) || 12)), enviar_encerramento: !!x.enviar_encerramento, enquete: { ativa: !!(x.enquete && x.enquete.ativa), escala: x.enquete && x.enquete.escala === "10" ? "10" : "5", tempo_min: Math.min(1440, Math.max(0, Number(x.enquete && x.enquete.tempo_min) || 0)) }, enviar_nome_atendente: !!x.enviar_nome_atendente, motivo_obrigatorio: !!x.motivo_obrigatorio, motivos: (Array.isArray(x.motivos) ? x.motivos : String(x.motivos || "").split(/[\n,;]+/)).map((m: any) => str(m, 60).trim().toUpperCase()).filter(Boolean).slice(0, 40), contato_pode_finalizar: !!x.contato_pode_finalizar, palavras_finalizar: (Array.isArray(x.palavras_finalizar) ? x.palavras_finalizar : String(x.palavras_finalizar || "sair,encerrar").split(",")).map((m: any) => str(m, 30).trim()).filter(Boolean).slice(0, 10), agrupar_segundos: Math.min(20, Math.max(0, Number(x.agrupar_segundos) || 0)), recado_minutos: Math.min(1440, Math.max(0, Number(x.recado_minutos) || 0)), interativo: !!x.interativo, potenciais: { modo: ["nunca", "novos", "msg_sem_atendimento"].includes(x.potenciais && x.potenciais.modo) ? x.potenciais.modo : "nunca", minutos: Math.min(1440, Math.max(1, Number(x.potenciais && x.potenciais.minutos) || 10)) }, avisar_assumiu: !!x.avisar_assumiu, distribuicao: x.distribuicao === "online" ? "online" : "manual", msgs, menu, palavras, msgs_dep, locais };
 }
 
 let __seg: Record<string, string> | null = null; let __segT = 0;
@@ -135,12 +157,12 @@ async function enviar(conv: any, bot: any, texto: string, interativo?: any) {
   await admin.from("atendimento_conversas").update({ ultima_mensagem_em: agora, ultima_mensagem_texto: texto, ultima_direcao: "out", updated_at: agora }).eq("id", conv.id);
 }
 // rótulo do botão/lista: até 20 caracteres, sem caracteres especiais
-const tituloMenu = (m: any, deps: any[]) => String(m.rotulo || (deps.find((d) => d.id === m.departamento_id) || {}).nome || "").trim();
+const tituloMenu = (m: any, deps: any[]) => String(m.rotulo || (deps.find((d) => d.id === m.departamento_id) || {}).nome || (m.tipo === "atendentes" ? "Escolher atendente" : m.tipo ? "Opção " + m.n : "")).trim();
 const rotuloOk = (t: string) => t.length > 0 && t.length <= 20 && /^[\p{L}\p{N} \-]+$/u.test(t);
 // menu: no WhatsApp OFICIAL vira botões (até 3) ou lista (até 10) quando os rótulos permitem; senão (e em qualquer outro canal) segue em texto numerado
-async function enviarMenu(conv: any, bot: any, f: any, deps: any[], intro: string, escolha: string) {
-  const itens: any[] = f.menu || [];
-  const textoPuro = [intro, listaMenu(f, deps), escolha].filter(Boolean).join("\n\n");
+async function enviarMenu(conv: any, bot: any, f: any, deps: any[], intro: string, escolha: string, lista?: any[]) {
+  const itens: any[] = lista || f.menu || [];
+  const textoPuro = [intro, lista ? listaItens(itens, deps) : listaMenu(f, deps), escolha].filter(Boolean).join("\n\n");
   if (f.interativo && ehCloud(conv) && itens.length && itens.length <= 10 && itens.every((m) => rotuloOk(tituloMenu(m, deps)))) {
     const body = { text: (intro || "Escolha uma opção:").slice(0, 1024) };
     const inter = itens.length <= 3
@@ -168,7 +190,7 @@ const PADRAO = {
     enquete_obrigado: "Obrigado pela avaliação! 💎",
     atendente_assumiu: "{{atendente}} iniciou o seu atendimento. 😊",
   },
-  voltar_digito: "9", reenviar_apos_horas: 12, menu: [] as any[], palavras: [] as any[], enquete: { ativa: false, escala: "5", tempo_min: 0 }, enviar_nome_atendente: false, motivo_obrigatorio: false, motivos: [] as string[], contato_pode_finalizar: false, palavras_finalizar: ["sair", "encerrar"], agrupar_segundos: 0, recado_minutos: 0, interativo: false, potenciais: { modo: "nunca", minutos: 10 }, enviar_encerramento: false, avisar_assumiu: false, distribuicao: "manual",
+  voltar_digito: "9", reenviar_apos_horas: 12, menu: [] as any[], palavras: [] as any[], enquete: { ativa: false, escala: "5", tempo_min: 0 }, enviar_nome_atendente: false, motivo_obrigatorio: false, motivos: [] as string[], contato_pode_finalizar: false, palavras_finalizar: ["sair", "encerrar"], agrupar_segundos: 0, recado_minutos: 0, interativo: false, potenciais: { modo: "nunca", minutos: 10 }, enviar_encerramento: false, avisar_assumiu: false, distribuicao: "manual", msgs_dep: {} as Record<string, string>, locais: [] as any[],
 };
 function fluxoDe(bot: any) {
   const f = (bot.config && bot.config.fluxo) || {};
@@ -177,6 +199,7 @@ function fluxoDe(bot: any) {
   if (enq.escala === "10") { if (!(f.msgs && f.msgs.enquete)) msgs.enquete = "De 0 a 10, como você avalia o atendimento que recebeu? (0 = péssimo, 10 = excelente)"; if (!(f.msgs && f.msgs.enquete_invalida)) msgs.enquete_invalida = "Por favor, responda apenas com um número de 0 a 10."; }
   return { ...PADRAO, ...f, empresa: f.empresa || PADRAO.empresa, msgs, enquete: enq };
 }
+function listaItens(itens: any[], deps: any[]): string { return (itens || []).map((m: any) => `${m.n} - ${tituloMenu(m, deps)}`).join("\n"); }
 function listaMenu(f: any, deps: any[]): string {
   return (f.menu || []).map((m: any) => `${m.n} - ${m.rotulo || (deps.find((d) => d.id === m.departamento_id) || {}).nome || ""}`).join("\n");
 }
@@ -206,7 +229,7 @@ async function iaResponder(conv: any, ultimoId: string | null, contexto = ""): P
 
 async function rotear(conv: any, bot: any, f: any, deps: any[], dep: any, est: any) {
   const v = vars(conv, f, dep);
-  await salvarEstado(conv, { ...est, etapa: "atendimento" }, { departamento_id: dep.id, setor: dep.nome });
+  await salvarEstado(conv, { ...est, etapa: "atendimento", caminho: [], lista: null }, { departamento_id: dep.id, setor: dep.nome });
   if (!dentroDoHorario(dep.horario)) { v.horario = resumoHorario(dep.horario); await enviar(conv, bot, tpl(f.msgs.fora_departamento, v)); return; }
   if (f.distribuicao === "online") {
     const at = await escolherAtendente(dep, bot);
@@ -217,7 +240,91 @@ async function rotear(conv: any, bot: any, f: any, deps: any[], dep: any, est: a
       v.atendente = at.nome;
     }
   }
-  await enviar(conv, bot, tpl(f.msgs.transferindo, v));
+  await enviar(conv, bot, tpl(msgTransf(f, dep), v));
+}
+/* ---------- v8: menu em árvore ---------- */
+// mensagem de encaminhamento: a do departamento, se cadastrada; senão a geral
+const msgTransf = (f: any, dep: any) => (dep && f.msgs_dep && f.msgs_dep[dep.id]) || f.msgs.transferindo;
+const QUALQUER = "Qualquer atendente";
+const rodapeSub = (f: any, v: Record<string, string>) => ["Digite o *NÚMERO* da opção desejada.", tpl(f.msgs.voltar, v)].filter(Boolean).join("\n");
+// itens do nível em que o cliente está (caminho = números dos submenus já escolhidos); caminho inválido volta ao menu principal
+function itensNoCaminho(f: any, caminho: string[]): { itens: any[]; pai: any } {
+  let itens: any[] = f.menu || []; let pai: any = null;
+  for (const n of caminho || []) {
+    const it = itens.find((m: any) => String(m.n).trim() === String(n) && m.tipo === "submenu" && Array.isArray(m.itens) && m.itens.length);
+    if (!it) return { itens: f.menu || [], pai: null };
+    pai = it; itens = it.itens;
+  }
+  return { itens, pai };
+}
+// atendentes dos departamentos (na ordem dos departamentos, depois por nome). As duas instâncias usam as mesmas atendentes,
+// então aqui NÃO se filtra por instância: fica de fora só quem não tem login, está bloqueado, sem o módulo ou é "administrativo".
+async function atendentesDosDeps(depIds: string[]): Promise<{ id: string; nome: string; dep: string }[]> {
+  if (!depIds.length) return [];
+  const { data: ats } = await admin.from("atendimento_atendentes").select("funcionario_id, departamentos");
+  const cfg = await configGeral();
+  const nomes: Record<string, string> = {}; for (const fu of (cfg.funcionarios || [])) nomes[fu.id] = ((fu.apelido || "").trim()) || fu.nome || "";
+  const out: { id: string; nome: string; dep: string }[] = [];
+  for (const a of ats || []) {
+    const dep = depIds.find((d) => Array.isArray(a.departamentos) && a.departamentos.includes(d)); if (!dep) continue;
+    const u = (cfg.users || []).find((x: any) => (x.funcionarioId || x.id) === a.funcionario_id);
+    if (!u || u.bloqueado) continue;
+    const pa = u.permissoes && u.permissoes.atendimento; if (pa && pa.ativo === false) continue;
+    if (perfilAtd(u).papel === "administrativo") continue;
+    const nome = String(nomes[a.funcionario_id] || "").trim(); if (!nome) continue;
+    out.push({ id: a.funcionario_id, nome: nome.slice(0, 40), dep });
+  }
+  out.sort((x, y) => (depIds.indexOf(x.dep) - depIds.indexOf(y.dep)) || x.nome.localeCompare(y.nome));
+  return out.slice(0, 30);
+}
+// lista numerada de atendentes + "Qualquer atendente" (no WhatsApp oficial vira botões/lista quando couber). 0 volta ao menu.
+async function enviarListaAtendentes(conv: any, bot: any, f: any, lista: any[], intro: string) {
+  const titulos = [...lista.map((a: any) => String(a.nome)), QUALQUER];
+  const textoPuro = [intro, titulos.map((t, i) => `${i + 1} - ${t}`).join("\n"), "Digite o *NÚMERO* da atendente. Digite 0 para voltar ao menu."].filter(Boolean).join("\n\n");
+  if (f.interativo && ehCloud(conv) && titulos.length <= 10 && titulos.every(rotuloOk)) {
+    const body = { text: (intro || "Com quem você deseja falar?").slice(0, 1024) };
+    const inter = titulos.length <= 3
+      ? { type: "button", body, action: { buttons: titulos.map((t, i) => ({ type: "reply", reply: { id: String(i + 1), title: t } })) } }
+      : { type: "list", body, action: { button: "Escolher", sections: [{ title: "Atendentes", rows: titulos.map((t, i) => ({ id: String(i + 1), title: t })) }] } };
+    return enviar(conv, bot, textoPuro, inter);
+  }
+  return enviar(conv, bot, textoPuro);
+}
+// o cliente escolheu a atendente: a conversa vai direto para ela, no departamento dela
+async function atribuirEscolhida(conv: any, bot: any, f: any, deps: any[], at: any, est: any) {
+  const dep = deps.find((d: any) => d.id === at.dep) || null; const ag = new Date().toISOString();
+  await salvarEstado(conv, { ...est, etapa: "atendimento", caminho: [], lista: null }, { departamento_id: dep ? dep.id : conv.departamento_id, setor: dep ? dep.nome : conv.setor, atendente_id: at.id, atendente_nome: at.nome, status: "em_atendimento", updated_at: ag });
+  await admin.from("atendimento_mensagens").insert({ conversa_id: conv.id, canal: conv.canal, direcao: "out", tipo: "sistema", texto: `O cliente escolheu ser atendido por ${at.nome}`, autor_nome: "🤖 Bot", status: "enviada" });
+  const v = vars(conv, f, dep); v.atendente = at.nome;
+  if (dep && !dentroDoHorario(dep.horario)) { v.horario = resumoHorario(dep.horario); await enviar(conv, bot, tpl(f.msgs.fora_departamento, v)); return; }
+  await enviar(conv, bot, tpl(msgTransf(f, dep), v));
+}
+// executa o item escolhido; devolve false se o item não puder ser atendido (cai em "opção inválida")
+async function executarItem(conv: any, bot: any, f: any, deps: any[], item: any, est: any, cam: string[]): Promise<boolean> {
+  const tipo = item.tipo || "departamento"; const v = vars(conv, f, null);
+  if (tipo === "submenu") {
+    const itens: any[] = Array.isArray(item.itens) ? item.itens : []; if (!itens.length) return false;
+    await salvarEstado(conv, { ...est, etapa: "menu", caminho: [...cam, String(item.n).trim()], tentativas: 0 });
+    await enviarMenu(conv, bot, f, deps, tpl(item.texto || "Escolha uma opção:", v), rodapeSub(f, v), itens);
+    return true;
+  }
+  if (tipo === "info") {
+    if (!item.texto) return false;
+    await salvarEstado(conv, { ...est, etapa: "menu", caminho: cam, viu_info: true });
+    await enviar(conv, bot, [tpl(item.texto, v), tpl(f.msgs.voltar, v)].filter(Boolean).join("\n\n"));
+    return true;
+  }
+  if (tipo === "atendentes") {
+    const ids: string[] = (Array.isArray(item.departamentos) && item.departamentos.length ? item.departamentos : [item.departamento_id]).filter(Boolean).map(String).filter((id: string) => deps.some((d: any) => d.id === id));
+    const depPadrao = ids.length ? deps.find((d: any) => d.id === ids[0]) : null; if (!depPadrao) return false;
+    const lista = await atendentesDosDeps(ids);
+    if (!lista.length) { await rotear(conv, bot, f, deps, depPadrao, est); return true; } // ninguém para listar: segue para a fila do departamento
+    await salvarEstado(conv, { ...est, etapa: "atendentes", lista, dep_padrao: depPadrao.id, caminho: cam, tentativas: 0 });
+    await enviarListaAtendentes(conv, bot, f, lista, tpl(item.texto || "Com qual atendente você deseja falar?", v));
+    return true;
+  }
+  const d = deps.find((x: any) => x.id === item.departamento_id); if (!d) return false;
+  await rotear(conv, bot, f, deps, d, est); return true;
 }
 /* v7: perfil no Atendimento (DP › Perfis de Acesso: permissoes.atendimento.papel/bots).
    Distribuição automática e carteira NUNCA vão para "administrativo" (só recebe por transferência)
@@ -409,16 +516,42 @@ async function processar(canal: string, instancia: string, contatoId: string) {
     if (!est.recado) { await salvarEstado(conv, { ...est, recado: true }, { origem: "recado" }); await enviar(conv, bot, tpl(f.msgs.recado_ok, vars(conv, f, null))); }
     return;
   }
-  if (est.etapa === "menu") {
-    const item = (f.menu || []).find((m: any) => String(m.n).trim() === texto || (norm(texto) && norm(texto) === norm(tituloMenu(m, deps || []))));
-    const d = item && deps ? deps.find((x: any) => x.id === item.departamento_id) : null;
-    if (item && d) { await rotear(conv, bot, f, deps || [], d, est); return; }
+  if (est.etapa === "atendentes") { // v8: cliente está escolhendo a atendente
+    const lista: any[] = Array.isArray(est.lista) ? est.lista : []; const v0 = vars(conv, f, null);
+    if (texto === "0" || norm(texto) === "voltar" || !lista.length) {
+      await salvarEstado(conv, { ...est, etapa: "menu", caminho: [], lista: null, tentativas: 0 });
+      await enviarMenu(conv, bot, f, deps || [], tpl(f.msgs.boasvindas, v0), tpl(f.msgs.escolha, v0));
+      return;
+    }
+    const num = /^\d{1,2}$/.test(texto) ? Number(texto) : 0;
+    if (num === lista.length + 1 || (norm(texto) && norm(texto) === norm(QUALQUER))) {
+      const d = deps ? deps.find((x: any) => x.id === est.dep_padrao) : null;
+      if (d) { await rotear(conv, bot, f, deps || [], d, est); return; }
+    }
+    const esc = (num >= 1 && num <= lista.length) ? lista[num - 1] : lista.find((a: any) => norm(texto) && norm(a.nome) === norm(texto));
+    if (esc) { await atribuirEscolhida(conv, bot, f, deps || [], esc, est); return; }
     await salvarEstado(conv, { ...est, tentativas: (est.tentativas || 0) + 1 });
-    await enviarMenu(conv, bot, f, deps || [], f.msgs.invalida, tpl(f.msgs.escolha, vars(conv, f, null)));
+    await enviarListaAtendentes(conv, bot, f, lista, f.msgs.invalida);
+    return;
+  }
+  if (est.etapa === "menu") {
+    const cam: string[] = Array.isArray(est.caminho) ? est.caminho.map(String) : [];
+    const nivel = itensNoCaminho(f, cam); const v0 = vars(conv, f, null);
+    // v8: dentro de um submenu (ou depois de uma opção só de informação) o dígito de voltar reabre o menu principal
+    if (texto === String(f.voltar_digito) && (nivel.pai || (est.viu_info && !nivel.itens.some((m: any) => String(m.n).trim() === texto)))) {
+      await salvarEstado(conv, { ...est, caminho: [], tentativas: 0, viu_info: false });
+      await enviarMenu(conv, bot, f, deps || [], tpl(f.msgs.boasvindas, v0), tpl(f.msgs.escolha, v0));
+      return;
+    }
+    const item = nivel.itens.find((m: any) => String(m.n).trim() === texto || (norm(texto) && norm(texto) === norm(tituloMenu(m, deps || []))));
+    if (item && await executarItem(conv, bot, f, deps || [], item, est, nivel.pai ? cam : [])) return;
+    await salvarEstado(conv, { ...est, tentativas: (est.tentativas || 0) + 1 });
+    if (nivel.pai) await enviarMenu(conv, bot, f, deps || [], f.msgs.invalida, rodapeSub(f, v0), nivel.itens);
+    else await enviarMenu(conv, bot, f, deps || [], f.msgs.invalida, tpl(f.msgs.escolha, v0));
     return;
   }
   if (est.etapa === "atendimento" && (f.menu || []).length && texto === String(f.voltar_digito)) {
-    await salvarEstado(conv, { ...est, etapa: "menu" }, { departamento_id: null, setor: null });
+    await salvarEstado(conv, { ...est, etapa: "menu", caminho: [], lista: null }, { departamento_id: null, setor: null });
     await enviarMenu(conv, bot, f, deps || [], tpl(f.msgs.boasvindas, vars(conv, f, null)), tpl(f.msgs.escolha, vars(conv, f, null)));
     return;
   }
