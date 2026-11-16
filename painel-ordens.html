@@ -541,6 +541,21 @@
   .item-row-produto input[type=text]{width:100%;height:40px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;font-size:14px;}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
   .item-row-obs{margin-top:8px;}
+  /* Gravação copo térmico (por disparo) — seção dentro do item */
+  .grav-sec{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);display:grid;gap:10px;}
+  .grav-tit{font-size:13.5px;font-weight:700;}
+  .grav-linha{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;}
+  .grav-campo{display:grid;gap:4px;font-size:12.5px;font-weight:600;color:var(--ink-soft);flex:1 1 200px;min-width:0;}
+  .grav-campo.grav-qtd{flex:0 0 110px;}
+  .grav-campo.grav-largo{flex:1 1 100%;}
+  .grav-campo select,.grav-campo input,.grav-campo textarea{width:100%;min-height:38px;padding:6px 10px;border:1px solid var(--line-strong);border-radius:8px;font-size:13.5px;font-family:inherit;font-weight:400;color:var(--ink);background:var(--surface);}
+  .grav-campo textarea{resize:vertical;}
+  .grav-orient{display:inline-flex;border:1px solid var(--line-strong);border-radius:8px;overflow:hidden;width:max-content;max-width:100%;}
+  .grav-orient-btn{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 12px;font-size:13px;font-weight:600;background:var(--surface);color:var(--ink-soft);border:none;cursor:pointer;font-family:inherit;}
+  .grav-orient-btn + .grav-orient-btn{border-left:1px solid var(--line-strong);}
+  .grav-orient-btn.active{background:var(--accent-soft);color:var(--accent);}
+  .grav-aviso{font-size:12.5px;color:var(--ink-soft);}
+  .grav-aviso svg{vertical-align:-2px;margin-right:4px;}
   .item-row-obs input{width:100%;height:38px;padding:0 10px;border:1px solid var(--line-strong);border-radius:8px;font-size:13.5px;}
   .item-row-estoque{margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
   .item-avulso-chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;margin-top:8px;cursor:pointer;font-weight:600;color:var(--ink-soft);}
@@ -2598,7 +2613,7 @@ function mountPagamentos(container, holder, getLojaVendaId){
     // real dos itens já lançados, não o que ainda está sendo digitado.
     if(window.__itensHolder) return window.__itensHolder.itens
       .filter(it=>it._modo==='ok')
-      .reduce((acc,it)=>acc+(Number(it.valorUnitario)||0),0);
+      .reduce((acc,it)=>acc+(Number(it.valorUnitario)||0)*Math.max(1,Number(it.quantidade)||1),0);
     return 0;
   }
   function calcTotalFinal(subtotal){
@@ -3564,7 +3579,7 @@ function idsDoMesmoGrupo(serviceTypeId){
 }
 /** Quantas vagas a via ocupa: 1 por item de SERVIÇO lançado (mínimo 1). */
 function qtdServicosVia(itens){
-  const n = (itens||[]).filter(it=> it._modo==='ok' && it.tipoItem==='servico').reduce((a,it)=> a + Math.max(1, Number(it.quantidade)||1), 0);
+  const n = (itens||[]).filter(it=> it._modo==='ok' && it.tipoItem==='servico').reduce((a,it)=> a + (itemEhGravacaoDisparo(it) ? 1 : Math.max(1, Number(it.quantidade)||1)), 0);
   return Math.max(1, n);
 }
 function checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd){
@@ -4278,7 +4293,7 @@ function produtoEhServico(p){
 /* Desconto/acréscimo por item: mantém o valor original e mostra o valor do ajuste e o final */
 function ajusteTotalDoRegistro(rec){
   if(!rec || !rec.descTotalTipo || rec.descTotalTipo==='nenhum') return null;
-  const sub=(rec.itens||[]).reduce((a,it)=>a+(Number(it.valorUnitario)||0),0), fin=Number(rec.valorTotal);
+  const sub=(rec.itens||[]).reduce((a,it)=>a+(Number(it.valorUnitario)||0)*Math.max(1,Number(it.quantidade)||1),0), fin=Number(rec.valorTotal);
   if(isNaN(fin)) return null;
   const delta=Math.round(Math.abs(sub-fin)*100)/100; if(!delta) return null;
   const d=rec.descTotalTipo==='desconto';
@@ -4300,6 +4315,52 @@ function ajusteItemHtml(it){ const a=ajusteDoItem(it); return a ? `<span class="
 function ajusteResumoEdicao(it){ const a=ajusteDoItem(it); return a ? `<span style="color:${a.tipo==='desconto'?'var(--danger,#B3261E)':'var(--ok,#0F6B40)'};font-weight:600;">${a.rot} ${a.sinal}${fmtMoeda(a.delta)} → <b>Final ${fmtMoeda(a.fin)}</b></span>` : ''; }
 function valorBaseItem(it){ const v = (it.ajusteTipo && it.ajusteTipo!=='nenhum' && it.precoOriginal!==''&&it.precoOriginal!=null) ? it.precoOriginal : it.valorUnitario; return (v!==undefined&&v!==null&&v!=='') ? v : ''; }
 
+/* 16/11: "1 SERVIÇO GRAVAÇÃO COPO TÉRMICO (POR DISPARO)" — o item do Pedido leva os dados do item do módulo Gravações
+   (o que gravar, logo, orientação, observações), a tabela de valor e a quantidade. Uma gravação diferente = outro item. */
+const GRAV_OPCOES = [{ id:'nome', rot:'1 NOME', valor:10 }, { id:'logo', rot:'1 LOGO', valor:10 }, { id:'nome_logo', rot:'1 NOME + LOGO', valor:18 }];
+const GRAV_ORIENT = { vertical:'VERTICAL', horizontal:'HORIZONTAL' };
+function itemEhGravacaoDisparo(it){
+  if(!it) return false;
+  const p = it.produtoEstoqueId ? (produtosEstoque||[]).find(x=>x.id===it.produtoEstoqueId) : null;
+  return !!(p && p.gravacaoDisparo) || /GRAVA[ÇC][ÃA]O COPO T[ÉE]RMICO/i.test(String(it.produto||''));
+}
+function gravTemNome(g){ return !!g && (g.tipo==='nome' || g.tipo==='nome_logo'); }
+function gravTemLogo(g){ return !!g && (g.tipo==='logo' || g.tipo==='nome_logo'); }
+/** Texto que vai na observação do item (aparece na via, na Oficina e nas listas sem mexer nessas telas). */
+function gravObsTexto(it){
+  const g = (it && it.gravacao) || {}; const op = GRAV_OPCOES.find(o=>o.id===g.tipo); const partes = [];
+  if(op) partes.push(op.rot);
+  if(gravTemNome(g) && String(g.nome||'').trim()) partes.push('GRAVAR: "'+String(g.nome).trim()+'"');
+  if(gravTemLogo(g)) partes.push('LOGO: '+((it.fotos&&it.fotos.length) ? 'ARQUIVO NA FOTO DO ITEM' : 'SEM ARQUIVO'));
+  if(GRAV_ORIENT[g.orientacao]) partes.push(GRAV_ORIENT[g.orientacao]);
+  if(String(g.observacoes||'').trim()) partes.push(String(g.observacoes).trim());
+  return partes.join(' · ');
+}
+function gravOrientSvg(o){ return o==='vertical' ? '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><line x1="8" y1="2" x2="8" y2="14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>' : '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>'; }
+function gravSecaoHtml(it, i){
+  const g = it.gravacao || {};
+  return `<div class="grav-sec" data-gravsec="${i}">
+    <div class="grav-tit">Dados da gravação</div>
+    <div class="grav-linha">
+      <label class="grav-campo"><span>Valor da gravação</span>
+        <select data-gravtipo="${i}" aria-label="Valor da gravação">
+          <option value="">Escolha…</option>
+          ${GRAV_OPCOES.map(o=>`<option value="${o.id}" ${g.tipo===o.id?'selected':''}>${o.rot} — ${fmtMoeda(o.valor)}</option>`).join('')}
+        </select></label>
+      <label class="grav-campo grav-qtd"><span>Quantidade</span>
+        <input type="number" min="1" step="1" inputmode="numeric" data-gravqtd="${i}" aria-label="Quantidade" value="${Math.max(1, Number(it.quantidade)||1)}"></label>
+      <div class="grav-campo"><span>Orientação</span>
+        <div class="grav-orient" role="group" aria-label="Orientação da gravação">
+          ${Object.keys(GRAV_ORIENT).map(o=>`<button type="button" class="grav-orient-btn ${g.orientacao===o?'active':''}" data-gravorient="${i}" data-val="${o}" aria-pressed="${g.orientacao===o}">${gravOrientSvg(o)} ${o==='vertical'?'Vertical':'Horizontal'}</button>`).join('')}
+        </div></div>
+    </div>
+    <div class="muted" style="font-size:12px;">O valor escolhido vai para o campo Valor acima e pode ser alterado à mão. Total deste item: <b data-gravtotal="${i}">${fmtMoeda((Number(it.valorUnitario)||0)*Math.max(1, Number(it.quantidade)||1))}</b></div>
+    ${gravTemNome(g)?`<label class="grav-campo grav-largo"><span>Nome ou frase para gravar</span><input type="text" data-gravnome="${i}" placeholder="Ex.: Maria, Sempre Juntos…" value="${escapeHtml(g.nome||'')}"></label>`:''}
+    ${gravTemLogo(g)?`<div class="grav-aviso">${ico('imagem',14)} Envie o arquivo do logo em <b>Arquivo do logo</b>, logo abaixo.</div>`:''}
+    <label class="grav-campo grav-largo"><span>Observações da gravação</span><textarea data-gravobs="${i}" rows="2" placeholder="Ex.: fonte cursiva, posição do logo, cor do copo…">${escapeHtml(g.observacoes||'')}</textarea></label>
+    <div class="muted" style="font-size:12px;">Outra gravação (outro nome ou logo)? Lance mais um item deste serviço.</div>
+  </div>`;
+}
 function mountItens(container, holder, getLojaId, opts){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -4437,7 +4498,7 @@ function recalcularValorAjustado(it){
         const descInfoHtml=ajusteItemHtml(it);
         __html+=`<div class="venda-item-compact" data-idx="${i}">
           <span class="venda-compact-nome" title="${escapeHtml(it.produto||'')}">${escapeHtml(it.produto||'Item')}${Number(it.quantidade)>1?` <span class="muted">×${escapeHtml(String(it.quantidade))}</span>`:''}${it.avulso?` <span class="badge" title="Item avulso — não mexe no estoque">avulso</span>`:(!it.produtoEstoqueId?` <span class="badge badge-flag" title="Clique no lápis para ligar ao catálogo ou marcar como avulso">sem vínculo</span>`:'')}</span>
-          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${it.semCobranca?`<span class="badge-semcob" title="Sem cobrança${Number(it.valorCheio)>0?' — valor '+fmtMoeda(it.valorCheio):''}">${it.semCobranca==='cortesia'?'Cortesia':'Garantia'}</span>`:descInfoHtml}</span>
+          <span class="venda-compact-val">${it.valorUnitario!==''&&it.valorUnitario!=null?fmtMoeda(it.valorUnitario):''}${Number(it.quantidade)>1&&!it.semCobranca&&Number(it.valorUnitario)>0?` <span class="muted" style="font-weight:400;">un. · total ${fmtMoeda(Number(it.valorUnitario)*Number(it.quantidade))}</span>`:''}${it.semCobranca?`<span class="badge-semcob" title="Sem cobrança${Number(it.valorCheio)>0?' — valor '+fmtMoeda(it.valorCheio):''}">${it.semCobranca==='cortesia'?'Cortesia':'Garantia'}</span>`:descInfoHtml}</span>
           <div class="venda-compact-icones">
             ${temObs?`<button type="button" class="venda-compact-btn tem-obs" data-itobstoggle="${i}" title="Ver observação: ${escapeHtml(it.observacaoItem)}" aria-label="Ver observação do item">${ico('mensagem')}</button>`:''}
             <button type="button" class="venda-compact-btn" data-iteditar="${i}" title="Editar item" aria-label="Editar item">${ico('lapis')}</button>
@@ -4504,16 +4565,16 @@ function recalcularValorAjustado(it){
           ${it.avulso?`<label class="item-avulso-chk">
             <input type="checkbox" data-itavulso="${i}" checked style="width:auto;margin:0;"> Item avulso (antigo)
           </label>`:''}
-          <div class="item-row-obs">
+          ${itemEhGravacaoDisparo(it) ? gravSecaoHtml(it, i) : `<div class="item-row-obs">
             <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)" aria-label="Observação do item"
               value="${escapeHtml(it.observacaoItem||'')}">
-          </div>
+          </div>`}
           <div class="item-row-fotos" style="margin-top:8px;">
             <div class="foto-grid" data-itfotogrid="${i}" data-edit="1"></div>
             <input type="file" accept="image/*" multiple data-itfotoin="${i}" style="display:none;">
             <input type="file" accept="image/*" capture="environment" data-itfotocam="${i}" style="display:none;">
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
-              <button type="button" class="btn btn-ghost btn-sm" data-itfotobtn="${i}:gal">${ico('imagem',14)} Foto do item</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-itfotobtn="${i}:gal">${ico('imagem',14)} ${itemEhGravacaoDisparo(it) ? 'Arquivo do logo' : 'Foto do item'}</button>
               <button type="button" class="btn btn-ghost btn-sm" data-itfotobtn="${i}:cam">${ico('camera',14)} Tirar foto</button>
             </div>
           </div>
@@ -4574,6 +4635,15 @@ function recalcularValorAjustado(it){
         const it=holder.itens[idx];
         if(it.avulso){ if(!String(it.produto||'').trim()){ showToast('Descreva o item avulso.'); return; } }
         else if(!it.produtoEstoqueId&&!it.valorUnitario) return;
+        if(itemEhGravacaoDisparo(it)){
+          const g = it.gravacao || {};
+          if(!g.tipo){ showToast('Escolha o valor da gravação: 1 nome, 1 logo ou 1 nome + logo.'); return; }
+          if(!it.semCobranca && !(Number(it.valorUnitario)>0)){ showToast('Digite o valor da gravação.'); return; }
+          if(gravTemNome(g) && !String(g.nome||'').trim()){ showToast('Escreva o nome ou a frase para gravar.'); return; }
+          if(gravTemLogo(g) && !(it.fotos && it.fotos.length)){ showToast('Envie o arquivo do logo em "Arquivo do logo".'); return; }
+          it.quantidade = Math.max(1, Math.floor(Number(it.quantidade)||1));
+          it.observacaoItem = gravObsTexto(it);
+        }
         const tipoDe = x=> x.tipoItem==='servico' ? 'servico' : 'produto';
         const outros = holder.itens.filter(x=> x!==it && x._modo==='ok');
         const conflito = outros.some(x=> tipoDe(x)!==tipoDe(it)) || (tipoDe(it)==='produto' && outros.some(x=> tipoDe(x)==='produto'));
@@ -4692,6 +4762,36 @@ function recalcularValorAjustado(it){
       });
     });
 
+    // ── Gravação copo térmico (por disparo): valor, quantidade, nome, orientação, observações ──
+    const gravSinc = (i)=>{ const it = holder.itens[i]; if(!it) return; it.observacaoItem = gravObsTexto(it);
+      const t = wrap.querySelector('[data-gravtotal="'+i+'"]'); if(t) t.textContent = fmtMoeda((Number(it.valorUnitario)||0)*Math.max(1, Number(it.quantidade)||1)); };
+    wrap.querySelectorAll('[data-gravtipo]').forEach(sel=> sel.addEventListener('change', ()=>{
+      const i = Number(sel.dataset.gravtipo), it = holder.itens[i]; if(!it) return;
+      it.gravacao = Object.assign({ nome:'', orientacao:'', observacoes:'' }, it.gravacao||{}, { tipo: sel.value });
+      const op = GRAV_OPCOES.find(o=>o.id===sel.value);
+      if(op && !it.semCobranca){ it.precoOriginal = op.valor; it.valorUnitario = op.valor; it.ajusteTipo='nenhum'; it.ajustePerc=''; it.ajusteValR=''; it.ajusteQtd=''; }
+      gravSinc(i); drawRows(); updateTotalHint();
+    }));
+    wrap.querySelectorAll('[data-gravqtd]').forEach(inp=> inp.addEventListener('input', ()=>{
+      const i = Number(inp.dataset.gravqtd), it = holder.itens[i]; if(!it) return;
+      it.quantidade = Math.max(1, Math.floor(Number(inp.value)||1)); gravSinc(i); updateTotalHint();
+    }));
+    wrap.querySelectorAll('[data-gravnome]').forEach(inp=> inp.addEventListener('input', ()=>{
+      const i = Number(inp.dataset.gravnome), it = holder.itens[i]; if(!it) return;
+      it.gravacao = Object.assign({}, it.gravacao||{}, { nome: inp.value }); gravSinc(i);
+    }));
+    wrap.querySelectorAll('[data-gravobs]').forEach(ta=> ta.addEventListener('input', ()=>{
+      const i = Number(ta.dataset.gravobs), it = holder.itens[i]; if(!it) return;
+      it.gravacao = Object.assign({}, it.gravacao||{}, { observacoes: ta.value }); gravSinc(i);
+    }));
+    wrap.querySelectorAll('[data-gravorient]').forEach(b=> b.addEventListener('click', ()=>{
+      const i = Number(b.dataset.gravorient), it = holder.itens[i]; if(!it) return;
+      const atual = (it.gravacao||{}).orientacao;
+      it.gravacao = Object.assign({}, it.gravacao||{}, { orientacao: atual===b.dataset.val ? '' : b.dataset.val });
+      wrap.querySelectorAll('[data-gravorient="'+i+'"]').forEach(x=>{ const on = x.dataset.val===it.gravacao.orientacao; x.classList.toggle('active', on); x.setAttribute('aria-pressed', on); });
+      gravSinc(i);
+    }));
+
     // ── Campos de valor e desconto ──
     wrap.querySelectorAll('[data-itfield="valorUnitario"]').forEach(el=>{ el.addEventListener('blur',()=>{ if(el.value!=='' && !isNaN(parseFloat(el.value))) el.value = parseFloat(el.value).toFixed(2); }); });
     wrap.querySelectorAll('[data-itfield]').forEach(el=>{
@@ -4706,6 +4806,7 @@ function recalcularValorAjustado(it){
           it.precoOriginal=nv;
           it.valorUnitario=nv;
           if(it.ajusteTipo!=='nenhum' && nv!=='' && it.ajusteQtd!==''&&it.ajusteQtd!=null){ recalcularAjusteNovo(it, idx, row); return; }
+          { const _gt = row.querySelector('[data-gravtotal]'); if(_gt) _gt.textContent = fmtMoeda((Number(nv)||0)*Math.max(1, Number(it.quantidade)||1)); }
           updateTotalHint(); return;
         }
         if(field==='ajustePerc'){
@@ -4754,6 +4855,7 @@ function recalcularValorAjustado(it){
     it.produtoEstoqueId=produto.id; it.produto=produto.nome; it.avulso=false;
     it.precoOriginal=produto.precoVenda!=null?produto.precoVenda:'';
     if(it.valorUnitario===''||it.valorUnitario==null) it.valorUnitario=it.precoOriginal||'';
+    if(itemEhGravacaoDisparo(it)){ it.tipoItem='servico'; if(!it.gravacao) it.gravacao = { tipo:'', nome:'', orientacao:'', observacoes:'' }; }
 
     /* Desconto padrão do tipo (Cadastro → Fator → Venda, o "Desconto atual" do produto): aplicado sozinho ao incluir o item.
        A pessoa pode trocar/zerar nos botões de desconto/acréscimo normalmente. Valor final arredondado ao real, igual ao cadastro. */
@@ -5605,7 +5707,7 @@ function openEditModalCompleto(order, opts){
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
-  const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', semCobranca:it.semCobranca||'', valorCheio:it.valorCheio, _modo:'ok' })) };
+  const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', semCobranca:it.semCobranca||'', valorCheio:it.valorCheio, tipoItem:it.tipoItem, fotos:Array.isArray(it.fotos)?it.fotos.slice():undefined, gravacao:it.gravacao?{...it.gravacao}:undefined, _modo:'ok' })) };
   if(!editItensHolder.itens.length) editItensHolder.itens.push({ id:uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'', _modo:'editar' });
   window.__itensHolder = editItensHolder;
   let itensApiEdit = null;
