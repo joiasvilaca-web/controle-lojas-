@@ -31,3 +31,9 @@ module.exports.casos.push({ nome: 'ADM: o cartão GRAVAÇÕES não aparece mais 
   const h = ler('index.html');
   t.ok(!/out\.push\('grav'\)/.test(h), 'sub-tela grav fora dos cartões');
 } });
+module.exports.casos.push({ nome: 'Gravação copo: o botão Adicionar fica no fim da seção (depois do arquivo do logo)', bug: 'botão Adicionar ficava no topo, antes dos dados da gravação', rodar: async ({ t, ler }) => {
+  const h = ler('painel-ordens.html');
+  t.ok(/class="grav-fim"><button type="button" class="btn-add-item" data-itadd/.test(h), 'botão no fim');
+  t.ok(/itemEhGravacaoDisparo\(it\) \? '' : `<button type="button" class="btn-add-item"/.test(h), 'some do topo neste serviço');
+  t.ok(h.indexOf('class="grav-fim"') > h.indexOf('data-itfotobtn="${i}:cam"'), 'vem depois do arquivo do logo');
+} });
