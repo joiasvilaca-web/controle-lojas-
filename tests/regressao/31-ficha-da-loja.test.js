@@ -31,4 +31,19 @@ module.exports = { casos: [
     t.ok(/upload-foto-drive/.test(h) && !/supabase\.co/.test(h), 'fotos pelo envio já existente; sem endereço fixo do banco');
     ['Iluminação e elétrica', 'Internet, Wi-Fi e TI', 'Equipamentos e mobiliário', 'Telefones e contatos', 'Equipe e chaves', 'Documentos e vencimentos'].forEach((x) => t.ok(h.includes("titulo:'" + x + "'"), 'seção ' + x));
   } },
+  { nome: 'Apresentação: seção visual só de leitura, primeira do menu, sem senha nem Segurança; linha sem _id ganha um ao abrir', bug: 'itens gravados sem _id não abriam para editar; apresentação não pode expor senha de Wi-Fi nem dados de alarme/cofre', rodar: async ({ t, ler }) => {
+    const h = ler('ficha-loja.html');
+    const i = h.indexOf('function apresHtml()'); const fn = h.slice(i, h.indexOf('function secaoFotosHtml()', i));
+    t.ok(i > 0 && /bt\('apres', 'olho', 'Apresentação'/.test(h) && /secao:'apres'/.test(h), 'Apresentação é a primeira seção e a que abre');
+    t.ok(!/wifi|seguranca|alarme|cofre|senha/i.test(fn.replace(/\/\*[^]*?\*\//g, '')), 'não lê Wi-Fi, senha nem a seção Segurança');
+    t.ok(!/<input|<select|<textarea/.test(fn), 'só leitura: sem campo editável');
+    t.ok(/if\(r && !r\._id\) r\._id = uid\('r'\)/.test(h), 'linha sem _id ganha um ao abrir a ficha');
+  } },
+  { nome: 'Ficha GERAL: identidade visual e embalagens só no GERAL; fornecedor do Cadastro; tela antiga não vê o GERAL', bug: 'embalagem com fornecedor digitado à mão; ficha geral aparecendo em tela antiga', rodar: async ({ t, ler }) => {
+    const h = ler('ficha-loja.html'); const api = ler('ficha-loja-api.ts');
+    t.ok(/id:'identidade', escopo:'grupo'/.test(h) && /id:'embalagens', escopo:'grupo'/.test(h), 'seções do GERAL marcadas');
+    t.ok(/const secoesVis = \(\) => SECOES\.filter\(s => \(s\.escopo === 'grupo'\) === ehGeral\(\)\)/.test(h), 'loja só vê as dela; GERAL só as dele');
+    t.ok(/tipo:'fornecedor'/.test(h) && /E\.fornecedores\.map\(x => x\.empresa\)/.test(h), 'fornecedor da embalagem vem do Cadastro');
+    t.ok(/tela: 2/.test(h) && /const telaNova = Number\(body\.tela\) >= 2/.test(api) && /acessiveis = telaNova \? \[\.\.\.permitidas, GERAL\] : permitidas/.test(api), 'GERAL só para a tela nova');
+  } },
 ] };
