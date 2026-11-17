@@ -753,12 +753,12 @@ const STATUS = { AGUARDANDO:'aguardando', ENVIADO_FABRICA:'enviado_fabrica', EM_
 // oficina_pronto ("Fábrica pronto") = a Oficina terminou (card OFICINA); a loja ainda confere e marca Pronto.
 /** Status que ainda ocupam vaga da agenda (trabalho por fazer na Oficina). */
 const STATUS_OCUPA_VAGA = ['aguardando','enviado_fabrica','em_producao','pendencia'];
-/* Nomes (sempre em MAIÚSCULAS). As chaves gravadas NÃO mudam: aguardando = APROVADO, oficina_pronto = PRODUZIDO. */
+/* Nomes (sempre em MAIÚSCULAS). As chaves gravadas NÃO mudam: aguardando = APROVADO, oficina_pronto = LIBERADO FÁBRICA. */
 const STATUS_ORDEM = ['rascunho','aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto','pronto','entregue','cancelado'];
-const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'PRODUZIDO', pronto:'PRONTO', entregue:'ENTREGUE', cancelado:'CANCELADO' };
+const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'LIBERADO FÁBRICA', pronto:'PRONTO', entregue:'ENTREGUE', cancelado:'CANCELADO' };
 /* Quem pode colocar cada status (10/11, Felipe):
    Vendedora e Gerente → APROVADO, ENVIADO P/ FÁBRICA, PRONTO, ENTREGUE e CANCELADO — e NÃO mudam o status de via EM PRODUÇÃO ou PENDÊNCIA (só a Oficina; o resto da via continua editável);
-   Oficina → EM PRODUÇÃO / PENDÊNCIA / PRODUZIDO, e só enquanto a via está ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA; Diretoria → todos. */
+   Oficina → EM PRODUÇÃO / PENDÊNCIA / LIBERADO FÁBRICA, e só enquanto a via está ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA; Diretoria → todos. */
 const STATUS_LOJA = ['aguardando','enviado_fabrica','pronto','entregue','cancelado'];
 const STATUS_TRAVADOS_LOJA = ['em_producao','pendencia'];
 const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'], gerente:STATUS_LOJA, vendedora:STATUS_LOJA };
@@ -6087,7 +6087,7 @@ function renderPainel(main){
         <option value="enviado_fabrica">ENVIADO P/ FÁBRICA</option>
         <option value="em_producao">EM PRODUÇÃO</option>
         <option value="pendencia">PENDÊNCIA</option>
-        <option value="oficina_pronto">PRODUZIDO</option>
+        <option value="oficina_pronto">LIBERADO FÁBRICA</option>
         <option value="pronto">PRONTO</option>
         <option value="entregue">ENTREGUE</option>
         <option value="cancelado">CANCELADO</option>
@@ -6581,21 +6581,21 @@ function abrirEnviarParaFabrica(aoConcluir){
     if(aoConcluir) aoConcluir();
   });
 }
-/** Lote: vias PRODUZIDAS que voltaram da fábrica → PRONTO na loja.
+/** Lote: vias LIBERADAS PELA FÁBRICA que voltaram da fábrica → PRONTO na loja.
  *  O leitor de código marca via por via, conferindo o que realmente veio na caixa. */
 function abrirReceberDaFabrica(aoConcluir){
   const filtroLoja = (document.getElementById('filtroLoja')||{}).value || (window.__lojaAtual && window.__lojaAtual.id) || '';
   const lista = orders.filter(o=>o.status==='oficina_pronto' && (!filtroLoja || o.lojaId===filtroLoja)).sort((a,b)=>String(viaTxt(a)).localeCompare(String(viaTxt(b)), 'pt-BR', {numeric:true}));
   const nomeLoja = filtroLoja ? String(((config.lojas||[]).find(l=>l.id===filtroLoja)||{}).nome||'').toUpperCase() : '';
   if(!lista.length){
-    openModal(`<h3>RECEBER DA FÁBRICA</h3><p class="muted">Nenhuma via PRODUZIDA${nomeLoja?' em '+escapeHtml(nomeLoja):''} esperando para voltar da fábrica.</p><div class="modal-actions"><button class="btn btn-accent" id="rfFechar">Fechar</button></div>`);
+    openModal(`<h3>RECEBER DA FÁBRICA</h3><p class="muted">Nenhuma via LIBERADA PELA FÁBRICA${nomeLoja?' em '+escapeHtml(nomeLoja):''} esperando para voltar da fábrica.</p><div class="modal-actions"><button class="btn btn-accent" id="rfFechar">Fechar</button></div>`);
     document.getElementById('rfFechar').addEventListener('click', closeModal);
     return;
   }
   const chave = t => String(t||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
   openModal(`
     <h3>RECEBER DA FÁBRICA</h3>
-    <p class="muted">Vias PRODUZIDAS${nomeLoja?' — '+escapeHtml(nomeLoja):''}. Leia o código de cada via que chegou na caixa, ou marque na lista. As marcadas passam para PRONTO e voltam para a loja.</p>
+    <p class="muted">Vias LIBERADAS PELA FÁBRICA${nomeLoja?' — '+escapeHtml(nomeLoja):''}. Leia o código de cada via que chegou na caixa, ou marque na lista. As marcadas passam para PRONTO e voltam para a loja.</p>
     <input id="rfLeitor" placeholder="Leia ou digite o código da via e tecle Enter" autocomplete="off" autocapitalize="characters" spellcheck="false" style="width:100%;min-height:44px;font-size:16px;font-weight:700;letter-spacing:.04em;padding:10px 12px;border:2px solid var(--accent);border-radius:10px;margin-bottom:10px;">
     <label class="chk" style="margin:6px 0;"><input type="checkbox" id="rfTodos"> Marcar todas — <b><span id="rfQtd">0</span> de ${lista.length}</b> marcadas</label>
     <div style="max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:10px;">
@@ -6621,7 +6621,7 @@ function abrirReceberDaFabrica(aoConcluir){
     const cod = chave(leitor.value); leitor.value = '';
     if(!cod) return;
     const alvo = itens().find(i=>i.dataset.cod===cod);
-    if(!alvo){ showToast('A via ' + cod + ' não está nesta lista — confira se ela está como PRODUZIDA e se é desta loja.'); return; }
+    if(!alvo){ showToast('A via ' + cod + ' não está nesta lista — confira se ela está como LIBERADA PELA FÁBRICA e se é desta loja.'); return; }
     if(alvo.checked){ showToast('A via ' + cod + ' já estava marcada.'); return; }
     alvo.checked = true; atualiza();
     const linha = alvo.closest('label');
