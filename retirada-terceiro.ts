@@ -89,6 +89,18 @@ async function lojaInfo(lojaId: string) {
 }
 const lojaNome = async (lojaId: string) => (await lojaInfo(lojaId)).nome;
 
+// ---------- ORÇAMENTO RECUSADO: "O QUE PODEMOS MELHORAR?" (18/11) ----------
+// O cliente que não fechou conta o motivo no link do orçamento (payload.melhoria = {texto, motivos[], em, lida, resposta{texto,por,em}}).
+// Gravação atômica pela função SQL orc_melhoria_gravar (um UPDATE só). A equipe vê (o orçamento já traz payload.melhoria) e responde no card Orçamento (melhoriaResponder / melhoriaLida); o cliente lê a resposta ao reabrir o link.
+const MOTIVOS_MELHORIA = ["preco", "prazo", "modelo", "atendimento", "qualidade", "outra_loja", "desistiu", "outro"];
+const melhoriaAberta = (tipo: string, via: any) => tipo === "orc" && via && (via.status === "recusado" || via.status === "vencido");
+function melhoriaInfo(tipo: string, via: any) {
+  const m = via && via.melhoria;
+  return { disponivel: melhoriaAberta(tipo, via) && !m, feita: !!m, resposta: m && m.resposta ? { texto: m.resposta.texto, em: m.resposta.em } : null, em: m ? m.em : null };
+}
+function lojasDoUsuario(u: any): Set<string> { return new Set<string>([...(Array.isArray(u && u.lojas) ? u.lojas : []).map(String), ...(u && u.lojaExtra && u.lojaExtra.id ? [String(u.lojaExtra.id)] : [])]); }
+const veTodasLojas = (u: any) => nivelDe(u) === "diretoria" || nivelDe(u) === "oficina";
+
 // ---------- AVALIAÇÃO DO ATENDIMENTO (09/11) ----------
 const AVAL_DESDE = Date.parse("2026-11-08T00:00:00-03:00");   // só vias criadas a partir daqui perguntam
 const semAcento = (t: unknown) => String(t || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean).join(" ");
@@ -181,6 +193,24 @@ Deno.serve(async (req) => {
     const acao = String(b.acao || "");
     const tipo = String(b.tipo || "");
     const id = String(b.id || "");
+    // ----- ações da EQUIPE sobre o "o que melhorar" dos orçamentos recusados (18/11) -----
+    if (["melhoriaResponder", "melhoriaLida"].includes(acao)) {
+      const u = await staff(String(b.senha || ""));
+      if (!u) return json({ error: "Acesso não autorizado." });
+      if (nivelDe(u) === "oficina") return json({ error: "A Oficina não vê orçamentos." });
+      const lojas = lojasDoUsuario(u);
+      const pode = (l: unknown) => veTodasLojas(u) || lojas.has(String(l || ""));
+      const oid = String(b.id || "");
+      const { data: row } = await admin.from("orcamentos").select("payload").eq("id", oid).maybeSingle();
+      const o = row && row.payload;
+      if (!o || !o.melhoria || !pode(o.lojaId)) return json({ error: "Retorno do cliente não encontrado." });
+      if (acao === "melhoriaLida") { await admin.rpc("orc_melhoria_gravar", { p_id: oid, p_obj: { lida: true, lidaPor: String(u.nome || ""), lidaEm: new Date().toISOString() }, p_so_se_vazio: false }); return json({ ok: true }); }
+      const texto = String(b.texto || "").trim().slice(0, 1500);
+      if (texto.length < 3) return json({ error: "Escreva a resposta." });
+      const { data: okR, error: eR } = await admin.rpc("orc_melhoria_gravar", { p_id: oid, p_obj: { lida: true, resposta: { texto, por: String(u.nome || ""), em: new Date().toISOString() } }, p_so_se_vazio: false });
+      if (eR || okR !== true) return json({ error: "Não foi possível gravar a resposta. Tente de novo." });
+      return json({ ok: true });
+    }
     // ----- ações da EQUIPE sobre avaliações (não dependem de uma via) -----
     if (["avaliacoesLista", "avaliacoesMedias", "avaliacaoResponder", "avaliacaoCorrigir", "avaliacaoLida"].includes(acao)) {
       const u = await staff(String(b.senha || ""));
@@ -275,7 +305,7 @@ Deno.serve(async (req) => {
     // ---------- públicas (cliente) ----------
     if (acao === "estado") {
       const reg = await lerReg(tipo, id);
-      const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg), codigoTerceiro: encerrada(tipo, via, reg) ? null : await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) };
+      const out: any = { retirada: publico(reg), encerrada: encerrada(tipo, via, reg), codigoTerceiro: encerrada(tipo, via, reg) ? null : await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via), melhoria: melhoriaInfo(tipo, via) };
       if (b.resumo) out.via = await comFotos(resumoVia(tipo, via, await lojaNome(via.lojaId)));
       return json(out);
     }
@@ -296,6 +326,18 @@ Deno.serve(async (req) => {
       const { error } = await admin.from("avaliacoes_cliente").insert({ id: tipo + ":" + id, tipo, via_id: id, via_codigo: via.codigoVia || via.via || via.numero || null, loja_id: via.lojaId || null, atendente: info.atendente || null, cliente: via.cliente || null, estrelas: pulou ? null : est, comentario: comentario || null, pulou });
       if (error && !String(error.message || "").includes("duplicate")) throw error;
       return json({ ok: true, avaliacao: await avalInfo(tipo, id, via) });
+    }
+    if (acao === "melhoria") {
+      const info = melhoriaInfo(tipo, via);
+      if (info.feita) return json({ ok: true, jaFeita: true, melhoria: info });
+      if (!melhoriaAberta(tipo, via)) return json({ error: "Este orçamento não está encerrado: não há o que contar por aqui." });
+      const motivos = (Array.isArray(b.motivos) ? b.motivos : []).map((x: unknown) => String(x)).filter((x: string) => MOTIVOS_MELHORIA.includes(x)).slice(0, 8);
+      const texto = String(b.texto || "").trim().slice(0, 1500);
+      if (!motivos.length && texto.length < 3) return json({ error: "Escolha um motivo ou escreva um pouquinho do que podemos melhorar." });
+      const { data: ok, error } = await admin.rpc("orc_melhoria_gravar", { p_id: id, p_obj: { texto, motivos, em: new Date().toISOString(), lida: false, ua: String(req.headers.get("user-agent") || "").slice(0, 160) }, p_so_se_vazio: true });
+      if (error) throw error;
+      via.melhoria = { texto, motivos, em: new Date().toISOString() };
+      return json({ ok: true, jaFeita: ok !== true, melhoria: melhoriaInfo(tipo, via) });
     }
     if (acao === "ciente") {
       const reg = await lerReg(tipo, id);

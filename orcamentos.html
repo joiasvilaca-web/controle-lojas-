@@ -194,6 +194,15 @@ textarea{border:1px solid var(--line-strong); border-radius:8px; background:var(
 .qo-card.arrastando{opacity:.45;}
 .qo-col.alvo{outline:2px dashed var(--primary,#1d5f7a);outline-offset:-2px;background:var(--primary-soft,#e8f0f6);}
 .qo-visto{color:var(--ok);display:inline-flex;vertical-align:middle;}
+.badge-melhoria{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:700;background:var(--accent-soft);color:var(--accent);vertical-align:middle;white-space:nowrap;}
+.badge-melhoria.lida{background:var(--surface-2);color:var(--ink-faint);}
+.melhoria-bloco{margin:14px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);}
+.melhoria-bloco h4{margin:0 0 6px;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.melhoria-chips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;}
+.melhoria-chips span{padding:3px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line-strong);font-size:12.5px;font-weight:600;}
+.melhoria-texto{margin:6px 0;white-space:pre-wrap;font-size:14px;line-height:1.5;}
+.melhoria-resp{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--line);font-size:13px;white-space:pre-wrap;}
+.melhoria-item{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;background:var(--surface);}
 .qo-visto svg,.selo-status svg.ic-visto{stroke:var(--ok);stroke-width:3;}
 .qo-curto{display:block;flex:1 1 auto;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .qo-cheio{display:none;}
@@ -812,6 +821,68 @@ function avisoOrcTravado(o){
   return '';
 }
 function orcTravado(o){ const m = avisoOrcTravado(o); if(m){ alert(m); return true; } return false; }
+/* 18/11: RETORNO DO CLIENTE em orçamento recusado/vencido ("o que podemos melhorar?"). O cliente responde no link do orçamento (via.html);
+   fica em o.melhoria = {texto, motivos[], em, lida, resposta{texto,por,em}}. A resposta da loja aparece para o cliente ao reabrir o link. */
+const MOTIVOS_MELHORIA_NOME = { preco:'Preço', prazo:'Prazo de entrega', modelo:'Modelo ou opções de joia', atendimento:'Atendimento', qualidade:'Qualidade ou acabamento', outra_loja:'Comprou em outra loja', desistiu:'Desistiu da compra', outro:'Outro motivo' };
+const melhoriaDe = o => (o && o.melhoria && typeof o.melhoria==='object') ? o.melhoria : null;
+const melhoriaNova = o => { const m = melhoriaDe(o); return !!(m && !m.lida); };
+function melhoriaBadgeHtml(o){ const m = melhoriaDe(o); if(!m) return ''; return `<span class="badge-melhoria${m.lida?' lida':''}" title="${m.lida?'O cliente contou o que podemos melhorar':'NOVO: o cliente contou o que podemos melhorar'}">${ic('mensagem',12)}${m.lida?(m.resposta?'Respondido':'Retorno'):'Retorno novo'}</span>`; }
+function dataHoraBR(s){ const d = new Date(s); return isNaN(d) ? '' : d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function melhoriaConteudoHtml(o){
+  const m = melhoriaDe(o); if(!m) return '';
+  return `${(m.motivos||[]).length ? `<div class="melhoria-chips">${m.motivos.map(k=>`<span>${escapeHtml(MOTIVOS_MELHORIA_NOME[k]||k)}</span>`).join('')}</div>` : ''}
+    ${m.texto ? `<div class="melhoria-texto">“${escapeHtml(m.texto)}”</div>` : ''}
+    ${m.resposta ? `<div class="melhoria-resp"><b>Resposta enviada ao cliente</b> (${escapeHtml(m.resposta.por||'')}, ${escapeHtml(dataHoraBR(m.resposta.em))})<br>${escapeHtml(m.resposta.texto)}</div>` : ''}`;
+}
+function melhoriaBlocoHtml(o){
+  const m = melhoriaDe(o); if(!m) return '';
+  return `<div class="melhoria-bloco" id="melhoriaBloco"><h4>${ic('mensagem',16)} O que o cliente contou que podemos melhorar <span class="muted" style="font-weight:500;font-size:12.5px;">${escapeHtml(dataHoraBR(m.em))}</span></h4>
+    ${melhoriaConteudoHtml(o)}
+    <div style="margin-top:8px;"><button type="button" class="btn btn-ghost btn-sm" id="btnResponderMelhoria">${ic('lapis',14)} ${m.resposta?'Editar resposta':'Responder ao cliente'}</button></div></div>`;
+}
+async function chamarMelhoria(acao, o, extra){
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/retirada-terceiro', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ acao, tipo:'orc', id:o.id, senha:__gatewaySenha }, extra||{})) });
+    return await r.json();
+  }catch(e){ return { error:'Sem conexão. Tente de novo.' }; }
+}
+/** marca como lido (uma vez) quando alguém da equipe abre o retorno */
+async function marcarMelhoriaLida(o){ const m = melhoriaDe(o); if(!m || m.lida) return; const r = await chamarMelhoria('melhoriaLida', o); if(r && r.ok){ m.lida = true; } }
+function abrirResponderMelhoria(o, volta){
+  const m = melhoriaDe(o); if(!m) return;
+  openModal(`<h3>Responder a ${escapeHtml(o.cliente||'cliente')}</h3>
+    <div class="melhoria-bloco" style="margin-top:0;">${melhoriaConteudoHtml(Object.assign({}, o, { melhoria: Object.assign({}, m, { resposta:null }) }))}</div>
+    <div class="field" style="margin-top:12px;"><label for="melhResp">Sua resposta (o cliente vê ao abrir o link do orçamento)</label><textarea id="melhResp" maxlength="1500" rows="5" placeholder="Agradeça e, se fizer sentido, convide a pessoa a voltar.">${escapeHtml(m.resposta?m.resposta.texto:'')}</textarea></div>
+    <div id="melhRespErro" class="muted" style="color:var(--danger);min-height:1.2em;"></div>
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" id="melhCancel">Cancelar</button><button type="button" class="btn btn-accent" id="melhEnviar">Enviar resposta</button></div>`);
+  document.getElementById('melhCancel').addEventListener('click', ()=>{ closeModal(); if(volta) volta(); });
+  document.getElementById('melhEnviar').addEventListener('click', async function(){
+    const texto = document.getElementById('melhResp').value.trim();
+    if(texto.length<3){ document.getElementById('melhRespErro').textContent = 'Escreva a resposta.'; return; }
+    this.disabled = true; this.textContent = 'Enviando…';
+    const r = await chamarMelhoria('melhoriaResponder', o, { texto });
+    if(!r || !r.ok){ document.getElementById('melhRespErro').textContent = (r && r.error) || 'Não foi possível enviar.'; this.disabled = false; this.textContent = 'Enviar resposta'; return; }
+    m.lida = true; m.resposta = { texto, por: (currentUser && currentUser.nome) || '', em: new Date().toISOString() };
+    showToast('Resposta salva. O cliente vê ao abrir o link do orçamento.');
+    closeModal(); if(volta) volta();
+  });
+}
+function abrirRetornosClientes(){
+  const lista = orcamentos.filter(o=>melhoriaDe(o)).slice().sort((a,b)=> String(melhoriaDe(b).em||'').localeCompare(String(melhoriaDe(a).em||'')));
+  openModal(`<h3>O que os clientes contaram que podemos melhorar</h3>
+    <p class="muted" style="margin:0 0 6px;">Clientes de orçamentos recusados ou vencidos que responderam pelo link. Os novos ficam em destaque.</p>
+    ${lista.length ? lista.map(o=>`<div class="melhoria-item" data-melh="${escapeHtml(o.id)}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;"><b>${escapeHtml(o.cliente||'Cliente')}</b>${melhoriaBadgeHtml(o)}</div>
+      <div class="muted" style="font-size:12.5px;">${o.codigoVia?escapeHtml(o.codigoVia)+' · ':''}${escapeHtml(o.loja||'—')} · ${escapeHtml(o.vendedora||'—')} · ${fmtMoeda(o.valorTotal)} · ${escapeHtml(dataHoraBR(melhoriaDe(o).em))}</div>
+      ${melhoriaConteudoHtml(o)}
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;"><button type="button" class="btn btn-ghost btn-sm" data-melhresp="${escapeHtml(o.id)}">${ic('lapis',14)} ${melhoriaDe(o).resposta?'Editar resposta':'Responder'}</button><button type="button" class="btn btn-ghost btn-sm" data-melhver="${escapeHtml(o.id)}">Abrir orçamento</button></div></div>`).join('') : '<div class="muted" style="padding:12px 0;">Nenhum cliente respondeu ainda.</div>'}
+    <div class="modal-actions"><button type="button" class="btn btn-ghost" id="melhRecarregar">Atualizar</button><button type="button" class="btn btn-accent" id="melhFechar">Fechar</button></div>`);
+  document.getElementById('melhFechar').addEventListener('click', ()=>{ closeModal(); renderView(); });
+  document.getElementById('melhRecarregar').addEventListener('click', async ()=>{ orcamentos = filtrarVisiveisParaMim(await orcamentosGet()); abrirRetornosClientes(); });
+  document.querySelectorAll('[data-melhresp]').forEach(b=> b.addEventListener('click', ()=>{ const o = orcamentos.find(x=>x.id===b.dataset.melhresp); if(o) abrirResponderMelhoria(o, abrirRetornosClientes); }));
+  document.querySelectorAll('[data-melhver]').forEach(b=> b.addEventListener('click', ()=>{ const o = orcamentos.find(x=>x.id===b.dataset.melhver); if(o){ closeModal(); abrirDetalheOrcamento(o); } }));
+  lista.filter(melhoriaNova).forEach(o=> marcarMelhoriaLida(o));   // abrir a lista já conta como lido (o selo "novo" some ao fechar)
+}
 let __mudandoStatusOrc = false;
 async function mudarStatusManual(o, novoId){
   if(!o || !novoId || __mudandoStatusOrc) return false;
@@ -2175,9 +2246,9 @@ function renderQuadroOrc(base){
     const prim = String(o.cliente||'Sem cliente').trim().split(/\s+/)[0];
     const venc = estaVencido(o);
     return `<div class="qo-card" data-qoid="${escapeHtml(o.id)}" ${o.rascunho?'':'draggable="true"'} title="Toque para ver detalhes${o.rascunho?'':' · arraste para outra coluna para mudar o status e enviar a mensagem'}">
-      <span class="qo-linha"><span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span><span class="qo-curto">${escapeHtml(prim)}</span>${msgEnviadaDoStatus(o) ? `<span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',13)}</span>` : ''}${(o.telefone && !o.rascunho) ? `<button type="button" class="btn-icone wa qo-wa" data-qowa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(15)}</button>` : ''}</span>
+      <span class="qo-linha"><span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span><span class="qo-curto">${escapeHtml(prim)}</span>${melhoriaBadgeHtml(o)}${msgEnviadaDoStatus(o) ? `<span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',13)}</span>` : ''}${(o.telefone && !o.rascunho) ? `<button type="button" class="btn-icone wa qo-wa" data-qowa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(15)}</button>` : ''}</span>
       <div class="qo-cheio">
-        <div class="qo-nome"><span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span> · ${escapeHtml(o.cliente||'Sem cliente')}${msgEnviadaDoStatus(o) ? ` <span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',14)}</span>` : ''}${(o.telefone && !o.rascunho) ? `<button type="button" class="btn-icone wa qo-wa" data-qowa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(15)}</button>` : ''}</div>
+        <div class="qo-nome"><span class="qo-via">${escapeHtml(o.codigoVia||o.numero||'—')}</span> · ${escapeHtml(o.cliente||'Sem cliente')} ${melhoriaBadgeHtml(o)}${msgEnviadaDoStatus(o) ? ` <span class="qo-visto" title="Mensagem deste status enviada em ${fmtDate(String(msgEnviadaDoStatus(o)).slice(0,10))}">${ic('check',14)}</span>` : ''}${(o.telefone && !o.rascunho) ? `<button type="button" class="btn-icone wa qo-wa" data-qowa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(15)}</button>` : ''}</div>
         <div class="qo-sub">${escapeHtml(o.loja||'—')} · ${escapeHtml(o.vendedora||'—')}</div>
         <div class="qo-sub">${fmtDate(o.data)} · <span${venc?' style="color:var(--danger);font-weight:700;"':''}>validade ${fmtDate(o.validade)}${venc?' (vencido)':''}</span></div>
         <div class="qo-acoes"><b>${fmtMoeda(o.valorTotal)}</b><button type="button" class="btn btn-ghost btn-sm" data-qostatus="${escapeHtml(o.id)}">${o.rascunho?'Continuar':'Mudar status'}</button></div>
@@ -2253,6 +2324,7 @@ function renderLista(main){
         </div>
       </div>
     ` : ''}
+    ${(()=>{ const com = orcamentos.filter(o=>melhoriaDe(o)); if(!com.length) return ''; const novas = com.filter(melhoriaNova).length; return `<div class="aviso ${novas?'aviso-atencao':''}" role="status">${ic('mensagem',18)}<div class="aviso-corpo"><p class="aviso-titulo">${com.length===1?'1 cliente contou':com.length+' clientes contaram'} o que podemos melhorar${novas?' · '+(novas===1?'1 novo':novas+' novos'):''}</p><p class="aviso-texto">Clientes de orçamentos recusados ou vencidos que responderam pelo link. Veja o que pesou na decisão e responda.</p><div class="chips-vendedora"><button type="button" class="chip-vendedora" id="btnRetornosClientes" style="color:var(--accent);">Ver o que os clientes contaram</button></div></div></div>`; })()}
     <div id="bvSecaoOrcs"></div>
     <div class="filters" role="search">
       <div class="busca-campo">${ic('busca')}<input type="text" id="fBusca" placeholder="Buscar cliente ou código da via" aria-label="Buscar cliente ou código da via" value="${escapeHtml(filtrosOrc.busca)}"></div>
@@ -2292,6 +2364,7 @@ function renderLista(main){
     btnNovo.addEventListener('click', ()=>{ orcamentoEmEdicao = null; currentTab = 'novo'; renderTabs(); renderView(); });
   }
   { const bc = document.getElementById('btnConfigMsgAuto'); if(bc) bc.addEventListener('click', abrirConfigAcoes); }
+  { const bm = document.getElementById('btnRetornosClientes'); if(bm) bm.addEventListener('click', abrirRetornosClientes); }
   { const bi = document.getElementById('btnIrBlocos'); if(bi) bi.addEventListener('click', ()=> document.getElementById('blocosAcoes').scrollIntoView({ behavior:'smooth', block:'start' })); }
   function draw(){
     const lojaFiltro = document.getElementById('fLoja').value;
@@ -2365,7 +2438,7 @@ function renderLista(main){
       const acaoMsgHtml = o.email ? `<button type="button" class="btn-icone" data-orcmail="${o.id}" title="Enviar por e-mail" aria-label="Enviar por e-mail">${ic('email')}</button>` : '';
       const vencido = estaVencido(o);
       return `<tr>
-        <td class="td-cliente" data-label="Cliente"><b>${escapeHtml(o.cliente)}</b>${o.codigoVia?`<span class="sub">${escapeHtml(o.codigoVia)}</span>`:''}</td>
+        <td class="td-cliente" data-label="Cliente"><b>${escapeHtml(o.cliente)}</b>${o.codigoVia?`<span class="sub">${escapeHtml(o.codigoVia)}</span>`:''}${melhoriaBadgeHtml(o)}</td>
         <td class="td-meta" data-label="Loja"><span class="badge badge-loja">${escapeHtml(o.loja||'—')}</span></td>
         <td class="td-meta" data-label="Vendedora">${escapeHtml(o.vendedora||'—')}</td>
         <td class="nowrap td-meta" data-label="Data">${fmtDate(o.data)}</td>
@@ -2831,6 +2904,7 @@ function abrirDetalheOrcamento(o){
     </table>
     <div class="total-linha"><span>Total</span><b>${fmtMoeda(o.valorTotal)}</b></div>
     ${o.observacoes ? `<p class="obs-detalhe">${escapeHtml(o.observacoes)}</p>` : ''}
+    ${melhoriaBlocoHtml(o)}
     <div class="grupo-acoes">
       ${htmlConversaoOrcamento(o, false)}
       ${o.telefone ? `<button type="button" class="btn btn-wa" id="btnWhatsappOrc">${waIconSvg(16)} Enviar pelo WhatsApp</button>` : ''}
@@ -2848,7 +2922,9 @@ function abrirDetalheOrcamento(o){
       <button type="button" class="btn btn-ghost" id="btnFecharDetalheOrc">Fechar</button>
     </div>
   `);
-  document.getElementById('btnFecharDetalheOrc').addEventListener('click', closeModal);
+  document.getElementById('btnFecharDetalheOrc').addEventListener('click', ()=>{ closeModal(); if(melhoriaDe(o)) renderView(); });
+  { const br = document.getElementById('btnResponderMelhoria'); if(br) br.addEventListener('click', ()=> abrirResponderMelhoria(o, ()=> abrirDetalheOrcamento(o))); }
+  if(melhoriaNova(o)) marcarMelhoriaLida(o);
 
   // Converter orçamento em Venda (PDV) ou Pedido (O.S.) — o shell abre a sub-tela certa
   ligarBotoesConversao(document.getElementById('modalBox') || document);
