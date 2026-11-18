@@ -57,12 +57,19 @@
     };
   }
   async function listar(opts, filtro){
-    return await chamar({acao:'avaliacoesLista',senha:opts.senha,baixas:!!filtro.baixas,semResposta:!!filtro.semResposta,atendente:filtro.atendente||''});
+    var r=await chamar({acao:'avaliacoesLista',senha:opts.senha,baixas:!!filtro.baixas,semResposta:!!filtro.semResposta,atendente:filtro.atendente||''});
+    /* 18/11: filtro por quantidade de estrelas (a lista já vem com a nota de cada avaliação) */
+    if(!r.error && filtro.estrelas){ r.lista=(r.lista||[]).filter(function(a){ return Number(a.estrelas)===Number(filtro.estrelas); }); }
+    return r;
   }
   function pintarLista(box, r, opts){
     if(r.error){ box.innerHTML='<div style="color:var(--t-danger,#b3261e);">'+esc(r.error)+'</div>'; return; }
     var l=r.lista||[];
-    box.innerHTML=l.length?l.map(function(a){ return cardHtml(a,opts.lojaNome); }).join(''):'<div class="muted" style="padding:10px;">Nenhuma avaliação encontrada.</div>';
+    var f=box.__filtro||{}, partes=[];
+    if(f.estrelas) partes.push(f.estrelas+(Number(f.estrelas)===1?' estrela':' estrelas'));
+    if(f.atendente) partes.push('vendedora '+f.atendente);
+    var resumo=l.length?'<div class="muted" style="margin:6px 0;">'+l.length+(l.length===1?' avaliação':' avaliações')+(partes.length?' · '+esc(partes.join(' · ')):'')+(l.length>=500?' (mostrando as 500 mais recentes)':'')+'</div>':'';
+    box.innerHTML=l.length?resumo+l.map(function(a){ return cardHtml(a,opts.lojaNome); }).join(''):'<div class="muted" style="padding:10px;">Nenhuma avaliação encontrada'+(partes.length?' para '+esc(partes.join(' · ')):'')+'.</div>';
     box.querySelectorAll('.av-card').forEach(function(c){
       var a=l.find(function(x){ return x.id===c.dataset.id; });
       c.querySelector('[data-resp]').onclick=function(){ abrirResponder(a,opts.senha,function(){ carregar(box,opts,box.__filtro); }); };
@@ -75,8 +82,21 @@
     css();
     el.innerHTML='<div class="cad-head"><div><h2 style="margin:0;">Avaliações dos clientes</h2><p class="muted" style="margin:4px 0 0;">Só gerente e diretoria veem. Nota 3 ou menos aparece como aviso no Painel. Toque em Responder para escrever o retorno que o cliente vê ao reabrir a via.</p></div></div>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;"><button class="av-b" data-f="todas">Todas</button><button class="av-b" data-f="baixas">Notas 3 ou menos</button><button class="av-b" data-f="semresp">Sem resposta</button><button class="av-b" data-f="medias">Média por atendente</button></div>'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin:0 0 12px;">'
+      +'<label style="display:grid;gap:3px;font-size:12.5px;font-weight:600;">Estrelas<select data-estrelas class="av-b" style="min-width:140px;"><option value="">Todas as notas</option><option value="5">5 estrelas</option><option value="4">4 estrelas</option><option value="3">3 estrelas</option><option value="2">2 estrelas</option><option value="1">1 estrela</option></select></label>'
+      +'<label style="display:grid;gap:3px;font-size:12.5px;font-weight:600;">Vendedora<select data-vend class="av-b" style="min-width:200px;"><option value="">Todas as vendedoras</option></select></label>'
+      +'<button class="av-b pri" data-buscar>Buscar</button></div>'
       +'<div data-lista></div>';
     var box=el.querySelector('[data-lista]');
+    var selE=el.querySelector('[data-estrelas]'), selV=el.querySelector('[data-vend]'), base={baixas:false,semResposta:false};
+    /* nomes das vendedoras que já têm avaliação (vêm das médias; carrega ao abrir a aba, é leve) */
+    chamar({acao:'avaliacoesMedias',senha:opts.senha}).then(function(r){
+      var ms=(r&&r.medias||[]).slice().sort(function(a,b){ return String(a.nome).localeCompare(String(b.nome),'pt-BR'); });
+      selV.insertAdjacentHTML('beforeend',ms.map(function(m){ return '<option value="'+esc(m.nome)+'">'+esc(m.nome)+' ('+m.total+')</option>'; }).join(''));
+    });
+    function buscar(){ carregar(box,opts,{baixas:base.baixas,semResposta:base.semResposta,estrelas:selE.value,atendente:selV.value}); }
+    el.querySelector('[data-buscar]').onclick=buscar;
+    selE.onchange=function(){ if(box.__filtro) buscar(); }; selV.onchange=function(){ if(box.__filtro) buscar(); };
     el.querySelectorAll('[data-f]').forEach(function(b){ b.onclick=async function(){
       var f=b.dataset.f;
       if(f==='medias'){
@@ -86,7 +106,9 @@
         box.innerHTML=ms.length?'<table class="cad-tabela" style="width:100%;"><thead><tr><th>Atendente</th><th>Média</th><th>Avaliações</th></tr></thead><tbody>'+ms.map(function(m){ return '<tr><td>'+esc(m.nome)+'</td><td>'+estrelas(Math.round(m.media))+' <b>'+String(m.media).replace('.',',')+'</b></td><td>'+m.total+'</td></tr>'; }).join('')+'</tbody></table>':'<div class="muted">Ainda não há avaliações.</div>';
         return;
       }
-      carregar(box,opts,{baixas:f==='baixas',semResposta:f==='semresp'});
+      base={baixas:f==='baixas',semResposta:f==='semresp'};
+      if(f==='baixas' && selE.value && Number(selE.value)>3) selE.value='';   // "3 ou menos" e 4–5 estrelas não combinam
+      buscar();
     }; });
   }
   async function contarBaixas(senha){
