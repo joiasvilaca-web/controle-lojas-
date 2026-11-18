@@ -69,7 +69,7 @@
   .acoes-linha{display:flex;gap:4px;justify-content:flex-end;}
   /* selos */
   .badge,.st{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap;background:var(--surface-2);color:var(--ink-soft);}
-  .b-COMPRA{background:var(--ok-soft);color:var(--ok);} .b-CONSUMO{background:var(--wait-soft);color:var(--wait);} .b-ESTORNO,.b-PERDA{background:var(--danger-soft);color:var(--danger);} .b-ENVIO,.b-ENVIO_FELIPE,.b-RETORNO{background:var(--accent-soft);color:var(--accent);} .b-AJUSTE{background:var(--surface-2);color:var(--ink-soft);}
+  .b-COMPRA,.b-PECA_ENTRADA{background:var(--ok-soft);color:var(--ok);} .b-PECA_SAIDA{background:var(--wait-soft);color:var(--wait);} .peso-row{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);} .peso-row:last-child{border-bottom:0;} .peso-desc{flex:1;min-width:0;} .peso-row .mpPeso{width:120px;flex-shrink:0;} .b-CONSUMO{background:var(--wait-soft);color:var(--wait);} .b-ESTORNO,.b-PERDA{background:var(--danger-soft);color:var(--danger);} .b-ENVIO,.b-ENVIO_FELIPE,.b-RETORNO{background:var(--accent-soft);color:var(--accent);} .b-AJUSTE{background:var(--surface-2);color:var(--ink-soft);}
   .st-aguardando{background:var(--surface-2);color:var(--ink-soft);} .st-enviado_fabrica{background:var(--accent-soft);color:var(--accent);}
   .st-pendencia{background:var(--wait-soft);color:var(--wait);} .st-em_producao{background:var(--accent-soft);color:var(--accent);} .st-oficina_pronto{background:var(--t-info-soft);color:var(--info);}
   .st-pronto{background:var(--ok-soft);color:var(--ok);} .st-entregue,.st-rascunho{background:var(--surface-2);color:var(--ink-faint);} .st-cancelado{background:var(--danger-soft);color:var(--danger);}
@@ -260,7 +260,7 @@
   <div class="card"><div class="filtros-barra">
     <div class="field"><label for="mInsumo">Insumo</label><select id="mInsumo"></select></div>
     <div class="field"><label for="mLoja">Loja</label><select id="mLoja"></select></div>
-    <div class="field"><label for="mTipo">Tipo</label><select id="mTipo"><option value="">Todos</option><option value="COMPRA">Compra</option><option value="ENVIO">Envio</option><option value="ENVIO_FELIPE">Envio Felipe</option><option value="RETORNO">Retorno</option><option value="CONSUMO">Consumo (via)</option><option value="PERDA">Perda</option><option value="AJUSTE">Ajuste</option><option value="ESTORNO">Estorno</option></select></div>
+    <div class="field"><label for="mTipo">Tipo</label><select id="mTipo"><option value="">Todos</option><option value="COMPRA">Compra</option><option value="ENVIO">Envio</option><option value="ENVIO_FELIPE">Envio Felipe</option><option value="RETORNO">Retorno</option><option value="CONSUMO">Consumo (via)</option><option value="PECA_ENTRADA">Peso de entrada (peça)</option><option value="PECA_SAIDA">Peso de saída (peça)</option><option value="PERDA">Perda</option><option value="AJUSTE">Ajuste</option><option value="ESTORNO">Estorno</option></select></div>
     <div class="field"><label for="mDe">De</label><input type="date" id="mDe"></div>
     <div class="field"><label for="mAte">Até</label><input type="date" id="mAte"></div>
     <div class="acao"><button class="btn btn-accent" id="btnMov" type="button"><span data-ico="busca"></span>Buscar</button></div>
@@ -454,7 +454,7 @@ async function lancar(forcar){
 document.getElementById('btnLancar').addEventListener('click', ()=> lancar(false));
 
 /* ---------- Movimentos ---------- */
-const NOMES_TIPO = { COMPRA:'Compra', ENVIO:'Envio', ENVIO_FELIPE:'Envio Felipe', RETORNO:'Retorno', CONSUMO:'Consumo (via)', PERDA:'Perda', AJUSTE:'Ajuste', ESTORNO:'Estorno' };
+const NOMES_TIPO = { PECA_ENTRADA:'Peso entrada (peça)', PECA_SAIDA:'Peso saída (peça)', COMPRA:'Compra', ENVIO:'Envio', ENVIO_FELIPE:'Envio Felipe', RETORNO:'Retorno', CONSUMO:'Consumo (via)', PERDA:'Perda', AJUSTE:'Ajuste', ESTORNO:'Estorno' };
 async function buscarMov(){
   const box = document.getElementById('movBox'); box.innerHTML = estadoCarregando();
   try{
@@ -658,6 +658,19 @@ function abrirPendencia(v){
     }catch(e){ showToast(e.message, 4500); b.disabled = false; b.textContent = 'Salvar pendência'; }
   });
 }
+/* 18/11: peso das peças (g). Entrada vem da loja (Pedido); a Oficina informa a saída na baixa. Não é obrigatório. */
+const PESO_METAL_NOME = { ouro:'OURO 18K', prata:'PRATA 925' };
+const pesoParse = t => { const x = String(t||'').trim(); if(!x) return NaN; const n = Number(/,/.test(x) ? x.replace(/\./g,'').replace(',', '.') : x); return isFinite(n) ? n : NaN; };   // aceita 3,25 e 3.25
+const pesoG = n => String(Math.round(Number(n)*1000)/1000).replace('.', ',') + ' g';
+function pesosItensHtml(v){
+  const itens = v.itens || []; if(!itens.length) return '';
+  return `<div class="field"><label>Peso de saída de cada item (g)</label>
+    <div id="mpPesos">${itens.map(i=>`<div class="peso-row" data-pesoid="${escapeHtml(i.id||'')}" data-pesoidx="${i.idx}">
+      <div class="peso-desc"><b>${escapeHtml(i.descricao||'Item')}</b><div class="small muted">${i.pesoEntrada?'Entrada: <b>'+pesoG(i.pesoEntrada)+'</b>':'Sem peso de entrada'}${i.pesoMetal?' · '+PESO_METAL_NOME[i.pesoMetal]:' · sem metal definido'}</div></div>
+      <input class="mpPeso" inputmode="decimal" placeholder="Saída (g)" aria-label="Peso de saída de ${escapeHtml(i.descricao||'item')}, em gramas" value="${i.pesoSaida?String(i.pesoSaida).replace('.', ','):''}">
+    </div>`).join('')}</div>
+    <div class="dica">Opcional. A entrada soma ao saldo de metal da Oficina e a saída abate. Item sem metal definido fica só anotado.</div></div>`;
+}
 /* LIBERADO FÁBRICA: abre o lançamento do gasto de material; ao SALVAR lança o material e muda o status */
 function abrirProduzido(v){
   const ins = (INIT.insumos||[]).filter(x=>x.ativo!==false);
@@ -669,6 +682,7 @@ function abrirProduzido(v){
     ${podeMat ? `<div class="field"><label>Gasto de material</label><div id="mpLinhas">${linha(ouro)}</div>
       <div><button type="button" class="btn btn-ghost btn-sm" id="mpAdd">+ outro material</button></div>
       <div class="dica">Deixe a quantidade em branco se não usou material.</div></div>` : '<div class="aviso">Seu acesso não lança material. Salve para marcar LIBERADO FÁBRICA.</div>'}
+    ${pesosItensHtml(v)}
     <div class="form-acoes"><button class="btn btn-ghost" id="mpCancelar" type="button">Cancelar</button><button class="btn btn-accent" id="mpSalvar" type="button">Salvar</button></div>`);
   const ligarDel = ()=> document.querySelectorAll('#mpLinhas .mpDel').forEach(b=> b.onclick = ()=>{ if(document.querySelectorAll('#mpLinhas .mat-row').length>1) b.closest('.mat-row').remove(); else b.closest('.mat-row').querySelector('.mpQtd').value=''; });
   if(podeMat){
@@ -686,6 +700,12 @@ function abrirProduzido(v){
         itens.push({ insumoId: r.querySelector('.mpIns').value, quantidade:q });
       }
     }
+    const pesos = [];
+    for(const r of document.querySelectorAll('#mpPesos .peso-row')){
+      const t = r.querySelector('.mpPeso').value.trim();
+      if(t && !(pesoParse(t) >= 0)){ showToast('Peso de saída: só números, em gramas (ex.: 3,25).'); r.querySelector('.mpPeso').focus(); return; }
+      pesos.push({ id: r.dataset.pesoid || undefined, idx: Number(r.dataset.pesoidx), saida: t ? pesoParse(t) : '' });
+    }
     const b = document.getElementById('mpSalvar'); b.disabled = true; b.textContent = 'Salvando…';
     try{
       if(itens.length){
@@ -695,8 +715,10 @@ function abrirProduzido(v){
           else throw e;
         }
       }
-      const r = await api('viaAtualizar', { id: v.id, status:'oficina_pronto', avisarLoja:false });
-      showToast('Via ' + (v.codigoVia||'') + ' → LIBERADO FÁBRICA' + (itens.length?' · material lançado.':'.')); aposMovimento(v, r.via);
+      const r = await api('viaAtualizar', { id: v.id, status:'oficina_pronto', avisarLoja:false, pesos });
+      if(r.peso && r.peso.ok === false) showToast(r.peso.erro || 'O peso não entrou no saldo da Oficina.', 6000);
+      else showToast('Via ' + (v.codigoVia||'') + ' → LIBERADO FÁBRICA' + (itens.length?' · material lançado':'') + (pesos.some(x=>x.saida!=='')?' · peso de saída lançado.':'.'));
+      aposMovimento(v, r.via);
     }catch(e){ showToast(e.message, 5000); b.disabled = false; b.textContent = 'Salvar'; }
   });
 }
@@ -746,7 +768,7 @@ function abrirVia(v){
     </div>
     ${v.descricao?`<div class="bloco-tit">Descrição</div><div class="det-desc">${escapeHtml(v.descricao)}</div>`:''}
     ${v.infoInterna?`<div class="bloco-tit">Informação interna</div><div class="det-desc">${escapeHtml(v.infoInterna)}</div>`:''}
-    ${(v.itens||[]).length?`<div class="bloco-tit">Itens</div>${v.itens.map(i=>`<div class="ro-item"><b>${escapeHtml(i.descricao||'—')}</b> ${i.qtd>1?'× '+escapeHtml(String(i.qtd)):''}${i.metal?` <span class="muted small">· ${escapeHtml(i.metal)}</span>`:''}${i.obs?`<div class="small" style="white-space:pre-wrap;margin-top:4px;">${escapeHtml(i.obs)}</div>`:''}${fotos(i.fotos)}</div>`).join('')}`:''}
+    ${(v.itens||[]).length?`<div class="bloco-tit">Itens</div>${v.itens.map(i=>`<div class="ro-item"><b>${escapeHtml(i.descricao||'—')}</b> ${i.qtd>1?'× '+escapeHtml(String(i.qtd)):''}${i.metal?` <span class="muted small">· ${escapeHtml(i.metal)}</span>`:''}${(i.pesoEntrada||i.pesoSaida)?`<div class="small">Peso: ${i.pesoEntrada?'entrada <b>'+pesoG(i.pesoEntrada)+'</b>':''}${i.pesoEntrada&&i.pesoSaida?' · ':''}${i.pesoSaida?'saída <b>'+pesoG(i.pesoSaida)+'</b>':''}${i.pesoMetal?' · '+PESO_METAL_NOME[i.pesoMetal]:''}</div>`:''}${i.obs?`<div class="small" style="white-space:pre-wrap;margin-top:4px;">${escapeHtml(i.obs)}</div>`:''}${fotos(i.fotos)}</div>`).join('')}`:''}
     ${(v.fotos||[]).length?`<div class="bloco-tit">Fotos da via</div>${fotos(v.fotos)}`:''}
     <div id="dMaterial" style="margin-top:14px;"></div>
     <div style="margin-top:14px;"><div class="bloco-tit">Observações da via</div>

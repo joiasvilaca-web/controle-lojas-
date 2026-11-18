@@ -541,6 +541,10 @@
   .item-row-produto input[type=text]{width:100%;height:40px;padding:0 12px;border:1px solid var(--line-strong);border-radius:8px;font-size:14px;}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
   .item-row-obs{margin-top:8px;}
+  .item-row-peso{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin-top:8px;}
+  .item-row-peso label{display:grid;gap:3px;font-size:12px;font-weight:600;color:var(--ink-soft);flex:0 0 150px;}
+  .item-row-peso input{width:100%;height:38px;padding:0 10px;border:1px solid var(--line-strong);border-radius:8px;font-size:13.5px;background:var(--surface);color:var(--ink);}
+  .item-row-peso > span{font-size:12px;flex:1 1 220px;padding-bottom:10px;}
   /* Gravação copo térmico (por disparo) — seção dentro do item */
   .grav-sec{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);display:grid;gap:10px;}
   .grav-tit{font-size:13.5px;font-weight:700;}
@@ -1471,13 +1475,16 @@ function travarCliqueDuplo(fn){
 const __ordemSnap = new Map();
 function snapOrdem(o){ if(o && o.id) try{ __ordemSnap.set(o.id, JSON.stringify(o)); }catch(e){} }
 async function saveOrders(){
+  orders.forEach(o=>{ if(o && !o.pesoSinc && ordemTemPeso(o)) o.pesoSinc = true; });   // 18/11: via que já teve peso continua sendo acertada (inclusive quando o peso é apagado)
   const mudadas = orders.filter(o=> o && o.id && __ordemSnap.get(o.id) !== JSON.stringify(o));
+  const comPeso = [];
   for(let i=0; i<mudadas.length; i+=6){
     await Promise.all(mudadas.slice(i, i+6).map(async order=>{
       const r = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id: order.id, payload: order, updated_at: new Date().toISOString() } } });
-      if(r && r.error) console.error('erro ao salvar O.S.', order.id, r.error); else snapOrdem(order);
+      if(r && r.error) console.error('erro ao salvar O.S.', order.id, r.error); else { snapOrdem(order); if(order.pesoSinc) comPeso.push(order.id); }
     }));
   }
+  for(const id of comPeso) await sincronizarPesoOficina(id);   // peso de entrada/saída → saldo de metal da Oficina
 }
 
 /* ============================================================
@@ -1702,6 +1709,7 @@ async function excluirOrdemDefinitivo(order, motivo){
   if(!okBackup) throw new Error('Não foi possível guardar a cópia de segurança. Nada foi excluído.');
   const r = await gatewayCall({ op:'delete', table:'ordens_servico', params:{ column:'id', value: order.id } });
   if(!r || r.error) throw new Error('Falha ao excluir no servidor: ' + ((r && r.error) || 'sem resposta') + '. Nada foi alterado.');
+  if(order.pesoSinc || ordemTemPeso(order)) await sincronizarPesoOficina(order.id);   // via apagada: o peso dela sai do saldo da Oficina
   orders = orders.filter(x=>x.id!==order.id);
   // Estoque: libera reserva / oferece devolver peças já baixadas (não bloqueia a exclusão).
   await estoqueAoCancelarOuExcluir(order, 'excluído');
@@ -4363,6 +4371,33 @@ function gravSecaoHtml(it, i){
     <div class="muted" style="font-size:12px;">Outra gravação (outro nome ou logo)? Lance mais um item deste serviço.</div>
   </div>`;
 }
+/* 18/11: PESO DA PEÇA (gramas) — entrada e saída por item, opcionais. Com a via na Oficina, a entrada soma ao saldo de metal da Oficina
+   e a saída abate (lançado pela função insumos-api, op pesoVia). O metal vem do tipo do produto. */
+const PESO_METAL_NOME = { ouro:'OURO 18K', prata:'PRATA 925' };
+function pesoMetalDoItem(it){
+  const p = it && it.produtoEstoqueId ? (produtosEstoque||[]).find(x=>x.id===it.produtoEstoqueId) : null;
+  const tv = String((p && p.tipoVenda) || '');
+  if(/ouro/i.test(tv)) return 'ouro'; if(/prata/i.test(tv)) return 'prata';
+  const n = String((it && it.produto) || (p && p.nome) || '').toUpperCase();
+  if(/(^|[^A-ZÀ-Ú])OURO([^A-ZÀ-Ú]|$)/.test(n)) return 'ouro';
+  if(/(^|[^A-ZÀ-Ú])PRATA([^A-ZÀ-Ú]|$)/.test(n)) return 'prata';
+  return '';
+}
+const pesoTem = v => v!=='' && v!=null && Number(v)>0;
+const pesoFmt = v => String(Math.round(Number(v)*1000)/1000).replace('.', ',') + ' g';
+function pesoResumoItem(it){ const a=[]; if(pesoTem(it.pesoEntrada)) a.push('Entrada '+pesoFmt(it.pesoEntrada)); if(pesoTem(it.pesoSaida)) a.push('Saída '+pesoFmt(it.pesoSaida)); return a.join(' · '); }
+function ordemTemPeso(o){ return !!(o && Array.isArray(o.itens) && o.itens.some(it=> it && (pesoTem(it.pesoEntrada) || pesoTem(it.pesoSaida)))); }
+/** Acerta o saldo de metal da Oficina pelo peso gravado na via (o servidor só lança a diferença; pode chamar à vontade). */
+async function sincronizarPesoOficina(osId){
+  if(!osId || !window.SUPABASE_URL || !__gatewaySenha) return null;
+  try{
+    const res = await fetch(window.SUPABASE_URL + '/functions/v1/insumos-api', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify({ senha:__gatewaySenha, op:'pesoVia', params:{ osId } }) });
+    const j = await res.json().catch(()=>({}));
+    if(!res.ok || !j.ok){ showToast('Pedido salvo, mas o peso não entrou no saldo da Oficina: ' + ((j && j.error) || 'tente salvar de novo.'), 6000); return null; }
+    if(j.semMetal && j.semMetal.length) showToast('Peso sem metal definido (não entrou no saldo da Oficina): ' + j.semMetal.join(', '), 6000);
+    return j;
+  }catch(e){ showToast('Pedido salvo, mas o peso não entrou no saldo da Oficina (sem conexão). Salve de novo quando a internet voltar.', 6000); return null; }
+}
 function mountItens(container, holder, getLojaId, opts){
   if(!holder.itens) holder.itens = [];
   getLojaId = getLojaId || (()=>'');
@@ -4508,6 +4543,7 @@ function recalcularValorAjustado(it){
           </div>
         </div>
         <div class="venda-compact-obs" id="vendaObs_${i}">${temObs?escapeHtml(it.observacaoItem):''}</div>
+        ${pesoResumoItem(it)?`<div class="muted" style="font-size:12.5px;margin:-2px 0 6px 2px;">Peso: ${escapeHtml(pesoResumoItem(it))}${it.pesoMetal?' · '+PESO_METAL_NOME[it.pesoMetal]:''}</div>`:''}
         ${(it.fotos&&it.fotos.length)?`<div class="foto-grid" data-itfotogrid="${i}" style="margin:2px 0 8px;"></div>`:''}`;
       } else {
         const produtoAtual=it.produtoEstoqueId?vendaveis.find(p=>p.id===it.produtoEstoqueId):null;
@@ -4574,6 +4610,11 @@ function recalcularValorAjustado(it){
           ${itemEhGravacaoDisparo(it) ? gravSecaoHtml(it, i) : `<div class="item-row-obs">
             <input type="text" data-itfield="observacaoItem" placeholder="Observação do item (opcional)" aria-label="Observação do item"
               value="${escapeHtml(it.observacaoItem||'')}">
+          </div>
+          <div class="item-row-peso">
+            <label><span>Peso de entrada (g)</span><input type="number" min="0" step="0.01" inputmode="decimal" data-itfield="pesoEntrada" placeholder="opcional" value="${pesoTem(it.pesoEntrada)?it.pesoEntrada:''}"></label>
+            <label><span>Peso de saída (g)</span><input type="number" min="0" step="0.01" inputmode="decimal" data-itfield="pesoSaida" placeholder="opcional" value="${pesoTem(it.pesoSaida)?it.pesoSaida:''}"></label>
+            <span class="muted" data-pesometal>${(()=>{ const m=pesoMetalDoItem(it); return m ? 'Metal: <b>'+PESO_METAL_NOME[m]+'</b> · vai para o saldo da Oficina quando a via for enviada para a fábrica' : (it.produto ? 'Produto sem metal definido (ouro ou prata): o peso fica só anotado na via' : 'Peso da peça, se quiser registrar'); })()}</span>
           </div>`}
           ${_grav ? `<div class="item-row-topo grav-valores">${_valDescHtml}</div>` : ''}
           <div class="item-row-fotos" style="margin-top:8px;">
@@ -4848,6 +4889,7 @@ function recalcularValorAjustado(it){
           recalcularAjusteNovo(it, idx, row); return;
         }
         if(field==='observacaoItem'){ it.observacaoItem=el.value; return; }
+        if(field==='pesoEntrada' || field==='pesoSaida'){ const n = el.value==='' ? '' : parseFloat(el.value); it[field] = (n==='' || !(n>0)) ? '' : Math.round(n*10000)/10000; it.pesoMetal = pesoMetalDoItem(it) || ''; return; }
         it[field]=el.value; updateTotalHint();
       });
     });
@@ -4863,6 +4905,7 @@ function recalcularValorAjustado(it){
     it.produtoEstoqueId=produto.id; it.produto=produto.nome; it.avulso=false;
     it.precoOriginal=produto.precoVenda!=null?produto.precoVenda:'';
     if(it.valorUnitario===''||it.valorUnitario==null) it.valorUnitario=it.precoOriginal||'';
+    it.pesoMetal = pesoMetalDoItem(it) || '';
     if(itemEhGravacaoDisparo(it)){ it.tipoItem='servico'; if(!it.gravacao) it.gravacao = { tipo:'', nome:'', orientacao:'', observacoes:'' }; }
 
     /* Desconto padrão do tipo (Cadastro → Fator → Venda, o "Desconto atual" do produto): aplicado sozinho ao incluir o item.
@@ -5715,7 +5758,7 @@ function openEditModalCompleto(order, opts){
   mountFotos(document.getElementById('fotoContainerEdit'), order, true, somenteLeitura);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, !somenteLeitura);
   // ── ITENS EDITÁVEIS (igual Nova Ordem) ──
-  const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', semCobranca:it.semCobranca||'', valorCheio:it.valorCheio, tipoItem:it.tipoItem, fotos:Array.isArray(it.fotos)?it.fotos.slice():undefined, gravacao:it.gravacao?{...it.gravacao}:undefined, _modo:'ok' })) };
+  const editItensHolder = { itens: (order.itens||[]).map(it=>({ id:it.id||uid('it'), produto:it.produto||'', metal:it.metal||'', quantidade:it.quantidade, valorUnitario:it.valorUnitario, produtoEstoqueId:it.produtoEstoqueId||'', avulso:!!it.avulso, precoOriginal:it.precoOriginal!==undefined?it.precoOriginal:'', ajusteTipo:it.ajusteTipo||'nenhum', ajusteModo:it.ajusteModo||'percentual', ajusteQtd:it.ajusteQtd!==undefined?it.ajusteQtd:'', ajustePerc:it.ajustePerc||'', ajusteValR:it.ajusteValR||'', observacaoItem:it.observacaoItem||'', semCobranca:it.semCobranca||'', valorCheio:it.valorCheio, tipoItem:it.tipoItem, pesoEntrada:it.pesoEntrada, pesoSaida:it.pesoSaida, pesoMetal:it.pesoMetal, fotos:Array.isArray(it.fotos)?it.fotos.slice():undefined, gravacao:it.gravacao?{...it.gravacao}:undefined, _modo:'ok' })) };
   if(!editItensHolder.itens.length) editItensHolder.itens.push({ id:uid('it'), produto:'', metal:'', quantidade:1, valorUnitario:'', produtoEstoqueId:'', precoOriginal:'', ajusteTipo:'nenhum', ajusteModo:'percentual', ajusteQtd:'', ajustePerc:'', ajusteValR:'', observacaoItem:'', _modo:'editar' });
   window.__itensHolder = editItensHolder;
   let itensApiEdit = null;

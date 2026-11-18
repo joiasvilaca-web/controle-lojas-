@@ -1,3 +1,8 @@
+// insumos-api v14 (18/11): PESO DAS PEÇAS. Cada item do Pedido pode ter peso de entrada e de saída (g). Com a via na Oficina
+//   (enviado p/ fábrica em diante), a entrada SOMA ao saldo de metal em poder da Oficina (tipo PECA_ENTRADA) e a saída ABATE (PECA_SAIDA),
+//   na loja da via. O metal vem do tipo do produto (ouro → OURO 18K, prata → PRATA 925; muda em insumos._config.pesoMetal).
+//   op pesoVia {osId} acerta os lançamentos pelo que está gravado na via (pode chamar quantas vezes quiser: só lança a diferença);
+//   viaAtualizar aceita pesos:[{id|idx, saida}] (a Oficina informa a saída na baixa) e acerta sozinho. Pesos não são obrigatórios.
 // insumos-api v12 (09/11: Envio Felipe com escolha das lojas, inclui Reforma Joias; 06/11: Envio Felipe) — card OFICINA: vias (O.S.) de todas as lojas + insumos (ouro, prata, cobre, pedras…).
 // v13 (10/11): a Oficina só muda o status de via ENVIADA P/ FÁBRICA / EM PRODUÇÃO / PENDÊNCIA (aguardando saiu); grava statusEm.
 // v2: ops vias / via / viaAtualizar. A Oficina atende todas as lojas, então vê as vias de todas,
@@ -18,7 +23,7 @@
 //   PERDA   −q ; AJUSTE ±q ; ESTORNO = contrário de um lançamento
 // Sessão (sess_…) validada contra gestao_config, igual ao db-gateway.
 // Permissão: módulo "insumos" com abas saldos / movimentos / cadastro / baixaVia.
-// Ops: init, salvarInsumo, salvarConfig, saldos, contar, contagens, acertarContagem, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
+// Ops: pesoVia, init, salvarInsumo, salvarConfig, saldos, contar, contagens, acertarContagem, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -36,6 +41,48 @@ const num = (v: unknown) => { const n = Number(String(v ?? "").replace(",", ".")
 const ABAS = ["vias", "saldos", "movimentos", "cadastro", "baixaVia"];
 /** Via de SERVIÇO (conserto, relógio, gravação) baixa como serviço; o resto (aliança, fabricação, joias) como fabricação. */
 const finalidadeDoTipo = (nome: string) => /SERVI|RELOG|GRAVA|CONSERT/i.test(String(nome || "")) ? "servico" : "fabricacao";
+
+/* ---------- PESO DAS PEÇAS (v14) ---------- */
+/** Status em que a peça já foi enviada para a Oficina (a entrada conta a partir daqui). */
+const STATUS_PESO = ["enviado_fabrica", "em_producao", "pendencia", "oficina_pronto", "pronto", "entregue"];
+const PESO_METAL_PADRAO: Record<string, string> = { ouro: "ins_ouro750", prata: "ins_prata925" };
+const r4 = (n: number) => Math.round(n * 10000) / 10000;
+const pesoNum = (v: unknown) => { const n = num(v); return Number.isFinite(n) && n > 0 ? r4(n) : 0; };
+/** Metal do item: o que a tela gravou (pesoMetal) ou, sem isso, o nome do produto (… OURO …, … PRATA …). COURO não é ouro. */
+function metalDoItem(it: any): string {
+  const m = String((it && it.pesoMetal) || "").toLowerCase();
+  if (m === "ouro" || m === "prata") return m;
+  const n = String((it && (it.produto || it.descricao)) || "").toUpperCase();
+  if (/(^|[^A-ZÀ-Ú])OURO([^A-ZÀ-Ú]|$)/.test(n)) return "ouro";
+  if (/(^|[^A-ZÀ-Ú])PRATA([^A-ZÀ-Ú]|$)/.test(n)) return "prata";
+  return "";
+}
+/** alvo[insumoId] = { ent, sai } em gramas, pelo que está gravado na via. Via fora da Oficina (rascunho, aprovado, cancelado) = tudo zero. */
+function alvoPesos(o: any, mapa: Record<string, string>) {
+  const conta = STATUS_PESO.includes(String((o && o.status) || ""));
+  const alvo: Record<string, { ent: number; sai: number }> = {};
+  const semMetal: string[] = [];
+  for (const it of (o && Array.isArray(o.itens) ? o.itens : [])) {
+    const e = pesoNum(it && it.pesoEntrada), sd = pesoNum(it && it.pesoSaida);
+    if (!e && !sd) continue;
+    const ins = mapa[metalDoItem(it)];
+    if (!ins) { semMetal.push(String((it && it.produto) || "item")); continue; }
+    const a = (alvo[ins] ||= { ent: 0, sai: 0 });
+    if (conta) { a.ent = r4(a.ent + e); a.sai = r4(a.sai + sd); }
+  }
+  return { alvo, semMetal, conta };
+}
+/** Diferença entre o que a via pede e o que já está lançado → linhas a lançar. atual/quer: chave "insumo|loja|tipo" → gramas (saída negativa). */
+function deltaPesos(atual: Record<string, number>, quer: Record<string, number>) {
+  const out: { insumo: string; loja: string; tipo: string; q: number }[] = [];
+  for (const k of new Set([...Object.keys(atual), ...Object.keys(quer)])) {
+    const d = r4((quer[k] || 0) - (atual[k] || 0));
+    if (Math.abs(d) < 0.00005) continue;
+    const [insumo, loja, tipo] = k.split("|");
+    out.push({ insumo, loja, tipo, q: d });
+  }
+  return out;
+}
 
 /** Mesmo critério do app: o que foi salvo no acesso vale; sem nada salvo, padrão por nível. */
 function permissoes(user: any) {
@@ -129,6 +176,42 @@ Deno.serve(async (req: Request) => {
       if (error) throw error;
       return data;
     };
+
+    /** v14: acerta os lançamentos de peso (PECA_ENTRADA / PECA_SAIDA) de uma via pelo que está gravado nela. Só lança a diferença. */
+    const reconciliarPeso = async (osId: string) => {
+      const { data: os } = await admin.from("ordens_servico").select("id,payload").eq("id", osId).maybeSingle();
+      if (!osId) return { ok: false, erro: "Via não informada.", lancados: 0, semMetal: [] as string[] };
+      // via apagada: não sobra peso nenhum dela no saldo (tudo o que foi lançado é desfeito)
+      const osRef = os || { id: osId, payload: {} };
+      const o = osRef.payload || {};
+      const lojaId = String(o.lojaId || "");
+      const { data: cfgI } = await admin.from("insumos").select("payload").eq("id", "_config").maybeSingle();
+      const mapa: Record<string, string> = { ...PESO_METAL_PADRAO, ...((cfgI && cfgI.payload && cfgI.payload.pesoMetal) || {}) };
+      const { alvo, semMetal } = alvoPesos(o, mapa);
+      const { data: existentes } = await admin.from("insumos").select("id").in("id", Object.keys(alvo).length ? Object.keys(alvo) : ["-"]);
+      const existe = new Set((existentes || []).map((x: any) => x.id));
+      const { data: movs, error } = await admin.from("insumos_movimentos").select("insumo_id,loja_id,tipo,quantidade").eq("os_id", osRef.id).in("tipo", ["PECA_ENTRADA", "PECA_SAIDA"]);
+      if (error) throw error;
+      const atual: Record<string, number> = {};
+      for (const m of movs || []) { const k = `${m.insumo_id}|${m.loja_id}|${m.tipo}`; atual[k] = r4((atual[k] || 0) + Number(m.quantidade)); }
+      const quer: Record<string, number> = {};
+      if (lojaValida(lojaId)) for (const [ins, a] of Object.entries(alvo)) {
+        if (!existe.has(ins)) { semMetal.push("insumo " + ins + " não cadastrado"); continue; }
+        quer[`${ins}|${lojaId}|PECA_ENTRADA`] = a.ent; quer[`${ins}|${lojaId}|PECA_SAIDA`] = -a.sai;
+      }
+      const codigoVia = o.codigoVia || o.via || "";
+      const rows = deltaPesos(atual, quer).map((d) => ({ insumo_id: d.insumo, loja_id: d.loja, local: "oficina", tipo: d.tipo, quantidade: d.q, os_id: osRef.id, codigo_via: codigoVia,
+        finalidade: finalidadeDoTipo(o.serviceTypeName || ""), payload: { por: quem, peso: true, tipoOrdem: o.serviceTypeName || "", status: o.status || "",
+          obs: d.tipo === "PECA_ENTRADA" ? (d.q > 0 ? "Peso de entrada da peça" : "Acerto do peso de entrada") : (d.q < 0 ? "Peso de saída da peça" : "Acerto do peso de saída") } }));
+      if (rows.length) await inserir(rows);
+      return { ok: true, lancados: rows.length, semMetal };
+    };
+
+    if (op === "pesoVia") {   // qualquer pessoa com o módulo: os valores vêm da via gravada, não da tela
+      const r = await reconciliarPeso(texto(p.osId, 80));
+      if (!r.ok) return json({ error: r.erro }, 400);
+      return json(r);
+    }
 
     if (op === "init") {
       let q = admin.from("insumos").select("id,payload,ativo").neq("id", "_config").order("id");
@@ -343,6 +426,7 @@ Deno.serve(async (req: Request) => {
       if (!m) return json({ error: "Lançamento não encontrado." }, 404);
       precisa(m.tipo === "CONSUMO" ? "baixaVia" : "movimentos");
       if (m.tipo === "ESTORNO") return json({ error: "Um estorno não pode ser estornado." }, 400);
+      if (m.tipo === "PECA_ENTRADA" || m.tipo === "PECA_SAIDA") return json({ error: "Peso de peça não se estorna aqui: corrija o peso no item da via (Pedido ou baixa da Oficina) e o lançamento se acerta sozinho." }, 400);
       // movimentos em par (envio/retorno) são estornados juntos
       let alvo: any[] = [m];
       if (m.payload && m.payload.par) {
@@ -365,8 +449,8 @@ Deno.serve(async (req: Request) => {
       const o = r.payload || {};
       const obs = Array.isArray(o.observacoes) ? o.observacoes : [];
       const itensRaw = Array.isArray(o.itens) ? o.itens : [];
-      const itens = itensRaw.map((i: any) => ({ descricao: String(i.produto || i.descricao || i.produtoNome || i.nome || ""), qtd: i.quantidade || i.qtd || 1,
-        metal: String(i.metal || ""), obs: String(i.observacaoItem || ""),
+      const itens = itensRaw.map((i: any, idx: number) => ({ id: String(i.id || ""), idx, descricao: String(i.produto || i.descricao || i.produtoNome || i.nome || ""), qtd: i.quantidade || i.qtd || 1,
+        metal: String(i.metal || ""), obs: String(i.observacaoItem || ""), pesoEntrada: pesoNum(i.pesoEntrada) || null, pesoSaida: pesoNum(i.pesoSaida) || null, pesoMetal: metalDoItem(i),
         fotos: (Array.isArray(i.fotos) ? i.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8) }));
       const fotos = (Array.isArray(o.fotos) ? o.fotos : []).map((f: any) => f && (f.driveUrl || f.url || f.thumb) || null).filter(Boolean).slice(0, 8);
       const v: any = { id: r.id, codigoVia: o.codigoVia || o.via || "", via: o.via || "", numero: o.numero || "", cliente: o.cliente || "", telefone: o.telefone || "",
@@ -440,6 +524,20 @@ Deno.serve(async (req: Request) => {
         o.historicoLocal.push({ local: p.localAtual, em: agora, por: quem.nome });
         mudou.push("local");
       }
+      // v14: a Oficina informa o peso de saída de cada item na baixa (vazio = sem peso; não é obrigatório)
+      if (Array.isArray(p.pesos) && Array.isArray(o.itens)) {
+        let alterou = false;
+        for (const x of p.pesos.slice(0, 60)) {
+          const it = o.itens.find((y: any) => x && x.id && String(y.id || "") === String(x.id)) || (Number.isInteger(x && x.idx) ? o.itens[x.idx] : null);
+          if (!it || x.saida === undefined) continue;
+          const bruto = String(x.saida ?? "").trim();
+          const novo = bruto === "" ? null : num(bruto);
+          if (novo !== null && !(novo >= 0)) return json({ error: "Peso de saída inválido. Use só números, em gramas (ex.: 3,25)." }, 400);
+          const gravar = novo === null || novo === 0 ? "" : r4(novo);
+          if (String(it.pesoSaida ?? "") !== String(gravar)) { it.pesoSaida = gravar; if (!it.pesoMetal) { const mt = metalDoItem(it); if (mt) it.pesoMetal = mt; } alterou = true; }
+        }
+        if (alterou) { o.pesoSinc = true; mudou.push("peso de saída"); }
+      }
       const txt = texto(p.observacao, 1000).toUpperCase();
       if (txt) {
         const lojaVia = o.lojaId;
@@ -455,7 +553,10 @@ Deno.serve(async (req: Request) => {
       o.historicoOficina = hist.slice(-50);
       const { error } = await admin.from("ordens_servico").update({ payload: o, updated_at: new Date().toISOString() }).eq("id", id);
       if (error) throw error;
-      return json({ ok: true, mudou, via: resumoVia({ id, payload: o }) });
+      // v14: status ou peso mudou → acerta o saldo de metal da Oficina (falha aqui não desfaz a via; a tela avisa)
+      let peso: any = null;
+      if (mudou.includes("status") || mudou.includes("peso de saída")) { try { peso = await reconciliarPeso(id); } catch (e) { console.error("peso da via", e); peso = { ok: false, erro: "A via foi salva, mas o peso não entrou no saldo da Oficina. Abra a via e salve de novo." }; } }
+      return json({ ok: true, mudou, via: resumoVia({ id, payload: o }), peso });
     }
 
     return json({ error: "operação desconhecida" }, 400);
