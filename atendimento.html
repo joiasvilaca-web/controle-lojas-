@@ -2744,7 +2744,7 @@ const AG_TIPOS = { privada:{ nome:'Privada', desc:'Só você vê' }, loja:{ nome
 const AG_CLASSES = { urgente:'Urgente', importante:'Importante', normal:'Normal', baixa:'Baixa' };
 const AG_COLUNAS = [ ['a_fazer','A fazer'], ['fazendo','Fazendo'], ['feito','Feito'] ];
 const AG_VIA = { orcamento:{ nome:'Orçamento', alvo:'orcamentos' }, venda:{ nome:'Venda', alvo:'pdv' }, pedido:{ nome:'Pedido', alvo:'os' } };
-estado.ag = { aba:'quadro', ini:null, tarefas:[], lembretes:[], vias:null, viasErro:null, filtroTipo:'', filtroCls:'', viaTipo:'', viaBusca:'', mes:null, mostrarVias:true };
+estado.ag = { aba:'quadro', ini:null, tarefas:[], lembretes:[], vias:null, viasErro:null, filtroTipo:'', filtroCls:'', viaTipo:'', viaBusca:'', mes:null, mostrarVias:true, escopoVias:'minhas', viasCal:{} };
 
 function agDataISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function agFmtData(s){ if(!s) return ''; const [y,m,d] = String(s).slice(0,10).split('-'); return `${d}/${m}/${y}`; }
@@ -2791,6 +2791,14 @@ async function agCarregar(forcarVias){
   estado.ag.lembretes = (l && l.ok && l.data) || [];
   if(forcarVias || (estado.ag.aba==='vias' && !estado.ag.vias)) await agCarregarVias(true);
   agRender();
+}
+/* Calendário: vias de outro escopo (loja / todas as lojas) ficam em cache à parte; 'minhas' usa a lista da aba Minhas vias. */
+function agViasCal(){ return estado.ag.escopoVias==='minhas' ? estado.ag.vias : estado.ag.viasCal[estado.ag.escopoVias]; }
+async function agCarregarViasCal(){
+  const e = estado.ag.escopoVias; if(e==='minhas'){ if(!estado.ag.vias) await agCarregarVias(true); return; }
+  const r = await tarefasApi({ op:'minhasVias', escopo:e });
+  estado.ag.viasCal[e] = (r && r.ok) ? (r.data||[]) : [];
+  if(!(r && r.ok)) showToast((r && r.error) || 'Não consegui buscar as vias.');
 }
 async function agCarregarVias(semRender){
   const r = await tarefasApi({ op:'minhasVias' });
@@ -2948,9 +2956,9 @@ function agEventosDoDia(iso){
   const ev = [];
   estado.ag.tarefas.filter(t=>t.data===iso).sort((a,b)=>String(a.hora||'').localeCompare(String(b.hora||''))).forEach(t=> ev.push({ cls:`t-${t.tipo} ${t.coluna==='feito'?'feito':''}`, txt:(t.hora?t.hora+' ':'')+t.titulo, tarefa:t.id }));
   estado.ag.lembretes.forEach(l=>{ const d = new Date(l.disparar_em); if(agDataISO(d)===iso) ev.push({ cls:'lemb', txt:'Lembrete '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' '+(l.descricao||'') }); });
-  if(estado.ag.mostrarVias) (estado.ag.vias||[]).forEach(v=>{
+  if(estado.ag.mostrarVias) (agViasCal()||[]).forEach(v=>{
     const dia = v.tipo==='orcamento' ? v.validade : v.data;
-    if(dia===iso && v.status!=='entregue' && v.status!=='cancelada' && v.status!=='cancelado') ev.push({ cls:'via', txt:(v.tipo==='pedido'?'Entrega ':v.tipo==='orcamento'?'Vence ':'Venda ')+(v.codigoVia||'')+' '+(v.cliente||''), via:v });
+    if(dia===iso && v.status!=='entregue' && v.status!=='cancelada' && v.status!=='cancelado') ev.push({ cls:'via', txt:(v.tipo==='pedido'?'Entrega ':v.tipo==='orcamento'?'Vence ':'Venda ')+(v.codigoVia||'')+' '+(v.cliente||'')+(estado.ag.escopoVias!=='minhas'&&v.vendedora?' ('+v.vendedora+')':''), via:v });
   });
   return ev;
 }
@@ -2965,7 +2973,8 @@ function agRenderCalendario(c){
     <div class="ag-cal-top" style="margin-bottom:8px;">
       <button class="btn-icone" id="agMesAnt" title="Mês anterior" aria-label="Mês anterior">${icn('esquerda',{tam:18})}</button><b>${(t=>t.charAt(0).toUpperCase()+t.slice(1))(m.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}))}</b><button class="btn-icone" id="agMesProx" title="Próximo mês" aria-label="Próximo mês">${icn('direita',{tam:18})}</button>
       <button class="btn btn-sm" id="agMesHoje">Hoje</button>
-      <label><input type="checkbox" id="agMostrarVias" ${estado.ag.mostrarVias?'checked':''}> Mostrar minhas vias</label>
+      <label><input type="checkbox" id="agMostrarVias" ${estado.ag.mostrarVias?'checked':''}> Mostrar vias</label>
+      <select class="busca" id="agEscopoVias" aria-label="Quais vias mostrar" style="max-width:230px;"><option value="minhas" ${estado.ag.escopoVias==='minhas'?'selected':''}>Em meu nome</option><option value="loja" ${estado.ag.escopoVias==='loja'?'selected':''}>Da minha loja</option><option value="todas" ${estado.ag.escopoVias==='todas'?'selected':''}>De todas as lojas</option></select>
       ${agLegenda()}
     </div>
     <div class="ag-cal">
@@ -2982,8 +2991,9 @@ function agRenderCalendario(c){
   document.getElementById('agMesAnt').onclick = ()=>{ estado.ag.mes = new Date(m.getFullYear(), m.getMonth()-1, 1); agRender(); };
   document.getElementById('agMesProx').onclick = ()=>{ estado.ag.mes = new Date(m.getFullYear(), m.getMonth()+1, 1); agRender(); };
   document.getElementById('agMesHoje').onclick = ()=>{ estado.ag.mes = null; agRender(); };
-  document.getElementById('agMostrarVias').onchange = async e=>{ estado.ag.mostrarVias = e.target.checked; if(e.target.checked && !estado.ag.vias) await agCarregarVias(true); agRender(); };
-  if(estado.ag.mostrarVias && !estado.ag.vias) agCarregarVias();
+  document.getElementById('agMostrarVias').onchange = async e=>{ estado.ag.mostrarVias = e.target.checked; if(e.target.checked && !agViasCal()) await agCarregarViasCal(); agRender(); };
+  document.getElementById('agEscopoVias').onchange = async e=>{ estado.ag.escopoVias = e.target.value; if(estado.ag.mostrarVias && !agViasCal()) await agCarregarViasCal(); agRender(); };
+  if(estado.ag.mostrarVias && !agViasCal()) agCarregarViasCal().then(()=>agRender());
   c.querySelectorAll('.ag-dia').forEach(el=> el.addEventListener('click', e=>{
     const iso = el.dataset.agdia; const evEl = e.target.closest('[data-agev]');
     if(evEl){ const ev = agEventosDoDia(iso)[+evEl.dataset.agev];

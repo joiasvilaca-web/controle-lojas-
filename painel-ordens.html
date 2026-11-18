@@ -1341,6 +1341,15 @@ function orcamentosAbertosDoCliente(cliente){
     return mesmoTelefone || mesmoNome;
   });
 }
+/** 18/11: orçamento cujos itens são produtos de código iniciado em 9 (peça de venda, não de pedido) e nenhum item 8/serviço → pergunta se vira VENDA. */
+function orcamentoEhDeVenda(o){
+  const itens = (o && o.itens || []).filter(it=>it && it.produto);
+  if(!itens.length) return false;
+  const nome = it=> String(it.produto||'').trim();
+  const tem9 = itens.some(it=>nome(it).startsWith('9'));
+  const tem8 = itens.some(it=>nome(it).startsWith('8') || it.tipoItem==='servico');
+  return tem9 && !tem8;
+}
 /**
  * Se o cliente tem orçamento(s) em aberto, mostra uma tela com a lista: dá pra ver
  * os itens, mudar o status, ou confirmar que um deles é exatamente o que está
@@ -1351,7 +1360,7 @@ function mostrarOrcamentosAbertosModal(cliente){
   if(abertos.length === 0) return;
   openModal(`
     <h3>${escapeHtml(cliente.nome||cliente.cliente)} tem ${abertos.length} orçamento${abertos.length>1?'s':''} em aberto</h3>
-    <p>Se um deles é o que está virando este pedido agora, clique em <b>É este</b> para trazer os itens. Nos outros, vale conferir o status com o cliente.</p>
+    <p>Se um deles é o que está virando este pedido agora, clique em <b>É este</b> para trazer os itens (orçamento só com produtos de venda, código 9, pergunta se vira venda). Nos outros, vale conferir o status com o cliente.</p>
     <div id="orcAbertosLista"></div>
     <div class="modal-actions"><button class="btn btn-ghost" id="btnFecharOrcAbertos">Continuar</button></div>
   `);
@@ -1368,7 +1377,9 @@ function mostrarOrcamentosAbertosModal(cliente){
         <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
           <button type="button" class="btn btn-ghost btn-sm" data-verorc="${o.id}">Ver itens</button>
           <select data-statusorc="${o.id}" style="max-width:170px;">${statusList().map(s=>`<option value="${s.id}" ${o.status===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select>
-          <button type="button" class="btn btn-accent btn-sm" data-confirmarorc="${o.id}">${ico('check')} É este</button>
+          ${orcamentoEhDeVenda(o)
+            ? `<button type="button" class="btn btn-accent btn-sm" data-virarvenda="${o.id}" title="Produtos com código iniciado em 9 são de venda">${ico('check')} Transformar em venda</button>`
+            : `<button type="button" class="btn btn-accent btn-sm" data-confirmarorc="${o.id}">${ico('check')} É este</button>`}
         </div>
         <div data-itensorc="${o.id}" style="display:none; margin-top:8px; font-size:12.5px; color:var(--muted);"></div>
       </div>`;
@@ -1390,6 +1401,15 @@ function mostrarOrcamentosAbertosModal(cliente){
         const infoNovo = statusInfoDe(o.status);
         if(infoNovo && infoNovo.encerra){ abertos.splice(abertos.indexOf(o),1); }
         draw();
+      });
+    });
+    wrap.querySelectorAll('[data-virarvenda]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const o = abertos.find(x=>x.id===b.dataset.virarvenda);
+        if(!o || !confirm('Este orçamento tem produtos de venda (código iniciado em 9). Deseja transformá-lo em VENDA?')) return;
+        closeModal();
+        if(window.parent && window.parent!==window) window.parent.postMessage({ type:'irParaModulo', alvo:'pdv', converterOrcamento:o.id }, '*');
+        else showToast('Abra pelo app para transformar em venda.');
       });
     });
     wrap.querySelectorAll('[data-confirmarorc]').forEach(b=>{

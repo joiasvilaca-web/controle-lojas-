@@ -4,6 +4,7 @@
 //   privada       → só quem criou
 //   loja          → quem criou + gerente (das lojas dele; sem lojas = todas) + diretoria
 //   compartilhada → quem criou + participantes
+// v12 (18/11): minhasVias aceita `escopo` (minhas | loja | todas) para o calendário.
 // Ops: init, listar, salvar, mover, excluir, lembretes, minhasVias, avisos, agendaCiente
 // v11 (18/11): AVISOS da agenda (PAINEL › Avisos). op `avisos` devolve o que a pessoa (criadora ou participante, tarefa não feita) precisa ver ao abrir o sistema:
 //   compartilhada = recebeu um compartilhamento há menos de 24 h e ainda não deu ciente (`cientes`; início em `participantes_em`);
@@ -230,6 +231,7 @@ Deno.serve(async (req: Request) => {
     // Vias com o meu nome (vendedora) em Orçamentos, Vendas e Pedidos
     if (b.op === "minhasVias") {
       const ST_OFICINA = ["enviado_fabrica", "em_producao", "pendencia", "oficina_pronto"];
+      const lojaNome = (p: any) => { const l = (config.lojas || []).find((x: any) => x.id === p.lojaId); return l ? l.nome : (p.loja || ""); };
       const lojaNome0 = (p: any) => { const l = (config.lojas || []).find((x: any) => x.id === p.lojaId); return l ? l.nome : (p.loja || ""); };
       if (nivel === "oficina") {
         const { data: ped0, error: e0 } = await admin.from("ordens_servico").select("id, payload").in("payload->>status", ST_OFICINA).limit(1000);
@@ -237,6 +239,26 @@ Deno.serve(async (req: Request) => {
         const lista0 = (ped0 || []).map((r: any) => { const p = r.payload || {}; return { tipo: "pedido", id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null, valorTotal: 0, status: p.status || null, loja: lojaNome0(p), data: p.data || null, validade: null, vendedora: p.vendedora || null, naOficina: true }; })
           .sort((a: any, c: any) => String(a.data || "9999").localeCompare(String(c.data || "9999")));
         return json({ ok: true, data: lista0, oficina: true });
+      }
+      // 18/11: escopo do calendário — "minhas" (padrão: vias em nome do usuário), "loja" (todas as vias das lojas dele) ou "todas" (diretoria: todas as lojas)
+      const escopo = ["loja", "todas"].includes(String(b.escopo)) ? String(b.escopo) : "minhas";
+      if (escopo !== "minhas") {
+        const todasIds: string[] = (config.lojas || []).map((l: any) => String(l.id));
+        const lojasEsc = escopo === "todas" && ehDiretoria ? todasIds : (ehDiretoria && !minhasLojas.length ? todasIds : minhasLojas);
+        if (!lojasEsc.length) return json({ ok: true, data: [], escopo });
+        const [orcL, venL, pedL] = await Promise.all([
+          admin.from("orcamentos").select("id, payload").in("payload->>lojaId", lojasEsc).limit(1500),
+          admin.from("vendas_pdv").select("id, payload").in("payload->>lojaId", lojasEsc).limit(1500),
+          admin.from("ordens_servico").select("id, payload").in("payload->>lojaId", lojasEsc).limit(1500),
+        ]);
+        for (const r of [orcL, venL, pedL]) if (r.error) throw r.error;
+        const mapL = (tipo: string, rows: any[]) => (rows || []).map((r) => {
+          const p = r.payload || {};
+          return { tipo, id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null, valorTotal: Number(p.valorTotal) || 0, status: p.status || null, loja: lojaNome(p), lojaId: p.lojaId || null,
+            data: p.data || null, validade: p.validade || null, vendedora: p.vendedora || null, naOficina: tipo === "pedido" && ST_OFICINA.includes(String(p.status || "")) };
+        }).filter((x) => x.status !== "rascunho");
+        const listaL = [...mapL("orcamento", orcL.data!), ...mapL("venda", venL.data!), ...mapL("pedido", pedL.data!)].sort((a, c) => String(c.data || "").localeCompare(String(a.data || "")));
+        return json({ ok: true, data: listaL, escopo });
       }
       const nomes = [...new Set([meuNome, user.nome, (funcs.find((f) => f.id === meuId) || {}).nome]
         .map((n) => String(n || "").trim().replace(/[,()"\\%_*]/g, "")).filter(Boolean))];
@@ -248,10 +270,6 @@ Deno.serve(async (req: Request) => {
         admin.from("ordens_servico").select("id, payload").or(filtro(["vendedora"])).limit(1000),
       ]);
       for (const r of [orc, ven, ped]) if (r.error) throw r.error;
-      const lojaNome = (p: any) => {
-        const l = (config.lojas || []).find((x: any) => x.id === p.lojaId);
-        return l ? l.nome : (p.loja || "");
-      };
       const map = (tipo: string, rows: any[]) => (rows || []).map((r) => {
         const p = r.payload || {};
         return {
