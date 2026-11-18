@@ -4,12 +4,16 @@
 //   privada       → só quem criou
 //   loja          → quem criou + gerente (das lojas dele; sem lojas = todas) + diretoria
 //   compartilhada → quem criou + participantes
-// Ops: init, listar, salvar, mover, excluir, lembretes, minhasVias
+// Ops: init, listar, salvar, mover, excluir, lembretes, minhasVias, avisos, agendaCiente
+// v11 (18/11): AVISOS da agenda (PAINEL › Avisos). op `avisos` devolve o que a pessoa (criadora ou participante, tarefa não feita) precisa ver ao abrir o sistema:
+//   compartilhada = recebeu um compartilhamento há menos de 24 h e ainda não deu ciente (`cientes`; início em `participantes_em`);
+//   amanha = vence amanhã; hoje = vence hoje; atrasada = venceu nos últimos 7 dias. Datas no fuso de São Paulo. op `agendaCiente` dá o ciente (função SQL atômica).
+//   Import fixado em 2.119.0 (npm com @supabase/storage-js 2.119.1 quebrado).
 // v10 (13/11): tarefa criada no CHAT (CRM) também aparece na Agenda (colunas origem='chat', conversa_id, crm_tarefa_id); listar devolve `conversa_ativa`;
 //   mover/sincCrm mantêm a tarefa do CRM e a da Agenda no mesmo andamento (feito ↔ feita).
 // v9 (13/11): módulo AGENDA. minhasVias marca `naOficina` nos pedidos em poder da Oficina (enviado p/ fábrica, em produção, pendência, produzido) e,
 //   para o login da OFICINA, devolve esses pedidos de TODAS as lojas (a Oficina enxerga na agenda o que está com ela; a vendedora vê o dela marcado "Na Oficina").
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.119.0";
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
@@ -117,6 +121,7 @@ Deno.serve(async (req: Request) => {
         : [];
       if (tipo === "compartilhada" && !participantes.length) return json({ error: "Escolha com quem compartilhar." }, 400);
       const coluna = COLUNAS.includes(t.coluna) ? t.coluna : "a_fazer";
+      const agoraIso = new Date().toISOString();
       const campos: Record<string, unknown> = {
         titulo, descricao: texto(t.descricao, 4000) || null, tipo, loja_id: lojaId, participantes,
         classificacao: CLASSES.includes(t.classificacao) ? t.classificacao : "normal",
@@ -128,6 +133,11 @@ Deno.serve(async (req: Request) => {
         if (!atual || !podeVer(atual)) return json({ error: "Tarefa não encontrada." }, 404);
         // quem não criou pode mexer no andamento e nos detalhes, mas não muda quem enxerga a tarefa
         if (atual.criador_id !== meuId) { campos.tipo = atual.tipo; campos.loja_id = atual.loja_id; campos.participantes = atual.participantes; }
+        // 18/11: quem entrou agora na tarefa ganha o carimbo (começa o aviso de 24 h); quem saiu perde o carimbo e o ciente
+        { const parts: string[] = (campos.participantes as string[]) || []; const em: Record<string, string> = { ...(atual.participantes_em || {}) }; const ci: Record<string, string> = { ...(atual.cientes || {}) };
+          for (const id of parts) if (!em[id] || !(atual.participantes || []).includes(id)) { em[id] = agoraIso; delete ci[id]; }
+          for (const id of Object.keys(em)) if (!parts.includes(id)) { delete em[id]; delete ci[id]; }
+          campos.participantes_em = em; campos.cientes = ci; }
         const { data, error } = await admin.from("agenda_tarefas").update(campos).eq("id", t.id).select().single();
         if (error) throw error;
         return json({ ok: true, data });
@@ -135,6 +145,7 @@ Deno.serve(async (req: Request) => {
       const { data: ult } = await admin.from("agenda_tarefas").select("ordem").eq("coluna", coluna).order("ordem", { ascending: false }).limit(1);
       campos.ordem = ((ult && ult[0] && Number(ult[0].ordem)) || 0) + 1;
       if (veioDoChat) { campos.origem = "chat"; campos.conversa_id = texto(t.conversa_id, 80) || null; campos.crm_tarefa_id = texto(t.crm_tarefa_id, 80) || null; }
+      campos.participantes_em = Object.fromEntries(((campos.participantes as string[]) || []).map((id) => [id, agoraIso]));
       const { data, error } = await admin.from("agenda_tarefas").insert({ ...campos, criador_id: meuId, criador_nome: meuNome }).select().single();
       if (error) throw error;
       return json({ ok: true, data });
@@ -170,6 +181,40 @@ Deno.serve(async (req: Request) => {
       if (!podeExcluir(atual)) return json({ error: "Só quem criou a tarefa pode excluir." }, 403);
       const { error } = await admin.from("agenda_tarefas").delete().eq("id", atual.id);
       if (error) throw error;
+      return json({ ok: true });
+    }
+
+    // 18/11: AVISOS da agenda para o PAINEL › Avisos (aparecem ao abrir o sistema)
+    if (b.op === "avisos") {
+      const fmtDia = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+      const hojeSP = fmtDia(new Date());
+      const somaDias = (iso: string, n: number) => { const d = new Date(iso + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+      const amanhaSP = somaDias(hojeSP, 1), limiteAtraso = somaDias(hojeSP, -7);
+      const { data, error } = await admin.from("agenda_tarefas").select("*").or(`criador_id.eq.${meuId},participantes.cs.{${meuId}}`).neq("coluna", "feito").limit(1000);
+      if (error) throw error;
+      const out: any[] = [];
+      const base = (t: any, kind: string, extra: any = {}) => ({ id: t.id, kind, titulo: t.titulo, descricao: t.descricao || "", tipo: t.tipo, data: t.data || null, hora: t.hora || null, de: t.criador_nome || "", classificacao: t.classificacao || "normal", minha: t.criador_id === meuId, ...extra });
+      for (const t of data || []) {
+        // compartilhamento recebido: 24 h a partir do momento em que a pessoa entrou na tarefa, até dar ciente
+        if (t.tipo === "compartilhada" && t.criador_id !== meuId && (t.participantes || []).includes(meuId)) {
+          const em = (t.participantes_em && t.participantes_em[meuId]) || t.created_at;
+          const ms = Date.now() - new Date(em).getTime();
+          if (ms >= 0 && ms < 24 * 3600 * 1000 && !(t.cientes && t.cientes[meuId])) out.push(base(t, "compartilhada", { recebidoEm: em }));
+        }
+        if (!t.data) continue;
+        const d = String(t.data).slice(0, 10);
+        if (d === amanhaSP) out.push(base(t, "amanha"));
+        else if (d === hojeSP) out.push(base(t, "hoje"));
+        else if (d < hojeSP && d >= limiteAtraso) out.push(base(t, "atrasada"));
+      }
+      out.sort((a, c) => String(a.data || "9999").localeCompare(String(c.data || "9999")) || String(a.hora || "").localeCompare(String(c.hora || "")));
+      return json({ ok: true, hoje: hojeSP, avisos: out });
+    }
+    if (b.op === "agendaCiente") {
+      const { data: atual } = await admin.from("agenda_tarefas").select("*").eq("id", String(b.id || "")).maybeSingle();
+      if (!atual || !(atual.participantes || []).includes(meuId)) return json({ error: "Aviso não encontrado." }, 404);
+      const { data: ok, error } = await admin.rpc("agenda_ciente", { p_id: atual.id, p_user: meuId });
+      if (error || ok !== true) return json({ error: "Não foi possível dar o ciente. Tente de novo." }, 500);
       return json({ ok: true });
     }
 

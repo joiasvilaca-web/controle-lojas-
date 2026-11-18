@@ -49,6 +49,7 @@
 
 </script>
 <script src="retirada-terceiro.js"></script>
+<script src="recado-cliente.js"></script>
 <script src="formato.js"></script>
 <script src="cashback.js"></script>
 <meta charset="UTF-8">
@@ -3190,6 +3191,17 @@ function promptRecebidoPor(onConfirm, onCancel){
   });
 }
 
+/* 18/11: recado para o cliente nas observações que pedem ciência (recado-cliente.js). Sai só com o clique no WhatsApp; vai ao cliente a situação da via + o recado, nunca a observação da Oficina. */
+function recadoCtx(){
+  return {
+    senha: __gatewaySenha, nomeUsuario: (currentUser && (currentUser.apelido || currentUser.nome)) || '',
+    achar: (oid, obid)=>{ const order = orders.find(x=>x.id===oid); const ob = order && (order.observacoes||[]).find(x=>x.id===obid); return ob ? { order, ob } : null; },
+    gravar: async (oid, obid, recado)=>{ const order = orders.find(x=>x.id===oid); const ob = order && (order.observacoes||[]).find(x=>x.id===obid); if(!ob) return false; if(recado) ob.recado = recado; else delete ob.recado; await saveOrders(); return true; },
+    lojaNome: id=>{ const l = (config.lojas||[]).find(x=>x.id===id); return l ? (l.nomeFantasia || l.nome) : ''; },
+    statusNome: o=> statusLabel(o.status),
+    aoMudar: ()=>{ renderAlerts(); },
+  };
+}
 function renderAlerts(){
   const bar = document.getElementById('alertBar');
   if(!bar) return;
@@ -3209,13 +3221,15 @@ function renderAlerts(){
         <div class="alert-title">${ico('sino')} ${pending.length===1 ? '1 observação aguarda a sua ciência' : pending.length + ' observações aguardam a sua ciência'}</div>
         ${pending.map(p=>`
           <div class="alert-item">
-            <div><b>${escapeHtml(p.order.cliente)}</b> — ${escapeHtml(p.obs.nome)}: ${escapeHtml(p.obs.descricao)}</div>
+            <div style="flex:1 1 280px;min-width:0;"><div><b>${escapeHtml(p.order.cliente)}</b> — ${escapeHtml(p.obs.nome)}: ${escapeHtml(p.obs.descricao)}</div>
+              ${window.RecadoCliente && p.order.telefone ? RecadoCliente.linhaHtml(p.order, p.obs) : ''}</div>
             <button class="btn btn-accent btn-sm" data-alertciente="${p.order.id}|${p.obs.id}">${ico('check',14)} Marcar ciente</button>
           </div>
         `).join('')}
       </div>
     </div>
   `;
+  if(window.RecadoCliente) RecadoCliente.ligar(bar, recadoCtx());
   bar.querySelectorAll('[data-alertciente]').forEach(b=>{
     b.addEventListener('click', ()=>{
       const [oid, obid] = b.dataset.alertciente.split('|');

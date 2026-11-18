@@ -11,6 +11,8 @@
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
 <script src="avaliacoes-ui.js"></script>
+<script src="marketing-off.js"></script>
+<script src="recado-cliente.js"></script>
 <style>
 :root{ --radius:12px; --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
 *{box-sizing:border-box;}
@@ -94,6 +96,13 @@ button{font-family:inherit;cursor:pointer;}
 }
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
 
+/* 18/11: observações da pendência (com recado ao cliente) e ciente da agenda dentro do item */
+.item .obs-av{margin-top:8px;display:grid;gap:8px;white-space:normal;}
+.item .obs-av-i{padding:8px 10px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);font-size:13px;line-height:1.45;cursor:default;}
+.item .obs-av b{display:inline;white-space:normal;font-weight:700;}
+.item .obs-av-t{font-size:12.5px;margin-bottom:2px;}
+.item .item-ciente{margin-top:6px;}
+.toast-av{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:9700;max-width:92vw;text-align:center;}
 /* Celular: linha inteira é o alvo, com seta à direita */
 @media (max-width:760px){
   .wrap{padding:16px 16px 40px;}
@@ -177,6 +186,47 @@ async function gatewayCall(body){
     return await res.json();
   }catch(e){ return { error:String(e) }; }
 }
+function showToast(msg){ let t = document.getElementById('toastAv'); if(!t){ t = document.createElement('div'); t.id = 'toastAv'; t.className = 'toast-av'; t.setAttribute('role','status'); document.body.appendChild(t); } t.textContent = msg; t.style.display = 'block'; clearTimeout(showToast._t); showToast._t = setTimeout(()=>{ t.style.display = 'none'; }, 4200); }
+async function agendaCall(body){
+  try{
+    const res = await fetch(SUPABASE_URL + '/functions/v1/agenda-tarefas', { method:'POST', headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
+    return await res.json();
+  }catch(e){ return { error:String(e) }; }
+}
+function dhAv(ms){ if(!ms) return ''; const d = new Date(ms); return isNaN(d) ? '' : d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+let __ordensAv = [];
+/** Todas as observações da via (a da Oficina é interna) + o recado para o cliente quando a observação pede ciência da loja. */
+function obsBlocoHtml(o){
+  const obs = (o.observacoes||[]).filter(x=> x && typeof x==='object').slice().sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0));
+  if(!obs.length) return '';
+  return `<div class="obs-av">${obs.map(ob=>{
+    const of = ob.origem==='oficina';
+    const txt = String(ob.descricao||'').replace(/^\[OFICINA\]\s*/,'');
+    const pode = window.RecadoCliente && o.telefone && (of || (ob.notificarPara||[]).length>0);
+    return `<div class="obs-av-i"><div class="obs-av-t"><b>${of?'Oficina':escapeHtml(ob.nome||'Observação')}</b> <span class="muted">${of?'· interno · ':'· '}${escapeHtml(dhAv(ob.criadoEm))}${ob.ciente?' · ciente '+escapeHtml(ob.cienteNome||''):''}</span></div><div>${escapeHtml(txt)}</div>${pode ? RecadoCliente.linhaHtml(o, ob) : ''}</div>`;
+  }).join('')}</div>`;
+}
+/** Contexto do recado para o cliente nesta tela: relê a via no servidor antes de gravar (não sobrescreve o que mudou enquanto a tela estava aberta). */
+function recadoCtxAv(){
+  const nomeLoja = id=>{ const l = (config.lojas||[]).find(x=>x.id===id); return l ? (l.nomeFantasia || l.nome) : ''; };
+  return {
+    senha: __gatewaySenha, nomeUsuario: (currentUser && (currentUser.apelido || currentUser.nome)) || '',
+    achar: (oid, obid)=>{ const order = __ordensAv.find(x=>x.id===oid); const ob = order && (order.observacoes||[]).find(x=>x.id===obid); return ob ? { order, ob } : null; },
+    gravar: async (oid, obid, recado)=>{
+      const r = await gatewayCall({ op:'selectOne', table:'ordens_servico', params:{ column:'id', value:oid } });
+      const row = r && r.data; if(!row || !row.payload) return false;
+      const o = row.payload; const ob = (o.observacoes||[]).find(x=>x.id===obid); if(!ob) return false;
+      if(recado) ob.recado = recado; else delete ob.recado;
+      const w = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:oid, payload:o, updated_at:new Date().toISOString() } } });
+      if(!w || w.error) return false;
+      const loc = __ordensAv.find(x=>x.id===oid); const lo = loc && (loc.observacoes||[]).find(x=>x.id===obid); if(lo){ if(recado) lo.recado = recado; else delete lo.recado; }
+      return true;
+    },
+    lojaNome: nomeLoja,
+    statusNome: o=> ({ pendencia:'PENDÊNCIA', em_producao:'EM PRODUÇÃO', enviado_fabrica:'ENVIADO P/ FÁBRICA', oficina_pronto:'LIBERADO FÁBRICA', pronto:'DISPONÍVEL PARA RETIRADA', aguardando:'APROVADO' }[o.status] || String(o.status||'').toUpperCase()),
+    aoMudar: ()=>{ render(__avisosAtuais); },
+  };
+}
 async function lerTabela(table){
   const r = await gatewayCall({ op:'selectAll', table });
   if(!r || r.error) return null; // sem permissão / erro: a seção simplesmente não aparece
@@ -214,6 +264,7 @@ async function calcularAvisos(){
   // ---------- CAIXA › Pedido/O.S. ----------
   let ordens = await lerTabela('ordens_servico');
   if(ordens){
+    __ordensAv = ordens;
     // 04/11: vendedora = gerente — vê os avisos de todas as vias das lojas dela (o servidor já manda só as lojas dela)
     const vencidas = ordens.filter(o=> o.status==='aguardando' && o.data && o.data < hoje)
       .sort((a,b)=> (a.data||'').localeCompare(b.data||''));
@@ -232,6 +283,7 @@ async function calcularAvisos(){
       sub: `${o.serviceTypeName||o.descricao||'Serviço'} · entrega prevista ${fmtDate(o.data)}${o.loja?' · '+o.loja:''}${o.vendedora?' · '+o.vendedora:''}`,
       falha: motivoPendencia(o) || 'Pendência sem motivo registrado — abra a via e confira a observação da Oficina.',
       tag: 'pendência', tagTipo:'danger',
+      extraFn: ()=> obsBlocoHtml(o),
       verVia: true,
       abrir:{ alvo:'os', registroId:o.id },
     }))});
@@ -342,6 +394,25 @@ async function calcularAvisos(){
     if(grupos.length) modulos.push({ nome:'CONFIGURAÇÕES', icone:'engrenagem', abas:[{ nome:'Departamento pessoal', icone:'usuarios', alvo:'dp', grupos }] });
   }
 
+  // ---------- AGENDA (18/11): compartilhamento recebido (24 h, com Ciente), tarefa de amanhã, de hoje e atrasadas ----------
+  try{
+    const ag = await agendaCall({ op:'avisos' });
+    if(ag && ag.ok && Array.isArray(ag.avisos) && ag.avisos.length){
+      const quando = a=> a.data ? `${fmtDate(a.data)}${a.hora?' às '+a.hora:''}` : 'sem data';
+      const item = (a, tag, tagTipo, subExtra)=>({
+        titulo: a.titulo, sub: `${subExtra||''}${subExtra?' · ':''}${a.tipo==='compartilhada'?'compartilhada':a.tipo==='loja'?'da loja':'sua'} · ${quando(a)}`, tag, tagTipo,
+        abrir:{ alvo:'agenda' }, ciente: a.kind==='compartilhada' ? { agenda:a.id } : null,
+      });
+      const grupos = [];
+      const comp = ag.avisos.filter(a=>a.kind==='compartilhada'), atras = ag.avisos.filter(a=>a.kind==='atrasada'), hojeA = ag.avisos.filter(a=>a.kind==='hoje'), amanhaA = ag.avisos.filter(a=>a.kind==='amanha');
+      if(comp.length) grupos.push({ titulo:'Você recebeu um compartilhamento de agenda', tipo:'wait', itens: comp.map(a=> item(a, 'novo compartilhamento', 'wait', `${a.de||'Alguém'} compartilhou com você`)) });
+      if(atras.length) grupos.push({ titulo:'Tarefas da agenda atrasadas', tipo:'danger', itens: atras.map(a=> item(a, plural(diasDesde(a.data)||0,'dia','dias')+' de atraso', 'danger')) });
+      if(hojeA.length) grupos.push({ titulo:'Tarefas da agenda para hoje', tipo:'wait', itens: hojeA.map(a=> item(a, 'hoje', 'wait')) });
+      if(amanhaA.length) grupos.push({ titulo:'Tarefas da agenda para amanhã', tipo:'info', itens: amanhaA.map(a=> item(a, 'amanhã', 'info')) });
+      if(grupos.length) modulos.push({ nome:'AGENDA', icone:'calendario', abas:[{ nome:'Agenda', icone:'calendario', alvo:'agenda', grupos }] });
+    }
+  }catch(e){ console.error('avisos da agenda', e); }
+
   // Junta abas do mesmo módulo (CAIXA aparece uma vez com Pedido e Orçamento dentro)
   const porModulo = [];
   modulos.forEach(m=>{
@@ -363,13 +434,14 @@ function contarPerigoAba(aba){ return aba.grupos.reduce((b,g)=> b + g.itens.filt
 function rotuloPerigo(aba){
   if(aba.alvo==='os') return 'com atraso';
   if(aba.alvo==='orcamentos') return 'vencidos';
+  if(aba.alvo==='agenda') return 'atrasadas';
   return 'urgentes';
 }
 function htmlItem(it, aba, escondido){
   const tipo = it.tagTipo || 'wait';
   const icoTag = tipo==='danger' ? ico('alerta') : (tipo==='wait' ? ico('relogio') : '');
   return `<div class="item"${escondido?' hidden':''} data-abrir='${escapeHtml(JSON.stringify(it.abrir||{alvo:aba.alvo}))}'>
-      <div class="txt"><b>${escapeHtml(it.titulo)}</b><span class="sub">${escapeHtml(it.sub||'')}</span>${it.falha?`<span class="sub falha">${ico('alerta')} ${escapeHtml(it.falha)}</span>`:''}</div>
+      <div class="txt"><b>${escapeHtml(it.titulo)}</b><span class="sub">${escapeHtml(it.sub||'')}</span>${it.falha?`<span class="sub falha">${ico('alerta')} ${escapeHtml(it.falha)}</span>`:''}${it.extraFn?it.extraFn():''}${it.ciente?`<button type="button" class="btn btn-sm item-ciente" data-agciente="${escapeHtml(it.ciente.agenda)}">${ico('check',{tam:14})} Ciente</button>`:''}</div>
       ${it.tag ? `<span class="tag tag-${tipo}">${icoTag}${escapeHtml(cap(it.tag))}</span>` : '<span></span>'}
       <button class="btn btn-sm item-ver" type="button" aria-label="Abrir ${escapeHtml(it.titulo)}"><span class="ver-txt">${it.verVia?'Ver via':'Ver'}</span>${ico('direita')}</button>
     </div>`;
@@ -444,6 +516,13 @@ function render(modulos){
     let alvo = {};
     try{ alvo = JSON.parse(b.dataset.abrir); }catch(e){}
     if(EMBEDDED) parent.postMessage({ type:'irParaModulo', modulo:'avisos', ...alvo }, '*');
+  }));
+  if(window.RecadoCliente) RecadoCliente.ligar(cont, recadoCtxAv());
+  cont.querySelectorAll('[data-agciente]').forEach(b=> b.addEventListener('click', async e=>{
+    e.stopPropagation(); b.disabled = true;
+    const r = await agendaCall({ op:'agendaCiente', id:b.dataset.agciente });
+    if(!r || !r.ok){ b.disabled = false; showToast((r && r.error) || 'Não foi possível dar o ciente. Tente de novo.'); return; }
+    showToast('Ciente registrado.'); carregar();
   }));
   cont.querySelectorAll('[data-mais]').forEach(b=> b.addEventListener('click', ()=>{
     const grupo = b.closest('.grupo');
