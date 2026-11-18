@@ -8,7 +8,7 @@
 (function(){
   var TABELA = { venda: 'vendas_pdv', pedido: 'ordens_servico', orcamento: 'orcamentos' };
   var ROT = { venda: 'Venda', pedido: 'Pedido', orcamento: 'Orçamento' };
-  var STATUS = { rascunho:'Rascunho', aguardando:'Aprovado', enviado_fabrica:'Enviado p/ fábrica', em_producao:'Em produção', pendencia:'Pendência', oficina_pronto:'Liberado fábrica', pronto:'Pronto', entregue:'Entregue', cancelado:'Cancelado', cancelada:'Cancelada' };
+  var STATUS = { rascunho:'Rascunho', aguardando:'Aprovado', enviado_fabrica:'Enviado p/ fábrica', em_producao:'Em produção', pendencia:'Pendência', oficina_pronto:'Liberado fábrica', pronto:'Disponível para retirada', entregue:'Entregue', cancelado:'Cancelado', cancelada:'Cancelada' };
   var cache = {}, cacheEm = {}, carregando = {};
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
   function dataBR(s){ var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + '/' + m[2] + '/' + m[1] : ''; }
