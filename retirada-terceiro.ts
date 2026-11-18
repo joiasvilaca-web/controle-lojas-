@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2.119.0";
 
 /**
  * Retirada da via na loja (v4, 09/11; 08/11: ação `achar` = busca a via pelo código do cliente).
