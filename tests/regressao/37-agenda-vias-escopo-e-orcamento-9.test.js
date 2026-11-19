@@ -8,19 +8,21 @@ module.exports = { casos: [
     t.ok(/escopo === "todas" && ehDiretoria \? todasIds : \(ehDiretoria && !minhasLojas\.length \? todasIds : minhasLojas\)/.test(s), 'só diretoria amplia para todas as lojas');
     t.ok((s.match(/\.in\("payload->>lojaId", lojasEsc\)/g) || []).length === 3, 'orçamentos, vendas e pedidos filtrados pela loja');
   } },
-  { nome: 'Tela: calendário tem seletor de escopo e cache separado da aba Minhas vias', bug: 'sem opção no calendário', rodar: async ({ t, ler }) => {
-    const a = ler('atendimento.html');
-    t.ok(/id="agEscopoVias"/.test(a) && /Em meu nome/.test(a) && /Da minha loja/.test(a) && /De todas as lojas/.test(a), 'seletor');
+  { nome: 'Tela: o módulo AGENDA (agenda.html) tem seletor de escopo das vias; a agenda do Pedido também', bug: 'seletor foi para a cópia errada da agenda', rodar: async ({ t, ler }) => {
+    const a = ler('agenda.html');
+    t.ok(/id="agEscopoVias"/.test(a) && /Em meu nome/.test(a) && /Da minha loja/.test(a) && /De todas as lojas/.test(a), 'seletor na Agenda');
     t.ok(/op:'minhasVias', escopo:e/.test(a) && /function agViasCal\(\)/.test(a), 'busca por escopo e cache à parte');
+    const p = ler('painel-ordens.html');
+    t.ok(/id="agEscopo"/.test(p) && /function ordensDaAgenda\(\)/.test(p) && (p.match(/ordensDaAgenda\(\)\.filter/g) || []).length === 2, 'agenda do Pedido filtra calendário e dia pelo escopo');
   } },
-  { nome: 'Pedido: orçamento só com produtos 9 pergunta se vira venda; com 8/serviço segue "É este"', bug: 'pedido oferecia transformar em pedido orçamento de produto de venda', rodar: async ({ t, ler }) => {
-    const src = ler('painel-ordens.html'); const m = src.match(/function orcamentoEhDeVenda\(o\)\{[\s\S]*?\n\}\n/);
-    t.ok(!!m, 'função existe'); const ctx = vm.createContext({}); vm.runInContext(m[0], ctx); const f = ctx.orcamentoEhDeVenda;
-    t.ok(f({ itens: [{ produto: '9001 ANEL' }] }) === true, 'só 9 → venda');
-    t.ok(f({ itens: [{ produto: '8001 ALIANCA' }] }) === false, 'só 8 → pedido');
-    t.ok(f({ itens: [{ produto: '9001 ANEL' }, { produto: '8001 ALIANCA' }] }) === false, 'misto → pedido');
-    t.ok(f({ itens: [{ produto: '9001 ANEL' }, { produto: 'SOLDA', tipoItem: 'servico' }] }) === false, 'com serviço → pedido');
-    t.ok(f({ itens: [] }) === false, 'sem itens → pedido');
-    t.ok(/data-virarvenda/.test(src) && /converterOrcamento:o\.id/.test(src) && /confirm\('Este orçamento tem produtos de venda/.test(src), 'botão pergunta e abre a Venda com o orçamento');
+  { nome: 'Aviso de orçamento em aberto: item 8/serviço só no Pedido, item 9 só na Venda; Orçamento novo sempre avisa', bug: 'aviso aparecia nos dois módulos / não aparecia no orçamento', rodar: async ({ t, ler }) => {
+    const mk = (src, nome) => { const m = src.match(new RegExp('function ' + nome + '\\(o\\)\\{[\\s\\S]*?\\n\\}\\n|function ' + nome + '\\(o\\)\\{[^\\n]*\\}\\n')); t.ok(!!m, nome + ' existe'); const c = vm.createContext({}); vm.runInContext(m[0], c); return c[nome]; };
+    const pe = mk(ler('painel-ordens.html'), 'orcamentoEhDePedido'), ve = mk(ler('vendas.html'), 'orcamentoEhDeVenda');
+    const o9 = { itens: [{ produto: '9001 ANEL' }] }, o8 = { itens: [{ produto: '8001 ALIANCA' }] }, om = { itens: [{ produto: '9001 ANEL' }, { produto: '8001 ALIANCA' }] };
+    t.ok(pe(o8) && !pe(o9) && pe(om), 'Pedido: 8 sim, 9 não, misto sim');
+    t.ok(ve(o9) && !ve(o8) && ve(om), 'Venda: 9 sim, 8 não, misto sim');
+    t.ok(!/data-virarvenda/.test(ler('painel-ordens.html')), 'sem botão de venda no Pedido');
+    const o = ler('orcamentos.html');
+    t.ok(/function avisarOrcamentosAbertosDoCliente\(/.test(o) && /avisarOrcamentosAbertosDoCliente\(c, /.test(o), 'Orçamento novo avisa os em aberto do cliente');
   } },
 ] };
