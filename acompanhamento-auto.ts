@@ -1,3 +1,4 @@
+// acompanhamento-auto v23 (22/11/2026): variáveis conforme o modelo ATIVO (meta_modelos.corpo); pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da loja (se o ativo tiver botao_dinamico); miolo igual ao disparo-cloud v9.
 // acompanhamento-auto v22 (22/11/2026): Reforma Joias (chip reformajoias) sai SEM o link wa.me da Vilaça e sem o pedido de 👍 (limpaTextoReforma, igual ao enviar-via v18); orçamento: "Aqui é <vendedora>."
 // acompanhamento-auto v21 (22/11/2026): miolo() do orçamento — links saem mas o texto do parágrafo fica (convite "o que podemos melhorar" do Recusado); "Aqui é <vendedora>, da <loja>." vira "Atendimento: <vendedora>." (loja não repete); sem emoji solto no início. supabase-js fixado em 2.119.0.
 // acompanhamento-auto v20 (12/11/2026): o aviso de PEDIDO PRONTO deixou de sair sozinho (so automatico se config.pedidoAcoes.prontoAuto === true; padrao desligado) - o aviso de pronto e MANUAL pelo botao do WhatsApp. Continuam automaticos: orcamentos (todos os status), pos-venda (venda e pedido entregue).
@@ -10,13 +11,14 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 const MIN_INI = 9 * 60, MIN_FIM = 19 * 60, MIN_FIM_ENVIO = 20 * 60, LIMITE_MS = 50000, PISO_SEG_MS = 5 * 60000, FALHAS_PARA_PAUSAR = 3;
 const WA_ATENDIMENTO = "https://wa.me/5532988307617";
 const NL = String.fromCharCode(10);
-let MAPA_MOD: Record<string, { nome: string; categoria: string }> | null = null, MAPA_EM = 0;
+let MAPA_MOD: Record<string, { nome: string; categoria: string; nVars: number; botao: boolean }> | null = null, MAPA_EM = 0;
+const nVarsDe = (corpo: string) => new Set(String(corpo || "").match(/\{\{\s*\d+\s*\}\}/g) || []).size;
 const CHAVE_DO_NOME: Record<string, string> = { orcamento_acompanhamento: "orcamento", pos_venda_garantia: "posvenda", pedido_pronto_acompanhamento: "pedido_pronto" };
 let ULTIMO_MODELO: { modelo: string; categoria: string } | null = null;
-async function modeloAtivo(nome: string): Promise<{ nome: string; categoria: string }> {
+async function modeloAtivo(nome: string): Promise<{ nome: string; categoria: string; nVars?: number; botao?: boolean }> {
   if (!MAPA_MOD || Date.now() - MAPA_EM > 60000) {
     MAPA_MOD = {}; MAPA_EM = Date.now();
-    try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria"); for (const m of data || []) MAPA_MOD[m.chave] = { nome: m.nome_template, categoria: m.categoria }; } catch (_) {}
+    try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria,corpo,botao_dinamico"); for (const m of data || []) MAPA_MOD[m.chave] = { nome: m.nome_template, categoria: m.categoria, nVars: nVarsDe(m.corpo), botao: !!m.botao_dinamico }; } catch (_) {}
   }
   const a = MAPA_MOD[CHAVE_DO_NOME[nome] || ""];
   return a ? a : { nome, categoria: "" };
@@ -119,14 +121,17 @@ async function oficialFlags(): Promise<{ tudo: boolean; orc: boolean; pronto: bo
   } catch (_) {}
   return f;
 }
-async function enviaModelo(tel: string, nome: string, params: string[]): Promise<{ ok: boolean; status: number }> {
+async function enviaModelo(tel: string, nome: string, params: string[], botao?: string): Promise<{ ok: boolean; status: number }> {
   const tk = Deno.env.get("WHATSAPP_CLOUD_TOKEN"), pid = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   const limpa = (t: string) => String(t || "").split(NL).join(" ").split("\t").join(" ").split("    ").join(" ").split("   ").join(" ").split("  ").join(" ").trim().slice(0, 900);
   const at = await modeloAtivo(nome);
   ULTIMO_MODELO = { modelo: at.nome, categoria: at.categoria };
   try {
     const r = await fetch(`https://graph.facebook.com/v21.0/${pid}/messages`, { method: "POST", headers: { Authorization: `Bearer ${tk}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ messaging_product: "whatsapp", to: tel, type: "template", template: { name: at.nome, language: { code: "pt_BR" }, components: [{ type: "body", parameters: params.map((x) => ({ type: "text", text: limpa(x) || "-" })) }] } }), signal: AbortSignal.timeout(15000) });
+      // v23: só as variáveis do modelo ATIVO; botão com link variável só se o ativo tiver
+      body: JSON.stringify({ messaging_product: "whatsapp", to: tel, type: "template", template: { name: at.nome, language: { code: "pt_BR" }, components: [
+        { type: "body", parameters: (at.nVars ? params.slice(0, at.nVars) : params).map((x) => ({ type: "text", text: limpa(x) || "-" })) },
+        ...(at.botao && botao ? [{ type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: botao }] }] : [])] } }), signal: AbortSignal.timeout(15000) });
     const j: any = await r.json().catch(() => ({}));
     return { ok: r.ok && !!(j && j.messages && j.messages[0]), status: r.status };
   } catch (_) { return { ok: false, status: 0 }; }
@@ -136,9 +141,10 @@ function miolo(texto: string): string {
   // "Aqui é <vendedora>, da <loja>." vira "Aqui é <vendedora>." (o modelo já diz "Aqui é da <loja>": a loja saía duas vezes); emoji solto no começo sai.
   const paras = String(texto || "").split(NL + NL)
     .map((p) => p.replace(/https?:[/][/]\S+/g, "").replace(/[ \t]+$/gm, "").trim())
-    .filter((p) => p && !/Para falar com a gente/i.test(p) && !/Responda com/i.test(p) && !/responda SAIR/i.test(p) && !/Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco)/i.test(p));
+    .map((p) => p.replace(/\bwww[.]\S+/gi, "").trim())
+    .filter((p) => p && !/Para falar com a gente/i.test(p) && !/Responda com/i.test(p) && !/responda SAIR/i.test(p) && !/Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco|N[ãa]o responda|Atenciosamente|Equipe Vila[çc]a)/i.test(p));
   let s = paras.join(" ").split(NL).join(" ").replace(/\s+/g, " ").trim();
-  s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, "").replace(/^[^\p{L}\p{N}*]+/u, "").replace(/Aqui [eé] da [^.]+[.] ?/i, "")
+  s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, "").replace(/^Feliz anivers[aá]rio[^!]*! ?/i, "").replace(/^[^\p{L}\p{N}*]+/u, "").replace(/Aqui [eé] da [^.]+[.] ?/i, "")
     .replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, "Aqui é $1. ");
   return s.replace(/\s+/g, " ").trim().slice(0, 900);
 }
@@ -395,8 +401,10 @@ Deno.serve(async (req: Request) => {
     const INST_D = await instanciaDisparo();
     const instanciaDe = (lojaId: string) => (lojaId === "loja_rj" ? "reformajoias" : INST_D);
     const nuvem = (it: Item) => FL.tudo && instanciaDe(String(it.reg.lojaId || "")) === INST_D && (it.tipo === "posvenda" || it.tipo === "os_posvenda" || (it.tipo === "orcamento" && FL.orc) || (it.tipo === "os_pronto" && FL.pronto));
-    const modeloRobot = (it: Item, reg: any): { nome: string; params: string[] } | null => {
-      if (it.tipo === "posvenda" || it.tipo === "os_posvenda") return { nome: "pos_venda_garantia", params: [primeiroNome(reg.cliente)] };
+    const reviewDe = (lojaId: string) => { const l = (cfg.lojas || []).find((x: any) => x && x.id === lojaId) || (cfg.lojas || []).find((x: any) => x && x.id === "loja_mc"); const g = String((l && l.googleReviewUrl) || "").match(/g[.]page[/]r[/](.+)$/); return g ? g[1] : ""; };
+    const modeloRobot = (it: Item, reg: any): { nome: string; params: string[]; botao?: string } | null => {
+      // v23: {{2}} = texto do pós-venda (só vai se o modelo ativo tiver {{2}}) e botão Google da loja
+      if (it.tipo === "posvenda" || it.tipo === "os_posvenda") return { nome: "pos_venda_garantia", params: [primeiroNome(reg.cliente), miolo(it.texto) || "Queremos agradecer a oportunidade de fazer parte de um momento especial com a sua nova joia."], botao: reviewDe(String(reg.lojaId || "")) };
       if (it.tipo === "orcamento") return { nome: "orcamento_acompanhamento", params: [primeiroNome(reg.cliente), nomeDaLoja(cfg, reg), miolo(it.texto) || "Passando para saber se ficou alguma dúvida sobre o seu orçamento.", linkOrc(it.id)] };
       if (it.tipo === "os_pronto") return { nome: "pedido_pronto_acompanhamento", params: [primeiroNome(reg.cliente), bonito(reg.vendedora || "") || "nossa equipe", nomeDaLoja(cfg, reg), `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(it.id)}`] };
       return null;
@@ -490,7 +498,7 @@ Deno.serve(async (req: Request) => {
       if (!motivoSem) {
         if (viaNuvem) {
           const m = modeloRobot(f, reg);
-          if (m) { const rc = await enviaModelo(String(f.tel), m.nome, m.params); ok = rc.ok; status = rc.status; }
+          if (m) { const rc = await enviaModelo(String(f.tel), m.nome, m.params, m.botao); ok = rc.ok; status = rc.status; }
           await espera(1100);
         } else {
           try {

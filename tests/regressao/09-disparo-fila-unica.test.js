@@ -76,7 +76,10 @@ module.exports = { casos: [
     const a = pegar('acompanhamento-auto.ts', ['WA_ATENDIMENTO', 'RODAPE', 'MSG_POSVENDA_PADRAO', 'MSG_OS_POSVENDA']);
     t.ok(!/\{avaliacao\}/.test(a.MSG_POSVENDA_PADRAO) && !/\{avaliacao\}/.test(a.MSG_OS_POSVENDA), 'textos padrão sem avaliação');
     const aa = ler('acompanhamento-auto.ts');
-    t.ok(!/googleReviewUrl/.test(aa), 'servidor não põe o link do Google no pós-venda');
+    // 22/11: o link do Google NÃO entra no TEXTO do pós-venda; só pode aparecer na função do BOTÃO "Avaliar no Google" do modelo (reviewDe → botao), que já existia fixo
+    const semBotao = aa.split('\n').filter((l) => !/const reviewDe = /.test(l)).join('\n');
+    t.ok(!/googleReviewUrl/.test(semBotao), 'servidor não põe o link do Google no texto do pós-venda');
+    t.ok((aa.match(/reviewDe\(/g) || []).length === 1 && /botao: reviewDe\(/.test(aa), 'link da loja só vai para o botão do modelo');
     t.ok(!/googleReviewUrl/.test(ler('vendas.html').slice(ler('vendas.html').indexOf('function preencherMsgPv'), ler('vendas.html').indexOf('function preencherMsgPv') + 1500)), 'Venda: sem link de avaliação');
     const po = ler('painel-ordens.html'), i = po.indexOf('function enviarPosVendaOS');
     t.ok(i > 0 && !/googleReviewUrl/.test(po.slice(i, i + 2500)), 'Pedido: sem link de avaliação');

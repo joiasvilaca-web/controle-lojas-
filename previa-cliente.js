@@ -11,9 +11,10 @@
   /* igual ao miolo() do servidor: tira saudação, parágrafos com link e as frases fixas, e junta numa linha */
   function miolo(t){   // 22/11: igual ao miolo() do servidor (disparo-cloud v8 / acompanhamento-auto v22)
     var ps = String(t || '').split(/\n\n/).map(function(p){ return p.replace(/https?:\/\/\S+/g, '').replace(/[ \t]+$/gm, '').trim(); })
-      .filter(function(p){ return p && !/Para falar com a gente|Responda com|responda SAIR|Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco)/i.test(p); });
+      .map(function(p){ return p.replace(/\bwww[.]\S+/gi, '').trim(); })
+      .filter(function(p){ return p && !/Para falar com a gente|Responda com|responda SAIR|Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco|N[ãa]o responda|Atenciosamente|Equipe Vila[çc]a)/i.test(p); });
     var s = ps.join(' ').replace(/\s+/g, ' ').trim();
-    s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, '').replace(/^[^\p{L}\p{N}*]+/u, '').replace(/Aqui [eé] da [^.]+[.] ?/i, '').replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, 'Aqui é $1. ');
+    s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, '').replace(/^Feliz anivers[aá]rio[^!]*! ?/i, '').replace(/^[^\p{L}\p{N}*]+/u, '').replace(/Aqui [eé] da [^.]+[.] ?/i, '').replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, 'Aqui é $1. ');
     return limpa(s);
   }
 
@@ -89,9 +90,9 @@
       viaModelo('Pedido', 'Retirada — "Reenviar link ao cliente"', 'Só pelo botão na tela de retirada.', 'os');
       // PÓS-VENDA / ANIVERSÁRIO
       var mdPv = corpoDe(modelos, 'posvenda');
-      if(mdPv) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda.', modelo: mdPv, texto: preencherModelo(mdPv.corpo, [nome1]), pagina:'' });
+      if(mdPv) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda.', modelo: mdPv, texto: preencherModelo(mdPv.corpo, [nome1, miolo(String((cfg.posVendaAuto && cfg.posVendaAuto.mensagem) || '').replace(/\{cliente\}/g, nome1).replace(/\{avaliacao\}/g, '').replace(/\{loja\}/g, loja))]), pagina:'' });
       var mdAn = corpoDe(modelos, 'aniversario');
-      if(mdAn) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante.', modelo: mdAn, texto: preencherModelo(mdAn.corpo, [nome1]), pagina:'' });
+      if(mdAn) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante.', modelo: mdAn, texto: preencherModelo(mdAn.corpo, [nome1, miolo(String((cfg.mensagens && cfg.mensagens.aniversario) || '').replace(/\{cliente\}/g, nome1))]), pagina:'' });
       // CHAMAR CLIENTE / RECADO
       var mdCh = corpoDe(modelos, 'chamar_cliente');
       if(mdCh){
