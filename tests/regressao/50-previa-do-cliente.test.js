@@ -10,7 +10,7 @@ module.exports = { casos: [
   } },
   { nome: 'Tela e páginas de exemplo', bug: 'sem prévia do card do link', rodar: async ({ t, ler }) => {
     const m = ler('modelos-whatsapp.html');
-    t.ok(/data-aba="previa"/.test(m) && /PreviaCliente\.montar\(box, \{ modelos, config: cfg \}\)/.test(m), 'aba O que o cliente recebe');
+    t.ok(/data-aba="previa"/.test(m) && /PreviaCliente\.montar\(box, \{ modelos, config: cfg[ ,}]/.test(m), 'aba O que o cliente recebe');
     const v = ler('via.html'), a = ler('acompanhar.html');
     t.ok(/const demo = p\.get\("demo"\);/.test(v) && /Página de EXEMPLO/.test(v), 'via.html tem página de exemplo');
     t.ok(/new URLSearchParams\(location\.search\)\.get\("demo"\)/.test(a) && /Página de EXEMPLO/.test(a), 'acompanhar.html tem página de exemplo');

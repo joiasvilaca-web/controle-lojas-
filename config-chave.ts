@@ -1,11 +1,12 @@
+// config-chave v2 (22/11/2026): aceita também a chave "mensagens"; supabase-js fixado em 2.119.0.
 // config-chave v1 (10/11/2026) — grava UMA chave da config (gestao_config) com sessão válida de Diretoria/Gerente.
 // Existe porque o mergeConfigKey do db-gateway só aceita gastosConfig e metasMensais. Usa a função SQL atômica cfg_set_chave (só mexe na chave).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2.119.0";
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
-const CHAVES = new Set(["posVendaAuto", "orcamentoAcoes", "orcamentoAutoMsgConfig", "statusOrcamento", "pedidoAcoes"]);
+const CHAVES = new Set(["posVendaAuto", "orcamentoAcoes", "orcamentoAutoMsgConfig", "statusOrcamento", "pedidoAcoes", "mensagens"]);   // v2 (22/11): + mensagens (texto do aniversário etc., editado em Modelos WhatsApp › Mensagens)
 function sessaoValida(u: any, senha: string): boolean {
   if (!u || !senha || typeof senha !== "string" || !senha.startsWith("sess_") || u.bloqueado) return false;
   const agora = Date.now();

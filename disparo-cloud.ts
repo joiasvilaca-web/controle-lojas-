@@ -1,3 +1,4 @@
+// disparo-cloud v10 (22/11/2026): aniversário com o botão "Abrir meu cartão" (link variável = primeiro nome → cartao-aniversario.html?n=Nome; só vai se o modelo ativo tiver o botão).
 // disparo-cloud v9 (22/11/2026): número de variáveis = o do modelo ATIVO (meta_modelos.corpo) — permite versão nova com variável a mais sem quebrar enquanto a Meta analisa; pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da LOJA (se o ativo tiver botao_dinamico); aniversário {{2}} = texto do Marketing; miolo também tira "Feliz aniversário X!", "Não responda…", "Atenciosamente", "Equipe Vilaça Joias" e www.
 // disparo-cloud v8 (22/11/2026): pedido DISPONÍVEL PARA RETIRADA pelo botão usa o modelo pedido_pronto; aniversário enviado um por um (ícone) usa o modelo de aniversário (antes falhava);
 //   reserva/retirada/link sem "Atendimento:" usam a vendedora e o NOME PÚBLICO da loja da fila (antes "nossa equipe" / "VILAÇA JOIAS"); nome do cliente sempre com 1ª maiúscula; orçamento: "Aqui é <vendedora>."
@@ -50,11 +51,11 @@ function modelo(item: any, orcOn: boolean): { chave: string; name: string; param
   if (item.tipo === "aniversario") {
     const m = flat.match(/anivers[aá]rio, ([^!]+)!/i);
     const nome = limpa(m ? m[1] : primeiro) || "cliente";
-    return { chave: "aniversario", name: "aniversario_vilaca", params: [nome, miolo(item.texto) || "Desejamos a você um dia muito especial e cheio de alegria."] };   // v9: {{2}} = texto do Marketing (só se o modelo ativo tiver {{2}})
+    return { chave: "aniversario", name: "aniversario_vilaca", params: [nome, miolo(item.texto) || "Desejamos a você um dia muito especial e cheio de alegria."], botao: encodeURIComponent(nome === "cliente" ? "" : nome) || "-" };   // sem nome: o cartão fica "para você!"   // v9: {{2}} = texto do Marketing (só se o modelo ativo tiver {{2}})
   }
   const n = flat.match(/Ol[aá], ([^!]+)!/);
   const nome = bonito(limpa(n ? n[1] : primeiro).split(" ")[0]) || "cliente";   // v8: "MARIA" -> "Maria"
-  if (item.tipo === "via" && item.registro_tabela === "aniversario") return { chave: "aniversario", name: "aniversario_vilaca", params: [primeiro || nome, miolo(item.texto) || "Desejamos a você um dia muito especial e cheio de alegria."] };   // v8: ícone individual
+  if (item.tipo === "via" && item.registro_tabela === "aniversario") return { chave: "aniversario", name: "aniversario_vilaca", params: [primeiro || nome, miolo(item.texto) || "Desejamos a você um dia muito especial e cheio de alegria."], botao: encodeURIComponent(primeiro || (nome === "cliente" ? "" : nome)) || "-" };   // v8: ícone individual
   if (item.tipo === "campanha") {
     const corpo = miolo(item.texto);
     return corpo ? { chave: "campanha", name: "campanha_vilaca", params: [nome, corpo] } : null;

@@ -61,7 +61,7 @@
   <p class="page-sub">Um modelo para cada lugar do app que manda mensagem. Edite o texto e envie para a Meta aprovar. Enquanto a Meta analisa, o modelo atual continua valendo; quando aprova, o app passa a usar o novo sozinho. Só a Diretoria vê esta tela.</p>
   <div class="abas">
     <button class="aba on" data-aba="modelos" type="button">Modelos</button>
-    <button class="aba" data-aba="previa" type="button">O que o cliente recebe</button>
+    <button class="aba" data-aba="previa" type="button">Mensagens (ver e editar)</button>
     <button class="aba" data-aba="custos" type="button">Custos da Meta</button>
   </div>
   <div id="abaModelos"></div>
@@ -258,6 +258,26 @@ function csv(){
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'})); a.download = 'custos-meta.csv'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500);
 }
 
+/* 22/11: grava UM texto de mensagem na config (servidor config-chave: só aquela chave; lê a config de novo antes, para não apagar mudança de outra pessoa). */
+async function lerConfig(){ const r = await fetch(SUPABASE_URL + '/functions/v1/db-gateway', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __senha, op:'getConfig' }) }); const j = await r.json(); return j && j.data; }
+async function salvarTextoMensagem(edit, texto){
+  const cfg = await lerConfig(); if(!cfg) return { error:'Não consegui ler a configuração. Confira a internet.' };
+  let key = '', value = null;
+  if(edit.tipo === 'status'){
+    const arr = JSON.parse(JSON.stringify(cfg.statusOrcamento || [])); const st = arr.find(x=>x.id===edit.statusId);
+    if(!st) return { error:'Status não encontrado (pode ter sido apagado).' };
+    if(edit.desconto && st.descontoEspecial) st.descontoEspecial.mensagemWhatsapp = texto; else st.mensagemWhatsapp = texto;
+    key = 'statusOrcamento'; value = arr;
+  } else if(edit.tipo === 'posVendaAuto'){ key = 'posVendaAuto'; value = Object.assign({}, cfg.posVendaAuto || {}, { mensagem: texto }); }
+  else if(edit.tipo === 'aniversario'){ key = 'mensagens'; value = Object.assign({}, cfg.mensagens || {}, { aniversario: texto }); }
+  else return { error:'Tipo de texto desconhecido.' };
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/config-chave', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __senha, key, value }) });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok || !j.ok) return { error: (j && j.error) || ('erro ' + r.status) };
+    cfg[key] = value; return { ok:true, config: cfg };
+  }catch(e){ return { error:'Sem conexão.' }; }
+}
 /* 22/11: aba "O que o cliente recebe" — prévia de todas as mensagens ao cliente e do card do link (previa-cliente.js). */
 async function abrirPrevia(){
   const box = $('abaPrevia'); box.innerHTML = '<div class="card muted">Carregando…</div>';
@@ -265,7 +285,7 @@ async function abrirPrevia(){
   let cfg = null;
   try{ const r = await fetch(SUPABASE_URL + '/functions/v1/db-gateway', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __senha, op:'getConfig' }) }); const j = await r.json(); cfg = j && j.data; }catch(e){}
   if(!cfg){ box.innerHTML = '<div class="card"><b>Não foi possível carregar a configuração.</b><div class="muted small">Confira a internet e abra a aba de novo.</div></div>'; return; }
-  if(window.PreviaCliente) PreviaCliente.montar(box, { modelos, config: cfg });
+  if(window.PreviaCliente) PreviaCliente.montar(box, { modelos, config: cfg, salvar: salvarTextoMensagem });
 }
 function iniciar(){
   document.querySelectorAll('.aba').forEach(b=> b.addEventListener('click', ()=>{

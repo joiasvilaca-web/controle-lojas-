@@ -21,7 +21,12 @@
   function brl(v){ return 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits:2, maximumFractionDigits:2 }); }
   function hojeMais(d){ var x = new Date(); x.setDate(x.getDate() + d); return x.toLocaleDateString('pt-BR'); }
   function wa(t){ return esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/_([^_\n]+)_/g, '<i>$1</i>').replace(/(https?:\/\/[^\s<]+)/g, '<span class="pc-link">$1</span>').replace(/\n/g, '<br>'); }
-  function corpoDe(modelos, chave){ var m = (modelos || []).find(function(x){ return x.chave === chave; }); return m ? { corpo: m.corpo || '', nome: m.nome_template || chave, rodape: chave === 'posvenda' ? 'Equipe Vilaça Joias' : 'Vilaça Joias', botao: chave === 'posvenda' ? 'Avaliar no Google' : '' } : null; }
+  function corpoDe(modelos, chave){
+    var m = (modelos || []).find(function(x){ return x.chave === chave; }); if(!m) return null;
+    var ex = Array.isArray(m.extras) ? m.extras : [], rod = ex.find(function(c){ return c.type === 'FOOTER'; }), bt = ex.find(function(c){ return c.type === 'BUTTONS'; });
+    var botaoAtivo = m.botao_dinamico || !bt || !/\{\{/.test(String((bt.buttons && bt.buttons[0] && bt.buttons[0].url) || ''));   // botão novo (com link variável) só aparece depois de aprovado
+    return { corpo: m.corpo || '', nome: m.nome_template || chave, rodape: rod ? rod.text : 'Vilaça Joias', botao: bt && bt.buttons && bt.buttons[0] && (botaoAtivo || chave === 'posvenda') ? bt.buttons[0].text : (chave === 'posvenda' ? 'Avaliar no Google' : '') };
+  }
   function preencherModelo(corpo, vars){ return String(corpo || '').replace(/\{\{\s*(\d+)\s*\}\}/g, function(_m, n){ var v = vars[Number(n) - 1]; return v == null || v === '' ? '…' : v; }); }
   var PAGINAS = {
     venda:   { url:'via.html?t=venda&id=EXEMPLO', demo:'via.html?demo=venda', titulo:'Sua via — Vilaça Joias', img:'logo-vilaca.webp?v=6' },
@@ -58,26 +63,30 @@
       var STs = Array.isArray(cfg.statusOrcamento) ? cfg.statusOrcamento : [];
       var passos = (cfg.orcamentoAcoes && Array.isArray(cfg.orcamentoAcoes.passos)) ? cfg.orcamentoAcoes.passos : [];
       var mdOrc = corpoDe(modelos, 'orcamento');
-      function textoStatus(st){
-        if(!st) return '';
-        var de = st.descontoEspecial && st.descontoEspecial.ativo ? st.descontoEspecial : null;
-        var t = (de && de.mensagemWhatsapp) || st.mensagemWhatsapp || '';
-        var pct = de ? Number(de.percentual) || 0 : 0;
-        return t.replace(/\{cliente\}/g, nome1).replace(/\{vendedora\}/g, vendCompleta).replace(/\{loja\}/g, loja).replace(/\{valor\}/g, valor).replace(/\{validade\}/g, validade)
+      function deDe(st){ return st && st.descontoEspecial && st.descontoEspecial.ativo && st.descontoEspecial.mensagemWhatsapp ? st.descontoEspecial : null; }
+      function cruStatus(st){ if(!st) return ''; var de = deDe(st); return (de && de.mensagemWhatsapp) || st.mensagemWhatsapp || ''; }
+      function preencheStatus(st, t){ var de = deDe(st), pct = de ? Number(de.percentual) || 0 : 0;
+        return String(t || '').replace(/\{cliente\}/g, nome1).replace(/\{vendedora\}/g, vendCompleta).replace(/\{loja\}/g, loja).replace(/\{valor\}/g, valor).replace(/\{validade\}/g, validade)
           .replace(/\{desconto\}/g, pct + '%').replace(/\{valorDesconto\}/g, brl(estado.valor * (1 - pct / 100))).replace(/\{link\}/g, base() + PAGINAS.orc.url);
+      }
+      function textoStatus(st){ return preencheStatus(st, cruStatus(st)); }
+      function itemOrc(st, extra){
+        var gerar = function(cru){ return preencherModelo(mdOrc.corpo, [nome1, loja, miolo(preencheStatus(st, cru)), base() + PAGINAS.orc.url]); };
+        return Object.assign({ grupo:'Orçamento', modelo: mdOrc, texto: gerar(cruStatus(st)), original: textoStatus(st), gerar: gerar,
+          edit: st ? { tipo:'status', statusId: st.id, desconto: !!deDe(st), valor: cruStatus(st), vars:'{cliente} {vendedora} {loja} {valor} {validade} {link}' + (deDe(st) ? ' {desconto} {valorDesconto}' : '') } : null }, extra);
       }
       if(mdOrc){
         var vistos = {};
         passos.forEach(function(p){
-          var st = STs.find(function(s){ return s.id === p.statusId; }); var tx = p.mensagem || textoStatus(st); vistos[p.statusId] = 1;
-          if(!tx) return;
-          lista.push({ grupo:'Orçamento', titulo:'Orçamento — ' + (p.nome || (st && st.nome) || p.statusId) + (Number(p.dias) ? ' (dia ' + p.dias + ')' : ' (ao salvar, na hora)'),
+          var st = STs.find(function(s){ return s.id === p.statusId; }); vistos[p.statusId] = 1;
+          if(!st || (!cruStatus(st) && !p.mensagem)) return;
+          lista.push(itemOrc(st, { titulo:'Orçamento — ' + (p.nome || (st && st.nome) || p.statusId) + (Number(p.dias) ? ' (dia ' + p.dias + ')' : ' (ao salvar, na hora)'),
             quando: Number(p.dias) ? 'Automático, ' + p.dias + ' dias depois (9h–20h), se o orçamento continuar aberto. Também sai se alguém mudar para este status na mão.' : 'Automático logo depois de salvar o orçamento.',
-            modelo: mdOrc, texto: preencherModelo(mdOrc.corpo, [nome1, loja, miolo(tx), base() + PAGINAS.orc.url]), pagina: p.statusId === 'recusado' ? 'orcRec' : 'orc', original: tx });
+            pagina: p.statusId === 'recusado' ? 'orcRec' : 'orc' }));
         });
         STs.forEach(function(st){
-          if(vistos[st.id] || st.encerra) return; var tx = textoStatus(st); if(!tx) return;
-          lista.push({ grupo:'Orçamento', titulo:'Orçamento — mudar para "' + (st.nome || st.id) + '"', quando:'Só quando alguém muda o status na mão.', modelo: mdOrc, texto: preencherModelo(mdOrc.corpo, [nome1, loja, miolo(tx), base() + PAGINAS.orc.url]), pagina:'orc', original: tx });
+          if(vistos[st.id] || st.encerra || !cruStatus(st)) return;
+          lista.push(itemOrc(st, { titulo:'Orçamento — mudar para "' + (st.nome || st.id) + '"', quando:'Só quando alguém muda o status na mão.', pagina:'orc' }));
         });
       }
       if(mdOrc){
@@ -90,9 +99,13 @@
       viaModelo('Pedido', 'Retirada — "Reenviar link ao cliente"', 'Só pelo botão na tela de retirada.', 'os');
       // PÓS-VENDA / ANIVERSÁRIO
       var mdPv = corpoDe(modelos, 'posvenda');
-      if(mdPv) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda.', modelo: mdPv, texto: preencherModelo(mdPv.corpo, [nome1, miolo(String((cfg.posVendaAuto && cfg.posVendaAuto.mensagem) || '').replace(/\{cliente\}/g, nome1).replace(/\{avaliacao\}/g, '').replace(/\{loja\}/g, loja))]), pagina:'' });
+      if(mdPv){ var gPv = function(cru){ return preencherModelo(mdPv.corpo, [nome1, miolo(String(cru || '').replace(/\{cliente\}/g, nome1).replace(/\{avaliacao\}/g, '').replace(/\{loja\}/g, loja))]); }, crPv = (cfg.posVendaAuto && cfg.posVendaAuto.mensagem) || '';
+        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda. O texto abaixo entra no lugar do {{2}} quando o modelo novo estiver aprovado.', modelo: mdPv, texto: gPv(crPv), gerar: gPv, pagina:'',
+          edit: { tipo:'posVendaAuto', valor: crPv, vars:'{cliente} {loja}' } }); }
       var mdAn = corpoDe(modelos, 'aniversario');
-      if(mdAn) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante.', modelo: mdAn, texto: preencherModelo(mdAn.corpo, [nome1, miolo(String((cfg.mensagens && cfg.mensagens.aniversario) || '').replace(/\{cliente\}/g, nome1))]), pagina:'' });
+      if(mdAn){ var gAn = function(cru){ return preencherModelo(mdAn.corpo, [nome1, miolo(String(cru || '').replace(/\{cliente\}/g, nome1))]); }, crAn = (cfg.mensagens && cfg.mensagens.aniversario) || '';
+        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário (com o cartão)', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante. O texto abaixo entra no lugar do {{2}} e o botão “Abrir meu cartão” aparece quando o modelo novo estiver aprovado.', modelo: mdAn, texto: gAn(crAn), gerar: gAn, pagina:'',
+          cartao: 'cartao-aniversario.html?n=' + encodeURIComponent(nome1), edit: { tipo:'aniversario', valor: crAn, vars:'{cliente}' } }); }
       // CHAMAR CLIENTE / RECADO
       var mdCh = corpoDe(modelos, 'chamar_cliente');
       if(mdCh){
@@ -114,16 +127,28 @@
     function desenhar(){
       var lista = envios(), grupos = [];
       lista.forEach(function(e){ if(grupos.indexOf(e.grupo) < 0) grupos.push(e.grupo); });
-      el.innerHTML = '<div class="card"><p class="small muted" style="margin:0 0 10px;">Exatamente o que chega no WhatsApp do cliente hoje, montado com o modelo ATIVO da Meta e os textos configurados, com dados de exemplo. Toque em “Ver a página do link” para abrir a página que o cliente vê (exemplo, sem dados reais).</p>'
+      el.innerHTML = '<div class="card"><p class="small muted" style="margin:0 0 10px;">Todas as mensagens que vão para o cliente, num só lugar: o que chega no WhatsApp (modelo ATIVO da Meta + o seu texto), com dados de exemplo. Onde houver “Texto que você escreve”, edite e toque em <b>Salvar texto</b> — a prévia muda na hora. “Ver a página do link” abre a página que o cliente vê (exemplo, sem dados reais).</p>'
         + '<div class="pc-filtros"><label>Loja <select id="pcLoja">' + lojas.map(function(l){ return '<option value="' + esc(l.id) + '"' + (l.id === estado.loja ? ' selected' : '') + '>' + esc(l.nome || l.id) + '</option>'; }).join('') + '</select></label>'
         + '<label>Cliente <input id="pcCli" value="' + esc(estado.cliente) + '"></label><label>Vendedora <input id="pcVend" value="' + esc(estado.vendedora) + '"></label><label>Valor <input id="pcValor" inputmode="decimal" value="' + esc(String(estado.valor).replace('.', ',')) + '"></label></div></div>'
-        + grupos.map(function(g){ return '<h3 class="pc-grupo">' + esc(g) + '</h3>' + lista.filter(function(e){ return e.grupo === g; }).map(function(e, i){
+        + grupos.map(function(g){ return '<h3 class="pc-grupo">' + esc(g) + '</h3>' + lista.filter(function(e){ return e.grupo === g; }).map(function(e){
+          var i = lista.indexOf(e);
           return '<div class="card pc-item"><div class="pc-cab"><b>' + esc(e.titulo) + '</b><span class="selo cinza" title="Modelo usado">' + esc(e.modelo.nome) + '</span></div><p class="small muted" style="margin:4px 0 10px;">' + esc(e.quando) + '</p>'
-            + '<div class="pc-fundo"><div class="pc-balao">' + (e.pagina ? cardHtml(e.pagina) : '') + '<div>' + wa(e.texto) + '</div>' + (e.modelo.rodape ? '<div class="pc-rodape">' + esc(e.modelo.rodape) + '</div>' : '') + '<div class="pc-hora">' + new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) + '</div>'
+            + (e.edit ? '<div class="pc-ed"><label for="pcEd' + i + '">Texto que você escreve <span class="muted">(variáveis: ' + esc(e.edit.vars) + ')</span></label><textarea id="pcEd' + i + '" data-ed="' + i + '" rows="5">' + esc(e.edit.valor) + '</textarea>'
+                + '<div class="pc-ed-acoes"><button class="btn btn-accent btn-sm" type="button" data-salvar="' + i + '">Salvar texto</button><span class="small muted" data-st="' + i + '"></span></div></div>'
+              : (e.modelo.nome && !/livre|sugestão/.test(e.modelo.nome) ? '<p class="small muted" style="margin:0 0 8px;">Texto fixo do modelo da Meta. Para mudar: aba Modelos.</p>' : ''))
+            + '<div class="pc-fundo"><div class="pc-balao">' + (e.pagina ? cardHtml(e.pagina) : '') + '<div data-bal="' + i + '">' + wa(e.texto) + '</div>' + (e.modelo.rodape ? '<div class="pc-rodape">' + esc(e.modelo.rodape) + '</div>' : '') + '<div class="pc-hora">' + new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) + '</div>'
             + (e.modelo.botao ? '<div class="pc-botao">↗ ' + esc(e.modelo.botao) + '</div>' : '') + '</div></div>'
             + (e.original ? '<details class="small" style="margin-top:8px;"><summary>Texto configurado no status (o que entra é só a parte sem saudação e sem links)</summary><div class="prev">' + esc(e.original) + '</div></details>' : '')
-            + (e.pagina ? '<div class="acoes" style="margin-top:8px;"><a class="btn btn-sm" href="' + esc(PAGINAS[e.pagina].demo) + '" target="_blank" rel="noopener">Ver a página do link (exemplo)</a></div>' : '') + '</div>';
+            + ((e.pagina || e.cartao) ? '<div class="acoes" style="margin-top:8px;">' + (e.pagina ? '<a class="btn btn-sm" href="' + esc(PAGINAS[e.pagina].demo) + '" target="_blank" rel="noopener">Ver a página do link (exemplo)</a>' : '') + (e.cartao ? '<a class="btn btn-sm" href="' + esc(e.cartao) + '" target="_blank" rel="noopener">Ver o cartão de aniversário</a>' : '') + '</div>' : '') + '</div>';
         }).join(''); }).join('');
+      el.querySelectorAll('textarea[data-ed]').forEach(function(t){ t.addEventListener('input', function(){ var e = lista[+t.dataset.ed]; var b = el.querySelector('[data-bal="' + t.dataset.ed + '"]'); if(e && e.gerar && b) b.innerHTML = wa(e.gerar(t.value)); var st = el.querySelector('[data-st="' + t.dataset.ed + '"]'); if(st) st.textContent = 'Alterado — falta salvar.'; }); });
+      el.querySelectorAll('[data-salvar]').forEach(function(b){ b.addEventListener('click', async function(){
+        var i = +b.dataset.salvar, e = lista[i], t = el.querySelector('#pcEd' + i), st = el.querySelector('[data-st="' + i + '"]');
+        if(!e || !e.edit || !o.salvar) return; b.disabled = true; st.textContent = 'Salvando…';
+        var r = null; try{ r = await o.salvar(e.edit, t.value); }catch(err){ r = { error: String(err && err.message || err) }; }
+        b.disabled = false; st.textContent = r && r.ok ? 'Salvo ✓' : 'Não salvou: ' + ((r && r.error) || 'tente de novo.');
+        if(r && r.ok){ e.edit.valor = t.value; if(r.config) cfg = r.config; }
+      }); });
       var on = function(id, f){ var x = document.getElementById(id); if(x) x.addEventListener('change', f); };
       on('pcLoja', function(e){ estado.loja = e.target.value; desenhar(); });
       on('pcCli', function(e){ estado.cliente = e.target.value || estado.cliente; desenhar(); });
@@ -135,6 +160,7 @@
       + '.pc-grupo{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);margin:18px 0 8px;}.pc-cab{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;}'
       + '.pc-fundo{background:#E9E2D8;border-radius:12px;padding:14px;}.pc-balao{max-width:420px;background:#fff;color:#111;border-radius:0 10px 10px 10px;padding:8px 10px 6px;font-size:14px;line-height:1.42;box-shadow:0 1px 1px rgba(0,0,0,.12);position:relative;}'
       + '.pc-link{color:#027EB5;word-break:break-all;}.pc-rodape{color:#8a8a8a;font-size:12.5px;margin-top:6px;}.pc-hora{text-align:right;color:#999;font-size:11px;}.pc-botao{border-top:1px solid #eee;margin:6px -10px -6px;padding:9px;text-align:center;color:#027EB5;font-weight:600;}'
+      + '.pc-ed label{display:block;font-size:12.5px;font-weight:600;margin:0 0 4px;}.pc-ed textarea{width:100%;box-sizing:border-box;min-height:110px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:13.5px;background:var(--surface);color:var(--ink);resize:vertical;}.pc-ed-acoes{display:flex;gap:10px;align-items:center;margin:6px 0 10px;}'
       + '.pc-card{display:flex;gap:8px;align-items:center;background:#F3F3F3;border-radius:8px;padding:6px;margin-bottom:6px;}.pc-card img{width:48px;height:48px;object-fit:cover;border-radius:6px;background:#fff;}.pc-card b{display:block;font-size:13px;}.pc-card small{color:#777;font-size:12px;}';
       document.head.appendChild(s); }
     desenhar();

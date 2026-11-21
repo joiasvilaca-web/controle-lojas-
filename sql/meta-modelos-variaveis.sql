@@ -20,3 +20,9 @@ update meta_modelos set
   exemplos  = '["Maria","É um prazer ter você como cliente da Vilaça Joias. Agradecemos pela confiança e preferência."]'::jsonb,
   atualizado_em = now()
 where chave = 'aniversario';
+
+-- 22/11 (2): aniversário com o botão "Abrir meu cartão" (cartao-aniversario.html?n=<primeiro nome>).
+update meta_modelos set
+  extras = '[{"type":"FOOTER","text":"Vilaça Joias"},{"type":"BUTTONS","buttons":[{"type":"URL","text":"Abrir meu cartão","url":"https://vilaca.app/cartao-aniversario.html?n={{1}}","example":"https://vilaca.app/cartao-aniversario.html?n=Maria"}]}]'::jsonb,
+  atualizado_em = now()
+where chave = 'aniversario';
