@@ -2808,7 +2808,7 @@ function renderLeitorBar(mostrar){
       <span class="gc-icon" style="background:#FBF5E2;color:#8A6D12;">${iconeSvg('scan')}</span>
       <div class="bp-corpo">
         <span class="vh-label">BUSCAR VIA</span>
-        <div class="bp-linha"><input id="inpBuscaVia" type="text" autocomplete="off" placeholder="Código da via (MC1V, JV3P…) ou do cliente" aria-label="Buscar via"><button type="button" class="bp-b pri" id="btnBuscaVia">Buscar</button>${temCam ? '<button type="button" class="bp-b" id="btnCamVia" title="Ler com a câmera" aria-label="Ler com a câmera">Câmera</button>' : ''}</div>
+        <div class="bp-linha"><input id="inpBuscaVia" type="text" autocomplete="off" placeholder="Código da via (MC1V, JV3P…), nome ou telefone do cliente" aria-label="Buscar via ou cliente"><button type="button" class="bp-b pri" id="btnBuscaVia">Buscar</button>${temCam ? '<button type="button" class="bp-b" id="btnCamVia" title="Ler com a câmera" aria-label="Ler com a câmera">Câmera</button>' : ''}</div>
       </div>
     </div>
     ${comPreco ? `<div class="busca-pdv" id="boxBuscaPreco">
@@ -2826,7 +2826,13 @@ function renderLeitorBar(mostrar){
   // BUSCAR VIA: digitou e Enter/Buscar, ou leitor (lê sozinho) → abre a via
   const inpVia = document.getElementById('inpBuscaVia');
   if(inpVia){
-    const irVia = ()=>{ const c = inpVia.value.trim().toUpperCase(); if(c.length < 3){ showToast('Digite o código da via.'); return; } inpVia.value = ''; navegarParaCodigoVia(c); };
+    const irVia = ()=>{
+      const bruto = inpVia.value.trim(), c = bruto.toUpperCase();
+      if(c.length < 2){ showToast('Digite o código da via ou o nome/telefone do cliente.'); return; }
+      inpVia.value = '';
+      // 21/11: código de via (MC1V, JV3P…) ou código do cliente (6 dígitos) abre direto; nome ou telefone do cliente abre a busca com as vias dele
+      if(ehCodigoDeVia(c)) navegarParaCodigoVia(c, { senaoBuscar: bruto }); else buscarClienteNaBarra(bruto);
+    };
     document.getElementById('btnBuscaVia').addEventListener('click', irVia);
     inpVia.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); irVia(); } });
     if(window.Leitor) Leitor.ligar(inpVia, ()=> irVia(), { espera: 120 });
@@ -2844,6 +2850,13 @@ function renderLeitorBar(mostrar){
   if(btnCh) btnCh.addEventListener('click', abrirChamarClienteShell);
 }
 
+/* 21/11: a barra BUSCAR VIA também acha CLIENTE: o que não parece código de via vai para a busca geral (vias + clientes) já preenchida. */
+function ehCodigoDeVia(t){ const c = String(t||'').replace(/\s+/g,'').toUpperCase(); return /^[A-Z]{1,4}-?\d{1,7}[A-Z]{0,2}$/.test(c) || /^\d{6}$/.test(c); }
+function buscarClienteNaBarra(termo){
+  abrirBuscaGeral();
+  const inp = document.getElementById('buscaInput'); if(!inp) return;
+  inp.value = termo; executarBusca(termo);
+}
 /** Registro pendente de abertura: setado quando a pessoa clica num resultado do
  * leitor de código, e consumido assim que o iframe do submódulo avisa 'ready'. */
 let pendingAbrirRegistro = null;
@@ -2901,7 +2914,7 @@ async function abrirViaPeloCodigoCliente(codigo){
   return true;
 }
 
-async function navegarParaCodigoVia(codigo){
+async function navegarParaCodigoVia(codigo, opts){
   if(!codigo || !currentUser) return;
   if(await abrirViaPeloCodigoCliente(codigo)) return;
   // 04/11: a Oficina lê a via de QUALQUER loja direto no card OFICINA (antes a busca filtrava pela loja do usuário e JV/MC "não liam")
@@ -2917,7 +2930,10 @@ async function navegarParaCodigoVia(codigo){
     });
   }
   const r = await gatewayCall({ op:'buscarPorCodigoVia', params:{ codigo } });
-  if(!r || r.error || !r.data){ showToast('Código não encontrado: '+codigo); return; }
+  if(!r || r.error || !r.data){
+    if(opts && opts.senaoBuscar){ buscarClienteNaBarra(opts.senaoBuscar); return; }   // 21/11: não é via → procura como cliente
+    showToast('Código não encontrado: '+codigo); return;
+  }
   abrirRegistroEncontrado(r.data.tipo, r.data.registro);
 }
 
