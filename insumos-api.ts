@@ -1,3 +1,6 @@
+// insumos-api v15 (22/11): op `editar` — corrige quantidade/observação de um lançamento (qualquer status da via), com MOTIVO obrigatório.
+//   Nada é apagado: estorna o original (ESTORNO, obs "Edição: motivo") e lança o corrigido (payload.editadoDe, motivoEdicao). Envio/Retorno corrigem o par.
+//   Pode: a OFICINA (qualquer tipo) e quem tem Movimentos (CONSUMO: baixa da via). Não pode: ESTORNO e peso de peça (PECA_*). perm.editarMov vai no init.
 // insumos-api v14 (18/11): PESO DAS PEÇAS. Cada item do Pedido pode ter peso de entrada e de saída (g). Com a via na Oficina
 //   (enviado p/ fábrica em diante), a entrada SOMA ao saldo de metal em poder da Oficina (tipo PECA_ENTRADA) e a saída ABATE (PECA_SAIDA),
 //   na loja da via. O metal vem do tipo do produto (ouro → OURO 18K, prata → PRATA 925; muda em insumos._config.pesoMetal).
@@ -23,8 +26,8 @@
 //   PERDA   −q ; AJUSTE ±q ; ESTORNO = contrário de um lançamento
 // Sessão (sess_…) validada contra gestao_config, igual ao db-gateway.
 // Permissão: módulo "insumos" com abas saldos / movimentos / cadastro / baixaVia.
-// Ops: pesoVia, init, salvarInsumo, salvarConfig, saldos, contar, contagens, acertarContagem, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
-import { createClient } from "npm:@supabase/supabase-js@2";
+// Ops: editar, pesoVia, init, salvarInsumo, salvarConfig, saldos, contar, contagens, acertarContagem, movimentos, lancar, consumoVia, estornar, vias, via, viaAtualizar
+import { createClient } from "npm:@supabase/supabase-js@2.119.0";   // fixado: npm 2.119.1 com storage-js quebrado
 
 const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
@@ -99,6 +102,8 @@ function permissoes(user: any) {
   out.envioFelipe = ativo && (nivel === "oficina" || nivel === "diretoria" || nivel === "gerente" || !!(m && m.abas && m.abas.movimentos === true));
   // aba salva no acesso vale; sem ela, o padrão do nível (com módulo ligado à mão numa vendedora, as abas salvas no DP decidem)
   for (const a of ABAS) out[a] = ativo && (m && m.abas && typeof m.abas[a] === "boolean" ? m.abas[a] : (ativoPadrao ? padrao[a] : !!(m && m.ativo)));
+  out.editarMov = ativo && (nivel === "oficina" || out.movimentos || out.baixaVia);   // 22/11: editar lançamento com motivo
+  out.oficina = nivel === "oficina";
   return out;
 }
 
@@ -440,6 +445,44 @@ Deno.serve(async (req: Request) => {
       await inserir(rows);
       for (const x of alvo) await admin.from("insumos_movimentos").update({ payload: { ...(x.payload || {}), estornado: true, estornadoPor: quem, estornadoEm: new Date().toISOString() } }).eq("id", x.id);
       return json({ ok: true });
+    }
+
+    if (op === "editar") {
+      const id = Number(p.id);
+      const motivo = texto(p.motivo, 300);
+      if (motivo.replace(/\s+/g, "").length < 5) return json({ error: "Escreva o motivo da alteração (pelo menos 5 letras)." }, 400);
+      const { data: m } = await admin.from("insumos_movimentos").select("*").eq("id", id).maybeSingle();
+      if (!m) return json({ error: "Lançamento não encontrado." }, 404);
+      if (m.tipo === "ESTORNO") return json({ error: "Um estorno não pode ser editado." }, 400);
+      if (m.tipo === "PECA_ENTRADA" || m.tipo === "PECA_SAIDA") return json({ error: "Peso de peça se corrige no item da via (Pedido ou baixa da Oficina)." }, 400);
+      if (m.payload && m.payload.estornado) return json({ error: "Esse lançamento já foi estornado ou editado. Edite o lançamento novo." }, 409);
+      const pode = perm.oficina || (m.tipo === "CONSUMO" ? perm.baixaVia : m.tipo === "ENVIO_FELIPE" ? (perm.envioFelipe || perm.movimentos) : perm.movimentos);
+      if (!perm.ativo || !pode) return json({ error: "Seu acesso não permite editar este lançamento." }, 403);
+      let q = num(p.quantidade);
+      if (!(q > 0)) return json({ error: "Informe uma quantidade maior que zero." }, 400);
+      q = Math.round(q * 10000) / 10000;
+      let alvo: any[] = [m];
+      if ((m.tipo === "ENVIO" || m.tipo === "RETORNO") && m.payload && m.payload.par) {
+        const { data } = await admin.from("insumos_movimentos").select("*").eq("payload->>par", m.payload.par);
+        alvo = (data || [m]).filter((x: any) => x.tipo === m.tipo);
+        if (alvo.some((x) => x.payload && x.payload.estornado)) return json({ error: "Esse lançamento já foi estornado ou editado." }, 409);
+      }
+      const obsNova = p.obs !== undefined ? texto(p.obs, 300) : texto(m.payload && m.payload.obs, 300);
+      const parNovo = alvo.length > 1 ? crypto.randomUUID() : (m.payload && m.payload.par) || undefined;
+      const agora = new Date().toISOString();
+      const estornos = alvo.map((x) => ({ insumo_id: x.insumo_id, loja_id: x.loja_id, local: x.local, tipo: "ESTORNO", quantidade: -Number(x.quantidade), valor_unit: x.valor_unit,
+        os_id: x.os_id, codigo_via: x.codigo_via, finalidade: x.finalidade, ref_id: x.id, payload: { por: quem, obs: "Edição: " + motivo, tipoOriginal: x.tipo, edicao: true } }));
+      const novos = alvo.map((x) => {
+        const { estornado, estornadoPor, estornadoEm, ...plBase } = (x.payload || {}) as any;
+        const sinal = Number(x.quantidade) < 0 ? -1 : 1;
+        return { insumo_id: x.insumo_id, loja_id: x.loja_id, local: x.local, tipo: x.tipo, quantidade: sinal * q, valor_unit: x.valor_unit,
+          os_id: x.os_id, codigo_via: x.codigo_via, finalidade: x.finalidade, ref_id: x.id,
+          payload: { ...plBase, obs: obsNova, ...(parNovo ? { par: parNovo } : {}), editadoDe: x.id, motivoEdicao: motivo, editadoPor: quem, editadoEm: agora, por: quem } };
+      });
+      await inserir(estornos);
+      const novosIds = await inserir(novos);
+      for (const x of alvo) await admin.from("insumos_movimentos").update({ payload: { ...(x.payload || {}), estornado: true, editado: true, estornadoPor: quem, estornadoEm: agora, motivoEdicao: motivo } }).eq("id", x.id);
+      return json({ ok: true, ids: (novosIds || []).map((x: any) => x.id) });
     }
 
     /* ---------- VIAS (O.S.) ---------- */

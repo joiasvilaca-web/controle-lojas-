@@ -462,12 +462,16 @@ async function buscarMov(){
       tipo: document.getElementById('mTipo').value, de: document.getElementById('mDe').value, ate: document.getElementById('mAte').value });
     if(!movimentos.length){ box.innerHTML = estadoVazio('busca', 'Nenhum movimento encontrado', 'Mude o período ou os filtros e busque de novo.'); return; }
     const podeEst = m => !m.payload.estornado && m.tipo!=='ESTORNO' && (m.tipo==='CONSUMO' ? INIT.perm.baixaVia : INIT.perm.movimentos);
+    // 22/11: editar (qualquer status da via) com motivo obrigatório — a Oficina pode; não vale para estorno nem peso de peça
+    const podeEditar = m => INIT.perm.editarMov && !m.payload.estornado && !['ESTORNO','PECA_ENTRADA','PECA_SAIDA'].includes(m.tipo)
+      && (INIT.perm.oficina || (m.tipo==='CONSUMO' ? INIT.perm.baixaVia : m.tipo==='ENVIO_FELIPE' ? (INIT.perm.envioFelipe || INIT.perm.movimentos) : INIT.perm.movimentos));
     box.innerHTML = `<table class="cartoes"><thead><tr><th>Data</th><th>Tipo</th><th>Insumo</th><th>Loja · local</th><th class="num">Quantidade</th><th class="num">Valor un.</th><th>Via / nota / obs.</th><th>Por</th><th></th></tr></thead><tbody>${movimentos.map(m=>{
       const i = insInfo(m.insumo_id), pl = m.payload||{}, fi = pl.fiscal||{};
-      const det = [m.codigo_via ? `Via <b>${escapeHtml(m.codigo_via)}</b> · ${m.finalidade==='fabricacao'?'fabricação':'serviço'}` : '', fi.nf ? `NF ${escapeHtml(fi.nf)}${fi.fornecedor?' · '+escapeHtml(fi.fornecedor):''}` : '', pl.tipoOriginal ? 'de '+escapeHtml(NOMES_TIPO[pl.tipoOriginal]||pl.tipoOriginal) : '', pl.obs ? escapeHtml(pl.obs) : ''].filter(Boolean).join('<br>');
-      return `<tr class="${pl.estornado?'riscado':''}"><td style="white-space:nowrap;">${fmtData(m.created_at)}</td><td class="cel-dir"><span class="selos"><span class="badge b-${m.tipo}">${NOMES_TIPO[m.tipo]||m.tipo}</span>${pl.estornado?'<span class="badge">Estornado</span>':''}</span></td><td class="forte">${escapeHtml(i.nome)}</td><td>${dotLoja(m.loja_id)} <span class="muted small">${m.local==='oficina'?'na Oficina':'na loja'}</span></td>
+      const det = [m.codigo_via ? `Via <b>${escapeHtml(m.codigo_via)}</b> · ${m.finalidade==='fabricacao'?'fabricação':'serviço'}` : '', fi.nf ? `NF ${escapeHtml(fi.nf)}${fi.fornecedor?' · '+escapeHtml(fi.fornecedor):''}` : '', pl.tipoOriginal ? 'de '+escapeHtml(NOMES_TIPO[pl.tipoOriginal]||pl.tipoOriginal) : '', pl.obs ? escapeHtml(pl.obs) : '', (pl.editadoDe && pl.motivoEdicao) ? `<span class="muted">Editado por ${escapeHtml((pl.editadoPor&&pl.editadoPor.nome)||'')}: ${escapeHtml(pl.motivoEdicao)}</span>` : ''].filter(Boolean).join('<br>');
+      return `<tr class="${pl.estornado?'riscado':''}"><td style="white-space:nowrap;">${fmtData(m.created_at)}</td><td class="cel-dir"><span class="selos"><span class="badge b-${m.tipo}">${NOMES_TIPO[m.tipo]||m.tipo}</span>${pl.estornado?`<span class="badge">${pl.editado?'Editado':'Estornado'}</span>`:''}${pl.editadoDe?'<span class="badge">Corrigido</span>':''}</span></td><td class="forte">${escapeHtml(i.nome)}</td><td>${dotLoja(m.loja_id)} <span class="muted small">${m.local==='oficina'?'na Oficina':'na loja'}</span></td>
         <td class="num ${Number(m.quantidade)<0?'neg':''}" data-rot="Quantidade">${fmtQ(m.quantidade, i.unidade)}</td><td class="num" data-rot="Valor un.">${m.valor_unit!=null?fmtR(m.valor_unit):'—'}</td><td class="small cel-cheia">${det||'—'}</td><td class="small muted">${escapeHtml((pl.por&&pl.por.nome)||'')}</td>
-        <td class="num cel-cheia">${podeEst(m)?`<button class="btn btn-ghost btn-sm" data-est="${m.id}" type="button" title="Estornar este movimento (pede o motivo)">${ico('devolver', 14)}Estornar</button>`:''}</td></tr>`; }).join('')}</tbody></table>`;
+        <td class="num cel-cheia">${podeEditar(m)?`<button class="btn btn-ghost btn-sm" data-edmov="${m.id}" type="button" title="Editar este lançamento (pede o motivo)">${ico('lapis', 14)}Editar</button>`:''}${podeEst(m)?`<button class="btn btn-ghost btn-sm" data-est="${m.id}" type="button" title="Estornar este movimento (pede o motivo)">${ico('devolver', 14)}Estornar</button>`:''}</td></tr>`; }).join('')}</tbody></table>`;
+    box.querySelectorAll('[data-edmov]').forEach(b=> b.addEventListener('click', ()=> editarMovimento(movimentos.find(x=>String(x.id)===b.dataset.edmov))));
     box.querySelectorAll('[data-est]').forEach(b=> b.addEventListener('click', async ()=>{
       const motivo = prompt('Motivo do estorno (obrigatório):'); if(!motivo || !motivo.trim()) return;
       try{ await api('estornar', { id:Number(b.dataset.est), motivo }); showToast('Estornado.'); buscarMov(); }catch(e){ showToast(e.message, 5000); }
@@ -475,6 +479,35 @@ async function buscarMov(){
   }catch(e){ box.innerHTML = estadoErro(e.message, 'Confira a conexão e toque em "Buscar" de novo.'); }
 }
 document.getElementById('btnMov').addEventListener('click', buscarMov);
+/* 22/11: janela de edição do lançamento — quantidade, observação e MOTIVO (obrigatório). O servidor estorna o original e lança o corrigido. */
+function editarMovimento(m){
+  if(!m) return;
+  const i = insInfo(m.insumo_id), pl = m.payload||{};
+  const par = (m.tipo==='ENVIO' || m.tipo==='RETORNO') && pl.par;
+  const fundo = document.createElement('div');
+  fundo.style.cssText = 'position:fixed;inset:0;background:rgba(15,25,35,.45);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;';
+  fundo.innerHTML = `<div role="dialog" aria-modal="true" aria-labelledby="edMovTit" style="background:var(--surface,#fff);color:var(--ink,#14202b);border-radius:14px;max-width:440px;width:100%;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25);">
+    <h3 id="edMovTit" style="margin:0 0 4px;">Editar lançamento</h3>
+    <p class="muted small" style="margin:0 0 12px;">${escapeHtml(NOMES_TIPO[m.tipo]||m.tipo)} · ${escapeHtml(i.nome)} · ${fmtData(m.created_at)}${m.codigo_via?' · via '+escapeHtml(m.codigo_via):''}${par?' · o par (saída e entrada) é corrigido junto':''}</p>
+    <div class="field"><label for="edQtd">Quantidade (${escapeHtml(i.unidade||'')})</label><input id="edQtd" inputmode="decimal" value="${escapeHtml(String(Math.abs(Number(m.quantidade))).replace('.',','))}"></div>
+    <div class="field"><label for="edObs">Observação</label><input id="edObs" maxlength="300" value="${escapeHtml(pl.obs||'')}"></div>
+    <div class="field"><label for="edMotivo">Motivo da alteração <span style="color:var(--danger,#b3261e);">(obrigatório)</span></label><textarea id="edMotivo" rows="3" maxlength="300" placeholder="Ex.: pesei de novo, a quantidade certa é…"></textarea></div>
+    <p class="muted small" style="margin:6px 0 0;">Nada é apagado: o lançamento antigo fica estornado e o corrigido entra no lugar, com o motivo e o seu nome.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button class="btn btn-ghost" type="button" id="edCancelar">Cancelar</button><button class="btn btn-accent" type="button" id="edSalvar">Salvar</button></div></div>`;
+  document.body.appendChild(fundo);
+  const fechar = ()=> fundo.remove();
+  fundo.addEventListener('click', e=>{ if(e.target===fundo) fechar(); });
+  document.getElementById('edCancelar').onclick = fechar;
+  setTimeout(()=> document.getElementById('edMotivo').focus(), 30);
+  document.getElementById('edSalvar').onclick = async ()=>{
+    const quantidade = numBR(document.getElementById('edQtd').value), motivo = document.getElementById('edMotivo').value.trim(), obs = document.getElementById('edObs').value;
+    if(!(quantidade > 0)){ showToast('Informe uma quantidade maior que zero.'); return; }
+    if(motivo.replace(/\s+/g,'').length < 5){ showToast('Escreva o motivo da alteração (pelo menos 5 letras).'); document.getElementById('edMotivo').focus(); return; }
+    const b = document.getElementById('edSalvar'); b.disabled = true;
+    try{ await api('editar', { id:Number(m.id), quantidade, obs, motivo }); fechar(); showToast('Lançamento corrigido.'); buscarMov(); }
+    catch(e){ showToast(e.message, 5000); b.disabled = false; }
+  };
+}
 
 /* ---------- Cadastro ---------- */
 function renderInsLista(){
