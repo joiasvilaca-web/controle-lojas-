@@ -492,6 +492,11 @@ html[data-theme=dark] .msgs.inst-reforma, html[data-theme=dark] .msgs.inst-vilac
 .ag-ev.via{background:var(--surface);color:var(--ink-soft);border:1px dashed var(--line-strong);}
 .ag-ev.feito{opacity:.55;text-decoration:line-through;}
 .ag-mais{font-size:10.5px;color:var(--ink-faint);}
+.ag-dia-lista{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto;}
+.ag-dia-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);border-left:4px solid var(--tc, var(--accent));background:var(--surface);color:var(--ink);font:inherit;cursor:pointer;min-height:48px;}
+.ag-dia-item.lemb{--tc:var(--ink-faint);cursor:default;}.ag-dia-item.via{border-left-style:dashed;}.ag-dia-item.feito{opacity:.6;}
+.ag-dia-item b{font-size:12px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.02em;}.ag-dia-item span{font-size:14.5px;font-weight:600;}.ag-dia-item small{font-size:12.5px;color:var(--ink-soft);}
+.ag-dia-item:hover:not([disabled]){border-color:var(--accent);}
 @media(max-width:700px){.ag-dia{min-height:62px;padding:3px;}.ag-ev{font-size:9.5px;padding:0 3px;}}
 .ag-vias{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
 .ag-vias th{text-align:left;font-size:11px;padding:9px 10px;border-bottom:1px solid var(--line);background:var(--surface-2);}
@@ -856,7 +861,7 @@ function agRenderCalendario(c){
       ${['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(d=>`<div class="dow">${d}</div>`).join('')}
       ${dias.map(d=>{
         const iso = agDataISO(d); const ev = agEventosDoDia(iso);
-        return `<div class="ag-dia ${d.getMonth()!==m.getMonth()?'fora':''} ${iso===hojeIso?'hoje':''}" data-agdia="${iso}" title="Clique para criar uma tarefa neste dia">
+        return `<div class="ag-dia ${d.getMonth()!==m.getMonth()?'fora':''} ${iso===hojeIso?'hoje':''}" data-agdia="${iso}" title="Toque para ver tudo deste dia">
           <span class="n">${d.getDate()}</span>
           ${ev.slice(0,3).map((e,i)=>`<span class="ag-ev ${e.cls}" data-agev="${i}" title="${escapeHtml(e.txt)}">${escapeHtml(e.txt)}</span>`).join('')}
           ${ev.length>3?`<span class="ag-mais">+${ev.length-3} mais</span>`:''}
@@ -874,9 +879,38 @@ function agRenderCalendario(c){
     if(evEl){ const ev = agEventosDoDia(iso)[+evEl.dataset.agev];
       if(ev && ev.tarefa) return agEditar(estado.ag.tarefas.find(t=>t.id===ev.tarefa));
       if(ev && ev.via) return agAbrirVia(ev.via);
-      return; }
-    agEditar(null, iso);
+      return agAbrirDia(iso); }
+    agAbrirDia(iso);   // 22/11: tocar no dia abre a lista completa (vias, tarefas, lembretes) + "Nova tarefa neste dia"
   }));
+}
+
+/* 22/11: tocar no dia do calendário abre tudo o que tem nele: tarefas, lembretes e vias — cada item abre a tarefa ou a via. */
+function agAbrirDia(iso){
+  const ev = agEventosDoDia(iso);
+  const dia = new Date(iso+'T12:00:00');
+  const titulo = dia.toLocaleDateString('pt-BR',{ weekday:'long', day:'2-digit', month:'long' });
+  const nomeSt = x=>{ x = String(x||'').replace(/_/g,' '); return x ? x.charAt(0).toUpperCase()+x.slice(1) : ''; };
+  const linha = (e,i)=>{
+    let tipo = 'Lembrete', det = '';
+    if(e.tarefa){ const t = estado.ag.tarefas.find(x=>x.id===e.tarefa) || {}; tipo = 'Tarefa · ' + ((AG_TIPOS[t.tipo]||{}).nome||'');
+      det = [t.hora, t.coluna ? (AG_COLUNAS.find(c=>c[0]===t.coluna)||[])[1] : '', t.criador_nome ? 'de '+t.criador_nome : '', t.descricao].filter(Boolean).join(' · '); }
+    else if(e.via){ const v = e.via; tipo = ((AG_VIA[v.tipo]||{}).nome || 'Via') + (v.codigoVia ? ' ' + v.codigoVia : '');
+      det = [v.cliente, v.loja, v.vendedora ? 'vendedora ' + v.vendedora : '', nomeSt(v.status), v.valorTotal ? brl(v.valorTotal) : ''].filter(Boolean).join(' · '); }
+    return `<button type="button" class="ag-dia-item ${e.cls}" data-agdi="${i}" ${(!e.tarefa && !e.via)?'disabled':''}><b>${escapeHtml(tipo)}</b><span>${escapeHtml(e.tarefa ? e.txt : e.via ? (e.via.tipo==='pedido'?'Entrega':e.via.tipo==='orcamento'?'Vence':'Venda') : e.txt)}</span>${det?`<small>${escapeHtml(det)}</small>`:''}</button>`;
+  };
+  abrirModal(`<h2 style="text-transform:none;">${escapeHtml(titulo.charAt(0).toUpperCase()+titulo.slice(1))}</h2>
+    ${ev.length ? `<div class="ag-dia-lista">${ev.map(linha).join('')}</div>` : '<p class="muted">Nada marcado neste dia.</p>'}
+    <div class="modal-acoes" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px;">
+      <button type="button" class="btn" id="agDiaFechar">Fechar</button>
+      <button type="button" class="btn btn-accent" id="agDiaNova">Nova tarefa neste dia</button></div>`);
+  document.getElementById('agDiaFechar').onclick = fecharModal;
+  document.getElementById('agDiaNova').onclick = ()=>{ fecharModal(); agEditar(null, iso); };
+  document.querySelectorAll('[data-agdi]').forEach(b=> b.onclick = ()=>{
+    const e = ev[+b.dataset.agdi]; if(!e) return;
+    fecharModal();
+    if(e.tarefa) agEditar(estado.ag.tarefas.find(t=>t.id===e.tarefa));
+    else if(e.via) agAbrirVia(e.via);
+  });
 }
 
 /* ---------- Minhas vias ---------- */
