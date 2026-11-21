@@ -25,7 +25,7 @@ module.exports = { casos: [
   { nome: 'PDV: BUSCAR VIA e BUSCAR PREÇO com campo próprio e botões sem pontilhado', bug: 'busca única e moldura pontilhada', rodar: async ({ t, ler }) => {
     const ix = ler('index.html');
     t.ok(/id="inpBuscaVia"/.test(ix) && /id="inpBuscaPreco"/.test(ix), 'um campo para cada');
-    t.ok(/navegarParaCodigoVia\(c\)/.test(ix) && /abrirConsultaPreco\(t\)/.test(ix), 'via abre via; preço abre consulta de preço');
+    t.ok(/navegarParaCodigoVia\(c[,)]/.test(ix) && /abrirConsultaPreco\(t\)/.test(ix), 'via abre via; preço abre consulta de preço');
     const css = ix.slice(ix.indexOf('.vendas-home-leitor-bar{'), ix.indexOf('.vendas-home-chamar .gc-icon'));
     t.ok(!/dashed/.test(css), 'sem borda pontilhada nos botões do PDV');
   } },
