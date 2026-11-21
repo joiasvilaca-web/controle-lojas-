@@ -9,12 +9,14 @@
   function primeiro(n){ return bonito(String(n || '').trim().split(/\s+/)[0] || ''); }
   function limpa(t){ return String(t || '').replace(/[\t\n\r]+/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 900); }
   /* igual ao miolo() do servidor: tira saudação, parágrafos com link e as frases fixas, e junta numa linha */
-  function miolo(t){
-    var ps = String(t || '').split(/\n\s*\n/).filter(function(p){ return !/https?:\/\//i.test(p) && !/Para falar com a gente|Responda com|responda SAIR|Veja o seu or/i.test(p); });
+  function miolo(t){   // 22/11: igual ao miolo() do servidor (disparo-cloud v7 / acompanhamento-auto v21)
+    var ps = String(t || '').split(/\n\n/).map(function(p){ return p.replace(/https?:\/\/\S+/g, '').replace(/[ \t]+$/gm, '').trim(); })
+      .filter(function(p){ return p && !/Para falar com a gente|Responda com|responda SAIR|Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco)/i.test(p); });
     var s = ps.join(' ').replace(/\s+/g, ' ').trim();
-    s = s.replace(/^(Ol[aá]|Oi),?\s*[^!]*!\s*/i, '').replace(/Aqui é da [^.]*\.\s*/, '');
+    s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, '').replace(/^[^\p{L}\p{N}*]+/u, '').replace(/Aqui [eé] da [^.]+[.] ?/i, '').replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, 'Atendimento: $1. ');
     return limpa(s);
   }
+
   function brl(v){ return 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits:2, maximumFractionDigits:2 }); }
   function hojeMais(d){ var x = new Date(); x.setDate(x.getDate() + d); return x.toLocaleDateString('pt-BR'); }
   function wa(t){ return esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/_([^_\n]+)_/g, '<i>$1</i>').replace(/(https?:\/\/[^\s<]+)/g, '<span class="pc-link">$1</span>').replace(/\n/g, '<br>'); }

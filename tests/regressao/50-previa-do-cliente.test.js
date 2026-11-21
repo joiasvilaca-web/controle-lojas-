@@ -5,7 +5,7 @@ module.exports = { casos: [
   { nome: 'Montagem igual à do servidor (miolo e variáveis)', bug: 'não dava para ver o que o cliente recebe', rodar: async ({ t }) => {
     const win = {}; vm.runInContext(fs.readFileSync(path.join(__dirname, '..', '..', 'previa-cliente.js'), 'utf8'), vm.createContext({ window: win, document: {} }));
     const P = win.PreviaCliente;
-    t.ok(P._miolo('Olá, Maria! 😊\n\nAqui é Paty, da LOJA. Seu orçamento está pronto!\n\nVeja:\nhttps://vilaca.app/x\n\nClique no link: https://wa.me/55') === '😊 Aqui é Paty, da LOJA. Seu orçamento está pronto!', 'tira saudação e parágrafos com link');
+    t.ok(P._miolo('Olá, Maria! 😊\n\nAqui é Paty, da LOJA. Seu orçamento está pronto!\n\nVeja:\nhttps://vilaca.app/x\n\nClique no link: https://wa.me/55') === 'Atendimento: Paty. Seu orçamento está pronto! Veja:', 'regra de 22/11: tira saudação, emoji e links; loja não repete');
     t.ok(P._preencherModelo('Olá, {{1}}! {{2}}', ['Maria', '']) === 'Olá, Maria! …', 'preenche variáveis');
   } },
   { nome: 'Tela e páginas de exemplo', bug: 'sem prévia do card do link', rodar: async ({ t, ler }) => {
