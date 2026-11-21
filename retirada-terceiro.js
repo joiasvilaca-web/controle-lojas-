@@ -79,7 +79,7 @@
         if((b=box.querySelector('[data-comp]'))) b.onclick=function(){ comprovante(o); };
         if((b=box.querySelector('[data-wa]'))) b.onclick=async function(){
           if(window.MarketingOff && !(await MarketingOff.permitir({ telefone:o.telefone, nome:o.cliente }))) return;
-          if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
+          if(window.WhatsAuto){ WhatsAuto.enviar({ telefone:tel, texto:txt, lojaId:o.lojaId||'', cliente:o.cliente||'', vendedora:o.vendedora||'', senha:o.senha, tipo:'retirada', registroId:o.id||'', via:o.via||'' }); return; }
           try{ showToast('Envio automático indisponível. Recarregue a página e tente de novo.'); }catch(e){ alert('Envio automático indisponível. Recarregue a página e tente de novo.'); }
         };
         if(usado) return;

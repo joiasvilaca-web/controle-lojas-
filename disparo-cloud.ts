@@ -1,3 +1,5 @@
+// disparo-cloud v8 (22/11/2026): pedido DISPONÍVEL PARA RETIRADA pelo botão usa o modelo pedido_pronto; aniversário enviado um por um (ícone) usa o modelo de aniversário (antes falhava);
+//   reserva/retirada/link sem "Atendimento:" usam a vendedora e o NOME PÚBLICO da loja da fila (antes "nossa equipe" / "VILAÇA JOIAS"); nome do cliente sempre com 1ª maiúscula; orçamento: "Aqui é <vendedora>."
 // disparo-cloud v7 (22/11/2026): miolo() do orçamento — links saem mas o texto do parágrafo fica (convite "o que podemos melhorar" do Recusado); "Aqui é <vendedora>, da <loja>." vira "Atendimento: <vendedora>." (loja não repete); sem emoji solto no início. supabase-js fixado em 2.119.0.
 // disparo-cloud v6 (11/11/2026): envia pela API OFICIAL da Meta (numero +55 32 98830-7617) as linhas da marketing_fila com status 'cloud_fila'. v6: o NOME do modelo vem da tabela meta_modelos (tela 'Modelos de mensagem' do app; o padrao continua o do codigo) e cada envio grava modelo + categoria em disparo_envios (base do painel de custos). SEM restricao de horario. Cada linha e reservada (status 'cloud_envio') antes de enviar (sem duplicar).
 // Chamada so com o header x-cron-token (= MARKETING_CRON_TOKEN) pela rotina ponte-disparo-cloud (pg_cron, todo minuto), pelo acompanhamento-auto e pelo enviar-via. Segredos da funcao: WHATSAPP_CLOUD_TOKEN, WHATSAPP_PHONE_NUMBER_ID.
@@ -12,8 +14,10 @@ const bonito = (t: string) => String(t || "").trim().toLowerCase().replace(/(^|[
 const fone8 = (t: string) => String(t || "").replace(/[^0-9]/g, "").slice(-8);
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let MAPA: Record<string, { nome: string; categoria: string }> = {};
+let LOJAS: Record<string, string> = {};   // v8: loja_id -> nome público (para reserva/retirada)
 async function carregaMapa() {
-  MAPA = {};
+  MAPA = {}; LOJAS = {};
+  try { const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle(); for (const l of ((cf && cf.payload && cf.payload.lojas) || [])) if (l && l.id) LOJAS[l.id] = String(l.nomePublico || l.nomeFantasia || l.nome || ""); } catch (_) {}
   try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria"); for (const m of data || []) MAPA[m.chave] = { nome: m.nome_template, categoria: m.categoria }; } catch (_) {}
 }
 function normalizaTelefone(t: string): string | null {
@@ -26,13 +30,13 @@ function normalizaTelefone(t: string): string | null {
 /** Miolo da mensagem para os modelos de texto livre (orcamento, campanha): tira saudacao, links, convite para falar e pedido de joinha; junta tudo numa linha. */
 function miolo(texto: string): string {
   // 22/11: links saem do parágrafo mas o TEXTO fica (o convite "o que podemos melhorar" do Recusado voltava cortado);
-  // "Aqui é <vendedora>, da <loja>." vira "Atendimento: <vendedora>." (o modelo já diz "Aqui é da <loja>": a loja saía duas vezes); emoji solto no começo sai.
+  // "Aqui é <vendedora>, da <loja>." vira "Aqui é <vendedora>." (o modelo já diz "Aqui é da <loja>": a loja saía duas vezes); emoji solto no começo sai.
   const paras = String(texto || "").split(NL + NL)
     .map((p) => p.replace(/https?:[/][/]\S+/g, "").replace(/[ \t]+$/gm, "").trim())
     .filter((p) => p && !/Para falar com a gente/i.test(p) && !/Responda com/i.test(p) && !/responda SAIR/i.test(p) && !/Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco)/i.test(p));
   let s = paras.join(" ").split(NL).join(" ").replace(/\s+/g, " ").trim();
   s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, "").replace(/^[^\p{L}\p{N}*]+/u, "").replace(/Aqui [eé] da [^.]+[.] ?/i, "")
-    .replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, "Atendimento: $1. ");
+    .replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, "Aqui é $1. ");
   return s.replace(/\s+/g, " ").trim().slice(0, 900);
 }
 function modelo(item: any, orcOn: boolean): { chave: string; name: string; params: string[] } | null {
@@ -44,7 +48,8 @@ function modelo(item: any, orcOn: boolean): { chave: string; name: string; param
     return { chave: "aniversario", name: "aniversario_vilaca", params: [nome] };
   }
   const n = flat.match(/Ol[aá], ([^!]+)!/);
-  const nome = limpa(n ? n[1] : primeiro) || "cliente";
+  const nome = bonito(limpa(n ? n[1] : primeiro).split(" ")[0]) || "cliente";   // v8: "MARIA" -> "Maria"
+  if (item.tipo === "via" && item.registro_tabela === "aniversario") return { chave: "aniversario", name: "aniversario_vilaca", params: [primeiro || nome] };   // v8: ícone individual
   if (item.tipo === "campanha") {
     const corpo = miolo(item.texto);
     return corpo ? { chave: "campanha", name: "campanha_vilaca", params: [nome, corpo] } : null;
@@ -71,8 +76,10 @@ function modelo(item: any, orcOn: boolean): { chave: string; name: string; param
     const l = flat.match(/https:[/][/]vilaca[.]app[/][^ ]+/);
     if (!l) return null;
     const a = flat.match(/Atendimento: (.+?) · (.+?)[.] +Todas/);
-    const vend = a ? a[1] : (item.vendedora ? bonito(item.vendedora) : "nossa equipe");
-    const loja = a ? a[2] : "VILAÇA JOIAS";
+    const vend = a ? a[1] : (item.vendedora ? bonito(String(item.vendedora).trim().split(/\s+/).slice(0, 2).join(" ")) : "nossa equipe");
+    const loja = a ? a[2] : (LOJAS[item.loja_id] || "Vilaça Joias");
+    // v8: pedido DISPONÍVEL PARA RETIRADA (status gravado na O.S.) usa o modelo próprio, com os mesmos 4 parâmetros
+    if (item.registro_tabela === "os" && item.__statusOs === "pronto" && /acompanhar[.]html/.test(l[0])) return { chave: "pedido_pronto", name: "pedido_pronto_acompanhamento", params: [nome, vend, loja, l[0]] };
     return { chave: "via", name: "via_acompanhamento", params: [nome, vend, loja, l[0]] };
   }
   return null;
@@ -80,6 +87,9 @@ function modelo(item: any, orcOn: boolean): { chave: string; name: string; param
 async function enviaCloud(item: any, numero: string, orcOn: boolean) {
   const tk = Deno.env.get("WHATSAPP_CLOUD_TOKEN"), pid = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
   if (!tk || !pid) return { ok: false, erro: "API oficial sem token/ID configurado", status: 0, parar: true };
+  if (item.tipo === "via" && item.registro_tabela === "os" && item.registro_id) {   // v8: status atual do pedido (para o modelo "pronto")
+    try { const { data: os } = await admin.from("ordens_servico").select("payload").eq("id", item.registro_id).maybeSingle(); item.__statusOs = os && os.payload ? String(os.payload.status || "") : ""; } catch (_) {}
+  }
   const p = modelo(item, orcOn);
   if (!p) return { ok: false, erro: "Sem modelo da API oficial para esta mensagem", status: 0, definitivo: true };
   const ativo = MAPA[p.chave];

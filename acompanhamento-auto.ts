@@ -1,3 +1,4 @@
+// acompanhamento-auto v22 (22/11/2026): Reforma Joias (chip reformajoias) sai SEM o link wa.me da Vilaça e sem o pedido de 👍 (limpaTextoReforma, igual ao enviar-via v18); orçamento: "Aqui é <vendedora>."
 // acompanhamento-auto v21 (22/11/2026): miolo() do orçamento — links saem mas o texto do parágrafo fica (convite "o que podemos melhorar" do Recusado); "Aqui é <vendedora>, da <loja>." vira "Atendimento: <vendedora>." (loja não repete); sem emoji solto no início. supabase-js fixado em 2.119.0.
 // acompanhamento-auto v20 (12/11/2026): o aviso de PEDIDO PRONTO deixou de sair sozinho (so automatico se config.pedidoAcoes.prontoAuto === true; padrao desligado) - o aviso de pronto e MANUAL pelo botao do WhatsApp. Continuam automaticos: orcamentos (todos os status), pos-venda (venda e pedido entregue).
 // acompanhamento-auto v19 (11/11/2026): TUDO pela API OFICIAL da Meta (número 32 98830-7617), sem depender do chip. Pós-venda (venda e pedido entregue) → pos_venda_garantia; ações de ORÇAMENTO (inclusive a do orçamento salvo) → orcamento_acompanhamento (ORC_API='on'); aviso de PEDIDO PRONTO → pedido_pronto_acompanhamento (PRONTO_API='on'); campanhas da fila (tipo campanha) são promovidas para a fila oficial (CAMPANHA_API='on'). Envio oficial sai em sequência (2 s), dentro da janela 9h–20h. Desliga tudo com atendimento_segredos.OFICIAL_TUDO='off' (volta ao chip). v19: o nome do modelo vem da tabela meta_modelos (tela 'Modelos WhatsApp') e o envio grava modelo/categoria em disparo_envios (painel de custos). v12–v18 e anteriores: ver AGENTS.md.
@@ -88,6 +89,13 @@ async function registrarEnvio(tel: string, reg: any, tipo: string, id: string, o
 }
 const fmtBRL = (v: unknown) => "R$ " + (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtData = (s: unknown) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : ""; };
+/** v22: texto da instância da Reforma — sem o link "falar com a gente" (wa.me da Vilaça) e sem o pedido do 👍 (igual ao enviar-via). */
+function limpaTextoReforma(t: string): string {
+  let s = String(t || "");
+  s = s.replace(/(Para falar com a gente, é só clicar no link|Caso precise falar conosco,?\s*clique no link|Clique no link):?[ \t]*\n?[ \t]*https?:\/\/wa\.me\/\S+/gi, "");
+  s = s.replace(/Responda com 👍 para confirmar que recebeu\.?/g, "");
+  return s.replace(/\n{3,}/g, "\n\n").trim();
+}
 function waMePrimeiro(t: string): string {
   const links = t.match(/https?:\/\/\S+/g) || [];
   if (links.length < 2 || /wa\.me\//.test(links[0])) return t;
@@ -125,13 +133,13 @@ async function enviaModelo(tel: string, nome: string, params: string[]): Promise
 }
 function miolo(texto: string): string {
   // 22/11: links saem do parágrafo mas o TEXTO fica (o convite "o que podemos melhorar" do Recusado voltava cortado);
-  // "Aqui é <vendedora>, da <loja>." vira "Atendimento: <vendedora>." (o modelo já diz "Aqui é da <loja>": a loja saía duas vezes); emoji solto no começo sai.
+  // "Aqui é <vendedora>, da <loja>." vira "Aqui é <vendedora>." (o modelo já diz "Aqui é da <loja>": a loja saía duas vezes); emoji solto no começo sai.
   const paras = String(texto || "").split(NL + NL)
     .map((p) => p.replace(/https?:[/][/]\S+/g, "").replace(/[ \t]+$/gm, "").trim())
     .filter((p) => p && !/Para falar com a gente/i.test(p) && !/Responda com/i.test(p) && !/responda SAIR/i.test(p) && !/Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco)/i.test(p));
   let s = paras.join(" ").split(NL).join(" ").replace(/\s+/g, " ").trim();
   s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, "").replace(/^[^\p{L}\p{N}*]+/u, "").replace(/Aqui [eé] da [^.]+[.] ?/i, "")
-    .replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, "Atendimento: $1. ");
+    .replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, "Aqui é $1. ");
   return s.replace(/\s+/g, " ").trim().slice(0, 900);
 }
 const primeiroNome = (t: string) => bonito(String(t || "").trim().split(/\s+/)[0] || "") || "cliente";
@@ -250,7 +258,7 @@ async function abertoAgora(body: any) {
   if (tagOff) { try { const { data: off } = await admin.rpc("cliente_marketing_off", { p_id: "", p_fone8: fone8(tel), p_tag: tagOff }); if (off === true) return await liberar("cliente com a tag MARKETING OFF"); } catch (_) {} }
   if (!nuvemAg) { try { const rw = await fetch(`${seg.EVOLUTION_URL}/chat/whatsappNumbers/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ numbers: [tel] }), signal: AbortSignal.timeout(10000) }); const jw = await rw.json().catch(() => null); if (rw.ok && Array.isArray(jw) && jw[0] && jw[0].exists === false) return await liberar("número sem WhatsApp"); } catch (_) {} }
   const t0 = varia(preencher(textoPasso(cfg, p0, 0), cfg, o, descontoDoPasso(cfg, p0), linkOrc(id)));
-  const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) : waMePrimeiro(t0);
+  const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) : limpaTextoReforma(t0);   // v22
   let ok = false, status = 0;
   if (nuvemAg) {
     const rc = await enviaModelo(tel, "orcamento_acompanhamento", [primeiroNome(o.cliente), nomeDaLoja(cfg, o), miolo(t0) || "Passando para saber se ficou alguma dúvida sobre o seu orçamento.", linkOrc(id)]);
@@ -486,7 +494,7 @@ Deno.serve(async (req: Request) => {
           await espera(1100);
         } else {
           try {
-            const texto = inst === INST_D ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) : waMePrimeiro(varia(f.texto));
+            const texto = inst === INST_D ? waMePrimeiro(ajustaTextoDisparo(varia(f.texto))) : limpaTextoReforma(varia(f.texto));   // v22
             const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: f.tel, text: texto, delay: 2500 + Math.floor(Math.random() * 5500) }), signal: AbortSignal.timeout(25000) });
             status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key);
           } catch (_) {}

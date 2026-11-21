@@ -8,7 +8,7 @@ module.exports = { casos: ['disparo-cloud.ts', 'acompanhamento-auto.ts'].map(arq
   nome: arq + ': miolo sem loja repetida e com o convite do Recusado', bug: 'loja saía 2 vezes e o convite "o que melhorar" sumia', rodar: async ({ t }) => {
     const { miolo } = pegar(arq, ['miolo'], { NL: '\n' });
     const a = miolo(ABERTO), r = miolo(RECUSADO);
-    t.ok(a === 'Atendimento: Paty Souza. Seu orçamento está pronto! Valor: *R$ 890,00*', 'aberto: ' + a);
+    t.ok(a === 'Aqui é Paty Souza. Seu orçamento está pronto! Valor: *R$ 890,00*', 'aberto: ' + a);
     t.ok(!a.includes(LOJA) && !/https?:/.test(a) && !/😊/.test(a), 'sem loja, sem link, sem emoji solto');
     t.ok(/o que podemos melhorar/.test(r) && !/https?:/.test(r) && !/Caso precise/.test(r), 'recusado mantém o convite: ' + r);
   } })) };

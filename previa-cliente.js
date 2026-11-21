@@ -9,11 +9,11 @@
   function primeiro(n){ return bonito(String(n || '').trim().split(/\s+/)[0] || ''); }
   function limpa(t){ return String(t || '').replace(/[\t\n\r]+/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, 900); }
   /* igual ao miolo() do servidor: tira saudação, parágrafos com link e as frases fixas, e junta numa linha */
-  function miolo(t){   // 22/11: igual ao miolo() do servidor (disparo-cloud v7 / acompanhamento-auto v21)
+  function miolo(t){   // 22/11: igual ao miolo() do servidor (disparo-cloud v8 / acompanhamento-auto v22)
     var ps = String(t || '').split(/\n\n/).map(function(p){ return p.replace(/https?:\/\/\S+/g, '').replace(/[ \t]+$/gm, '').trim(); })
       .filter(function(p){ return p && !/Para falar com a gente|Responda com|responda SAIR|Veja o seu or/i.test(p) && !/^(Clique no link|Caso precise falar conosco)/i.test(p); });
     var s = ps.join(' ').replace(/\s+/g, ' ').trim();
-    s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, '').replace(/^[^\p{L}\p{N}*]+/u, '').replace(/Aqui [eé] da [^.]+[.] ?/i, '').replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, 'Atendimento: $1. ');
+    s = s.replace(/^(Ol[aá]|Oi),? [^!]+! ?/i, '').replace(/^[^\p{L}\p{N}*]+/u, '').replace(/Aqui [eé] da [^.]+[.] ?/i, '').replace(/Aqui [eé] ([^,.!]{1,60}), da [^.!]+[.!] ?/i, 'Aqui é $1. ');
     return limpa(s);
   }
 
@@ -50,7 +50,9 @@
       viaModelo('Venda', 'Venda — ao salvar', 'Automático ao salvar a venda (com celular). O botão do WhatsApp na lista manda a mesma mensagem.', 'venda');
       // PEDIDO
       viaModelo('Pedido', 'Pedido — ao salvar (Aprovado)', 'Automático ao lançar o pedido (com celular).', 'os');
-      viaModelo('Pedido', 'Pedido — botão do WhatsApp (qualquer status: na fábrica, pendência, disponível para retirada, entregue…)', 'Só quando alguém toca no botão. O status NÃO aparece no texto: vai a mesma mensagem com o link, e o cliente vê o status ao abrir.', 'os');
+      viaModelo('Pedido', 'Pedido — botão do WhatsApp (na fábrica, pendência, entregue…)', 'Só quando alguém toca no botão. O status não aparece no texto: o cliente vê ao abrir o link.', 'os');
+      var mdPr = corpoDe(modelos, 'pedido_pronto');
+      if(mdPr) lista.push({ grupo:'Pedido', titulo:'Pedido — botão do WhatsApp com o pedido DISPONÍVEL PARA RETIRADA', quando:'Só quando alguém toca no botão com o pedido em Disponível para retirada (modelo próprio).', modelo: mdPr, texto: preencherModelo(mdPr.corpo, [nome1, vend, loja, base() + PAGINAS.os.url]), pagina:'os' });
       // ORÇAMENTO
       var STs = Array.isArray(cfg.statusOrcamento) ? cfg.statusOrcamento : [];
       var passos = (cfg.orcamentoAcoes && Array.isArray(cfg.orcamentoAcoes.passos)) ? cfg.orcamentoAcoes.passos : [];
@@ -77,15 +79,19 @@
           lista.push({ grupo:'Orçamento', titulo:'Orçamento — mudar para "' + (st.nome || st.id) + '"', quando:'Só quando alguém muda o status na mão.', modelo: mdOrc, texto: preencherModelo(mdOrc.corpo, [nome1, loja, miolo(tx), base() + PAGINAS.orc.url]), pagina:'orc', original: tx });
         });
       }
+      if(mdOrc){
+        var sug = PreviaCliente.SUGESTAO_ORCAMENTO, st0 = STs.find(function(x){ return x.inicial; }) || STs[0];
+        if(st0 && sug && String(mdOrc.corpo).trim() !== sug.trim()) lista.push({ grupo:'Orçamento', titulo:'SUGESTÃO — novo modelo de orçamento, com parágrafos (precisa da aprovação da Meta)', quando:'Copie o texto em Modelos › Orçamento e toque em “Enviar para aprovação da Meta”. Enquanto a Meta analisa, o atual continua valendo; aprovado, passa a valer sozinho (mesmas 4 variáveis).', modelo:{ nome:'sugestão', rodape:'Vilaça Joias' }, texto: preencherModelo(sug, [nome1, loja, miolo(textoStatus(st0)), base() + PAGINAS.orc.url]), pagina:'orc', original: sug });
+      }
       viaModelo('Orçamento', 'Orçamento — botão do WhatsApp', 'Só quando alguém toca no botão do orçamento. Vai a mensagem padrão da via (o texto do status não entra).', 'orc');
       // RESERVA / RETIRADA
-      viaModelo('Venda', 'Reserva — "Enviar ao cliente"', 'Só pelo botão depois de salvar a reserva. O texto do popup não chega ao cliente: sai o modelo da via.', 'res', { v2:'nossa equipe', nomeCru:true }, 'VILAÇA JOIAS');
-      viaModelo('Pedido', 'Retirada — "Reenviar link ao cliente"', 'Só pelo botão na tela de retirada.', 'os', { v2:'nossa equipe', nomeCru:true }, 'VILAÇA JOIAS');
+      viaModelo('Venda', 'Reserva — "Enviar ao cliente"', 'Só pelo botão depois de salvar a reserva. O texto do popup não chega ao cliente: sai o modelo da via.', 'res');
+      viaModelo('Pedido', 'Retirada — "Reenviar link ao cliente"', 'Só pelo botão na tela de retirada.', 'os');
       // PÓS-VENDA / ANIVERSÁRIO
       var mdPv = corpoDe(modelos, 'posvenda');
       if(mdPv) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda.', modelo: mdPv, texto: preencherModelo(mdPv.corpo, [nome1]), pagina:'' });
       var mdAn = corpoDe(modelos, 'aniversario');
-      if(mdAn) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje.', modelo: mdAn, texto: preencherModelo(mdAn.corpo, [nome1]), pagina:'' });
+      if(mdAn) lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante.', modelo: mdAn, texto: preencherModelo(mdAn.corpo, [nome1]), pagina:'' });
       // CHAMAR CLIENTE / RECADO
       var mdCh = corpoDe(modelos, 'chamar_cliente');
       if(mdCh){
@@ -132,5 +138,7 @@
       document.head.appendChild(s); }
     desenhar();
   }
-  window.PreviaCliente = { montar: montar, _miolo: miolo, _preencherModelo: preencherModelo };
+  /* 22/11: corpo sugerido para o modelo de orçamento (mesmas variáveis: {{1}} nome, {{2}} loja, {{3}} texto do status, {{4}} link) */
+  var SUGESTAO_ORCAMENTO = 'Olá, {{1}}!\n\n{{2}} informa sobre o seu orçamento.\n\n{{3}}\n\nO detalhamento completo, com fotos, está disponível no link:\n{{4}}\n\nQualquer dúvida, é só responder esta mensagem!';
+  window.PreviaCliente = { montar: montar, _miolo: miolo, _preencherModelo: preencherModelo, SUGESTAO_ORCAMENTO: SUGESTAO_ORCAMENTO };
 })();
