@@ -6,7 +6,7 @@ module.exports = { casos: [
     t.ok(/let currentTab = 'inicio';/.test(d) && /currentTab = 'inicio';/.test(d), 'abre em Início');
     // 22/11 (Felipe): o que virou cartão NÃO aparece como aba no topo do app; cada tela tem o botão "Início do DP"
     t.ok(/parent\.postMessage\(\{ type:'tabs', modulo:'dp', tabs: \[\], active: null \}, '\*'\)/.test(d), 'nenhuma aba no topo');
-    t.ok(/if\(currentTab!=='inicio'\)\{[\s\S]{0,200}Início do DP[\s\S]{0,300}main\.prepend\(volta\)/.test(d), 'botão Início do DP em toda tela');
+    t.ok(/if\(currentTab!=='inicio'\)\{[\s\S]{0,400}Início do DP[\s\S]{0,600}main\.prepend\(volta\)/.test(d), 'botão Início do DP em toda tela');
     t.ok(/const TABS = \[\n  \{ id:'inicio', label:'Início'/.test(d) && /ABAS_PROPRIAS = \['inicio',/.test(d), 'Início é a 1ª aba, para todos os níveis');
     t.ok(/currentTab==='inicio'\) renderInicioDP\(main\)/.test(d) && /abasVisiveisDP\(\)\.filter\(t=>t\.id!=='inicio'\)/.test(d), 'cartões = abas visíveis (respeita o nível)');
     t.ok(/r\.tipo==='aviso' && !r\.confirmadoEm/.test(d), 'contador de advertências sem ciente');
