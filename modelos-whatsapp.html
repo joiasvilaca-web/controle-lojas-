@@ -5,6 +5,7 @@
 <script src="tema.js"></script>
 <script src="icones.js"></script>
 <script src="formato.js"></script>
+<script src="previa-cliente.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Modelos WhatsApp — Gestão e Controle</title>
@@ -60,9 +61,11 @@
   <p class="page-sub">Um modelo para cada lugar do app que manda mensagem. Edite o texto e envie para a Meta aprovar. Enquanto a Meta analisa, o modelo atual continua valendo; quando aprova, o app passa a usar o novo sozinho. Só a Diretoria vê esta tela.</p>
   <div class="abas">
     <button class="aba on" data-aba="modelos" type="button">Modelos</button>
+    <button class="aba" data-aba="previa" type="button">O que o cliente recebe</button>
     <button class="aba" data-aba="custos" type="button">Custos da Meta</button>
   </div>
   <div id="abaModelos"></div>
+  <div id="abaPrevia" style="display:none;"></div>
   <div id="abaCustos" style="display:none;"></div>
 </div>
 <div id="toast"></div>
@@ -249,12 +252,22 @@ function csv(){
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'})); a.download = 'custos-meta.csv'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },500);
 }
 
+/* 22/11: aba "O que o cliente recebe" — prévia de todas as mensagens ao cliente e do card do link (previa-cliente.js). */
+async function abrirPrevia(){
+  const box = $('abaPrevia'); box.innerHTML = '<div class="card muted">Carregando…</div>';
+  if(!modelos.length) await carregar();
+  let cfg = null;
+  try{ const r = await fetch(SUPABASE_URL + '/functions/v1/db-gateway', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __senha, op:'getConfig' }) }); const j = await r.json(); cfg = j && j.data; }catch(e){}
+  if(!cfg){ box.innerHTML = '<div class="card"><b>Não foi possível carregar a configuração.</b><div class="muted small">Confira a internet e abra a aba de novo.</div></div>'; return; }
+  if(window.PreviaCliente) PreviaCliente.montar(box, { modelos, config: cfg });
+}
 function iniciar(){
   document.querySelectorAll('.aba').forEach(b=> b.addEventListener('click', ()=>{
     document.querySelectorAll('.aba').forEach(x=> x.classList.toggle('on', x===b));
-    const custos = b.dataset.aba==='custos';
-    $('abaModelos').style.display = custos?'none':''; $('abaCustos').style.display = custos?'':'none';
+    const aba = b.dataset.aba, custos = aba==='custos';
+    $('abaModelos').style.display = aba==='modelos'?'':'none'; $('abaCustos').style.display = custos?'':'none'; $('abaPrevia').style.display = aba==='previa'?'':'none';
     if(custos){ desenharCustosEsqueleto(); carregarCustos(); }
+    if(aba==='previa') abrirPrevia();
   }));
   $('app').style.display = 'block';
   carregar();

@@ -100,7 +100,7 @@
     var j={};
     try{
       var res=await fetch((window.SUPABASE_URL||'')+'/functions/v1/enviar-via',{ method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY },
-        body:JSON.stringify({ senha:ctx.senha, lojaId:order.lojaId||'', telefone:order.telefone, texto:textoCliente(order,r,ctx.statusNome)+rodape(ctx,order), tipo:'chamar_cliente', registroId:order.id, via:'RECADO '+(order.codigoVia||''), rotulo:'RECADO PENDÊNCIA' }) });
+        body:JSON.stringify({ senha:ctx.senha, lojaId:order.lojaId||'', telefone:order.telefone, cliente:order.cliente||'', texto:textoCliente(order,r,ctx.statusNome)+rodape(ctx,order), tipo:'chamar_cliente', registroId:order.id, via:'RECADO '+(order.codigoVia||''), rotulo:'RECADO PENDÊNCIA' }) });
       j=await res.json().catch(function(){ return {}; });
     }catch(e){ j={ erro:'Sem conexão com o envio automático. Confira a internet e tente de novo.' }; }
     enviando=false; if(botao) botao.disabled=false;
