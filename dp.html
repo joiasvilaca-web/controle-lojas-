@@ -317,7 +317,7 @@ let __configCarregadaOk = false; // só permite salvar depois de carregar a conf
 let funcionarios = [];
 let registros = [];
 let currentUser = null;
-let currentTab = 'funcionarios';
+let currentTab = 'inicio';   // 21/11: o DP abre na tela de cartões
 let __gatewaySenha = null;
 
 async function gatewayCall(body){
@@ -1491,13 +1491,14 @@ function enterApp(){
   document.getElementById('whoName').innerHTML = `<b>${escapeHtml(currentUser.nome)}</b>`;
   document.getElementById('whoLevel').textContent = levelLabel(currentUser.nivel);
   buildTabs();
-  currentTab = 'funcionarios';
+  currentTab = 'inicio';
   if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'dp', tabs: abasVisiveisDP(), active: currentTab }, '*');
   renderTabs();
   renderView();
 }
 
 const TABS = [
+  { id:'inicio', label:'Início', icon:'grade' },
   { id:'funcionarios', label:'Funcionários', icon:'usuarios' },
   { id:'vendas', label:'Vendas e comissões', icon:'grafico', soDiretoria:true },
   { id:'pagamentos', label:'Pagamentos', icon:'dinheiro', soDiretoria:true },
@@ -1510,7 +1511,7 @@ const TABS = [
   { id:'regimento', label:'Regimento interno', icon:'documento' },
 ];
 function abasVisiveisDP(){
-  const ABAS_PROPRIAS = ['funcionarios','pagamentos','ferias','avisos','atestados','regimento'];
+  const ABAS_PROPRIAS = ['inicio','funcionarios','pagamentos','ferias','avisos','atestados','regimento'];
   return soProprioDP()
     ? TABS.filter(t=> ABAS_PROPRIAS.includes(t.id))
     : TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : t.soGerencia ? (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente') : (!t.restrito || podeEditarDP()));
@@ -1544,8 +1545,9 @@ function renderTabs(){
 function renderView(){
   const main = document.getElementById('mainContent');
   main.innerHTML = '';
-  if(!abasVisiveisDP().some(t=>t.id===currentTab)) currentTab = 'funcionarios';
-  if(currentTab==='funcionarios') renderFuncionarios(main);
+  if(!abasVisiveisDP().some(t=>t.id===currentTab)) currentTab = 'inicio';
+  if(currentTab==='inicio') renderInicioDP(main);
+  else if(currentTab==='funcionarios') renderFuncionarios(main);
   else if(currentTab==='vendas') renderVendasDP(main);
   else if(currentTab==='pagamentos') renderRegistros(main, 'pagamento');
   else if(currentTab==='ferias') renderRegistros(main, 'ferias');
@@ -1555,6 +1557,48 @@ function renderView(){
   else if(currentTab==='acessos') renderAcessosDP(main);
   else if(currentTab==='enviarLink') renderEnviarLinkDP(main);
   else if(currentTab==='regimento') renderRegimentoDP(main);
+}
+
+/* Início do DP (21/11): as abas internas viram CARTÕES (mesmo visual dos cartões do PDV/ADM); as abas continuam no topo para trocar direto. */
+const DP_CARTAO_DESC = {
+  funcionarios:'Fichas, dados pessoais, acesso e desligamento.',
+  vendas:'Vendas do mês e cálculo das comissões.',
+  pagamentos:'Pagamentos de cada funcionário, mês a mês.',
+  ferias:'Períodos de férias e abono.',
+  avisos:'Advertências, suspensões e a ciência de cada uma.',
+  atestados:'Atestados médicos e dias de afastamento.',
+  enviarLink:'Link para o novo funcionário preencher a ficha.',
+  avaliacoes:'Avaliações dos clientes por atendente.',
+  acessos:'Funções e perfis de acesso.',
+  regimento:'Regras da empresa, imprimir e termo de recebimento.',
+};
+const DP_CARTAO_CSS = '.dp-home-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;}'
+ +'.dp-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:14px;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:22px 20px 20px;cursor:pointer;color:var(--ink);font-family:inherit;min-height:158px;box-shadow:0 1px 2px rgba(15,42,61,.04),0 1px 3px rgba(15,42,61,.04);transition:border-color .14s,box-shadow .14s,transform .14s;}'
+ +'.dp-card:hover{border-color:#B9CEDA;box-shadow:0 10px 26px -14px rgba(15,42,61,.30);transform:translateY(-2px);}'
+ +'.dp-card:focus-visible{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(31,111,139,.18);}'
+ +'.dp-card .gc-icon{width:46px;height:46px;border-radius:12px;background:var(--primary-soft);color:var(--primary);display:flex;align-items:center;justify-content:center;}'
+ +'.dp-card .gc-title{font-size:16px;font-weight:700;letter-spacing:.01em;text-transform:uppercase;}'
+ +'.dp-card .gc-desc{font-size:13px;color:var(--muted);line-height:1.5;display:block;margin-top:5px;}'
+ +'.dp-card .gc-badge{position:absolute;top:16px;right:16px;background:var(--danger);color:#fff;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 8px;}'
+ +'@media (max-width:640px){.dp-home-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}.dp-card{padding:16px 14px;min-height:140px;gap:10px;}.dp-card .gc-title{font-size:14px;}.dp-card .gc-icon{width:40px;height:40px;}}';
+function badgeCartaoDP(id){
+  if(id==='avisos'){
+    const meus = r=> !soProprioDP() || r.funcionarioId===currentUser.funcionarioId;
+    return registros.filter(r=>r.tipo==='aviso' && !r.confirmadoEm && meus(r)).length;
+  }
+  return 0;
+}
+function renderInicioDP(main){
+  if(!document.getElementById('dpCardCss')){ const st = document.createElement('style'); st.id = 'dpCardCss'; st.textContent = DP_CARTAO_CSS; document.head.appendChild(st); }
+  const cartoes = abasVisiveisDP().filter(t=>t.id!=='inicio');
+  main.innerHTML = `
+    <div class="page-head"><div><h1 class="page-title">Departamento pessoal</h1><p class="page-sub">${soProprioDP() ? 'Seus dados, registros e o regimento da empresa.' : 'Escolha o que deseja abrir.'}</p></div></div>
+    <div class="dp-home-grid">${cartoes.map(t=>{ const b = badgeCartaoDP(t.id); return `<button type="button" class="dp-card" data-dpcard="${t.id}">
+      <span class="gc-icon">${ic(t.icon, 23)}</span>
+      <span><span class="gc-title">${escapeHtml(t.label)}</span><span class="gc-desc">${escapeHtml(DP_CARTAO_DESC[t.id]||'')}</span></span>
+      ${b ? `<span class="gc-badge" title="Aguardando ciente">${b>99?'99+':b}</span>` : ''}
+    </button>`; }).join('')}</div>`;
+  main.querySelectorAll('[data-dpcard]').forEach(b=> b.addEventListener('click', ()=>{ currentTab = b.dataset.dpcard; renderTabs(); renderView(); window.scrollTo(0,0); }));
 }
 
 /* Regimento interno (21/11): texto fixo em regimento-interno.js (versionado). Todos os níveis leem; imprimir/PDF e Termo de recebimento. */
