@@ -2986,11 +2986,16 @@ const CAMPOS_POR_TIPO = {
   aviso: {
     titulo: 'Advertência', tituloPlural: 'Advertências',
     campos: [
-      { id:'tipoAviso', label:'Tipo', tipo:'select', opcoes:['Verbal','Escrita'] },
+      { id:'tipoAviso', label:'Tipo', tipo:'select', opcoes:['Verbal','Escrita','Suspensão'] },
       { id:'motivo', label:'Motivo', tipo:'text' },
+      // 21/11: suspensão disciplinar (regimento arts. 33 e 36; CLT art. 474 — até 30 dias, sem remuneração)
+      { id:'suspensaoInicio', label:'Suspensão — início', tipo:'date', soSuspensao:true },
+      { id:'suspensaoDias', label:'Suspensão — dias (1 a 30)', tipo:'number', soSuspensao:true },
+      { id:'suspensaoFim', label:'Suspensão — término', tipo:'date', soSuspensao:true },
+      { id:'regraInfringida', label:'Regra descumprida (artigo do regimento / lei)', tipo:'text' },
       { id:'descricao', label:'Descrição', tipo:'textarea' },
     ],
-    colunas: ['tipoAviso','motivo'],
+    colunas: ['tipoAviso','motivo','suspensaoInicio'],
   },
   atestado: {
     titulo: 'Atestado médico', tituloPlural: 'Atestados',
@@ -3010,8 +3015,8 @@ function renderRegistros(main, tipo){
   const meta = CAMPOS_POR_TIPO[tipo];
   const podeEditar = podeEditarDP();
   const NOVO_ROTULO = { pagamento:'Novo pagamento', ferias:'Registrar férias', aviso:'Nova advertência', atestado:'Novo atestado', vendaspg:'Novo registro' };
-  const SUB_ROTULO = { pagamento:'Pagamentos de cada funcionário, mês a mês.', ferias:'Períodos de férias tirados por funcionário.', aviso:'Advertências e a confirmação de leitura de cada uma.', atestado:'Atestados médicos e dias de afastamento.', vendaspg:'Vendas do mês conferidas no Venda PG.' };
-  const tituloColuna = c=> meta.campos.find(x=>x.id===c) ? meta.campos.find(x=>x.id===c).label : (c==='valorLiquido'?'Valor líquido':c==='totalItens'?'Total dos itens':c);
+  const SUB_ROTULO = { pagamento:'Pagamentos de cada funcionário, mês a mês.', ferias:'Períodos de férias tirados por funcionário.', aviso:'Advertências e suspensões, com a confirmação de leitura de cada uma.', atestado:'Atestados médicos e dias de afastamento.', vendaspg:'Vendas do mês conferidas no Venda PG.' };
+  const tituloColuna = c=> c==='suspensaoInicio' ? 'Período da suspensão' : meta.campos.find(x=>x.id===c) ? meta.campos.find(x=>x.id===c).label : (c==='valorLiquido'?'Valor líquido':c==='totalItens'?'Total dos itens':c);
   const colunaNum = c=> c==='valorLiquido' || c==='totalItens' || (meta.campos.find(x=>x.id===c)||{}).tipo==='number';
   main.innerHTML = `
     <div class="page-head">
@@ -3019,7 +3024,7 @@ function renderRegistros(main, tipo){
         <h1 class="page-title">${meta.tituloPlural}</h1>
         <p class="page-sub">${podeEditar ? (SUB_ROTULO[tipo] || 'Histórico por funcionário.') : 'Seu histórico.'}</p>
       </div>
-      ${podeEditar ? `<div class="page-actions"><button class="btn btn-accent" id="btnNovoRegistro">${ic('mais')} ${NOVO_ROTULO[tipo] || 'Novo registro'}</button></div>` : ''}
+      ${podeEditar ? `<div class="page-actions"><button class="btn btn-accent" id="btnNovoRegistro">${ic('mais')} ${NOVO_ROTULO[tipo] || 'Novo registro'}</button>${tipo==='aviso' && currentUser.nivel==='diretoria' ? `<button class="btn btn-ghost" id="btnNovaSuspensao" style="margin-left:8px;">${ic('alerta')} Aplicar suspensão</button>` : ''}</div>` : ''}
     </div>
     <div class="card filtro-barra">
       <div class="filters" style="margin-bottom:0;">
@@ -3036,6 +3041,7 @@ function renderRegistros(main, tipo){
     </div>
   `;
   function valorFmt(reg, campoId){
+    if(campoId==='suspensaoInicio') return reg.tipoAviso==='Suspensão' && reg.suspensaoInicio ? `${fmtDate(reg.suspensaoInicio)} a ${fmtDate(reg.suspensaoFim)} (${reg.suspensaoDias||'?'} dia${Number(reg.suspensaoDias)===1?'':'s'})` : '—';
     if(campoId==='valorLiquido'){
       const liquido = (Number(reg.salarioBase)||0) + (Number(reg.horasExtras)||0) + (Number(reg.adicionais)||0) - (Number(reg.descontos)||0);
       return fmtMoeda(liquido);
@@ -3096,6 +3102,7 @@ function renderRegistros(main, tipo){
   draw();
   document.getElementById('fFunc').addEventListener('change', draw);
   if(document.getElementById('btnNovoRegistro')) document.getElementById('btnNovoRegistro').addEventListener('click', ()=> abrirRegistroModal(tipo, null, draw));
+  if(document.getElementById('btnNovaSuspensao')) document.getElementById('btnNovaSuspensao').addEventListener('click', ()=> abrirRegistroModal(tipo, null, draw, { suspensao:true }));
 }
 
 /** O telefone usado pra notificar é sempre o celular particular — nunca o fixo ou o da loja. */
@@ -3155,7 +3162,8 @@ function notificarPorWhatsapp(registro, redesenhar){
   const tel = onlyDigitsDp(funcionario && funcionario.celularParticular);
   if(!tel){ showToast('Esse funcionário não tem celular particular cadastrado (Cadastro → Funcionários).'); return; }
   const linkConfirmacao = window.location.origin + '/advertencia.html?id=' + registro.id;
-  const msg = `Olá, ${funcionario.nome}! Você recebeu uma notificação de advertência. Por favor, confirme o recebimento no link: ${linkConfirmacao}`;
+  const oQue = registro.tipoAviso==='Suspensão' ? 'uma notificação de suspensão disciplinar' : 'uma notificação de advertência';
+  const msg = `Olá, ${funcionario.nome}! Você recebeu ${oQue}. Por favor, confirme o recebimento no link: ${linkConfirmacao}`;
   window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
   marcarNotificado(registro).then(redesenhar);
 }
@@ -3170,8 +3178,8 @@ async function notificarPorEmail(registro, redesenhar, botao){
       method: 'POST',
       headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON_KEY, 'Authorization':'Bearer '+SUPABASE_ANON_KEY },
       body: JSON.stringify({
-        to: email, subject: 'Notificação de Advertência — Vilaça Joias',
-        body: `Olá, ${funcionario.nome}!\n\nVocê recebeu uma notificação de advertência. Por favor, acesse o link abaixo pra confirmar o recebimento:\n${linkConfirmacao}\n\nAtenciosamente,\nVilaça Joias`,
+        to: email, subject: registro.tipoAviso==='Suspensão' ? 'Notificação de Suspensão Disciplinar — Vilaça Joias' : 'Notificação de Advertência — Vilaça Joias',
+        body: `Olá, ${funcionario.nome}!\n\nVocê recebeu ${registro.tipoAviso==='Suspensão' ? 'uma notificação de suspensão disciplinar' : 'uma notificação de advertência'}. Por favor, acesse o link abaixo pra confirmar o recebimento:\n${linkConfirmacao}\n\nAtenciosamente,\nVilaça Joias`,
         senha: __gatewaySenha,
       }),
     });
@@ -3184,7 +3192,8 @@ async function notificarPorEmail(registro, redesenhar, botao){
   if(botao){ botao.disabled = false; }
 }
 
-function abrirRegistroModal(tipo, r, onSalvo){
+function abrirRegistroModal(tipo, r, onSalvo, opts){
+  opts = opts || {};
   const meta = CAMPOS_POR_TIPO[tipo];
   const editando = !!r;
   const podeEditar = podeEditarDP();
@@ -3194,8 +3203,11 @@ function abrirRegistroModal(tipo, r, onSalvo){
     <div class="field"><label for="rg_funcionarioId">Funcionário</label><select id="rg_funcionarioId" ${podeEditar?'':'disabled'}>${funcionarioOptionsHtml(r?r.funcionarioId:'')}</select></div>
     <div class="grid-2">
     ${meta.campos.map(c=>{
-      const val = r ? (r[c.id]!==undefined?r[c.id]:'') : '';
+      let val = r ? (r[c.id]!==undefined && r[c.id]!==null?r[c.id]:'') : '';
+      if(c.id==='tipoAviso' && !r && opts.suspensao) val = 'Suspensão';
       const dis = podeEditar?'':'disabled';
+      if(c.soSuspensao) return `<div class="field" data-sosusp="1"><label for="rg_${c.id}">${c.label}</label><input type="${c.tipo==='number'?'number':'date'}" ${c.tipo==='number'?'min="1" max="30" step="1"':''} id="rg_${c.id}" value="${escapeHtml(String(val))}" ${dis}${c.id==='suspensaoFim'?' readonly title="Calculado pelo início e pelos dias"':''}></div>`;
+      if(c.id==='tipoAviso'){ const ops = c.opcoes.filter(o=> o!=='Suspensão' || currentUser.nivel==='diretoria' || val==='Suspensão'); return `<div class="field"><label for="rg_${c.id}">${c.label}</label><select id="rg_${c.id}" ${dis}>${ops.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`; }
       if(c.tipo==='textarea') return `<div class="field span-2"><label for="rg_${c.id}">${c.label}</label><textarea id="rg_${c.id}" rows="3" ${dis}>${escapeHtml(val)}</textarea></div>`;
       if(c.tipo==='select') return `<div class="field"><label for="rg_${c.id}">${c.label}</label><select id="rg_${c.id}" ${dis}>${c.opcoes.map(o=>`<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('')}</select></div>`;
       if(c.tipo==='number') return `<div class="field"><label for="rg_${c.id}">${c.label}</label><input type="number" step="0.01" id="rg_${c.id}" value="${val}" ${dis}></div>`;
@@ -3204,6 +3216,7 @@ function abrirRegistroModal(tipo, r, onSalvo){
       return `<div class="field"><label for="rg_${c.id}">${c.label}</label><input id="rg_${c.id}" value="${escapeHtml(val)}" ${dis}></div>`;
     }).join('')}
     </div>
+    ${tipo==='aviso' ? `<div id="rgSuspInfo" class="bloco" style="display:none;margin-top:4px;"><p class="dica" style="margin:0 0 6px;">Suspensão disciplinar: os dias não são remunerados nem contam para o DSR, o colaborador não comparece à loja no período, e o máximo é de 30 dias (CLT, art. 474). Só a Diretoria aplica (regimento, art. 49).</p><div id="rgHistAnt"></div></div>` : ''}
     ${tipo==='aviso' && editando ? `
       <div class="bloco" style="border-top:1px solid var(--line); margin-top:4px;">
         <h3>Situação da notificação</h3>
@@ -3221,6 +3234,23 @@ function abrirRegistroModal(tipo, r, onSalvo){
     </div>
   `);
   document.getElementById('btnCancelarReg').addEventListener('click', closeModal);
+  // Advertência × suspensão: mostra os campos do período, calcula o término e lista as medidas anteriores do colaborador.
+  function historicoAnteriorDe(funcId){
+    return registros.filter(x=>x.tipo==='aviso' && x.funcionarioId===funcId && (!r || x.id!==r.id))
+      .sort((a,b)=>String(a.data||'').localeCompare(String(b.data||'')))
+      .map(x=>`${fmtDate(x.data)} — ${x.tipoAviso==='Suspensão' ? 'Suspensão de '+(x.suspensaoDias||'?')+' dia(s)' : 'Advertência '+String(x.tipoAviso||'').toLowerCase()}${x.motivo?': '+x.motivo:''}`);
+  }
+  function ajustarSuspensao(){
+    if(tipo!=='aviso') return;
+    const ehS = document.getElementById('rg_tipoAviso').value==='Suspensão';
+    document.querySelectorAll('[data-sosusp]').forEach(el=> el.style.display = ehS ? '' : 'none');
+    const info = document.getElementById('rgSuspInfo'); if(info) info.style.display = ehS ? '' : 'none';
+    const ini = document.getElementById('rg_suspensaoInicio').value, dias = parseInt(document.getElementById('rg_suspensaoDias').value,10);
+    if(ehS && ini && dias>0){ const d = new Date(ini+'T12:00:00'); d.setDate(d.getDate()+dias-1); document.getElementById('rg_suspensaoFim').value = d.toISOString().slice(0,10); }
+    const h = document.getElementById('rgHistAnt');
+    if(h && ehS){ const lista = historicoAnteriorDe(document.getElementById('rg_funcionarioId').value); h.innerHTML = '<b style="font-size:13px;">Medidas anteriores deste colaborador</b>' + (lista.length ? '<ul style="margin:4px 0 0 18px;font-size:13px;">'+lista.map(t=>'<li>'+escapeHtml(t)+'</li>').join('')+'</ul>' : '<p class="muted" style="margin:4px 0 0;font-size:13px;">Nenhuma registrada no app.</p>'); }
+  }
+  if(tipo==='aviso'){ ['rg_tipoAviso','rg_suspensaoInicio','rg_suspensaoDias','rg_funcionarioId'].forEach(id=>{ const el=document.getElementById(id); if(el){ el.addEventListener('change', ajustarSuspensao); el.addEventListener('input', ajustarSuspensao); } }); ajustarSuspensao(); }
   if(document.getElementById('btnSalvarReg'))
   document.getElementById('btnSalvarReg').addEventListener('click', async ()=>{
     const funcionarioId = document.getElementById('rg_funcionarioId').value;
@@ -3236,6 +3266,16 @@ function abrirRegistroModal(tipo, r, onSalvo){
       const el = document.getElementById('rg_'+c.id);
       dados[c.id] = c.tipo==='number' ? (el.value===''?null:parseFloat(el.value)) : el.value;
     });
+    if(tipo==='aviso'){
+      if(dados.tipoAviso==='Suspensão'){
+        if(currentUser.nivel!=='diretoria' && !(r && r.tipoAviso==='Suspensão')){ showToast('Só a Diretoria aplica suspensão.'); return; }
+        const dias = Number(dados.suspensaoDias);
+        if(!dados.suspensaoInicio){ showToast('Informe o início da suspensão.'); return; }
+        if(!Number.isInteger(dias) || dias<1 || dias>30){ showToast('A suspensão deve ter de 1 a 30 dias (CLT, art. 474).'); return; }
+        if(!String(dados.motivo||'').trim()){ showToast('Informe o motivo da suspensão.'); return; }
+        dados.historicoAnterior = historicoAnteriorDe(funcionarioId);
+      } else { dados.suspensaoInicio = ''; dados.suspensaoDias = null; dados.suspensaoFim = ''; delete dados.historicoAnterior; }
+    }
     const ok = await registroSalvar(dados);
     if(ok){
       const idx = registros.findIndex(x=>x.id===dados.id);
