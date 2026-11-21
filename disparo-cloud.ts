@@ -1,3 +1,4 @@
+// disparo-cloud v12 (22/11/2026): orçamento com MODELO POR SITUAÇÃO — pronto / aprovado / encerrado vão nos modelos próprios de Utilidade (orc_pronto, orc_aprovado, orc_encerrado: nº do orçamento + loja + botão "Ver orçamento") só depois que a Meta aprovar; lembretes (Ação de fixação, Prorrogado) vão SEMPRE no modelo de lembrete (orc_lembrete, Marketing — regra da Meta). Sem modelo próprio aprovado, cai no genérico "orcamento" como antes.
 // disparo-cloud v11 (22/11/2026): orçamento pela API oficial leva só uma FRASE CURTA ({{3}}: pronto / continua disponível / encerrado) — detalhes no link, mensagem neutra para aprovar como Utilidade (custo menor).
 // disparo-cloud v10 (22/11/2026): aniversário com o botão "Abrir meu cartão" (link variável = primeiro nome → cartao-aniversario.html?n=Nome; só vai se o modelo ativo tiver o botão).
 // disparo-cloud v9 (22/11/2026): número de variáveis = o do modelo ATIVO (meta_modelos.corpo) — permite versão nova com variável a mais sem quebrar enquanto a Meta analisa; pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da LOJA (se o ativo tiver botao_dinamico); aniversário {{2}} = texto do Marketing; miolo também tira "Feliz aniversário X!", "Não responda…", "Atenciosamente", "Equipe Vilaça Joias" e www.
@@ -16,7 +17,7 @@ const limpa = (t: string) => String(t || "").split(NL).join(" ").split("\t").joi
 const bonito = (t: string) => String(t || "").trim().toLowerCase().replace(/(^|[ ])[^ ]/g, (m) => m.toUpperCase());
 const fone8 = (t: string) => String(t || "").replace(/[^0-9]/g, "").slice(-8);
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
-let MAPA: Record<string, { nome: string; categoria: string; nVars: number; botao: boolean }> = {};
+let MAPA: Record<string, { nome: string; categoria: string; nVars: number; botao: boolean; status: string }> = {};
 let LOJAS: Record<string, string> = {};   // v8: loja_id -> nome público (para reserva/retirada)
 let CFG: any = {};   // v11: config (status do orçamento para a frase curta)
 let REVIEW: Record<string, string> = {};  // v9: loja_id -> final do link do Google (g.page/r/<final>) para o botão do pós-venda
@@ -25,7 +26,7 @@ async function carregaMapa() {
   MAPA = {}; LOJAS = {};
   REVIEW = {};
   try { const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle(); CFG = (cf && cf.payload) || {}; for (const l of ((cf && cf.payload && cf.payload.lojas) || [])) if (l && l.id) { LOJAS[l.id] = String(l.nomePublico || l.nomeFantasia || l.nome || ""); const g = String(l.googleReviewUrl || "").match(/g[.]page[/]r[/](.+)$/); if (g) REVIEW[l.id] = g[1]; } } catch (_) {}
-  try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria,corpo,botao_dinamico"); for (const m of data || []) MAPA[m.chave] = { nome: m.nome_template, categoria: m.categoria, nVars: nVarsDe(m.corpo), botao: !!m.botao_dinamico }; } catch (_) {}
+  try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria,corpo,botao_dinamico,status"); for (const m of data || []) MAPA[m.chave] = { nome: m.nome_template, categoria: m.categoria, nVars: nVarsDe(m.corpo), botao: !!m.botao_dinamico, status: String(m.status || "") }; } catch (_) {}
 }
 /** 22/11: frase CURTA do orçamento para o WhatsApp oficial ({{3}}). Mensagem neutra, de atualização do orçamento (categoria Utilidade = mais barata);
  *  valores, fotos e condições ficam no link. O texto completo do status continua indo só pelo número da Reforma. */
@@ -36,6 +37,15 @@ function fraseOrc(cfg: any, statusId: string): string {
   if (st.encerra && statusId !== "aprovado") return "Seu orçamento foi encerrado. Se puder, conte no link o que podemos melhorar.";
   if (st.encerra) return "Seu orçamento foi aprovado.";
   return "Seu orçamento continua disponível para você.";
+}
+/** v12: modelo de cada situação do orçamento. Lembrete (status em aberto que não é o inicial) é Marketing pela regra da Meta
+ *  ("lembrete de oferta é marketing, mesmo pedido pelo cliente") e NUNCA sai por modelo de Utilidade. */
+function chaveOrc(cfg: any, statusId: string): string {
+  const st = ((cfg && cfg.statusOrcamento) || []).find((s: any) => s && s.id === statusId) || null;
+  if (!st) return "orcamento";
+  if (st.inicial) return "orc_pronto";
+  if (st.encerra) return statusId === "aprovado" ? "orc_aprovado" : "orc_encerrado";
+  return "orc_lembrete";
 }
 function normalizaTelefone(t: string): string | null {
   let d = String(t || "").replace(/[^0-9]/g, "");
@@ -88,8 +98,15 @@ function modelo(item: any, orcOn: boolean): { chave: string; name: string; param
     const lj = flat.match(/da ([^.]+)[.]/);
     if (!l) return null;
     // v11: {{3}} = frase curta (os detalhes ficam no link); loja = nome público da loja da fila
-    const corpo = fraseOrc(CFG, String((item.marcar && item.marcar.chave) || ""));
-    return { chave: "orcamento", name: "orcamento_acompanhamento", params: [nome, LOJAS[item.loja_id] || limpa(lj ? lj[1] : "Vilaça Joias"), corpo, l[0]] };
+    const statusId = String((item.marcar && item.marcar.chave) || "");
+    const loja = LOJAS[item.loja_id] || limpa(lj ? lj[1] : "Vilaça Joias");
+    const corpo = fraseOrc(CFG, statusId);
+    // v12: modelo próprio da situação (Utilidade) só depois de aprovado pela Meta; lembrete sempre no modelo de lembrete (Marketing)
+    const k = chaveOrc(CFG, statusId), proprio = MAPA[k];
+    const idLink = (l[0].match(/[?&]id=([A-Za-z0-9_%.-]+)/) || [])[1] || "";
+    if (k === "orc_lembrete" && proprio) return { chave: k, name: proprio.nome, params: [nome, loja, corpo, l[0]] };
+    if (k !== "orc_lembrete" && k !== "orcamento" && proprio && proprio.status === "APPROVED" && item.__codOrc && idLink) return { chave: k, name: proprio.nome, params: [nome, item.__codOrc, loja], botao: idLink };
+    return { chave: "orcamento", name: "orcamento_acompanhamento", params: [nome, loja, corpo, l[0]] };
   }
   if (item.tipo === "via") {
     const l = flat.match(/https:[/][/]vilaca[.]app[/][^ ]+/);
@@ -108,6 +125,9 @@ async function enviaCloud(item: any, numero: string, orcOn: boolean) {
   if (!tk || !pid) return { ok: false, erro: "API oficial sem token/ID configurado", status: 0, parar: true };
   if (item.tipo === "via" && item.registro_tabela === "os" && item.registro_id) {   // v8: status atual do pedido (para o modelo "pronto")
     try { const { data: os } = await admin.from("ordens_servico").select("payload").eq("id", item.registro_id).maybeSingle(); item.__statusOs = os && os.payload ? String(os.payload.status || "") : ""; } catch (_) {}
+  }
+  if (item.tipo === "via" && item.registro_tabela === "orc_acao" && item.registro_id) {   // v12: nº do orçamento (código da via) para os modelos próprios
+    try { const { data: oc } = await admin.from("orcamentos").select("payload").eq("id", item.registro_id).maybeSingle(); item.__codOrc = oc && oc.payload ? String(oc.payload.codigoVia || "").trim() : ""; } catch (_) {}
   }
   const p = modelo(item, orcOn);
   if (!p) return { ok: false, erro: "Sem modelo da API oficial para esta mensagem", status: 0, definitivo: true };

@@ -1,3 +1,4 @@
+// acompanhamento-auto v25 (22/11/2026): orçamento com MODELO POR SITUAÇÃO (orcModelo) — pronto / encerrado / aprovado nos modelos próprios de Utilidade (nº do orçamento + loja + botão "Ver orçamento") só depois que a Meta aprovar; lembretes (Ação de fixação, Prorrogado) sempre no modelo de lembrete (orc_lembrete, Marketing). Sem modelo próprio aprovado, cai no genérico "orcamento" como antes.
 // acompanhamento-auto v24 (22/11/2026): orçamento pela API oficial leva só a FRASE CURTA (fraseOrc) — detalhes no link, para aprovar como Utilidade.
 // acompanhamento-auto v23 (22/11/2026): variáveis conforme o modelo ATIVO (meta_modelos.corpo); pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da loja (se o ativo tiver botao_dinamico); miolo igual ao disparo-cloud v9.
 // acompanhamento-auto v22 (22/11/2026): Reforma Joias (chip reformajoias) sai SEM o link wa.me da Vilaça e sem o pedido de 👍 (limpaTextoReforma, igual ao enviar-via v18); orçamento: "Aqui é <vendedora>."
@@ -12,16 +13,16 @@ const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: 
 const MIN_INI = 9 * 60, MIN_FIM = 19 * 60, MIN_FIM_ENVIO = 20 * 60, LIMITE_MS = 50000, PISO_SEG_MS = 5 * 60000, FALHAS_PARA_PAUSAR = 3;
 const WA_ATENDIMENTO = "https://wa.me/5532988307617";
 const NL = String.fromCharCode(10);
-let MAPA_MOD: Record<string, { nome: string; categoria: string; nVars: number; botao: boolean }> | null = null, MAPA_EM = 0;
+let MAPA_MOD: Record<string, { nome: string; categoria: string; nVars: number; botao: boolean; status: string }> | null = null, MAPA_EM = 0;
 const nVarsDe = (corpo: string) => new Set(String(corpo || "").match(/\{\{\s*\d+\s*\}\}/g) || []).size;
 const CHAVE_DO_NOME: Record<string, string> = { orcamento_acompanhamento: "orcamento", pos_venda_garantia: "posvenda", pedido_pronto_acompanhamento: "pedido_pronto" };
 let ULTIMO_MODELO: { modelo: string; categoria: string } | null = null;
 async function modeloAtivo(nome: string): Promise<{ nome: string; categoria: string; nVars?: number; botao?: boolean }> {
   if (!MAPA_MOD || Date.now() - MAPA_EM > 60000) {
     MAPA_MOD = {}; MAPA_EM = Date.now();
-    try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria,corpo,botao_dinamico"); for (const m of data || []) MAPA_MOD[m.chave] = { nome: m.nome_template, categoria: m.categoria, nVars: nVarsDe(m.corpo), botao: !!m.botao_dinamico }; } catch (_) {}
+    try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria,corpo,botao_dinamico,status"); for (const m of data || []) MAPA_MOD[m.chave] = { nome: m.nome_template, categoria: m.categoria, nVars: nVarsDe(m.corpo), botao: !!m.botao_dinamico, status: String(m.status || "") }; } catch (_) {}
   }
-  const a = MAPA_MOD[CHAVE_DO_NOME[nome] || ""];
+  const a = MAPA_MOD[CHAVE_DO_NOME[nome] || nome];   // v25: aceita também a chave do modelo (ex.: orc_pronto)
   return a ? a : { nome, categoria: "" };
 }
 let cacheInst: { em: number; v: string } | null = null;
@@ -146,6 +147,26 @@ function fraseOrc(cfg: any, statusId: string): string {
   if (st.encerra && statusId !== "aprovado") return "Seu orçamento foi encerrado. Se puder, conte no link o que podemos melhorar.";
   if (st.encerra) return "Seu orçamento foi aprovado.";
   return "Seu orçamento continua disponível para você.";
+}
+/** v25: modelo de cada situação do orçamento. Lembrete (status em aberto que não é o inicial) é Marketing pela regra da Meta
+ *  ("lembrete de oferta é marketing, mesmo pedido pelo cliente") e NUNCA sai por modelo de Utilidade. */
+function chaveOrc(cfg: any, statusId: string): string {
+  const st = ((cfg && cfg.statusOrcamento) || []).find((s: any) => s && s.id === statusId) || null;
+  if (!st) return "orcamento";
+  if (st.inicial) return "orc_pronto";
+  if (st.encerra) return statusId === "aprovado" ? "orc_aprovado" : "orc_encerrado";
+  return "orc_lembrete";
+}
+/** v25: modelo + variáveis do orçamento. Modelo próprio da situação só depois de aprovado pela Meta (e com nº do orçamento); senão, o genérico "orcamento" como antes. */
+async function orcModelo(cfg: any, reg: any, statusId: string, id: string): Promise<{ nome: string; params: string[]; botao?: string }> {
+  await modeloAtivo("orcamento_acompanhamento");   // carrega o mapa dos modelos
+  const k = chaveOrc(cfg, statusId);
+  const proprio = MAPA_MOD ? MAPA_MOD[k] : null;
+  const generico = [primeiroNome(reg.cliente), nomeDaLoja(cfg, reg), fraseOrc(cfg, statusId), linkOrc(id)];
+  if (k === "orc_lembrete" && proprio) return { nome: k, params: generico };
+  const cod = String((reg && reg.codigoVia) || "").trim();
+  if (k !== "orc_lembrete" && k !== "orcamento" && proprio && proprio.status === "APPROVED" && cod) return { nome: k, params: [primeiroNome(reg.cliente), cod, nomeDaLoja(cfg, reg)], botao: encodeURIComponent(id) };
+  return { nome: "orcamento_acompanhamento", params: generico };
 }
 function miolo(texto: string): string {
   // 22/11: links saem do parágrafo mas o TEXTO fica (o convite "o que podemos melhorar" do Recusado voltava cortado);
@@ -278,7 +299,8 @@ async function abertoAgora(body: any) {
   const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) : limpaTextoReforma(t0);   // v22
   let ok = false, status = 0;
   if (nuvemAg) {
-    const rc = await enviaModelo(tel, "orcamento_acompanhamento", [primeiroNome(o.cliente), nomeDaLoja(cfg, o), fraseOrc(cfg, String(p0.statusId || "")), linkOrc(id)]);   // v24: frase curta
+    const mo = await orcModelo(cfg, o, String(p0.statusId || ""), id);   // v25: modelo da situação (v24: frase curta no genérico)
+    const rc = await enviaModelo(tel, mo.nome, mo.params, mo.botao);
     ok = rc.ok; status = rc.status;
   } else {
     try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
@@ -413,10 +435,10 @@ Deno.serve(async (req: Request) => {
     const instanciaDe = (lojaId: string) => (lojaId === "loja_rj" ? "reformajoias" : INST_D);
     const nuvem = (it: Item) => FL.tudo && instanciaDe(String(it.reg.lojaId || "")) === INST_D && (it.tipo === "posvenda" || it.tipo === "os_posvenda" || (it.tipo === "orcamento" && FL.orc) || (it.tipo === "os_pronto" && FL.pronto));
     const reviewDe = (lojaId: string) => { const l = (cfg.lojas || []).find((x: any) => x && x.id === lojaId) || (cfg.lojas || []).find((x: any) => x && x.id === "loja_mc"); const g = String((l && l.googleReviewUrl) || "").match(/g[.]page[/]r[/](.+)$/); return g ? g[1] : ""; };
-    const modeloRobot = (it: Item, reg: any): { nome: string; params: string[]; botao?: string } | null => {
+    const modeloRobot = async (it: Item, reg: any): Promise<{ nome: string; params: string[]; botao?: string } | null> => {
       // v23: {{2}} = texto do pós-venda (só vai se o modelo ativo tiver {{2}}) e botão Google da loja
       if (it.tipo === "posvenda" || it.tipo === "os_posvenda") return { nome: "pos_venda_garantia", params: [primeiroNome(reg.cliente), miolo(it.texto) || "Queremos agradecer a oportunidade de fazer parte de um momento especial com a sua nova joia."], botao: reviewDe(String(reg.lojaId || "")) };
-      if (it.tipo === "orcamento") return { nome: "orcamento_acompanhamento", params: [primeiroNome(reg.cliente), nomeDaLoja(cfg, reg), fraseOrc(cfg, it.statusDestino), linkOrc(it.id)] };   // v24: frase curta
+      if (it.tipo === "orcamento") return await orcModelo(cfg, reg, it.statusDestino, it.id);   // v25: modelo da situação (v24: frase curta no genérico)
       if (it.tipo === "os_pronto") return { nome: "pedido_pronto_acompanhamento", params: [primeiroNome(reg.cliente), bonito(reg.vendedora || "") || "nossa equipe", nomeDaLoja(cfg, reg), `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(it.id)}`] };
       return null;
     };
@@ -508,7 +530,7 @@ Deno.serve(async (req: Request) => {
       }
       if (!motivoSem) {
         if (viaNuvem) {
-          const m = modeloRobot(f, reg);
+          const m = await modeloRobot(f, reg);
           if (m) { const rc = await enviaModelo(String(f.tel), m.nome, m.params, m.botao); ok = rc.ok; status = rc.status; }
           await espera(1100);
         } else {
