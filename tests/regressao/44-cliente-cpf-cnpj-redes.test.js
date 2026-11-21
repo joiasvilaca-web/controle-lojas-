@@ -13,7 +13,7 @@ module.exports = { casos: [
     const c = vm.createContext({}); vm.runInContext(a + '\n' + b, c);
     t.ok(c.normalizarPerfilRede('@Maria.Joias') === 'maria.joias' && c.normalizarPerfilRede('https://www.instagram.com/loja_x/') === 'loja_x', 'tira @ e aceita link');
     t.ok(c.normalizarPerfilRede('nome com espaço') === '' && c.normalizarPerfilRede('') === '', 'recusa perfil inválido');
-    t.ok(c.linkDirectInstagram('maria.joias') === 'https://ig.me/m/maria.joias', 'abre o direct');
+    t.ok(c.linkDirectInstagram('maria.joias') === 'https://www.instagram.com/maria.joias/', 'abre o perfil (ig.me/m dava erro em perfil pessoal)');
     t.ok(/redesSociais: \(window\.__ccRedes \|\| \[\]\)\.slice\(0, 10\)/.test(s) && /id="ccRedeAdd"/.test(s), 'salva a lista (até 10)');
   } },
 ] };
