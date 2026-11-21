@@ -4214,6 +4214,14 @@ function formatarNumeroTelefoneCli(d){
   if(d.length<=8) return d.slice(0,d.length-4)+'-'+d.slice(-4);
   return d.slice(0,5)+'-'+d.slice(5);
 }
+/* 21/11: perfil de rede social (Instagram) — guarda sem @, só letras, números, ponto e _ (até 30). Aceita colarem o link do perfil. */
+function normalizarPerfilRede(t){
+  let u = String(t||'').trim();
+  const m = u.match(/instagram\.com\/([^/?#\s]+)/i); if(m) u = m[1];
+  u = u.replace(/^@+/, '').trim().toLowerCase();
+  return /^[a-z0-9._]{1,30}$/.test(u) ? u : '';
+}
+function linkDirectInstagram(u){ return 'https://ig.me/m/' + encodeURIComponent(u); }
 function clienteModalHtml(c){
   c = c||{};
   const tel = separarTelefoneCli(c.telefone);
@@ -4224,10 +4232,18 @@ function clienteModalHtml(c){
         <input id="ccTelDDD" placeholder="DDD" maxlength="2" inputmode="numeric" aria-label="DDD" style="width:64px; flex-shrink:0;" value="${escapeHtml(tel.ddd)}">
         <input id="ccTelNum" placeholder="00000-0000" maxlength="10" inputmode="numeric" aria-label="Número do celular" value="${escapeHtml(tel.numero.length>=8 ? formatarNumeroTelefoneCli(tel.numero) : tel.numero)}">
       </div></div>
-      <div class="field"><label for="ccCpf">CPF</label><input id="ccCpf" inputmode="numeric" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field"><label for="ccTipoPessoa">Tipo de pessoa</label><select id="ccTipoPessoa"><option value="PF" ${c.tipoPessoa!=='PJ'?'selected':''}>Pessoa física</option><option value="PJ" ${c.tipoPessoa==='PJ'?'selected':''}>Pessoa jurídica</option></select></div>
+      <div class="field" id="ccCampoCpf" ${c.tipoPessoa==='PJ'?'style="display:none;"':''}><label for="ccCpf">CPF</label><input id="ccCpf" inputmode="numeric" value="${escapeHtml(c.cpf||'')}"></div>
+      <div class="field" id="ccCampoCnpj" ${c.tipoPessoa==='PJ'?'':'style="display:none;"'}><label for="ccCnpj">CNPJ</label><input id="ccCnpj" inputmode="numeric" value="${escapeHtml(c.cnpj||'')}"></div>
       <div class="field"><label for="ccEmail">E-mail</label><input type="email" id="ccEmail" value="${escapeHtml(c.email||'')}"></div>
       <div class="field"><label for="ccNasc">Data de nascimento</label><input type="date" id="ccNasc" value="${c.dataNascimento||''}"></div>
     </div>
+    <div class="section-label">Redes sociais <span class="muted" style="font-weight:400;">— toque no perfil para abrir o direct no Instagram</span></div>
+    <div class="field" id="ccRedesCampo"><div style="display:flex;gap:6px;align-items:stretch;max-width:420px;">
+      <span style="display:flex;align-items:center;padding:0 10px;border:1px solid var(--line-strong,var(--line));border-radius:8px;background:var(--surface-2,#f4f6f8);font-weight:700;" aria-hidden="true">@</span>
+      <input id="ccRedeInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="nome do perfil" aria-label="Perfil da rede social (sem o @)" style="flex:1;min-width:0;">
+      <button type="button" class="btn btn-ghost btn-sm" id="ccRedeAdd">Adicionar</button></div></div>
+    <div id="ccRedesLista" style="display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 12px;"></div>
     <div class="section-label">Endereço</div>
     <div class="grid-3">
       <div class="field"><label for="ccCep">CEP</label><input id="ccCep" inputmode="numeric" placeholder="Preenche o endereço" value="${escapeHtml(c.cep||'')}"></div>
@@ -4238,13 +4254,13 @@ function clienteModalHtml(c){
       <div class="field"><label for="ccCidade">Cidade</label><input id="ccCidade" value="${escapeHtml(c.cidade||'')}"></div>
       <div class="field"><label for="ccEstado">Estado (UF)</label><input id="ccEstado" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml((c.estado||'').toUpperCase())}"></div>
     </div>
-    <div class="section-label">Dados fiscais <span class="muted" style="font-weight:400;">— para nota com identificação do cliente</span></div>
+    <div id="ccFiscal" ${c.tipoPessoa==='PJ'?'':'style="display:none;"'}>
+    <div class="section-label">Dados fiscais <span class="muted" style="font-weight:400;">— só para pessoa jurídica (CNPJ)</span></div>
     <div class="grid-2">
-      <div class="field"><label>Tipo de pessoa</label><select id="ccTipoPessoa"><option value="PF" ${c.tipoPessoa!=='PJ'?'selected':''}>Pessoa física (CPF)</option><option value="PJ" ${c.tipoPessoa==='PJ'?'selected':''}>Pessoa jurídica (CNPJ)</option></select></div>
-      <div class="field"><label>CNPJ (se pessoa jurídica)</label><input id="ccCnpj" value="${escapeHtml(c.cnpj||'')}"></div>
       <div class="field"><label>Indicador de IE</label><select id="ccIndIe"><option value="9" ${(c.indIE||'9')==='9'?'selected':''}>9 - Não contribuinte</option><option value="1" ${c.indIE==='1'?'selected':''}>1 - Contribuinte de ICMS</option><option value="2" ${c.indIE==='2'?'selected':''}>2 - Contribuinte isento de IE</option></select></div>
       <div class="field"><label>Inscrição Estadual</label><input id="ccIe" value="${escapeHtml(c.inscricaoEstadual||'')}"></div>
       <div class="field"><label>Código do município (IBGE)</label><input id="ccIbge" maxlength="7" placeholder="Preenche sozinho pelo CEP" value="${escapeHtml(c.codigoMunicipioIbge||'')}"></div>
+    </div>
     </div>
     <div class="section-label">Tags e observações</div>
     <div class="field"><label>Tags <span class="muted" style="font-weight:400;">— clique para marcar ou desmarcar</span></label><div id="ccTagsBox"></div></div>
@@ -4696,6 +4712,36 @@ function openClienteModalCadastro(cli, somenteVer){
     dddInp.addEventListener('input', ()=>{ dddInp.value = onlyDigitsCli(dddInp.value).slice(0,2); });
     numInp.addEventListener('input', ()=>{ numInp.value = formatarNumeroTelefoneCli(onlyDigitsCli(numInp.value)); });
   })();
+  // 21/11: CPF × CNPJ conforme o tipo de pessoa; dados fiscais só para CNPJ.
+  const ajustarTipoPessoa = ()=>{
+    const pj = document.getElementById('ccTipoPessoa').value==='PJ';
+    document.getElementById('ccCampoCpf').style.display = pj ? 'none' : '';
+    document.getElementById('ccCampoCnpj').style.display = pj ? '' : 'none';
+    document.getElementById('ccFiscal').style.display = pj ? '' : 'none';
+  };
+  document.getElementById('ccTipoPessoa').addEventListener('change', ajustarTipoPessoa);
+  if(somenteVer) document.getElementById('ccTipoPessoa').disabled = true;
+  // 21/11: redes sociais — o @ é fixo; cada perfil vira um botão que abre o direct do Instagram.
+  const redes = (Array.isArray(cli && cli.redesSociais) ? cli.redesSociais : []).map(normalizarPerfilRede).filter(Boolean);
+  window.__ccRedes = redes;
+  const desenharRedes = ()=>{
+    const box = document.getElementById('ccRedesLista');
+    box.innerHTML = redes.length ? redes.map((u,i)=>`<span style="display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:999px;padding:2px 4px 2px 10px;background:var(--surface);">
+      <a href="${escapeHtml(linkDirectInstagram(u))}" target="_blank" rel="noopener" title="Abrir o direct de @${escapeHtml(u)} no Instagram" style="font-weight:600;color:var(--primary);text-decoration:none;">@${escapeHtml(u)}</a>
+      ${somenteVer ? '' : `<button type="button" data-rmrede="${i}" aria-label="Remover @${escapeHtml(u)}" title="Remover" style="border:0;background:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;padding:2px 6px;">×</button>`}</span>`).join('')
+      : (somenteVer ? '<span class="muted" style="font-size:12.5px;">Nenhuma rede social.</span>' : '');
+    box.querySelectorAll('[data-rmrede]').forEach(b=> b.addEventListener('click', ()=>{ redes.splice(Number(b.dataset.rmrede),1); desenharRedes(); }));
+  };
+  const addRede = ()=>{
+    const inp = document.getElementById('ccRedeInput'); const u = normalizarPerfilRede(inp.value);
+    if(!u){ showToast('Digite o nome do perfil (só letras, números, ponto e _).'); return; }
+    if(!redes.includes(u)) redes.push(u);
+    inp.value = ''; desenharRedes(); inp.focus();
+  };
+  document.getElementById('ccRedeAdd').addEventListener('click', addRede);
+  document.getElementById('ccRedeInput').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); addRede(); } });
+  if(somenteVer) document.getElementById('ccRedesCampo').style.display = 'none';
+  desenharRedes();
   if(cli){
     document.getElementById('ccBtnCredito').addEventListener('click', ()=>{ closeModal(); abrirCreditoModal(cli); });
     document.getElementById('ccBtnDebitos').addEventListener('click', ()=>{ closeModal(); abrirDebitosModal(cli); });
@@ -4757,6 +4803,7 @@ function openClienteModalCadastro(cli, somenteVer){
       cidade: maiuscCli(document.getElementById('ccCidade').value),
       estado: document.getElementById('ccEstado').value.trim().toUpperCase(),
       tipoPessoa: document.getElementById('ccTipoPessoa').value,
+      redesSociais: (window.__ccRedes || []).slice(0, 10),
       cnpj: document.getElementById('ccCnpj').value.trim(),
       indIE: document.getElementById('ccIndIe').value,
       inscricaoEstadual: document.getElementById('ccIe').value.trim(),
