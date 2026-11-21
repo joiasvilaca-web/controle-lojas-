@@ -7,6 +7,7 @@
 <script src="icones.js"></script>
 <script src="formato.js"></script>
 <script src="avaliacoes-ui.js"></script>
+<script src="regimento-interno.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Departamento Pessoal · Vilaça Joias</title>
@@ -1506,9 +1507,10 @@ const TABS = [
   { id:'enviarLink', label:'Enviar link de cadastro', icon:'enviar', restrito:true },
   { id:'avaliacoes', label:'Avaliações dos clientes', icon:'estrela', soGerencia:true },
   { id:'acessos', label:'Funções', icon:'cadeado', soDiretoria:true },
+  { id:'regimento', label:'Regimento interno', icon:'documento' },
 ];
 function abasVisiveisDP(){
-  const ABAS_PROPRIAS = ['funcionarios','pagamentos','ferias','avisos','atestados'];
+  const ABAS_PROPRIAS = ['funcionarios','pagamentos','ferias','avisos','atestados','regimento'];
   return soProprioDP()
     ? TABS.filter(t=> ABAS_PROPRIAS.includes(t.id))
     : TABS.filter(t=> t.soDiretoria ? currentUser.nivel==='diretoria' : t.soGerencia ? (currentUser.nivel==='diretoria' || currentUser.nivel==='gerente') : (!t.restrito || podeEditarDP()));
@@ -1552,6 +1554,57 @@ function renderView(){
   else if(currentTab==='avaliacoes') renderAvaliacoesDP(main);
   else if(currentTab==='acessos') renderAcessosDP(main);
   else if(currentTab==='enviarLink') renderEnviarLinkDP(main);
+  else if(currentTab==='regimento') renderRegimentoDP(main);
+}
+
+/* Regimento interno (21/11): texto fixo em regimento-interno.js (versionado). Todos os níveis leem; imprimir/PDF e Termo de recebimento. */
+function regimentoHtml(txt){
+  const e = escapeHtml; let html = '', lista = false;
+  const fecha = ()=>{ if(lista){ html += '</ul>'; lista = false; } };
+  String(txt||'').split('\n').forEach(l=>{
+    const t = l.trim(); if(!t) return;
+    if(t.startsWith('# ')){ fecha(); html += `<h3 class="rg-cap">${e(t.slice(2))}</h3>`; return; }
+    if(t.startsWith('- ')){ if(!lista){ html += '<ul class="rg-lista">'; lista = true; } html += `<li>${e(t.slice(2))}</li>`; return; }
+    fecha();
+    const m = t.match(/^(Art\. \d+\.)\s*(.*)$/);
+    if(m){ html += `<p class="rg-art"><b>${e(m[1])}</b> ${e(m[2])}</p>`; return; }
+    if(/^(§|Parágrafo único|[IVXL]+ –)/.test(t)){ html += `<p class="rg-par">${e(t)}</p>`; return; }
+    html += `<p>${e(t)}</p>`;
+  });
+  fecha(); return html;
+}
+function regimentoInfo(){
+  const R = window.REGIMENTO_VILACA || {}; const n = (String(R.texto||'').match(/^Art\. \d+\./gm) || []).length;
+  return { R, artigos: n };
+}
+const REGIMENTO_CSS = '.rg-doc h3.rg-cap{font-size:15px;margin:22px 0 8px;letter-spacing:.01em}.rg-doc p{margin:0 0 8px;line-height:1.55}.rg-doc p.rg-par{margin-left:18px}.rg-doc ul.rg-lista{margin:0 0 10px 18px;padding-left:16px}.rg-doc li{margin:0 0 4px;line-height:1.5}';
+function renderRegimentoDP(main){
+  const { R, artigos } = regimentoInfo();
+  if(!R.texto){ main.innerHTML = '<div class="card"><p class="muted">Não foi possível carregar o regimento. Recarregue a página.</p></div>'; return; }
+  if(!document.getElementById('rgCss')){ const st = document.createElement('style'); st.id = 'rgCss'; st.textContent = REGIMENTO_CSS; document.head.appendChild(st); }
+  main.innerHTML = `
+    <div class="page-head"><div>
+      <h1 class="page-title">Regimento interno</h1>
+      <p class="page-sub">Versão ${escapeHtml(R.versao)} de ${escapeHtml(R.data)} · ${artigos} artigos. Vale para todos os colaboradores do Grupo Vilaça Joias.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-ghost" id="rgImprimir" type="button">${ic('documento',16)} Imprimir / PDF</button>
+      <button class="btn btn-ghost" id="rgTermo" type="button">${ic('documento',16)} Termo de recebimento</button>
+    </div></div>
+    <div class="card rg-doc"><h2 style="font-size:18px;margin:0 0 4px;text-align:center;">REGIMENTO INTERNO — GRUPO VILAÇA JOIAS</h2>
+      <p class="muted" style="text-align:center;margin-bottom:14px;">Versão ${escapeHtml(R.versao)} · ${escapeHtml(R.data)}</p>
+      ${regimentoHtml(R.texto)}
+    </div>`;
+  const imprimir = (titulo, corpo)=>{
+    const w = window.open('', '_blank'); if(!w){ showToast('Libere as janelas pop-up para imprimir.'); return; }
+    w.document.write(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>${escapeHtml(titulo)}</title><style>body{font-family:Arial,sans-serif;font-size:12px;margin:24px;color:#111}h2{text-align:center;font-size:16px}${REGIMENTO_CSS}.ass{margin-top:48px;display:flex;gap:40px;flex-wrap:wrap}.ass div{flex:1;min-width:220px;border-top:1px solid #333;padding-top:4px;text-align:center}.np{margin-top:14px}@media print{.np{display:none}}</style></head><body>${corpo}<div class="np"><button onclick="window.print()">Imprimir / salvar em PDF</button></div></body></html>`);
+    w.document.close();
+  };
+  document.getElementById('rgImprimir').onclick = ()=> imprimir('Regimento interno — Vilaça Joias', `<div class="rg-doc"><h2>REGIMENTO INTERNO — GRUPO VILAÇA JOIAS</h2><p style="text-align:center">Versão ${escapeHtml(R.versao)} · ${escapeHtml(R.data)}</p>${regimentoHtml(R.texto)}</div>`);
+  document.getElementById('rgTermo').onclick = ()=> imprimir('Termo de recebimento do regimento interno', `<h2>TERMO DE RECEBIMENTO DO REGIMENTO INTERNO</h2>
+    <p style="font-size:13px;line-height:1.7">Eu, ____________________________________________, CPF ______________________, função ______________________, declaro que recebi cópia do <b>Regimento Interno do Grupo Vilaça Joias, versão ${escapeHtml(R.versao)}, de ${escapeHtml(R.data)}</b>, documento que contém <b>${artigos} artigos</b>, que li e estou ciente de todo o seu conteúdo, e que ele adere ao meu contrato de trabalho. Declaro ainda que posso consultá-lo a qualquer tempo no aplicativo da empresa (Departamento Pessoal › Regimento interno).</p>
+    <p style="font-size:13px">Juiz de Fora/MG, ____ de ______________ de ________.</p>
+    <div class="ass"><div>Grupo Vilaça Joias</div><div>Colaborador(a)</div></div>`);
 }
 
 /* Avaliações dos clientes (09/11): só gerente/diretoria; o atendente vê apenas a própria média na ficha. */
