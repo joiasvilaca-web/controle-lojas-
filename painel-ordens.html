@@ -6860,7 +6860,7 @@ function renderGerarCodigo(main){
     <div class="page-head">
       <div>
         <h1 class="page-title">Código de autorização</h1>
-        <p class="page-sub">Libera um pedido fora do prazo ou acima do máximo de vagas do dia (encaixe). Cada código vale para um pedido só.</p>
+        <p class="page-sub">Libera um pedido fora do prazo ou acima do máximo de vagas do dia (encaixe). Cada código vale para um pedido só e não expira. Você vê só os códigos que gerou.</p>
       </div>
     </div>
     <div class="card" id="cardSolicitacoes">
@@ -6876,7 +6876,7 @@ function renderGerarCodigo(main){
       <div id="codeResult"></div>
     </div>
     <div class="card">
-      <div class="section-label">Códigos gerados</div>
+      <div class="section-label">Meus códigos gerados</div>
       <div id="codeHistory"></div>
     </div>
   `;
@@ -6885,7 +6885,7 @@ function renderGerarCodigo(main){
     const nome = maiusc(document.getElementById('c_autorizador').value);
     if(!nome){ showToast('Escolha quem está autorizando.'); return; }
     const codigo = Array.from({length:6}, ()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
-    const obj = { codigo, autorizadoPor: nome, nivelGerador: currentUser.nivel, geradoPor: currentUser.nome, criadoEm: Date.now(), usado:false };
+    const obj = { codigo, autorizadoPor: nome, nivelGerador: currentUser.nivel, geradoPor: currentUser.nome, geradoPorId: currentUser.id || null, criadoEm: Date.now(), usado:false };
     codes.unshift(obj);
     await saveCodes();
     document.getElementById('c_autorizador').value = '';
@@ -6899,17 +6899,20 @@ function renderGerarCodigo(main){
     renderCodeHistory();
   });
 
+  // 22/11: cada pessoa vê só os códigos que ELA gerou; os códigos não expiram (valem até serem usados num pedido).
+  const meuCodigo = c=> (c.geradoPorId && currentUser.id) ? c.geradoPorId===currentUser.id : String(c.geradoPor||'').trim().toUpperCase()===String(currentUser.nome||'').trim().toUpperCase();
   function renderCodeHistory(){
     const wrap = document.getElementById('codeHistory');
-    if(codes.length===0){ wrap.innerHTML = `<div class="empty" style="padding:24px;"><b>Nenhum código gerado ainda</b>Os códigos que você gerar aparecem aqui, com quem autorizou e se já foram usados.</div>`; return; }
-    wrap.innerHTML = codes.slice(0,25).map(c=>`
+    const meus = codes.filter(meuCodigo);
+    if(meus.length===0){ wrap.innerHTML = `<div class="empty" style="padding:24px;"><b>Nenhum código gerado por você ainda</b>Os códigos que você gerar aparecem aqui, com quem autorizou e se já foram usados. Eles não expiram: valem até serem usados num pedido.</div>`; return; }
+    wrap.innerHTML = `<p class="muted" style="margin:0 0 8px;font-size:12.5px;">Só os códigos gerados por você. Não expiram: cada um vale para um pedido, até ser usado.</p>` + meus.slice(0,50).map(c=>`
       <div class="code-list-item">
         <div>
           <span class="cl-code">${c.codigo}</span>
           <button type="button" class="copy-btn" data-copyhist="${c.codigo}" aria-label="Copiar código ${c.codigo}">${ico('copiar',14)} Copiar</button>
           <span class="muted" style="margin-left:10px;">autorizado por ${escapeHtml(c.autorizadoPor)}${c.criadoEm ? ' · ' + Fmt.dataHora(c.criadoEm) : ''}</span>
         </div>
-        <span class="selo ${c.usado ? 'st-entregue' : 'st-pronto'}">${c.usado ? 'Usado' : 'Disponível'}</span>
+        <span class="selo ${c.usado ? 'st-entregue' : 'st-pronto'}">${c.usado ? 'Usado' + (c.usadoPor ? ' por ' + escapeHtml(c.usadoPor) : '') : 'Disponível (não expira)'}</span>
       </div>
     `).join('');
     wrap.querySelectorAll('[data-copyhist]').forEach(b=>{
@@ -6994,7 +6997,7 @@ function renderGerarCodigo(main){
       if(!liberou){ showToast('Esta solicitação já foi respondida.'); closeModal(); desenharSolicitacoes(); return; }
       if(r.ordemId){ closeModal(); showToast('Liberado. O pedido da loja virou encaixe autorizado.'); desenharSolicitacoes(); return; }
       codes = await storageGet('codes', true) || codes;
-      codes.unshift({ codigo, autorizadoPor: quem, nivelGerador: currentUser.nivel, geradoPor: currentUser.nome, criadoEm: Date.now(), usado:false, solicitacaoId: r.id, viaNumero: (r.via&&r.via.numeroVia)||'', lojaId: r.lojaId, solicitante: r.solicitante||'' });
+      codes.unshift({ codigo, autorizadoPor: quem, nivelGerador: currentUser.nivel, geradoPor: currentUser.nome, geradoPorId: currentUser.id || null, criadoEm: Date.now(), usado:false, solicitacaoId: r.id, viaNumero: (r.via&&r.via.numeroVia)||'', lojaId: r.lojaId, solicitante: r.solicitante||'' });
       await saveCodes(); renderCodeHistory();
       closeModal(); showToast('Liberado. A loja já pode lançar o pedido.'); desenharSolicitacoes();
     });
