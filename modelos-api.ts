@@ -1,3 +1,4 @@
+// modelos-api v3 (22/11/2026): salvar_rascunho aceita `categoria` (UTILITY | MARKETING) — os textos sugeridos pedem Utilidade (mais barato) quando a mensagem é só atualização do atendimento.
 // modelos-api v2 (22/11/2026): botão de URL com variável (ex.: https://g.page/r/{{1}}) vai com o exemplo que a Meta exige; o rascunho guarda se tem botão variável (rascunho_botao_dinamico) e, quando a Meta aprova, sincronizar liga meta_modelos.botao_dinamico — só então o envio passa a mandar o final do link da loja. supabase-js fixado em 2.119.0.
 // modelos-api v1 (11/11/2026): tela 'Modelos WhatsApp' do app (so Diretoria). Ops: listar | salvar_rascunho {chave, corpo} | cancelar_rascunho {chave} | tarifa {categoria, valor} | custos {de, ate} | sincronizar (tambem pelo cron com x-cron-token).
 // Fluxo de edicao: o texto editado vira um NOVO modelo na Meta (nome_vN). Quando a Meta aprova, sincronizar troca o modelo ativo (meta_modelos.nome_template) e o envio passa a usar o novo. Enquanto isso o modelo antigo continua valendo.
@@ -143,7 +144,8 @@ Deno.serve(async (req: Request) => {
       }) } : { type: c.type, text: c.text });
       const tk = Deno.env.get("WHATSAPP_CLOUD_TOKEN"), waba = Deno.env.get("WHATSAPP_WABA_ID");
       if (!tk || !waba) return json({ ok: false, erro: "Faltam as chaves da Meta no servidor." });
-      const r = await fetch(`${G}/${waba}/message_templates`, { method: "POST", headers: { Authorization: `Bearer ${tk}`, "Content-Type": "application/json" }, body: JSON.stringify({ name: nome, language: "pt_BR", category: m.categoria, components }), signal: AbortSignal.timeout(25000) });
+      const categoria = ["UTILITY", "MARKETING"].includes(String(body.categoria || "")) ? String(body.categoria) : m.categoria;   // v3
+      const r = await fetch(`${G}/${waba}/message_templates`, { method: "POST", headers: { Authorization: `Bearer ${tk}`, "Content-Type": "application/json" }, body: JSON.stringify({ name: nome, language: "pt_BR", category: categoria, components }), signal: AbortSignal.timeout(25000) });
       const j: any = await r.json().catch(() => ({}));
       if (!r.ok || !j.id) { const e = j && j.error; return json({ ok: false, erro: "A Meta recusou: " + String((e && (e.error_user_msg || e.error_user_title || e.message)) || r.status).slice(0, 300) }); }
       await admin.from("meta_modelos").update({ rascunho_nome: nome, rascunho_corpo: corpo, rascunho_status: String(j.status || "PENDING"), rascunho_motivo: null, rascunho_botao_dinamico: botaoDinamico, atualizado_em: new Date().toISOString() }).eq("chave", m.chave);

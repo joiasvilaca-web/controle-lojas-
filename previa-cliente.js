@@ -70,10 +70,15 @@
           .replace(/\{desconto\}/g, pct + '%').replace(/\{valorDesconto\}/g, brl(estado.valor * (1 - pct / 100))).replace(/\{link\}/g, base() + PAGINAS.orc.url);
       }
       function textoStatus(st){ return preencheStatus(st, cruStatus(st)); }
+      function fraseOrc(st){   // igual ao servidor (disparo-cloud v11 / acompanhamento-auto v24): frase curta, detalhes no link
+        if(!st) return 'Seu orçamento foi atualizado.'; if(st.inicial) return 'Seu orçamento está pronto.';
+        if(st.encerra && st.id !== 'aprovado') return 'Seu orçamento foi encerrado. Se puder, conte no link o que podemos melhorar.';
+        if(st.encerra) return 'Seu orçamento foi aprovado.'; return 'Seu orçamento continua disponível para você.';
+      }
       function itemOrc(st, extra){
-        var gerar = function(cru){ return preencherModelo(mdOrc.corpo, [nome1, loja, miolo(preencheStatus(st, cru)), base() + PAGINAS.orc.url]); };
+        var gerar = function(){ return preencherModelo(mdOrc.corpo, [nome1, loja, fraseOrc(st), base() + PAGINAS.orc.url]); };
         return Object.assign({ grupo:'Orçamento', modelo: mdOrc, texto: gerar(cruStatus(st)), original: textoStatus(st), gerar: gerar,
-          edit: st ? { tipo:'status', statusId: st.id, desconto: !!deDe(st), valor: cruStatus(st), vars:'{cliente} {vendedora} {loja} {valor} {validade} {link}' + (deDe(st) ? ' {desconto} {valorDesconto}' : '') } : null }, extra);
+          edit: st ? { tipo:'status', statusId: st.id, desconto: !!deDe(st), valor: cruStatus(st), vars:'{cliente} {vendedora} {loja} {valor} {validade} {link}' + (deDe(st) ? ' {desconto} {valorDesconto}' : ''), nota:'Este texto completo vai só pelo número da Reforma e aparece no link. No WhatsApp oficial vai a frase curta acima (mais barato).' } : null }, extra);
       }
       if(mdOrc){
         var vistos = {};
@@ -91,7 +96,7 @@
       }
       if(mdOrc){
         var sug = PreviaCliente.SUGESTAO_ORCAMENTO, st0 = STs.find(function(x){ return x.inicial; }) || STs[0];
-        if(st0 && sug && String(mdOrc.corpo).trim() !== sug.trim()) lista.push({ grupo:'Orçamento', titulo:'SUGESTÃO — novo modelo de orçamento, com parágrafos (precisa da aprovação da Meta)', quando:'Copie o texto em Modelos › Orçamento e toque em “Enviar para aprovação da Meta”. Enquanto a Meta analisa, o atual continua valendo; aprovado, passa a valer sozinho (mesmas 4 variáveis).', modelo:{ nome:'sugestão', rodape:'Vilaça Joias' }, texto: preencherModelo(sug, [nome1, loja, miolo(textoStatus(st0)), base() + PAGINAS.orc.url]), pagina:'orc', original: sug });
+        if(st0 && sug && String(mdOrc.corpo).trim() !== sug.trim()) lista.push({ grupo:'Orçamento', titulo:'SUGESTÃO — novo modelo de orçamento, curto e mais barato (precisa da aprovação da Meta)', quando:'Copie o texto em Modelos › Orçamento e toque em “Enviar para aprovação da Meta”. Enquanto a Meta analisa, o atual continua valendo; aprovado, passa a valer sozinho (mesmas 4 variáveis).', modelo:{ nome:'sugestão', rodape:'Vilaça Joias' }, texto: preencherModelo(sug, [nome1, loja, fraseOrc(st0), base() + PAGINAS.orc.url]), pagina:'orc', original: sug });
       }
       viaModelo('Orçamento', 'Orçamento — botão do WhatsApp', 'Só quando alguém toca no botão do orçamento. Vai a mensagem padrão da via (o texto do status não entra).', 'orc');
       // RESERVA / RETIRADA
@@ -100,12 +105,12 @@
       // PÓS-VENDA / ANIVERSÁRIO
       var mdPv = corpoDe(modelos, 'posvenda');
       if(mdPv){ var gPv = function(cru){ return preencherModelo(mdPv.corpo, [nome1, miolo(String(cru || '').replace(/\{cliente\}/g, nome1).replace(/\{avaliacao\}/g, '').replace(/\{loja\}/g, loja))]); }, crPv = (cfg.posVendaAuto && cfg.posVendaAuto.mensagem) || '';
-        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda. O texto abaixo entra no lugar do {{2}} quando o modelo novo estiver aprovado.', modelo: mdPv, texto: gPv(crPv), gerar: gPv, pagina:'',
-          edit: { tipo:'posVendaAuto', valor: crPv, vars:'{cliente} {loja}' } }); }
+        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda. ', modelo: mdPv, texto: gPv(crPv), gerar: gPv, pagina:'',
+          edit: { tipo:'posVendaAuto', valor: crPv, vars:'{cliente} {loja}', nota:'Este texto vai só pelo número da Reforma. No WhatsApp oficial vai o modelo de garantia acima (Utilidade, mais barato).' } }); }
       var mdAn = corpoDe(modelos, 'aniversario');
       if(mdAn){ var gAn = function(cru){ return preencherModelo(mdAn.corpo, [nome1, miolo(String(cru || '').replace(/\{cliente\}/g, nome1))]); }, crAn = (cfg.mensagens && cfg.mensagens.aniversario) || '';
-        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário (com o cartão)', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante. O texto abaixo entra no lugar do {{2}} e o botão “Abrir meu cartão” aparece quando o modelo novo estiver aprovado.', modelo: mdAn, texto: gAn(crAn), gerar: gAn, pagina:'',
-          cartao: 'cartao-aniversario.html?n=' + encodeURIComponent(nome1), edit: { tipo:'aniversario', valor: crAn, vars:'{cliente}' } }); }
+        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Aniversário (com o cartão)', quando:'Automático no dia do aniversário (depois das 9h). Também pela Mala direta › Aniversariantes de hoje e pelo ícone de WhatsApp de cada aniversariante. O botão “Abrir meu cartão” aparece quando o modelo novo estiver aprovado.', modelo: mdAn, texto: gAn(crAn), gerar: gAn, pagina:'',
+          cartao: 'cartao-aniversario.html?n=' + encodeURIComponent(nome1), edit: { tipo:'aniversario', valor: crAn, vars:'{cliente}', nota:'Este texto não vai no WhatsApp oficial (a mensagem é curta e o carinho está no cartão). Fica guardado para a Mala direta.' } }); }
       // CHAMAR CLIENTE / RECADO
       var mdCh = corpoDe(modelos, 'chamar_cliente');
       if(mdCh){
@@ -134,6 +139,7 @@
           var i = lista.indexOf(e);
           return '<div class="card pc-item"><div class="pc-cab"><b>' + esc(e.titulo) + '</b><span class="selo cinza" title="Modelo usado">' + esc(e.modelo.nome) + '</span></div><p class="small muted" style="margin:4px 0 10px;">' + esc(e.quando) + '</p>'
             + (e.edit ? '<div class="pc-ed"><label for="pcEd' + i + '">Texto que você escreve <span class="muted">(variáveis: ' + esc(e.edit.vars) + ')</span></label><textarea id="pcEd' + i + '" data-ed="' + i + '" rows="5">' + esc(e.edit.valor) + '</textarea>'
+                + (e.edit.nota ? '<p class="small muted" style="margin:4px 0 0;">' + esc(e.edit.nota) + '</p>' : '')
                 + '<div class="pc-ed-acoes"><button class="btn btn-accent btn-sm" type="button" data-salvar="' + i + '">Salvar texto</button><span class="small muted" data-st="' + i + '"></span></div></div>'
               : (e.modelo.nome && !/livre|sugestão/.test(e.modelo.nome) ? '<p class="small muted" style="margin:0 0 8px;">Texto fixo do modelo da Meta. Para mudar: aba Modelos.</p>' : ''))
             + '<div class="pc-fundo"><div class="pc-balao">' + (e.pagina ? cardHtml(e.pagina) : '') + '<div data-bal="' + i + '">' + wa(e.texto) + '</div>' + (e.modelo.rodape ? '<div class="pc-rodape">' + esc(e.modelo.rodape) + '</div>' : '') + '<div class="pc-hora">' + new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) + '</div>'
@@ -166,6 +172,6 @@
     desenhar();
   }
   /* 22/11: corpo sugerido para o modelo de orçamento (mesmas variáveis: {{1}} nome, {{2}} loja, {{3}} texto do status, {{4}} link) */
-  var SUGESTAO_ORCAMENTO = 'Olá, {{1}}!\n\n{{2}} informa sobre o seu orçamento.\n\n{{3}}\n\nO detalhamento completo, com fotos, está disponível no link:\n{{4}}\n\nQualquer dúvida, é só responder esta mensagem!';
+  var SUGESTAO_ORCAMENTO = "Olá, {{1}}!\n\nAtualização do seu orçamento na {{2}}: {{3}}\n\nItens, valores e fotos estão no link:\n{{4}}\n\nQualquer dúvida, é só responder esta mensagem.";
   window.PreviaCliente = { montar: montar, _miolo: miolo, _preencherModelo: preencherModelo, SUGESTAO_ORCAMENTO: SUGESTAO_ORCAMENTO };
 })();

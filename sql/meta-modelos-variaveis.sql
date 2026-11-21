@@ -26,3 +26,8 @@ update meta_modelos set
   extras = '[{"type":"FOOTER","text":"Vilaça Joias"},{"type":"BUTTONS","buttons":[{"type":"URL","text":"Abrir meu cartão","url":"https://vilaca.app/cartao-aniversario.html?n={{1}}","example":"https://vilaca.app/cartao-aniversario.html?n=Maria"}]}]'::jsonb,
   atualizado_em = now()
 where chave = 'aniversario';
+
+-- 22/11 (3): modelos ENXUTOS para custo menor (Utilidade): pós-venda e aniversário voltam a 1 variável (o texto longo fica fora;
+-- aniversário vai com o cartão no botão); orçamento mantém 4 variáveis, mas {{3}} passa a ser uma frase curta (detalhes no link).
+update meta_modelos set variaveis = '["Nome do cliente"]'::jsonb, exemplos = '["Ana"]'::jsonb, atualizado_em = now() where chave in ('posvenda','aniversario');
+update meta_modelos set exemplos = '["Maria","VILAÇA - UNIDADE HALFELD","Seu orçamento está pronto.","https://vilaca.app/via.html?t=orc&id=orc_exemplo123"]'::jsonb, variaveis = '["Nome do cliente","Loja","Frase curta da situação","Link do orçamento"]'::jsonb, atualizado_em = now() where chave = 'orcamento';

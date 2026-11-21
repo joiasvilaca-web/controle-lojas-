@@ -1,3 +1,4 @@
+// acompanhamento-auto v24 (22/11/2026): orçamento pela API oficial leva só a FRASE CURTA (fraseOrc) — detalhes no link, para aprovar como Utilidade.
 // acompanhamento-auto v23 (22/11/2026): variáveis conforme o modelo ATIVO (meta_modelos.corpo); pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da loja (se o ativo tiver botao_dinamico); miolo igual ao disparo-cloud v9.
 // acompanhamento-auto v22 (22/11/2026): Reforma Joias (chip reformajoias) sai SEM o link wa.me da Vilaça e sem o pedido de 👍 (limpaTextoReforma, igual ao enviar-via v18); orçamento: "Aqui é <vendedora>."
 // acompanhamento-auto v21 (22/11/2026): miolo() do orçamento — links saem mas o texto do parágrafo fica (convite "o que podemos melhorar" do Recusado); "Aqui é <vendedora>, da <loja>." vira "Atendimento: <vendedora>." (loja não repete); sem emoji solto no início. supabase-js fixado em 2.119.0.
@@ -136,6 +137,16 @@ async function enviaModelo(tel: string, nome: string, params: string[], botao?: 
     return { ok: r.ok && !!(j && j.messages && j.messages[0]), status: r.status };
   } catch (_) { return { ok: false, status: 0 }; }
 }
+/** 22/11: frase CURTA do orçamento para o WhatsApp oficial ({{3}}). Mensagem neutra, de atualização do orçamento (categoria Utilidade = mais barata);
+ *  valores, fotos e condições ficam no link. O texto completo do status continua indo só pelo número da Reforma. */
+function fraseOrc(cfg: any, statusId: string): string {
+  const st = ((cfg && cfg.statusOrcamento) || []).find((s: any) => s && s.id === statusId) || null;
+  if (!st) return "Seu orçamento foi atualizado.";
+  if (st.inicial) return "Seu orçamento está pronto.";
+  if (st.encerra && statusId !== "aprovado") return "Seu orçamento foi encerrado. Se puder, conte no link o que podemos melhorar.";
+  if (st.encerra) return "Seu orçamento foi aprovado.";
+  return "Seu orçamento continua disponível para você.";
+}
 function miolo(texto: string): string {
   // 22/11: links saem do parágrafo mas o TEXTO fica (o convite "o que podemos melhorar" do Recusado voltava cortado);
   // "Aqui é <vendedora>, da <loja>." vira "Aqui é <vendedora>." (o modelo já diz "Aqui é da <loja>": a loja saía duas vezes); emoji solto no começo sai.
@@ -267,7 +278,7 @@ async function abertoAgora(body: any) {
   const texto = inst === instD ? waMePrimeiro(ajustaTextoDisparo(t0)) : limpaTextoReforma(t0);   // v22
   let ok = false, status = 0;
   if (nuvemAg) {
-    const rc = await enviaModelo(tel, "orcamento_acompanhamento", [primeiroNome(o.cliente), nomeDaLoja(cfg, o), miolo(t0) || "Passando para saber se ficou alguma dúvida sobre o seu orçamento.", linkOrc(id)]);
+    const rc = await enviaModelo(tel, "orcamento_acompanhamento", [primeiroNome(o.cliente), nomeDaLoja(cfg, o), fraseOrc(cfg, String(p0.statusId || "")), linkOrc(id)]);   // v24: frase curta
     ok = rc.ok; status = rc.status;
   } else {
     try { const r = await fetch(`${seg.EVOLUTION_URL}/message/sendText/${inst}`, { method: "POST", headers: H, body: JSON.stringify({ number: tel, text: texto, delay: 1200 }), signal: AbortSignal.timeout(25000) }); status = r.status; const rj = await r.json().catch(() => ({})); ok = r.ok && !!(rj && rj.key); } catch (_) {}
@@ -405,7 +416,7 @@ Deno.serve(async (req: Request) => {
     const modeloRobot = (it: Item, reg: any): { nome: string; params: string[]; botao?: string } | null => {
       // v23: {{2}} = texto do pós-venda (só vai se o modelo ativo tiver {{2}}) e botão Google da loja
       if (it.tipo === "posvenda" || it.tipo === "os_posvenda") return { nome: "pos_venda_garantia", params: [primeiroNome(reg.cliente), miolo(it.texto) || "Queremos agradecer a oportunidade de fazer parte de um momento especial com a sua nova joia."], botao: reviewDe(String(reg.lojaId || "")) };
-      if (it.tipo === "orcamento") return { nome: "orcamento_acompanhamento", params: [primeiroNome(reg.cliente), nomeDaLoja(cfg, reg), miolo(it.texto) || "Passando para saber se ficou alguma dúvida sobre o seu orçamento.", linkOrc(it.id)] };
+      if (it.tipo === "orcamento") return { nome: "orcamento_acompanhamento", params: [primeiroNome(reg.cliente), nomeDaLoja(cfg, reg), fraseOrc(cfg, it.statusDestino), linkOrc(it.id)] };   // v24: frase curta
       if (it.tipo === "os_pronto") return { nome: "pedido_pronto_acompanhamento", params: [primeiroNome(reg.cliente), bonito(reg.vendedora || "") || "nossa equipe", nomeDaLoja(cfg, reg), `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(it.id)}`] };
       return null;
     };

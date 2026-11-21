@@ -1,3 +1,4 @@
+// disparo-cloud v11 (22/11/2026): orçamento pela API oficial leva só uma FRASE CURTA ({{3}}: pronto / continua disponível / encerrado) — detalhes no link, mensagem neutra para aprovar como Utilidade (custo menor).
 // disparo-cloud v10 (22/11/2026): aniversário com o botão "Abrir meu cartão" (link variável = primeiro nome → cartao-aniversario.html?n=Nome; só vai se o modelo ativo tiver o botão).
 // disparo-cloud v9 (22/11/2026): número de variáveis = o do modelo ATIVO (meta_modelos.corpo) — permite versão nova com variável a mais sem quebrar enquanto a Meta analisa; pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da LOJA (se o ativo tiver botao_dinamico); aniversário {{2}} = texto do Marketing; miolo também tira "Feliz aniversário X!", "Não responda…", "Atenciosamente", "Equipe Vilaça Joias" e www.
 // disparo-cloud v8 (22/11/2026): pedido DISPONÍVEL PARA RETIRADA pelo botão usa o modelo pedido_pronto; aniversário enviado um por um (ícone) usa o modelo de aniversário (antes falhava);
@@ -17,13 +18,24 @@ const fone8 = (t: string) => String(t || "").replace(/[^0-9]/g, "").slice(-8);
 const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let MAPA: Record<string, { nome: string; categoria: string; nVars: number; botao: boolean }> = {};
 let LOJAS: Record<string, string> = {};   // v8: loja_id -> nome público (para reserva/retirada)
+let CFG: any = {};   // v11: config (status do orçamento para a frase curta)
 let REVIEW: Record<string, string> = {};  // v9: loja_id -> final do link do Google (g.page/r/<final>) para o botão do pós-venda
 const nVarsDe = (corpo: string) => new Set(String(corpo || "").match(/\{\{\s*\d+\s*\}\}/g) || []).size;
 async function carregaMapa() {
   MAPA = {}; LOJAS = {};
   REVIEW = {};
-  try { const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle(); for (const l of ((cf && cf.payload && cf.payload.lojas) || [])) if (l && l.id) { LOJAS[l.id] = String(l.nomePublico || l.nomeFantasia || l.nome || ""); const g = String(l.googleReviewUrl || "").match(/g[.]page[/]r[/](.+)$/); if (g) REVIEW[l.id] = g[1]; } } catch (_) {}
+  try { const { data: cf } = await admin.from("gestao_config").select("payload").eq("id", "config").maybeSingle(); CFG = (cf && cf.payload) || {}; for (const l of ((cf && cf.payload && cf.payload.lojas) || [])) if (l && l.id) { LOJAS[l.id] = String(l.nomePublico || l.nomeFantasia || l.nome || ""); const g = String(l.googleReviewUrl || "").match(/g[.]page[/]r[/](.+)$/); if (g) REVIEW[l.id] = g[1]; } } catch (_) {}
   try { const { data } = await admin.from("meta_modelos").select("chave,nome_template,categoria,corpo,botao_dinamico"); for (const m of data || []) MAPA[m.chave] = { nome: m.nome_template, categoria: m.categoria, nVars: nVarsDe(m.corpo), botao: !!m.botao_dinamico }; } catch (_) {}
+}
+/** 22/11: frase CURTA do orçamento para o WhatsApp oficial ({{3}}). Mensagem neutra, de atualização do orçamento (categoria Utilidade = mais barata);
+ *  valores, fotos e condições ficam no link. O texto completo do status continua indo só pelo número da Reforma. */
+function fraseOrc(cfg: any, statusId: string): string {
+  const st = ((cfg && cfg.statusOrcamento) || []).find((s: any) => s && s.id === statusId) || null;
+  if (!st) return "Seu orçamento foi atualizado.";
+  if (st.inicial) return "Seu orçamento está pronto.";
+  if (st.encerra && statusId !== "aprovado") return "Seu orçamento foi encerrado. Se puder, conte no link o que podemos melhorar.";
+  if (st.encerra) return "Seu orçamento foi aprovado.";
+  return "Seu orçamento continua disponível para você.";
 }
 function normalizaTelefone(t: string): string | null {
   let d = String(t || "").replace(/[^0-9]/g, "");
@@ -74,9 +86,10 @@ function modelo(item: any, orcOn: boolean): { chave: string; name: string; param
   if (item.tipo === "via" && item.registro_tabela === "orc_acao" && orcOn) {
     const l = flat.match(/https:[/][/]vilaca[.]app[/][^ ]+/);
     const lj = flat.match(/da ([^.]+)[.]/);
-    const corpo = miolo(item.texto);
-    if (!l || !corpo) return null;
-    return { chave: "orcamento", name: "orcamento_acompanhamento", params: [nome, limpa(lj ? lj[1] : "Vilaça Joias"), corpo, l[0]] };
+    if (!l) return null;
+    // v11: {{3}} = frase curta (os detalhes ficam no link); loja = nome público da loja da fila
+    const corpo = fraseOrc(CFG, String((item.marcar && item.marcar.chave) || ""));
+    return { chave: "orcamento", name: "orcamento_acompanhamento", params: [nome, LOJAS[item.loja_id] || limpa(lj ? lj[1] : "Vilaça Joias"), corpo, l[0]] };
   }
   if (item.tipo === "via") {
     const l = flat.match(/https:[/][/]vilaca[.]app[/][^ ]+/);
