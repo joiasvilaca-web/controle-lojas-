@@ -9,7 +9,7 @@ module.exports = { casos: [
       t.ok(fraseOrc(CFG, 'pendente') === 'Seu orçamento está pronto.' && fraseOrc(CFG, 'cutucado') === 'Seu orçamento continua disponível para você.', arq + ': aberto/seguinte');
       t.ok(/o que podemos melhorar/.test(fraseOrc(CFG, 'recusado')) && fraseOrc(CFG, 'x') === 'Seu orçamento foi atualizado.', arq + ': encerrado e desconhecido');
     }
-    const f = pegar('disparo-cloud.ts', ['limpa', 'bonito', 'miolo', 'fraseOrc', 'modelo'], { NL: '\n', LOJAS: { loja_jb: 'VILAÇA - UNIDADE HALFELD' }, REVIEW: {}, CFG });
+    const f = pegar('disparo-cloud.ts', ['limpa', 'bonito', 'miolo', 'fraseOrc', 'chaveOrc', 'modelo'], { NL: '\n', LOJAS: { loja_jb: 'VILAÇA - UNIDADE HALFELD' }, REVIEW: {}, CFG, MAPA: {} });   // 22/11 (v12): modelo() usa chaveOrc e MAPA
     const o = f.modelo({ tipo: 'via', registro_tabela: 'orc_acao', loja_id: 'loja_jb', marcar: { chave: 'pendente' }, texto: 'Olá, Maria! Aqui é Paty, da X. Valor R$ 890 https://vilaca.app/via.html?t=orc&id=1', cliente_nome: 'MARIA' }, true);
     t.ok(o.params[2] === 'Seu orçamento está pronto.' && o.params[1] === 'VILAÇA - UNIDADE HALFELD' && /via\.html/.test(o.params[3]), 'orçamento: ' + JSON.stringify(o.params));
   } },
