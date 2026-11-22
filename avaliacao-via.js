@@ -21,19 +21,19 @@
   function css(){ if(document.getElementById('avCss')) return; var s=document.createElement('style'); s.id='avCss'; s.textContent=CSS; document.head.appendChild(s); }
 
   function esc2(s){ return esc(s); }
-  /* Etapas (estrelas -> Google) dentro de um overlay já criado pelo "Ciente". fim() é chamado quando terminar. */
+  /* Etapas (22/11, Felipe: primeiro o GOOGLE, depois as ESTRELAS do atendente) dentro de um overlay já criado pelo "Ciente". fim() é chamado quando terminar. */
   /* 22/11: Google sozinho (pedido ENTREGUE, quando a avaliação do atendimento já foi feita na 1ª abertura). Mostra uma vez por aparelho. */
   function chaveG(o){ return 'avGoogle:'+o.tipo+':'+o.id; }
   function googleJaVisto(o){ try{ return localStorage.getItem(chaveG(o))==='1'; }catch(e){ return false; } }
   function marcarGoogle(o){ try{ localStorage.setItem(chaveG(o),'1'); }catch(e){} }
   function soGoogle(ov, a, fim, chamar){ etapas(ov, a, chamar||null, fim, true); }
   function etapas(ov, a, chamar, fim, direto){
-    function etapaGoogle(){
-      if(!a.google){ fim(); return; }
+    function etapaGoogle(depois){
+      if(!a.google){ depois(); return; }
       var abriu=false;
       ov.innerHTML='<div class="av-box"><h2>Avalie também no Google</h2><p>Sua opinião no Google ajuda outras pessoas a conhecerem a <b>'+esc(a.loja||'nossa loja')+'</b>. Leva menos de um minuto.</p>'
         +'<div class="av-row" style="flex-direction:column;"><button class="av-btn" data-g>Avaliar no Google</button><button class="av-btn sec" data-ok>Concluir</button></div></div>';
-      ov.querySelector('[data-ok]').onclick=function(){ limpa(); fim(); };
+      ov.querySelector('[data-ok]').onclick=function(){ limpa(); depois(); };
       ov.querySelector('[data-g]').onclick=function(){
         abriu=true;
         if(chamar) try{ chamar({acao:'google'}); }catch(e){}   // 22/11: registra no Histórico da via
@@ -41,10 +41,11 @@
         if(!w) window.open(a.google,'_blank','noopener');
         this.textContent='Abrir de novo';
       };
-      function volta(){ if(abriu && document.visibilityState==='visible'){ limpa(); setTimeout(fim,600); } }
+      function volta(){ if(abriu && document.visibilityState==='visible'){ limpa(); setTimeout(depois,600); } }
       function limpa(){ document.removeEventListener('visibilitychange',volta); window.removeEventListener('focus',volta); }
       document.addEventListener('visibilitychange',volta); window.addEventListener('focus',volta);
     }
+    function etapaEstrelas(){
     var est=5;
     function estrelas(){ return [1,2,3,4,5].map(function(n){ return '<button type="button" class="av-star'+(n<=est?' on':'')+'" data-n="'+n+'" aria-label="'+n+' estrela'+(n>1?'s':'')+'">★</button>'; }).join(''); }
     ov.innerHTML='<div class="av-box"><h2>Como foi seu atendimento'+(a.atendente?' com '+esc(String(a.atendente).split(' ')[0]):'')+'?</h2><p>Toque nas estrelas para avaliar o atendimento.</p>'
@@ -57,11 +58,12 @@
       var bs=ov.querySelectorAll('button'); bs.forEach(function(b){ b.disabled=true; });
       var r=await chamar(pulou?{acao:'avaliar',pulou:true}:{acao:'avaliar',estrelas:est,comentario:(est<=3?ov.querySelector('[data-txt]').value:'')});
       if(!r.ok){ bs.forEach(function(b){ b.disabled=false; }); return; }
-      etapaGoogle();
+      fim();
     }
-    if(direto){ etapaGoogle(); return; }
     ov.querySelector('[data-pular]').onclick=function(){ enviar(true); };
     ov.querySelector('[data-env]').onclick=function(){ enviar(false); };
+    }
+    if(direto) etapaGoogle(fim); else etapaGoogle(etapaEstrelas);
   }
 
   /* "Resposta da loja": aparece UMA vez, em destaque, depois do Ciente (guarda no aparelho que já foi vista). */

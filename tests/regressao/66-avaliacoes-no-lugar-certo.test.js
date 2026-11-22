@@ -9,6 +9,11 @@ module.exports = { casos: [
     const c = ler('ciente-via.js'), a = ler('avaliacao-via.js');
     t.ok(/else if\(a && a\.google && AV && AV\.soGoogle\) AV\.soGoogle\(ov, a, fim, chamar\);/.test(c) && /function soGoogle\(ov, a, fim(, chamar)?\)/.test(a), 'pedido entregue já avaliado: mostra só o Google (uma vez por aparelho)');
   } },
+  { nome: 'Ordem das etapas: primeiro o Google, depois as estrelas do atendente', bug: 'Felipe pediu a ordem invertida', rodar: async ({ t, ler }) => {
+    const a = ler('avaliacao-via.js');
+    t.ok(/if\(direto\) etapaGoogle\(fim\); else etapaGoogle\(etapaEstrelas\);/.test(a), 'Google abre antes; estrelas depois');
+    t.ok(/function etapaEstrelas\(\)\{/.test(a) && /      fim\(\);\n    \}\n    ov\.querySelector\('\[data-pular\]'\)/.test(a), 'estrelas é a última etapa');
+  } },
   { nome: 'Toque em Avaliar no Google fica no Histórico da via', bug: 'Histórico sem o registro do Google', rodar: async ({ t, ler }) => {
     const r = ler('retirada-terceiro.ts');
     t.ok(/if \(acao === "google"\)/.test(r) && /if \(l\.google\) \{ ev\.push/.test(r), 'servidor registra e o histórico mostra');
