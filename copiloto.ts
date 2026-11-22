@@ -1,16 +1,17 @@
+// copiloto v5 (22/11/2026): renomeado de "Felipe" para "Vilacinha" (persona da IA). Resto igual à v4.
 // copiloto v4 (22/11/2026): (1) meta da loja = a PRÓXIMA faixa do Lançamentos acima do que a loja já vendeu (bateu, passa para a seguinte);
 //   (2) dicas POR MÓDULO (venda, pedido, orçamento, chat, agenda, adm, painel, geral) para o balão; (3) BEM-ESTAR: perguntas com resposta clicável
 //   (só com consentimento da pessoa — dado sensível, LGPD), guardadas em copiloto_bemestar; op `equipe` mostra o perfil da equipe SÓ para a diretoria.
 // copiloto v3 (22/11/2026): META = a do módulo LANÇAMENTOS (fator da loja: faixas de venda × percentual, vale do mês em diante). Meta da loja = 1ª faixa;
 //   a parte de cada vendedora = participação dela nas vendas da loja no último mês fechado em Lançamentos (sem histórico: divide igual). Mostra a próxima faixa.
 // copiloto v2 (22/11/2026): loja = a escolhida no app (diretoria/gerente com várias lojas; vendedora só as dela); sem histórico, meta sugerida vira "sem meta".
-// copiloto v1 (22/11/2026): COPILOTO DE VENDAS "Felipe" — o gerente-auxiliar que fica no canto da tela e ajuda as vendedoras.
+// copiloto v1 (22/11/2026): COPILOTO DE VENDAS "Vilacinha" — a gerente-auxiliar que fica no canto da tela e ajuda as vendedoras.
 // Sessão sess_… validada contra gestao_config (igual ao db-gateway). Lê os dados com service_role e entrega SÓ o que a pessoa pode ver:
 //   - números dela (vendas do mês, ticket médio, peças por venda, orçamentos) e a posição na loja;
 //   - das colegas, só "a melhor da loja" SEM NOME e SEM VALOR (ordem do Felipe, 22/11). Gerente/diretoria recebem o ranking com nomes.
 // Ops:
 //   dia          → { saudacao, meta, eu, loja, vendaAtiva[], dicas[] } — calculado 1x por dia por pessoa (cache copiloto_dia; `forcar` refaz).
-//   perguntar    → { resposta } — conversa com o Felipe sobre vendas, com os números dela e o que já se aprendeu nas conversas do CHAT.
+//   perguntar    → { resposta } — conversa com a Vilacinha sobre vendas, com os números dela e o que já se aprendeu nas conversas do CHAT.
 //   analisarChat → estuda as conversas do CHAT (atendimento_mensagens) ainda não vistas e guarda técnicas, objeções e perguntas em copiloto_aprendizados.
 //                  Chamado pelo pg_cron (header x-cron-token = MARKETING_CRON_TOKEN) ou pela diretoria. Base para dicas e, no futuro, resposta automática.
 // NUNCA envia mensagem a cliente: só sugere o texto; o envio é pelo botão (ação humana), pela função enviar-via (tipo chamar_cliente).
@@ -179,7 +180,7 @@ async function montarDia(user: any, config: any, lojas: string[], meusNomes: str
   }
   ativa.sort((a, b) => a.prioridade - b.prioridade);
 
-  // v4: quantos atendimentos (vendas, pedidos e orçamentos) ela já fez hoje — dia cheio = o Felipe pergunta como ela está
+  // v4: quantos atendimentos (vendas, pedidos e orçamentos) ela já fez hoje — dia cheio = a Vilacinha pergunta como ela está
   const hojeAtend = vendasTodas.filter((v: any) => eu(v) && String(v.data || "") === hoje).length + (oR.data || []).filter((r: any) => eu(r.payload || {}) && String((r.payload || {}).data || "") === hoje).length;
   // ---- dicas da IA (números dela × melhor da loja sem nome × aprendizados do CHAT) ----
   const { data: ap } = await admin.from("copiloto_aprendizados").select("payload").order("criado_em", { ascending: false }).limit(3);
@@ -188,7 +189,7 @@ async function montarDia(user: any, config: any, lojas: string[], meusNomes: str
   let dicas: string[] = [];
   const dicasModulo: Record<string, string[]> = {};
   try {
-    const prompt = `Você é "Felipe", gerente experiente da rede de joalherias Vilaça Joias, treinando a vendedora ${meuNome || ""}. Escreva dicas CURTAS (até 26 palavras cada), práticas para HOJE, em português do Brasil, tom de colega animado e respeitoso, SEPARADAS POR TELA do app:
+    const prompt = `Você é "Vilacinha", gerente experiente da rede de joalherias Vilaça Joias, treinando a vendedora ${meuNome || ""}. Escreva dicas CURTAS (até 26 palavras cada), práticas para HOJE, em português do Brasil, tom de colega animado e respeitoso, SEPARADAS POR TELA do app:
 geral (3), venda (3: atendimento no balcão, agregar peça/serviço, fechamento), pedido (2: preenchimento completo da via, prazo, telefone, fotos), orcamento (2: retorno rápido, validade, objeções), chat (2: responder rápido, fotos, convite para a loja), agenda (1), adm (1), painel (1).
 Foque em atingir a PRÓXIMA FAIXA da loja (lojaFaixa.proximaFaixa / faltaParaProxima) quando houver.
 Baseie-se nos números abaixo. Compare com "a melhor da loja" SEM citar nome nem valores dela. Se faltar dado, dê dica geral de atendimento em joalheria (agregar serviço como limpeza/gravação, oferecer conjunto, pedir indicação, pós-venda).
@@ -302,9 +303,9 @@ Deno.serve(async (req: Request) => {
       const { data: c } = await admin.from("copiloto_dia").select("payload").like("id", `${user.id}|${hojeBR()}%`).order("criado_em", { ascending: false }).limit(1).maybeSingle();
       const dia = (c && c.payload) || {};
       const { data: ap } = await admin.from("copiloto_aprendizados").select("payload").order("criado_em", { ascending: false }).limit(3);
-      const hist = (Array.isArray(b.historico) ? b.historico : []).slice(-6).map((m: any) => `${m && m.de === "ia" ? "Felipe" : "Vendedora"}: ${String((m && m.texto) || "").slice(0, 400)}`).join("\n");
+      const hist = (Array.isArray(b.historico) ? b.historico : []).slice(-6).map((m: any) => `${m && m.de === "ia" ? "Vilacinha" : "Vendedora"}: ${String((m && m.texto) || "").slice(0, 400)}`).join("\n");
       const ctx = { meta: dia.meta, meusNumeros: dia.eu, melhorDaLojaSemNome: dia.melhor, vendaAtiva: (dia.vendaAtiva || []).map((x: any) => x.motivo), aprendizadosDasConversas: (ap || []).map((x: any) => x.payload), ...(gestao ? { ranking: dia.ranking } : {}) };
-      const prompt = `Você é "Felipe", gerente experiente e animado da Vilaça Joias (joalheria em Juiz de Fora), auxiliando ${primeiro(user.apelido || user.nome) || "a vendedora"} (perfil ${nivel}). Ajude com vendas, atendimento, argumentos, metas, preenchimento de vias e venda ativa.
+      const prompt = `Você é "Vilacinha", gerente experiente e animada da Vilaça Joias (joalheria em Juiz de Fora), auxiliando ${primeiro(user.apelido || user.nome) || "a vendedora"} (perfil ${nivel}). Ajude com vendas, atendimento, argumentos, metas, preenchimento de vias e venda ativa.
 Regras: português do Brasil, frases curtas, prático, no máximo 130 palavras; use os dados abaixo quando ajudarem; ${gestao ? "pode citar nomes do ranking" : "NUNCA cite nomes nem valores de outras vendedoras"}; não invente números; para dúvida de COMO USAR o app, diga para perguntar na tela de Ajuda. Nunca diga que enviou mensagem a cliente.
 DADOS: ${JSON.stringify(ctx)}
 ${hist ? "CONVERSA:\n" + hist + "\n" : ""}PERGUNTA: ${pergunta}`;

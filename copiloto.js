@@ -5,7 +5,7 @@
  * Dados: Edge Function `copiloto` (op dia / perguntar). Mensagem ao cliente SÓ sai pelo botão "Enviar pelo WhatsApp" (ação humana, enviar-via tipo chamar_cliente).
  * 22/11 (v4): BALÃO POR MÓDULO — ao abrir uma tela (Copiloto.moduloAberto, chamado pelo shell) às vezes aparece uma dica DAQUELA tela, de preferência
  *   uma que a pessoa ainda não viu (máx. 6 balões/dia, 12 min entre eles). BEM-ESTAR — em telas fora de venda/atendimento, em dia com poucas dicas ou
- *   em dia cheio de atendimentos, o Felipe pergunta como a pessoa está (resposta clicável, sempre com "prefiro não dizer") e responde com um cuidado
+ *   em dia cheio de atendimentos, a Vilacinha pergunta como a pessoa está (resposta clicável, sempre com "prefiro não dizer") e responde com um cuidado
  *   (água, alongar, respirar, sentar um pouco). Só grava com CONSENTIMENTO (perguntado uma vez). A diretoria vê o perfil da equipe no painel.
  * Shell: Copiloto.iniciar({ senha, user, lojaNome }) ao entrar; Copiloto.parar() ao sair. Oficina não tem copiloto. Fora da produção a função não existe → some sozinho. */
 (function(){
@@ -26,7 +26,16 @@
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
   }
 
-  /* ---------- rosto do Felipe (SVG próprio: vinho e dourado) ---------- */
+  /* ícone de ouvir: alto-falante com ondas (anima enquanto fala) */
+  function icOuvir(t){
+    return '<svg class="cp-som" width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      +'<path d="M11 5 6 9H3v6h3l5 4z" fill="currentColor" stroke="none"/>'
+      +'<path class="o1" d="M15.2 9.2a4 4 0 0 1 0 5.6"/><path class="o2" d="M18 6.6a8 8 0 0 1 0 10.8"/></svg>';
+  }
+  function icMic(t){ return '<svg width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'; }
+  function icParar(t){ return '<svg width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>'; }
+
+  /* ---------- rosto da Vilacinha (SVG próprio: vinho e dourado) ---------- */
   function rosto(tam, falando){
     return '<svg class="cp-rosto'+(falando?' falando':'')+'" width="'+tam+'" height="'+tam+'" viewBox="0 0 64 64" aria-hidden="true">'
       +'<defs><linearGradient id="cpG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8a3560"/><stop offset="1" stop-color="#4d1a33"/></linearGradient></defs>'
@@ -76,7 +85,35 @@
   +'.cp-ops{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;} .cp-ops button{border:1px solid #d9b26a;background:#fffaf0;color:#4d1a33;border-radius:999px;padding:6px 11px;font:600 12.5px Inter,sans-serif;cursor:pointer;} .cp-ops button:hover{background:#f3dfae;} .cp-ops button.neutro{border-color:var(--t-line,#dde);background:var(--t-surface,#fff);color:var(--t-text-soft,#556);}'
   +'.cp-be{border:1px solid var(--t-line,#dde);border-radius:10px;padding:8px 10px;margin-top:8px;} .cp-be b{font-size:13.5px;} .cp-be .m{font-size:12px;color:var(--t-text-soft,#556);} .cp-be .r{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;} .cp-be .r span{font-size:11.5px;background:var(--t-surface-2,#f4f6f8);border-radius:6px;padding:1px 6px;}'
   +'.cp-be .r span.ruim{background:#fde2e2;color:#8a1c1c;} .cp-be .r span.bom{background:#e3f4e9;color:#1f6b3a;} .cp-be details{margin-top:4px;font-size:12px;}'
-  +'@media(max-width:600px){.cp-fab{right:12px;bottom:12px;width:54px;height:54px;} .cp-balao{right:74px;bottom:18px;}}'
+  +'.cp-ouvir{background:#fffaf0;border-color:#d9b26a;color:#4d1a33;padding:7px 12px 7px 9px;} .cp-ouvir.tocando{background:#662344;border-color:#662344;color:#fff;}'
+  +'.cp-som .o1,.cp-som .o2{opacity:1;} .tocando .cp-som .o1{animation:cpOnda 1s infinite;} .tocando .cp-som .o2{animation:cpOnda 1s .25s infinite;}'
+  +'@keyframes cpOnda{0%,100%{opacity:.25}50%{opacity:1}}'
+  +'.cp-topo .cp-ler.tocando{background:#d9b26a;color:#4d1a33;}'
+  +'.cp-fab{bottom:calc(18px + env(safe-area-inset-bottom));right:calc(18px + env(safe-area-inset-right));}'
+  +'@media(max-width:760px){'
+  +'.cp-fab{right:calc(12px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));width:56px;height:56px;-webkit-tap-highlight-color:transparent;}'
+  /* balão vira cartão ancorado embaixo, acima da carinha, largura total */
+  +'.cp-balao{left:12px;right:12px;bottom:calc(80px + env(safe-area-inset-bottom));max-width:none;border-radius:18px;padding:14px 14px 12px;font-size:15px;box-shadow:0 18px 40px -12px rgba(0,0,0,.45);}'
+  +'.cp-balao .cp-acoes{justify-content:stretch;} .cp-balao .cp-acoes .cp-b{flex:1 1 auto;justify-content:center;min-height:44px;font-size:14px;}'
+  +'.cp-b{min-height:40px;}'
+  /* painel vira tela cheia (folha) com área segura */
+  +'.cp-painel{width:100vw;height:100vh;height:100dvh;top:0;box-shadow:none;animation:cpSobe .25s ease-out;}'
+  +'@keyframes cpSobe{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}'
+  +'.cp-topo{padding:calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 12px calc(12px + env(safe-area-inset-left));}'
+  +'.cp-topo button{width:44px;height:44px;border-radius:12px;}'
+  +'.cp-corpo{padding:12px calc(12px + env(safe-area-inset-right)) 16px calc(12px + env(safe-area-inset-left));-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}'
+  +'.cp-card{padding:13px;} .cp-meta-v{font-size:26px;}'
+  +'.cp-nums{gap:5px;} .cp-num{padding:7px 4px;} .cp-num b{font-size:14px;}'
+  +'.cp-cli{padding:10px 11px;} .cp-cli .cp-acoes .cp-b{flex:1 1 130px;justify-content:center;min-height:44px;}'
+  +'.cp-msg{max-width:94%;font-size:14.5px;}'
+  /* barra de digitar: 16px evita o zoom do iPhone; alvos de 46px */
+  +'.cp-form{padding:10px calc(12px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));gap:8px;}'
+  +'.cp-form textarea{font-size:16px;height:46px;padding:11px 12px;} .cp-form button{width:46px;height:46px;border-radius:12px;flex-shrink:0;}'
+  +'.cp-ops button{min-height:42px;padding:8px 13px;font-size:14px;}'
+  +'.cp-ov{align-items:flex-end;padding:0;} .cp-modal{max-width:none;border-radius:20px 20px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));max-height:92dvh;overflow:auto;} .cp-modal textarea{font-size:16px;}'
+  +'.cp-rank{font-size:13px;} .cp-be .r span{font-size:12px;}'
+  +'}'
+  +'@media(max-width:760px) and (max-height:480px){.cp-balao{bottom:12px;right:84px;left:12px;}}'
   +'@media print{.cp-fab,.cp-balao,.cp-painel{display:none!important;}}'
   +'@media (prefers-reduced-motion:reduce){.cp-balao,.cp-painel{animation:none;} .cp-rosto.falando .cp-boca{animation:none;}}';
   function css(){ if(document.getElementById('cpCss')) return; var s=document.createElement('style'); s.id='cpCss'; s.textContent=CSS; document.head.appendChild(s); }
@@ -85,7 +122,8 @@
   function falar(txt){
     try{
       if(!window.speechSynthesis) return toast('Este aparelho não lê em voz alta.');
-      speechSynthesis.cancel();
+      var jaFalando = S.falando; speechSynthesis.cancel();
+      if(jaFalando){ S.falando = false; pintarFab(); return; }   // 2º toque = parar
       var u = new SpeechSynthesisUtterance(String(txt||'').replace(/[*_#]/g,''));
       u.lang = 'pt-BR'; u.rate = 1.03;
       var v = speechSynthesis.getVoices().find(function(x){ return /pt(-|_)BR/i.test(x.lang); }); if(v) u.voice = v;
@@ -107,21 +145,22 @@
 
   /* ---------- botão flutuante e balão ---------- */
   function pintarFab(){
+    document.querySelectorAll('.cp-ouvir,.cp-ler').forEach(function(x){ x.classList.toggle('tocando', !!S.falando); var sp=x.querySelector('span'); if(sp) sp.textContent = S.falando ? 'Parar' : 'Ouvir'; });
     var b = document.getElementById('cpFab'); if(!b) return;
     var n = S.dia && S.dia.vendaAtiva ? S.dia.vendaAtiva.length : 0;
     b.innerHTML = rosto(b.offsetWidth || 62, S.falando) + (n ? '<span class="cp-n" aria-hidden="true">'+n+'</span>' : '');
-    b.title = 'Felipe, seu gerente-auxiliar' + (n ? ' — ' + n + ' clientes para chamar hoje' : '');
+    b.title = 'Vilacinha, sua gerente-auxiliar' + (n ? ' — ' + n + ' clientes para chamar hoje' : '');
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
   function balao(html, acoes, semPadrao){
     fecharBalao(); if(S.aberto) return null;
     var d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status');
-    d.innerHTML = '<b class="cp-quem">Felipe</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b" data-cp="ouvir" title="Ouvir">'+ic('mensagem',13)+'Ouvir</button>' + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
+    d.innerHTML = '<b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
     document.body.appendChild(d);
     d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); ls(chave('pausa'), String(Date.now())); };
     var ab = d.querySelector('[data-cp="abrir"]'); if(ab) ab.onclick = function(){ fecharBalao(); abrirPainel(); };
-    d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Felipe/,'')); };
+    d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Vilacinha/,'')); };
     clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, semPadrao ? 60000 : 25000);
     return d;
   }
@@ -228,13 +267,13 @@
   function abrirPainel(){
     if(document.getElementById('cpPainel')) return;
     S.aberto = true; fecharBalao();
-    var p = document.createElement('aside'); p.id = 'cpPainel'; p.className = 'cp-painel'; p.setAttribute('aria-label','Felipe, gerente-auxiliar');
-    p.innerHTML = '<div class="cp-topo">' + rosto(44) + '<div class="cp-nm"><b>Felipe</b><small>seu gerente-auxiliar de vendas</small></div>'
-      + '<button type="button" data-cp="ler" title="Ler o resumo em voz alta" aria-label="Ler em voz alta">'+ic('mensagem',18)+'</button>'
+    var p = document.createElement('aside'); p.id = 'cpPainel'; p.className = 'cp-painel'; p.setAttribute('aria-label','Vilacinha, gerente-auxiliar');
+    p.innerHTML = '<div class="cp-topo">' + rosto(44) + '<div class="cp-nm"><b>Vilacinha</b><small>sua gerente-auxiliar de vendas</small></div>'
+      + '<button type="button" class="cp-ler" data-cp="ler" title="Ouvir o resumo do dia" aria-label="Ouvir o resumo do dia">'+icOuvir(22)+'</button>'
       + '<button type="button" data-cp="atualizar" title="Atualizar os números" aria-label="Atualizar">'+ic('atualizar',18)+'</button>'
       + '<button type="button" data-cp="fechar" title="Fechar" aria-label="Fechar">'+ic('x',18)+'</button></div>'
       + '<div class="cp-corpo" id="cpCorpo"></div>'
-      + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+ic('telefone',18)+'</button><textarea id="cpTexto" maxlength="600" placeholder="Pergunte ao Felipe: como vender mais aliança?" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
+      + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+icMic(22)+'</button><textarea id="cpTexto" maxlength="600" placeholder="Pergunte à Vilacinha: como vender mais aliança?" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
     document.body.appendChild(p);
     p.querySelector('[data-cp="fechar"]').onclick = fecharPainel;
     p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; pintarFab(); } desenhar(); };
@@ -281,7 +320,7 @@
       : '<div class="cp-meta-s">Ninguém pendente hoje. Que tal pedir indicação aos clientes da semana?</div>') + '</div>';
     if(S.user && S.user.nivel === 'diretoria') h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Equipe: bem-estar (só diretoria)</h4><div id="cpEquipe"><button type="button" class="cp-b" data-cp="equipe">Ver como a equipe está</button></div></div>';
     if(d.ranking && d.ranking.length) h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Ranking da loja (gerência)</h4><table class="cp-rank">' + d.ranking.map(function(r,i){ return '<tr><td>'+(i+1)+'º '+esc(r.nome)+'</td><td class="r">'+r.vendas+' vendas</td><td class="r">'+brl0(r.total)+'</td></tr>'; }).join('') + '</table></div>';
-    h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Felipe</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
+    h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com a Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
     c.innerHTML = h;
     c.querySelectorAll('[data-cpmsg]').forEach(function(b){ b.onclick = function(){ abrirMensagem(va[+b.dataset.cpmsg]); }; });
     var be = c.querySelector('[data-cp="equipe"]'); if(be) be.onclick = verEquipe;

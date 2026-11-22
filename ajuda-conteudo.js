@@ -24,7 +24,7 @@ window.AJUDA_MODULOS = [
   { grupo:'ADM', ico:'presente', nome:'Marketing', oque:'Aniversariantes, mala direta e fila do WhatsApp.', onde:'ADM → MARKETING', quem:'Gerência e diretoria' },
   { grupo:'ADM', ico:'loja', nome:'Outra loja', oque:'Trabalhar por um tempo em outra loja.', onde:'ADM → OUTRA LOJA', quem:'Todos (com a própria senha)' },
   { grupo:'CHAT', ico:'mensagem', nome:'Chat', oque:'WhatsApp dos clientes e conversas da equipe.', onde:'CHAT', quem:'Quem atende' },
-  { grupo:'AGENDA', ico:'estrela', nome:'Felipe (gerente-auxiliar)', oque:'Meta do dia, quem chamar hoje, dicas e conversa sobre vendas.', onde:'Carinha no canto da tela', quem:'Vendedoras, gerência e diretoria' },
+  { grupo:'AGENDA', ico:'estrela', nome:'Vilacinha (gerente-auxiliar)', oque:'Meta do dia, quem chamar hoje, dicas e conversa sobre vendas.', onde:'Carinha no canto da tela', quem:'Vendedoras, gerência e diretoria' },
   { grupo:'AGENDA', ico:'calendario', nome:'Agenda', oque:'Tarefas, calendário, suas vias e os avisos do sistema.', onde:'AGENDA', quem:'Todos' },
   { grupo:'PAINEL', ico:'sino', nome:'Avisos', oque:'O que precisa da sua atenção hoje.', onde:'PAINEL → AVISOS', quem:'Todos' },
   { grupo:'PAINEL', ico:'grafico', nome:'Dashboard', oque:'Vendas, metas e desempenho.', onde:'PAINEL → DASHBOARD', quem:'Gerência e diretoria' },
@@ -333,19 +333,19 @@ window.AJUDA_TOPICOS = [
   `
 },
 {
-  cat:'Vender', ico:'estrela', tit:'Felipe, o gerente-auxiliar (carinha no canto da tela)',
-  chave:'felipe copiloto assistente gerente auxiliar dicas meta do dia quem chamar venda ativa voz ouvir microfone',
+  cat:'Vender', ico:'estrela', tit:'Vilacinha, a gerente-auxiliar (carinha no canto da tela)',
+  chave:'vilacinha felipe copiloto assistente gerente auxiliar dicas meta do dia quem chamar venda ativa voz ouvir microfone',
   body:`
-    <p>A carinha no <b>canto de baixo da tela</b> é o <b>Felipe</b>, seu gerente-auxiliar. Ele olha os seus números e te ajuda a vender mais.</p>
+    <p>A carinha no <b>canto de baixo da tela</b> é a <b>Vilacinha</b>, sua gerente-auxiliar. Ela olha os seus números e te ajuda a vender mais.</p>
     <ol class="passos">
       <li>Toque na carinha para abrir <b>o seu dia</b>: meta de hoje, seus números no mês e dicas.</li>
       <li><b>Quem chamar hoje</b>: orçamentos vencendo, aniversariantes, clientes que compraram há um ano e pedidos prontos. Toque em <span class="btn-ref">Mensagem pronta</span>, ajuste o texto e toque em <span class="btn-ref">Enviar pelo WhatsApp</span>.</li>
-      <li>Pergunte o que quiser sobre vendas, digitando ou pelo <b>microfone</b>. O botão de som <b>lê em voz alta</b>.</li>
+      <li>Pergunte o que quiser sobre vendas, digitando ou pelo <b>microfone</b>. O botão <b>Ouvir</b> (alto-falante) <b>lê em voz alta</b>; toque de novo para parar.</li>
     </ol>
-    <div class="dica">De vez em quando ele aparece num balão com uma dica (no máximo 4 por dia). Toque em <span class="btn-ref">Agora não</span> para ele esperar 2 horas.</div>
+    <div class="dica">De vez em quando ela aparece num balão com uma dica. Toque em <span class="btn-ref">Agora não</span> para ela esperar 2 horas.</div>
     <div class="aviso">Você vê a comparação com <b>a melhor da loja</b>, sem nome. A gerência vê o ranking completo. Nenhuma mensagem sai para o cliente sem você tocar em enviar.</div>
-    <div class="dica"><b>Dicas por tela:</b> ao abrir Venda, Pedido, Orçamento, Chat e outras telas, às vezes ele mostra uma dica daquela tela, de preferência uma que você ainda não viu. A meta é sempre a <b>próxima faixa</b> da loja: bateu, ele passa para a seguinte.</div>
-    <div class="dica"><b>Como você está?</b> De vez em quando ele pergunta do seu dia (água, cansaço, sono, vida fora da loja), com resposta de um toque e sempre com "prefiro não dizer". Só pergunta se você aceitar, e as respostas ficam visíveis apenas para a diretoria.</div>
+    <div class="dica"><b>Dicas por tela:</b> ao abrir Venda, Pedido, Orçamento, Chat e outras telas, às vezes ela mostra uma dica daquela tela, de preferência uma que você ainda não viu. A meta é sempre a <b>próxima faixa</b> da loja: bateu, ela passa para a seguinte.</div>
+    <div class="dica"><b>Como você está?</b> De vez em quando ela pergunta do seu dia (água, cansaço, sono, vida fora da loja), com resposta de um toque e sempre com "prefiro não dizer". Só pergunta se você aceitar, e as respostas ficam visíveis apenas para a diretoria.</div>
   `
 },
 /* ─────────────── 22/11: ASSUNTOS NOVOS (módulos que não tinham ajuda) ─────────────── */
