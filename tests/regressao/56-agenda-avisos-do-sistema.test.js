@@ -43,7 +43,10 @@ module.exports = { casos: [
     const h = ler('agenda.html');
     t.ok(/<script src="avisos-core\.js"><\/script>/.test(h) && /AvisosCore\.calcular/.test(h), 'carrega o núcleo');
     t.ok(/c\.innerHTML = agPainelAvisos\(\) \+/.test(h) && /Avisos do sistema/.test(h), 'painel acima do quadro');
-    t.ok(/filter\(a=>a\.data===iso\)/.test(h) && /id="agMostrarAvisos"/.test(h), 'calendário no dia do aviso, com opção de esconder');
+    t.ok(/filter\(a=>a\.data===iso\)/.test(h) && /if\(TP\.aviso!==false\)/.test(h), 'calendário no dia do aviso, com opção de esconder');
+    // 22/11: escolher o que aparece no calendário; abre com tudo ligado e com as vias do usuário
+    t.ok(/tiposCal:\{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:true, orcamento:true \}/.test(h) && /escopoVias:'minhas'/.test(h), 'abre com tudo e vias em meu nome');
+    t.ok(/if\(TP\[v\.tipo\]===false\) return;/.test(h) && /data-agtp="_tudo"/.test(h) && /\['pedido','Pedidos \(serviço\)'/.test(h), 'filtro por tipo (pedido/serviço, venda, orçamento, tarefas, avisos, lembretes)');
     t.ok(/av\.length\+' avisos', grupoAvisos:true/.test(h) && /agEventosDoDia\(iso, true\)/.test(h), 'dia com mais de um aviso: um só item; o dia aberto lista todos');
     t.ok(/function agGruposAvisos/.test(h) && /if\(l\.length === 1\) return agItemAviso\(l\[0\]\)/.test(h), 'painel: mais de um do mesmo tipo vira grupo recolhido');
     t.ok(/function agAvisoParaTarefa/.test(h) && /function agEditar\(t, dataPadrao, modelo\)/.test(h) && /modulo:'agenda', \.\.\.a\.abrir/.test(h), 'virar tarefa e abrir no módulo');
