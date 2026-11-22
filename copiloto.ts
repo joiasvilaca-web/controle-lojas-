@@ -1,3 +1,5 @@
+// copiloto v3 (22/11/2026): META = a do módulo LANÇAMENTOS (fator da loja: faixas de venda × percentual, vale do mês em diante). Meta da loja = 1ª faixa;
+//   a parte de cada vendedora = participação dela nas vendas da loja no último mês fechado em Lançamentos (sem histórico: divide igual). Mostra a próxima faixa.
 // copiloto v2 (22/11/2026): loja = a escolhida no app (diretoria/gerente com várias lojas; vendedora só as dela); sem histórico, meta sugerida vira "sem meta".
 // copiloto v1 (22/11/2026): COPILOTO DE VENDAS "Felipe" — o gerente-auxiliar que fica no canto da tela e ajuda as vendedoras.
 // Sessão sess_… validada contra gestao_config (igual ao db-gateway). Lê os dados com service_role e entrega SÓ o que a pessoa pode ver:
@@ -94,14 +96,30 @@ async function montarDia(user: any, config: any, lojas: string[], meusNomes: str
   // ---- meta: a da loja (Dashboard › Editar metas) dividida pelas vendedoras ativas; sem meta cadastrada, meta sugerida = média diária dela nos últimos 3 meses + 10% ----
   const diasMes = new Date(Number(hoje.slice(0, 4)), Number(hoje.slice(5, 7)), 0).getDate();
   const diasRestantes = diasMes - Number(hoje.slice(8, 10)) + 1;
-  const metas = config.metasMensais || (config.metas && config.metas.mensal) || {};
-  const metaLoja = Number(metas[loja.nome] || metas[lojaId] || 0);
   const vendidoLoja = vendasMesLoja.reduce((s: number, v: any) => s + (Number(v.valorTotal) || 0), 0);
+  // v3: meta do LANÇAMENTOS — fator da loja (faixas) do mês atual ou o último salvo antes dele
+  const CHAVE_LANC: Record<string, string> = { loja_mc: "MARECHAL", loja_jb: "JOAO BERALDO", loja_jn: "JARDIM NORTE", loja_rj: "REFORMA" };
+  const chaveLanc = CHAVE_LANC[lojaId] || "", mes = hoje.slice(0, 7);
+  let faixas: { valor: number; percentual: number }[] = [], partes: Record<string, number> = {}, totalPartes = 0;
+  if (chaveLanc) {
+    const [fR, vdR] = await Promise.all([
+      admin.from("lancamentos_mensais").select("mes, dados").eq("tipo", "fator").eq("chave", chaveLanc).lte("mes", mes).order("mes", { ascending: false }).limit(1),
+      admin.from("lancamentos_mensais").select("mes, chave, dados").eq("tipo", "vendedora").lt("mes", mes).order("mes", { ascending: false }).limit(200),
+    ]);
+    faixas = (((fR.data || [])[0] || {}).dados?.faixas || []).map((f: any) => ({ valor: Number(f.valor) || 0, percentual: Number(f.percentual) || 0 })).filter((f: any) => f.valor > 0).sort((a: any, b: any) => a.valor - b.valor);
+    const ultimoMes = ((vdR.data || [])[0] || {}).mes;
+    for (const r of (vdR.data || []).filter((x: any) => x.mes === ultimoMes)) { const v = Number(r.dados?.lojas?.[chaveLanc]?.venda) || 0; if (v > 0) { partes[norm(r.chave)] = v; totalPartes += v; } }
+  }
   let meta: any;
-  if (metaLoja > 0) {
-    const nV = Math.max(1, rank.length);
-    const minhaMetaMes = metaLoja / nV;
-    meta = { tipo: "loja", metaMes: minhaMetaMes, vendidoMes: minha.total, hoje: Math.max(0, (minhaMetaMes - minha.total) / diasRestantes), lojaMeta: metaLoja, lojaVendido: vendidoLoja, diasRestantes };
+  if (faixas.length) {
+    const metaLoja = faixas[0].valor;
+    const minhaParte = meusNomes.map((n) => partes[n] || 0).find((x) => x > 0) || 0;
+    const share = totalPartes && minhaParte ? minhaParte / totalPartes : 1 / Math.max(1, Object.keys(partes).length || rank.length || 1);
+    const minhaMetaMes = metaLoja * share;
+    const atual = [...faixas].reverse().find((f) => vendidoLoja >= f.valor) || null;
+    const proxima = faixas.find((f) => vendidoLoja < f.valor) || null;
+    meta = { tipo: "lancamentos", metaMes: minhaMetaMes, vendidoMes: minha.total, hoje: Math.max(0, (minhaMetaMes - minha.total) / diasRestantes), diasRestantes,
+      loja: { meta: metaLoja, vendido: vendidoLoja, faixaAtual: atual, proxima, falta: proxima ? Math.max(0, proxima.valor - vendidoLoja) : 0 }, participacao: Math.round(share * 100) };
   } else {
     const ini90 = somaDias(hoje, -90);
     const minhas90 = vendasTodas.filter((v: any) => eu(v) && String(v.data || "") >= ini90 && String(v.data || "") < iniMes);
@@ -166,7 +184,7 @@ async function montarDia(user: any, config: any, lojas: string[], meusNomes: str
     const prompt = `Você é "Felipe", gerente experiente da rede de joalherias Vilaça Joias, treinando a vendedora ${meuNome || ""}. Escreva 3 dicas CURTAS (até 28 palavras cada), práticas para HOJE, em português do Brasil, tom de colega animado e respeitoso.
 Baseie-se nos números abaixo. Compare com "a melhor da loja" SEM citar nome nem valores dela. Se faltar dado, dê dica geral de atendimento em joalheria (agregar serviço como limpeza/gravação, oferecer conjunto, pedir indicação, pós-venda).
 Responda SOMENTE JSON: {"dicas":["...","...","..."]}
-DADOS: ${JSON.stringify({ mesAteHoje: fmt(minha), posicaoNaLoja: pos ? pos + "º de " + rank.length : "sem vendas no mês", melhorDaLoja: fmt(melhor), mediaDaLoja: media ? { ticketMedio: Math.round(media.ticket), pecasPorVenda: Number(media.pecasPorVenda.toFixed(2)), vendasComServico: Math.round(media.pctServico * 100) + "%" } : null, metaHoje: Math.round(meta.hoje), vendaAtivaHoje: ativa.length, aprendizadosDasConversas: aprend })}`;
+DADOS: ${JSON.stringify({ mesAteHoje: fmt(minha), posicaoNaLoja: pos ? pos + "º de " + rank.length : "sem vendas no mês", melhorDaLoja: fmt(melhor), mediaDaLoja: media ? { ticketMedio: Math.round(media.ticket), pecasPorVenda: Number(media.pecasPorVenda.toFixed(2)), vendasComServico: Math.round(media.pctServico * 100) + "%" } : null, metaHoje: Math.round(meta.hoje), lojaFaixa: meta.loja ? { vendido: Math.round(meta.loja.vendido), proximaFaixa: meta.loja.proxima, faltaParaProxima: Math.round(meta.loja.falta) } : null, vendaAtivaHoje: ativa.length, aprendizadosDasConversas: aprend })}`;
     const j = lerJson(await gemini(prompt, true));
     dicas = (j && Array.isArray(j.dicas) ? j.dicas : []).map((d: unknown) => String(d).slice(0, 240)).slice(0, 3);
   } catch (e) { console.error("dicas", e); }

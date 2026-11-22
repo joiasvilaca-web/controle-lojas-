@@ -1,3 +1,4 @@
+// acompanhamento-auto v26 (22/11/2026): pós-venda de venda da Reforma Joias/Ecommerce (peça enviada depois) só depois de 25 dias (pv.diasEnvio), não 7.
 // acompanhamento-auto v25 (22/11/2026): orçamento com MODELO POR SITUAÇÃO (orcModelo) — pronto / encerrado / aprovado nos modelos próprios de Utilidade (nº do orçamento + loja + botão "Ver orçamento") só depois que a Meta aprovar; lembretes (Ação de fixação, Prorrogado) sempre no modelo de lembrete (orc_lembrete, Marketing). Sem modelo próprio aprovado, cai no genérico "orcamento" como antes.
 // acompanhamento-auto v24 (22/11/2026): orçamento pela API oficial leva só a FRASE CURTA (fraseOrc) — detalhes no link, para aprovar como Utilidade.
 // acompanhamento-auto v23 (22/11/2026): variáveis conforme o modelo ATIVO (meta_modelos.corpo); pós-venda {{2}} = texto do pós-venda e botão "Avaliar no Google" com o link da loja (se o ativo tiver botao_dinamico); miolo igual ao disparo-cloud v9.
@@ -401,7 +402,10 @@ Deno.serve(async (req: Request) => {
           const v = r.payload || {};
           if (v.posVendaEnviadoEm || v.status === "cancelada" || v.status === "cancelado" || v.rascunho || !v.data) continue;
           if (Number(v.criadoEm || 0) < desdeMs) continue;
-          if (diasEntre(String(v.data).slice(0, 10), agora.dia) < dias) continue;
+          // v26: venda que a loja ENVIA depois (Reforma Joias e Ecommerce: a peça vai pelos Correios/oficina) só ganha pós-venda depois de dar tempo de chegar
+          //      (pv.diasEnvio, padrão 25 dias) — antes o cliente recebia "a peça vestiu bem?" ainda esperando a peça.
+          const remota = ["loja_rj", "loja_ec"].includes(String(v.lojaId || ""));
+          if (diasEntre(String(v.data).slice(0, 10), agora.dia) < (remota ? Math.max(dias, Number(pv.diasEnvio) || 25) : dias)) continue;
           cand.push({ tipo: "posvenda", tabela: "vendas_pdv", id: r.id, reg: v, passo: 0, tel: celular(v.telefone), pulados: 0, statusDestino: "", nomeAcao: "pós-venda", agenda: v.autoAgenda || null,
             texto: preencher((pv.mensagem && pv.mensagem.trim()) || MSG_POSVENDA_PADRAO, cfg, v) });
         }
