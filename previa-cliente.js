@@ -58,6 +58,7 @@
       viaModelo('Pedido', 'Pedido — ao salvar (Aprovado)', 'Automático ao lançar o pedido (com celular).', 'os');
       viaModelo('Pedido', 'Pedido — botão do WhatsApp (na fábrica, pendência, entregue…)', 'Só quando alguém toca no botão. O status não aparece no texto: o cliente vê ao abrir o link.', 'os');
       var mdPr = corpoDe(modelos, 'pedido_pronto');
+      if(mdPr) lista.push({ grupo:'Pedido', titulo:'Pedido — PRONTO com pagamento em aberto (automático)', quando:'Sai sozinho quando o pedido fica PRONTO e ainda falta pagar (9h–20h). Pedido já quitado: só pelo botão.', modelo: mdPr, texto: preencherModelo(mdPr.corpo, [nome1, vend, loja, base() + PAGINAS.os.url]), pagina:'os' });
       if(mdPr) lista.push({ grupo:'Pedido', titulo:'Pedido — botão do WhatsApp com o pedido DISPONÍVEL PARA RETIRADA', quando:'Só quando alguém toca no botão com o pedido em Disponível para retirada (modelo próprio).', modelo: mdPr, texto: preencherModelo(mdPr.corpo, [nome1, vend, loja, base() + PAGINAS.os.url]), pagina:'os' });
       // ORÇAMENTO
       var STs = Array.isArray(cfg.statusOrcamento) ? cfg.statusOrcamento : [];

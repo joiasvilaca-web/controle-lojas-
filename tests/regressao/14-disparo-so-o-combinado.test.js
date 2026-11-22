@@ -14,7 +14,7 @@ module.exports = { casos: [
     const s = ler('acompanhamento-auto.ts');
     // a cópia do repositório pode estar atrás da produção; se tiver o bloco, ele precisa estar travado
     const i = s.indexOf('o.status === "pronto"');
-    if (i > 0) t.ok(/prontoAuto === true/.test(s.slice(i - 20, i + 200)), 'os_pronto só com prontoAuto=true');
+    if (i > 0) t.ok(/o\.status === "pronto" && \(?po\.prontoAuto === true/.test(s) && /\(po\.prontoAuto === true \|\| prontoSaldo\)/.test(s), 'os_pronto só com prontoAuto=true ou (22/11, pedido do Felipe) pagamento em aberto');
     else t.ok(true, 'bloco os_pronto ausente na cópia local');
   } },
   { nome: 'REGRA FIXA 16/11: mudar o status do Pedido nunca envia mensagem (só ação humana no botão)', bug: 'status do pedido disparando WhatsApp sem ninguém clicar', rodar: async ({ t, ler }) => {

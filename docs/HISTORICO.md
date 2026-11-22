@@ -447,3 +447,4 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - 22/11 (Vilacinha): novo avatar (ilustração própria em SVG: homem de cabelo escuro, sobrancelhas grossas, sorriso largo, camisa preta com gola dourada); boca anima ao falar.
 - 22/11 (Vilacinha): botão X em todos os balões.
 - 22/11: tela Mensagens (previa-cliente.js) mostra o orçamento no mesmo modelo que o servidor usa (orc_pronto/orc_aprovado/orc_encerrado de Utilidade quando aprovados; lembretes no orc_lembrete; sem modelo próprio, o genérico). Teste 63.
+- 22/11: (pedido do Felipe) Pedido PRONTO com pagamento em aberto recebe o aviso de pronto sozinho — acompanhamento-auto v27 (saldoAbertoOS + fiadoPagoOS, mesma regra da tela; só pedidos prontos a partir de 22/11 13:30 UTC, os 50 já prontos não disparam). Regra fixa do AGENTS.md ganhou o item 6. Prévia em Mensagens. Teste 64 (14 ajustado).

@@ -1,3 +1,4 @@
+// acompanhamento-auto v27 (22/11/2026, pedido do Felipe): pedido que fica PRONTO com PAGAMENTO EM ABERTO (saldo a pagar > 0) recebe o aviso de pronto SOZINHO (modelo pedido_pronto_acompanhamento). Pedido quitado continua só pelo botão (ou prontoAuto=true). Vale só para pedidos que ficaram prontos a partir de PRONTO_SALDO_DESDE (não dispara os antigos). Saldo pela mesma regra da tela (saldoAbertoOS = valorAReceberDe + fiado já pago).
 // acompanhamento-auto v26 (22/11/2026): pós-venda de venda da Reforma Joias/Ecommerce (peça enviada depois) só depois de 25 dias (pv.diasEnvio), não 7.
 // acompanhamento-auto v25 (22/11/2026): orçamento com MODELO POR SITUAÇÃO (orcModelo) — pronto / encerrado / aprovado nos modelos próprios de Utilidade (nº do orçamento + loja + botão "Ver orçamento") só depois que a Meta aprovar; lembretes (Ação de fixação, Prorrogado) sempre no modelo de lembrete (orc_lembrete, Marketing). Sem modelo próprio aprovado, cai no genérico "orcamento" como antes.
 // acompanhamento-auto v24 (22/11/2026): orçamento pela API oficial leva só a FRASE CURTA (fraseOrc) — detalhes no link, para aprovar como Utilidade.
@@ -320,6 +321,34 @@ async function abertoAgora(body: any) {
   return json({ ok: true, enviado: true, autoMensagensEnviadas: 1, msgEnviadas: reg.msgEnviadas, acoesLog: reg.acoesLog });
 }
 
+// v27: saldo a pagar do pedido — mesma regra do painel-ordens (valorAReceberDe + saldoRealDaOrdem; cartão quita pela base valor/1,2)
+const PRONTO_SALDO_DESDE = Date.parse("2026-11-22T13:30:00Z");
+function saldoAbertoOS(o: any, cfg: any): number {
+  const formas = ([] as any[]).concat((cfg && cfg.formasPagamento) || [], (cfg && cfg.paymentTypes) || []);
+  const ehCartao = (p: any) => {
+    const id = String((p && p.formaId) || ""); if (!id || id.indexOf("__") === 0) return false;
+    const f = formas.find((x: any) => x && x.id === id); const nm = String((f && f.nome) || "");
+    const cart = !!(f && (f.cartao === true || /cart[aã]o|cr[eé]dito|d[eé]bito|link\s*eco/i.test(nm)));
+    const deb = /d[eé]bito/i.test(nm) && !/cr[eé]dito|link\s*eco/i.test(nm);
+    if (cart && deb) { if (p.debitoAntigo) return true; const d = String(p.data || "").slice(0, 10) || new Date().toISOString().slice(0, 10); if (d >= "2026-11-07") return false; }
+    return cart;
+  };
+  const base = (p: any) => { const v = Number(p && p.valor) || 0; if (p && p.noTotal) return v; return ehCartao(p) ? Math.round(v / 1.2 * 100) / 100 : v; };
+  const pags = (Array.isArray(o.pagamentos) ? o.pagamentos : []).filter((p: any) => p && p._modo !== "editar");
+  const credOuro = pags.reduce((a: number, p: any) => { if (p.formaId !== "__credito") return a; const c = Number(p.creditoOuro); return isFinite(c) && c > 0 ? a + Math.min(c, Number(p.valor) || 0) : a; }, 0);
+  const pago = pags.filter((p: any) => !(p.formaId === "__fiado" || p.formaId === "__credito" || p.formaId === "__cashback")).reduce((a: number, p: any) => a + base(p), 0);
+  return Math.max(0, (Number(o.valorTotal) || 0) - credOuro - pago);
+}
+async function fiadoPagoOS(o: any): Promise<number> {
+  if (!o || !o.fiadoDebitoId) return 0;
+  try {
+    const { data } = await admin.from("clientes_cadastro").select("payload").contains("payload", { fiadoDebitos: [{ id: o.fiadoDebitoId }] }).limit(1);
+    const d = ((data && data[0] && data[0].payload && data[0].payload.fiadoDebitos) || []).find((x: any) => x && x.id === o.fiadoDebitoId);
+    if (!d) return 0;
+    const noPedido = (o.pagamentos || []).filter((p: any) => p && p.formaId === "__fiado").reduce((a: number, p: any) => a + (Number(p.valor) || 0), 0);
+    return Math.min(Number(d.valorPago) || 0, noPedido || (Number(d.valor) || 0));
+  } catch (_) { return 0; }
+}
 type Item = { tipo: "orcamento" | "posvenda" | "os_pronto" | "os_posvenda"; tabela: string; id: string; reg: any; passo: number; tel: string | null; texto: string; statusDestino: string; nomeAcao: string; pulados: number; agenda: any };
 
 Deno.serve(async (req: Request) => {
@@ -421,7 +450,12 @@ Deno.serve(async (req: Request) => {
           const o = r.payload || {};
           if (o.rascunho || o.status === "cancelado") continue;
           const jaLog = (k: string) => (Array.isArray(o.acoesLog) ? o.acoesLog : []).some((a: any) => a && a.passo === k);
-          if (o.status === "pronto" && po.prontoAuto === true && Number(o.statusEm || 0) >= desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
+          let prontoSaldo = false;   // v27: pronto com pagamento em aberto sai sozinho
+          if (o.status === "pronto" && po.prontoAuto !== true && Number(o.statusEm || 0) >= PRONTO_SALDO_DESDE && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
+            let pend = saldoAbertoOS(o, cfg); if (pend > 0.009 && o.fiadoDebitoId) pend = Math.max(0, pend - await fiadoPagoOS(o));
+            prontoSaldo = pend > 0.009;
+          }
+          if (o.status === "pronto" && (po.prontoAuto === true || prontoSaldo) && Number(o.statusEm || 0) >= desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
             cand.push({ tipo: "os_pronto", tabela: "ordens_servico", id: r.id, reg: o, passo: 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: "aviso de pronto", agenda: o.autoAgenda || null,
               texto: preencherOS((po.mensagemPronto && po.mensagemPronto.trim()) || (cfg.mensagens && cfg.mensagens.pronto) || MSG_OS_PRONTO, cfg, o) });
           } else if (o.status === "entregue" && Number(o.recebidoEm || 0) >= desdeMs && !o.posVendaEnviadoEm && diasEntre(diaDe(Number(o.recebidoEm)), agora.dia) >= diasPV) {

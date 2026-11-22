@@ -31,8 +31,8 @@ Você é o engenheiro principal do Vilaça App. Português, curto, direto, com l
 **Regras de negócio (não alterar sem pedido):** Cartão e LINK ECO = +20%, até 12x. À vista = dinheiro, PIX, ouro, fiado. Caixa conta pela data do pagamento. Diretoria vê todas as lojas; gerente e vendedora só as suas. Ouro excedente vira crédito do cliente.
 
 **WhatsApp — REGRA FIXA DO DISPARO (16/11, ordem do Felipe; não mudar sem ele pedir):**
-- Dispara SOZINHO somente: (1) **Venda** ao salvar; (2) **Pedido** ao salvar, status **APROVADO**; (3) **Orçamento**, todos os status; (4) **Aniversário**; (5) **Pós-venda**.
-- **Todo o resto só sai com AÇÃO HUMANA** (alguém clicar no botão/ícone do WhatsApp). Mudar o status do Pedido (ENVIADO P/ FÁBRICA, EM PRODUÇÃO, PENDÊNCIA, PRODUZIDO, PRONTO, ENTREGUE, CANCELADO), por arrastar, lista, leitor ou Oficina, NUNCA envia mensagem.
+- Dispara SOZINHO somente: (1) **Venda** ao salvar; (2) **Pedido** ao salvar, status **APROVADO**; (3) **Orçamento**, todos os status; (4) **Aniversário**; (5) **Pós-venda**; (6) **Pedido PRONTO com pagamento em aberto** (22/11, pedido do Felipe: robô `acompanhamento-auto` v27, modelo de pedido pronto; pedido quitado continua só pelo botão).
+- **Todo o resto só sai com AÇÃO HUMANA** (alguém clicar no botão/ícone do WhatsApp). Mudar o status do Pedido (ENVIADO P/ FÁBRICA, EM PRODUÇÃO, PENDÊNCIA, PRODUZIDO, PRONTO, ENTREGUE, CANCELADO), por arrastar, lista, leitor ou Oficina, NUNCA envia mensagem pela tela (a única exceção é o item 6, enviado pelo robô do servidor).
 - Nenhuma tela, função ou robô novo pode enviar mensagem a cliente fora dessa lista. O teste `tests/regressao/14` trava isso.
 
 **WhatsApp (geral):** o disparo automático já está implantado (`docs/HISTORICO.md` seções 20 e 24). Não alterá-lo sem pedido. Em testes, NUNCA fazer envio real a clientes. Não mexer na Evolution API, no número do chatbot, em tokens nem em webhooks ativos. Migração para a API oficial: só análise e preparação até o Felipe autorizar.
