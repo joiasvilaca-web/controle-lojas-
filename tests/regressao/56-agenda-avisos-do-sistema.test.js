@@ -23,6 +23,19 @@ module.exports = { casos: [
     t.ok(l[0].nivel === 'danger' && l[l.length - 1].nivel !== 'danger', 'urgentes primeiro');
     const v = await core().calcular({ gatewayCall: gw, config:{}, user:{ nivel:'vendedora' } });
     t.ok(!v.some(a => /^dp-exp|^dp-semficha/.test(a.id)), 'experiência e sem ficha só para gestão');
+    // 22/11: só quem participa da via (ou a gestão da loja) vê o aviso; Oficina só os pedidos em poder dela; DP só a própria ficha
+    const dados2 = { ordens_servico: [ { id:'p1', status:'pendencia', vendedora:'PATY', data:iso(1) }, { id:'p2', status:'pendencia', vendedora:'MARIANA', data:iso(1) }, { id:'p3', status:'aguardando', recebidoPor:'Paty', data:iso(-2) }, { id:'p4', status:'pronto', vendedora:'MARIANA', data:iso(-9) } ],
+      orcamentos: [ { id:'q1', status:'pendente', validade:iso(-1), funcionario:'PATY' }, { id:'q2', status:'pendente', validade:iso(-1), vendedora:'MARIANA' } ],
+      dp_funcionarios: [ { id:'x', nome:'PATRICIA', apelido:'PATY', funcionarioId:'fP' }, { id:'y', nome:'MARIANA' } ] };
+    const gw2 = async b => ({ data: (dados2[b.table] || []).map(p => ({ payload:p })) });
+    const cfg2 = { funcionarios:[ { id:'fP', nome:'PATRICIA', apelido:'PATY' } ] };
+    const ids = l => l.map(a => a.id).sort().join(',');
+    const vend = await core().calcular({ gatewayCall: gw2, config:cfg2, user:{ nivel:'vendedora', nome:'PATY', funcionarioId:'fP' } });
+    t.ok(ids(vend) === 'dp-ficha-x,orc-venc-q1,os-pend-p1,os-venc-p3', 'vendedora: só as vias dela e a própria ficha → ' + ids(vend));
+    const ger = await core().calcular({ gatewayCall: gw2, config:cfg2, user:{ nivel:'gerente', nome:'CAMILA' } });
+    t.ok(['os-pend-p1','os-pend-p2','os-venc-p3','os-pronto-p4','orc-venc-q1','orc-venc-q2'].every(id => ger.some(a => a.id === id)), 'gerente: todas as vias da loja');
+    const of = await core().calcular({ gatewayCall: gw2, config:cfg2, user:{ nivel:'oficina', nome:'OFICINA' } });
+    t.ok(ids(of.filter(a => /^os|^orc/.test(a.id))) === 'os-pend-p1,os-pend-p2', 'oficina: só pedidos em poder dela');
     const semPerm = await core().calcular({ gatewayCall: async () => ({ error:'sem permissão' }), config:{}, user:{} });
     t.ok(Array.isArray(semPerm) && semPerm.length === 0, 'sem permissão: nada, sem erro');
   } },
@@ -30,7 +43,9 @@ module.exports = { casos: [
     const h = ler('agenda.html');
     t.ok(/<script src="avisos-core\.js"><\/script>/.test(h) && /AvisosCore\.calcular/.test(h), 'carrega o núcleo');
     t.ok(/c\.innerHTML = agPainelAvisos\(\) \+/.test(h) && /Avisos do sistema/.test(h), 'painel acima do quadro');
-    t.ok(/estado\.ag\.mostrarAvisos\) \(estado\.ag\.avisos\|\|\[\]\)\.forEach\(a=>\{ if\(a\.data===iso\)/.test(h) && /id="agMostrarAvisos"/.test(h), 'calendário no dia do aviso, com opção de esconder');
+    t.ok(/filter\(a=>a\.data===iso\)/.test(h) && /id="agMostrarAvisos"/.test(h), 'calendário no dia do aviso, com opção de esconder');
+    t.ok(/av\.length\+' avisos', grupoAvisos:true/.test(h) && /agEventosDoDia\(iso, true\)/.test(h), 'dia com mais de um aviso: um só item; o dia aberto lista todos');
+    t.ok(/function agGruposAvisos/.test(h) && /if\(l\.length === 1\) return agItemAviso\(l\[0\]\)/.test(h), 'painel: mais de um do mesmo tipo vira grupo recolhido');
     t.ok(/function agAvisoParaTarefa/.test(h) && /function agEditar\(t, dataPadrao, modelo\)/.test(h) && /modulo:'agenda', \.\.\.a\.abrir/.test(h), 'virar tarefa e abrir no módulo');
   } },
   { nome: 'disparo-cloud v12: lembrete sempre no modelo de lembrete; pronto/aprovado/encerrado só no próprio depois de APPROVED', bug: 'lembrete por modelo de Utilidade puniria a conta', rodar: async ({ t }) => {

@@ -3,6 +3,9 @@
  * Uso: const lista = await AvisosCore.calcular({ gatewayCall, config, user });
  * Cada aviso: { id, modulo, area, icone, grupo, nivel:'danger'|'wait'|'info', titulo, sub, tag,
  *               data:'AAAA-MM-DD'|null (dia no calendário), rotuloData, abrir:{ alvo, registroId?, tab? }, classe:'urgente'|'importante'|'normal' }
+ * QUEM VÊ (22/11, ordem do Felipe): só quem PARTICIPA da via (vendedora, funcionário, quem criou ou recebeu) ou a GESTÃO da loja
+ * (gerente: todas as vias das lojas dela — o db-gateway já entrega só as lojas dela; diretoria: todas). Oficina: só os pedidos em poder dela.
+ * DP: gestão vê tudo; os demais só a própria ficha.
  * Não grava nada: só lê (pelo db-gateway, com as permissões de quem está logado). Tabela sem permissão = seção some. */
 (function(){
   'use strict';
@@ -20,7 +23,13 @@
 
   async function calcular(ctx){
     var gw = ctx.gatewayCall, config = ctx.config || {}, user = ctx.user || {};
-    var gestao = user.nivel==='diretoria' || user.nivel==='gerente';
+    var gestao = user.nivel==='diretoria' || user.nivel==='gerente', oficina = user.nivel==='oficina';
+    var fu = (config.funcionarios||[]).find(function(x){ return x.id===user.funcionarioId; }) || {};
+    var meus = [user.nome, user.apelido, fu.nome, fu.apelido].map(function(n){ return String(n||'').trim().toLowerCase(); }).filter(Boolean);
+    function participo(o){ return ['vendedora','funcionario','criadoPor','recebidoPor'].some(function(k){ var v = String(o[k]||'').trim().toLowerCase(); return v && meus.indexOf(v) >= 0; }); }
+    var ST_OFICINA = ['enviado_fabrica','em_producao','pendencia','oficina_pronto'];
+    function vejoVia(o, pedido){ if(gestao) return true; if(oficina) return pedido && ST_OFICINA.indexOf(String(o.status||'')) >= 0; return participo(o); }
+    function minhaFicha(f){ return f.funcionarioId===user.funcionarioId || meus.indexOf(String(f.nome||'').trim().toLowerCase()) >= 0 || meus.indexOf(String(f.apelido||'').trim().toLowerCase()) >= 0; }
     var hj = hoje(), out = [];
     async function ler(table){ try{ var r = await gw({ op:'selectAll', table:table }); if(!r || r.error) return null; return (r.data||[]).map(function(x){ return x.payload; }).filter(Boolean); }catch(e){ return null; } }
     function add(a){ a.classe = CLASSE[a.nivel] || 'normal'; out.push(a); }
@@ -30,7 +39,7 @@
     var ordens = r[0], orcs = r[1], fichas = r[2];
 
     // ---------- CAIXA › Pedido ----------
-    (ordens||[]).forEach(function(o){
+    (ordens||[]).filter(function(o){ return vejoVia(o, true); }).forEach(function(o){
       var base = { modulo:'CAIXA', area:'Pedido', icone:'recibo', abrir:{ alvo:'os', registroId:o.id } };
       var sub = (o.serviceTypeName||o.descricao||'Serviço') + (o.loja?' · '+o.loja:'') + (o.vendedora?' · '+o.vendedora:'');
       if(o.status==='pendencia'){
@@ -45,7 +54,7 @@
     });
 
     // ---------- CAIXA › Orçamento ----------
-    (orcs||[]).filter(function(o){ return !STATUS_ORC_FECHADOS.includes(o.status) && !o.rascunho && !o.convertidoEm; }).forEach(function(o){
+    (orcs||[]).filter(function(o){ return !STATUS_ORC_FECHADOS.includes(o.status) && !o.rascunho && !o.convertidoEm && vejoVia(o, false); }).forEach(function(o){
       var base = { modulo:'CAIXA', area:'Orçamento', icone:'documento', abrir:{ alvo:'orcamentos', registroId:o.id } };
       var sub = 'Status: '+nomeSt(o.status)+(o.vendedora?' · '+o.vendedora:'');
       if(o.validade && o.validade < hj){
@@ -58,7 +67,7 @@
     // ---------- CONFIGURAÇÕES › Departamento pessoal ----------
     if(fichas){
       var base = { modulo:'DP', area:'Departamento pessoal', icone:'usuarios', abrir:{ alvo:'dp', tab:'funcionarios' } };
-      fichas.filter(function(f){ return (f.status||'ativo')!=='desligado'; }).forEach(function(f){
+      fichas.filter(function(f){ return (f.status||'ativo')!=='desligado' && (gestao || minhaFicha(f)); }).forEach(function(f){
         var faltam = CAMPOS_FICHA.filter(function(c){ return !String(f[c[0]]||'').trim(); }).map(function(c){ return c[1]; });
         var pix = !!String(f.chavePix||'').trim(), conta = !!(String(f.banco||'').trim() && String(f.agencia||'').trim() && String(f.conta||'').trim());
         if(!pix && !conta) faltam.push('Dados bancários ou chave Pix');
