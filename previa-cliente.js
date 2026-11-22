@@ -75,9 +75,17 @@
         if(st.encerra && st.id !== 'aprovado') return 'Seu orçamento foi encerrado. Se puder, conte no link o que podemos melhorar.';
         if(st.encerra) return 'Seu orçamento foi aprovado.'; return 'Seu orçamento continua disponível para você.';
       }
+      function aprovado(chave){ var m = (modelos || []).find(function(x){ return x.chave === chave; }); return !!(m && m.status === 'APPROVED'); }
+      function chaveOrc(st){   // igual ao servidor (disparo-cloud v12 / acompanhamento-auto v25): modelo por situação
+        if(!st) return 'orcamento'; if(st.inicial) return 'orc_pronto'; if(st.encerra) return st.id === 'aprovado' ? 'orc_aprovado' : 'orc_encerrado'; return 'orc_lembrete';
+      }
       function itemOrc(st, extra){
-        var gerar = function(){ return preencherModelo(mdOrc.corpo, [nome1, loja, fraseOrc(st), base() + PAGINAS.orc.url]); };
-        return Object.assign({ grupo:'Orçamento', modelo: mdOrc, texto: gerar(cruStatus(st)), original: textoStatus(st), gerar: gerar,
+        var k = chaveOrc(st), md = corpoDe(modelos, k), proprioOk = md && (k === 'orc_lembrete' || aprovado(k));
+        var mdUsado = proprioOk ? md : mdOrc;
+        var gerar = proprioOk && k !== 'orc_lembrete'
+          ? function(){ return preencherModelo(md.corpo, [nome1, 'JB25O', loja]); }
+          : function(){ return preencherModelo(mdUsado.corpo, [nome1, loja, fraseOrc(st), base() + PAGINAS.orc.url]); };
+        return Object.assign({ grupo:'Orçamento', modelo: mdUsado, texto: gerar(cruStatus(st)), original: textoStatus(st), gerar: gerar,
           edit: st ? { tipo:'status', statusId: st.id, desconto: !!deDe(st), valor: cruStatus(st), vars:'{cliente} {vendedora} {loja} {valor} {validade} {link}' + (deDe(st) ? ' {desconto} {valorDesconto}' : ''), nota:'Este texto completo vai só pelo número da Reforma e aparece no link. No WhatsApp oficial vai a frase curta acima (mais barato).' } : null }, extra);
       }
       if(mdOrc){
@@ -96,7 +104,7 @@
       }
       if(mdOrc){
         var sug = PreviaCliente.SUGESTAO_ORCAMENTO, st0 = STs.find(function(x){ return x.inicial; }) || STs[0];
-        if(st0 && sug && String(mdOrc.corpo).trim() !== sug.trim()) lista.push({ grupo:'Orçamento', titulo:'SUGESTÃO — novo modelo de orçamento, curto e mais barato (precisa da aprovação da Meta)', quando:'Copie o texto em Modelos › Orçamento e toque em “Enviar para aprovação da Meta”. Enquanto a Meta analisa, o atual continua valendo; aprovado, passa a valer sozinho (mesmas 4 variáveis).', modelo:{ nome:'sugestão', rodape:'Vilaça Joias' }, texto: preencherModelo(sug, [nome1, loja, fraseOrc(st0), base() + PAGINAS.orc.url]), pagina:'orc', original: sug });
+        if(st0 && sug && !aprovado('orc_pronto') && String(mdOrc.corpo).trim() !== sug.trim()) lista.push({ grupo:'Orçamento', titulo:'SUGESTÃO — novo modelo de orçamento, curto e mais barato (precisa da aprovação da Meta)', quando:'Copie o texto em Modelos › Orçamento e toque em “Enviar para aprovação da Meta”. Enquanto a Meta analisa, o atual continua valendo; aprovado, passa a valer sozinho (mesmas 4 variáveis).', modelo:{ nome:'sugestão', rodape:'Vilaça Joias' }, texto: preencherModelo(sug, [nome1, loja, fraseOrc(st0), base() + PAGINAS.orc.url]), pagina:'orc', original: sug });
       }
       viaModelo('Orçamento', 'Orçamento — botão do WhatsApp', 'Só quando alguém toca no botão do orçamento. Vai a mensagem padrão da via (o texto do status não entra).', 'orc');
       // RESERVA / RETIRADA

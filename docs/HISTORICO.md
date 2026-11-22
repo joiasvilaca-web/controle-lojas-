@@ -446,3 +446,4 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - 22/11 (Vilacinha): pergunta de bem-estar respondida no próprio balão (troca o conteúdo em vez de abrir outro); após "Pode perguntar" a água agora vem com opções (antes só texto, sem sim/não); respostas fecham sozinhas e não silenciam as dicas.
 - 22/11 (Vilacinha): novo avatar (ilustração própria em SVG: homem de cabelo escuro, sobrancelhas grossas, sorriso largo, camisa preta com gola dourada); boca anima ao falar.
 - 22/11 (Vilacinha): botão X em todos os balões.
+- 22/11: tela Mensagens (previa-cliente.js) mostra o orçamento no mesmo modelo que o servidor usa (orc_pronto/orc_aprovado/orc_encerrado de Utilidade quando aprovados; lembretes no orc_lembrete; sem modelo próprio, o genérico). Teste 63.
