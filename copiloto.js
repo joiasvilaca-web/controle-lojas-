@@ -153,15 +153,18 @@
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
-  function balao(html, acoes, semPadrao){
-    fecharBalao(); if(S.aberto) return null;
-    var d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status');
+  function balao(html, acoes, semPadrao, fechaEm){
+    if(S.aberto){ fecharBalao(); return null; }
+    /* se o balão já está na tela (pergunta → resposta), troca o conteúdo NO PRÓPRIO balão */
+    var d = document.getElementById('cpBalao'), novo = !d;
+    if(novo){ d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status'); }
+    try{ speechSynthesis.cancel(); S.falando = false; }catch(e){}
     d.innerHTML = '<b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
-    document.body.appendChild(d);
-    d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); ls(chave('pausa'), String(Date.now())); };
+    if(novo) document.body.appendChild(d);
+    d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); if(!semPadrao) ls(chave('pausa'), String(Date.now())); };
     var ab = d.querySelector('[data-cp="abrir"]'); if(ab) ab.onclick = function(){ fecharBalao(); abrirPainel(); };
     d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Vilacinha/,'')); };
-    clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, semPadrao ? 60000 : 25000);
+    clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, fechaEm || (semPadrao ? 60000 : 25000));
     return d;
   }
   /** Loja escolhida no seletor do app (shell). */
@@ -240,27 +243,31 @@
     if(cheio) pool = PERGUNTAS.filter(function(q){ return ['agua','humor','corpo'].indexOf(q.id) >= 0 && feitas.indexOf(q.id) < 0; }).concat(pool);
     var q = pool[0] ? pool[Math.floor(Math.random()*Math.min(pool.length, cheio ? 2 : pool.length))] : null; if(!q) return;
     ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now())); ls(chave('beFeitas'), feitas.concat(q.id).join(','));
-    var d = balao('<div class="cp-txt">' + (cheio ? 'Dia cheio hoje, hein? ' : '') + esc(q.txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true);
+    mostrarPergunta(q, cheio ? 'Dia cheio hoje, hein? ' : '');
+  }
+  /** Mostra UMA pergunta de bem-estar no balão, com as respostas clicáveis; a resposta aparece no mesmo balão. */
+  function mostrarPergunta(q, intro){
+    var d = balao('<div class="cp-txt">' + esc(intro||'') + esc(q.txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true);
     if(!d) return;
     d.querySelectorAll('[data-be]').forEach(function(b){ b.onclick = function(){
       var r = b.dataset.be;
-      if(r === 'nao_dizer'){ enviarBE(q.id, r); balao('<div class="cp-txt">Tudo bem! Se precisar, estou aqui. 😊</div>', '', true); return; }
+      if(r === 'nao_dizer'){ enviarBE(q.id, r); balao('<div class="cp-txt">Tudo bem! Se precisar, estou aqui. 😊</div>', '', true, 8000); return; }
       var resp = (CUIDADO[q.id]||{})[r] || 'Obrigado por contar!';
       if(q.texto && r === 'dificil' || q.texto && r === 'corrida'){
         var d2 = balao('<div class="cp-txt">' + esc(resp) + '</div><p style="margin:6px 0 4px;font-size:12.5px;">Se quiser, conte um pouco mais (opcional):</p><textarea id="cpBeTxt" maxlength="600" style="width:100%;box-sizing:border-box;min-height:60px;border:1px solid #d9b26a;border-radius:8px;padding:6px;font:inherit;"></textarea>', '<button type="button" class="cp-b pri" data-cp="beok">Enviar</button>', true);
-        if(d2){ d2.querySelector('[data-cp="beok"]').onclick = function(){ enviarBE(q.id, r, (d2.querySelector('#cpBeTxt')||{}).value||''); balao('<div class="cp-txt">Obrigado pela confiança. 💛</div>', '', true); }; }
+        if(d2){ d2.querySelector('[data-cp="beok"]').onclick = function(){ enviarBE(q.id, r, (d2.querySelector('#cpBeTxt')||{}).value||''); balao('<div class="cp-txt">Obrigado pela confiança. 💛</div>', '', true, 12000); }; }
         return;
       }
       enviarBE(q.id, r);
-      balao('<div class="cp-txt">' + esc(resp) + '</div>', '', true);
+      balao('<div class="cp-txt">' + esc(resp) + '</div>', '', true, 15000);
     }; });
   }
   function pedirConsentimento(){
     ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now()));
     var d = balao('<div class="cp-txt">Posso, de vez em quando, perguntar como você está? É rapidinho, com resposta de um toque. Suas respostas ajudam a <b>diretoria</b> a cuidar melhor da equipe e só ela vê. Você pode sempre escolher "prefiro não dizer".</div>', '<button type="button" class="cp-b" data-cp="nao">Não, obrigado</button><button type="button" class="cp-b pri" data-cp="sim">Pode perguntar</button>', true);
     if(!d) return;
-    d.querySelector('[data-cp="sim"]').onclick = async function(){ await api({ op:'consentir', aceito:true }); S.dia.consentimento = true; balao('<div class="cp-txt">Combinado! 😊 E pra começar: já bebeu água hoje? 💧</div>', '', true); };
-    d.querySelector('[data-cp="nao"]').onclick = async function(){ await api({ op:'consentir', aceito:false }); S.dia.consentimento = false; balao('<div class="cp-txt">Sem problema! Vou continuar só com as dicas de vendas. 👍</div>', '', true); };
+    d.querySelector('[data-cp="sim"]').onclick = async function(){ await api({ op:'consentir', aceito:true }); S.dia.consentimento = true; ls(chave('beFeitas'), 'agua'); mostrarPergunta(PERGUNTAS[1], 'Combinado! 😊 '); };
+    d.querySelector('[data-cp="nao"]').onclick = async function(){ await api({ op:'consentir', aceito:false }); S.dia.consentimento = false; balao('<div class="cp-txt">Sem problema! Vou continuar só com as dicas de vendas. 👍</div>', '', true, 8000); };
   }
 
   /* ---------- painel ---------- */
