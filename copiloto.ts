@@ -1,3 +1,6 @@
+// copiloto v4 (22/11/2026): (1) meta da loja = a PRÓXIMA faixa do Lançamentos acima do que a loja já vendeu (bateu, passa para a seguinte);
+//   (2) dicas POR MÓDULO (venda, pedido, orçamento, chat, agenda, adm, painel, geral) para o balão; (3) BEM-ESTAR: perguntas com resposta clicável
+//   (só com consentimento da pessoa — dado sensível, LGPD), guardadas em copiloto_bemestar; op `equipe` mostra o perfil da equipe SÓ para a diretoria.
 // copiloto v3 (22/11/2026): META = a do módulo LANÇAMENTOS (fator da loja: faixas de venda × percentual, vale do mês em diante). Meta da loja = 1ª faixa;
 //   a parte de cada vendedora = participação dela nas vendas da loja no último mês fechado em Lançamentos (sem histórico: divide igual). Mostra a próxima faixa.
 // copiloto v2 (22/11/2026): loja = a escolhida no app (diretoria/gerente com várias lojas; vendedora só as dela); sem histórico, meta sugerida vira "sem meta".
@@ -112,7 +115,8 @@ async function montarDia(user: any, config: any, lojas: string[], meusNomes: str
   }
   let meta: any;
   if (faixas.length) {
-    const metaLoja = faixas[0].valor;
+    const proximaF = faixas.find((f) => vendidoLoja < f.valor) || null;
+    const metaLoja = (proximaF || faixas[faixas.length - 1]).valor;   // v4: a próxima faixa; passou de todas, fica na última
     const minhaParte = meusNomes.map((n) => partes[n] || 0).find((x) => x > 0) || 0;
     const share = totalPartes && minhaParte ? minhaParte / totalPartes : 1 / Math.max(1, Object.keys(partes).length || rank.length || 1);
     const minhaMetaMes = metaLoja * share;
@@ -175,18 +179,24 @@ async function montarDia(user: any, config: any, lojas: string[], meusNomes: str
   }
   ativa.sort((a, b) => a.prioridade - b.prioridade);
 
+  // v4: quantos atendimentos (vendas, pedidos e orçamentos) ela já fez hoje — dia cheio = o Felipe pergunta como ela está
+  const hojeAtend = vendasTodas.filter((v: any) => eu(v) && String(v.data || "") === hoje).length + (oR.data || []).filter((r: any) => eu(r.payload || {}) && String((r.payload || {}).data || "") === hoje).length;
   // ---- dicas da IA (números dela × melhor da loja sem nome × aprendizados do CHAT) ----
   const { data: ap } = await admin.from("copiloto_aprendizados").select("payload").order("criado_em", { ascending: false }).limit(3);
   const aprend = (ap || []).map((x: any) => x.payload);
   const fmt = (x: any) => x ? { vendas: x.n, ticketMedio: Math.round(x.ticket), pecasPorVenda: Number(x.pecasPorVenda.toFixed(2)), vendasComServico: Math.round(x.pctServico * 100) + "%" } : null;
   let dicas: string[] = [];
+  const dicasModulo: Record<string, string[]> = {};
   try {
-    const prompt = `Você é "Felipe", gerente experiente da rede de joalherias Vilaça Joias, treinando a vendedora ${meuNome || ""}. Escreva 3 dicas CURTAS (até 28 palavras cada), práticas para HOJE, em português do Brasil, tom de colega animado e respeitoso.
+    const prompt = `Você é "Felipe", gerente experiente da rede de joalherias Vilaça Joias, treinando a vendedora ${meuNome || ""}. Escreva dicas CURTAS (até 26 palavras cada), práticas para HOJE, em português do Brasil, tom de colega animado e respeitoso, SEPARADAS POR TELA do app:
+geral (3), venda (3: atendimento no balcão, agregar peça/serviço, fechamento), pedido (2: preenchimento completo da via, prazo, telefone, fotos), orcamento (2: retorno rápido, validade, objeções), chat (2: responder rápido, fotos, convite para a loja), agenda (1), adm (1), painel (1).
+Foque em atingir a PRÓXIMA FAIXA da loja (lojaFaixa.proximaFaixa / faltaParaProxima) quando houver.
 Baseie-se nos números abaixo. Compare com "a melhor da loja" SEM citar nome nem valores dela. Se faltar dado, dê dica geral de atendimento em joalheria (agregar serviço como limpeza/gravação, oferecer conjunto, pedir indicação, pós-venda).
-Responda SOMENTE JSON: {"dicas":["...","...","..."]}
+Responda SOMENTE JSON: {"geral":[],"venda":[],"pedido":[],"orcamento":[],"chat":[],"agenda":[],"adm":[],"painel":[]}
 DADOS: ${JSON.stringify({ mesAteHoje: fmt(minha), posicaoNaLoja: pos ? pos + "º de " + rank.length : "sem vendas no mês", melhorDaLoja: fmt(melhor), mediaDaLoja: media ? { ticketMedio: Math.round(media.ticket), pecasPorVenda: Number(media.pecasPorVenda.toFixed(2)), vendasComServico: Math.round(media.pctServico * 100) + "%" } : null, metaHoje: Math.round(meta.hoje), lojaFaixa: meta.loja ? { vendido: Math.round(meta.loja.vendido), proximaFaixa: meta.loja.proxima, faltaParaProxima: Math.round(meta.loja.falta) } : null, vendaAtivaHoje: ativa.length, aprendizadosDasConversas: aprend })}`;
-    const j = lerJson(await gemini(prompt, true));
-    dicas = (j && Array.isArray(j.dicas) ? j.dicas : []).map((d: unknown) => String(d).slice(0, 240)).slice(0, 3);
+    const j = lerJson(await gemini(prompt, true)) || {};
+    for (const k of ["geral", "venda", "pedido", "orcamento", "chat", "agenda", "adm", "painel"]) if (Array.isArray(j[k])) dicasModulo[k] = j[k].map((d: unknown) => String(d).slice(0, 240)).slice(0, 4);
+    dicas = (dicasModulo.geral || []).slice(0, 3);
   } catch (e) { console.error("dicas", e); }
   if (!dicas.length) dicas = ["Ao fechar uma venda, ofereça a limpeza ou a gravação: agrega valor e o cliente volta.", "Responda os orçamentos no mesmo dia. Quem responde rápido fecha mais.", "Peça indicação para quem comprou: um cliente feliz traz outro."];
 
@@ -195,7 +205,7 @@ DADOS: ${JSON.stringify({ mesAteHoje: fmt(minha), posicaoNaLoja: pos ? pos + "º
     saudacao: `${horaBR() < 12 ? "Bom dia" : horaBR() < 18 ? "Boa tarde" : "Boa noite"}, ${meuNome || "tudo bem"}!`,
     meta, eu: { ...fmt(minha), total: minha.total, posicao: pos || null, deQuantas: rank.length },
     melhor: melhor ? { ...fmt(melhor) } : null,   // sem nome e sem valor total (ordem do Felipe)
-    vendaAtiva: ativa.slice(0, 10), dicas,
+    vendaAtiva: ativa.slice(0, 10), dicas, dicasModulo, hojeAtendimentos: hojeAtend,
   };
   if (gestao) out.ranking = rank.map((x) => ({ nome: x.nome, total: x.total, vendas: x.n, ticket: Math.round(x.ticket) }));
   return out;
@@ -256,10 +266,36 @@ Deno.serve(async (req: Request) => {
     if (b.op === "analisarChat") { if (nivel !== "diretoria") return json({ error: "só a diretoria" }, 403); return json({ ok: true, ...(await analisarChat()) }); }
     if (b.op === "dia") {
       const id = `${user.id}|${hojeBR()}|${lojas[0] || "todas"}`;
-      if (!b.forcar) { const { data: c } = await admin.from("copiloto_dia").select("payload").eq("id", id).maybeSingle(); if (c && c.payload) return json({ ok: true, ...c.payload, cache: true }); }
+      if (!b.forcar) { const { data: c } = await admin.from("copiloto_dia").select("payload").eq("id", id).maybeSingle(); if (c && c.payload) { const { data: cs } = await admin.from("copiloto_consentimento").select("aceito").eq("user_id", String(user.id)).maybeSingle(); return json({ ok: true, ...c.payload, consentimento: cs ? !!cs.aceito : null, cache: true }); } }
       const p = await montarDia(user, config, lojas, meusNomes, gestao);
+      { const { data: cs } = await admin.from("copiloto_consentimento").select("aceito").eq("user_id", String(user.id)).maybeSingle(); p.consentimento = cs ? !!cs.aceito : null; }
       await admin.from("copiloto_dia").upsert({ id, user_id: String(user.id), dia: hojeBR(), payload: p });
       return json({ ok: true, ...p });
+    }
+    // ---- v4: BEM-ESTAR (só com consentimento; só a diretoria vê) ----
+    if (b.op === "consentir") {
+      await admin.from("copiloto_consentimento").upsert({ user_id: String(user.id), nome: String(user.apelido || user.nome || ""), aceito: !!b.aceito, em: new Date().toISOString() });
+      return json({ ok: true, aceito: !!b.aceito });
+    }
+    if (b.op === "bemestar") {
+      const { data: cs } = await admin.from("copiloto_consentimento").select("aceito").eq("user_id", String(user.id)).maybeSingle();
+      if (!cs || !cs.aceito) return json({ ok: false, error: "sem consentimento" });
+      const pergunta = String(b.pergunta || "").slice(0, 60), resposta = String(b.resposta || "").slice(0, 60);
+      if (!pergunta || !resposta) return json({ error: "faltou a resposta" }, 400);
+      await admin.from("copiloto_bemestar").insert({ user_id: String(user.id), nome: String(user.apelido || user.nome || ""), loja_id: lojas[0] || null, pergunta, resposta, detalhe: String(b.detalhe || "").slice(0, 600) || null });
+      return json({ ok: true });
+    }
+    if (b.op === "equipe") {
+      if (nivel !== "diretoria") return json({ error: "só a diretoria" }, 403);
+      const desde = new Date(Date.now() - 45 * 86400000).toISOString();
+      const [cR, bR] = await Promise.all([
+        admin.from("copiloto_consentimento").select("user_id, nome, aceito, em"),
+        admin.from("copiloto_bemestar").select("user_id, nome, loja_id, criado_em, pergunta, resposta, detalhe").gte("criado_em", desde).order("criado_em", { ascending: false }).limit(3000),
+      ]);
+      const pessoas: Record<string, any> = {};
+      for (const c of cR.data || []) pessoas[c.user_id] = { user_id: c.user_id, nome: c.nome, aceito: c.aceito, consentEm: c.em, respostas: [] };
+      for (const r of bR.data || []) (pessoas[r.user_id] = pessoas[r.user_id] || { user_id: r.user_id, nome: r.nome, aceito: true, respostas: [] }).respostas.push(r);
+      return json({ ok: true, pessoas: Object.values(pessoas).sort((a: any, c: any) => String(a.nome).localeCompare(String(c.nome))) });
     }
     if (b.op === "perguntar") {
       const pergunta = String(b.pergunta || "").trim().slice(0, 600); if (!pergunta) return json({ error: "escreva a pergunta" }, 400);

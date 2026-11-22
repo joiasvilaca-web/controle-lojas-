@@ -3,6 +3,10 @@
  *  - lista QUEM CHAMAR HOJE (orçamentos vencendo/parados, aniversariantes, clientes sumidos, pedidos prontos) com a mensagem pronta;
  *  - dá dicas (IA, com o que aprendeu nas conversas do CHAT) e conversa por texto ou voz; lê em voz alta.
  * Dados: Edge Function `copiloto` (op dia / perguntar). Mensagem ao cliente SÓ sai pelo botão "Enviar pelo WhatsApp" (ação humana, enviar-via tipo chamar_cliente).
+ * 22/11 (v4): BALÃO POR MÓDULO — ao abrir uma tela (Copiloto.moduloAberto, chamado pelo shell) às vezes aparece uma dica DAQUELA tela, de preferência
+ *   uma que a pessoa ainda não viu (máx. 6 balões/dia, 12 min entre eles). BEM-ESTAR — em telas fora de venda/atendimento, em dia com poucas dicas ou
+ *   em dia cheio de atendimentos, o Felipe pergunta como a pessoa está (resposta clicável, sempre com "prefiro não dizer") e responde com um cuidado
+ *   (água, alongar, respirar, sentar um pouco). Só grava com CONSENTIMENTO (perguntado uma vez). A diretoria vê o perfil da equipe no painel.
  * Shell: Copiloto.iniciar({ senha, user, lojaNome }) ao entrar; Copiloto.parar() ao sair. Oficina não tem copiloto. Fora da produção a função não existe → some sozinho. */
 (function(){
   'use strict';
@@ -69,6 +73,9 @@
   +'.cp-form button{width:42px;height:42px;border-radius:10px;border:0;background:#662344;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;} .cp-form button.mic{background:var(--t-surface-2,#eef0f3);color:#662344;} .cp-form button.mic.on{background:#c62828;color:#fff;}'
   +'.cp-rank{width:100%;border-collapse:collapse;font-size:12.5px;} .cp-rank td{padding:4px 2px;border-top:1px solid var(--t-line,#dde);} .cp-rank td.r{text-align:right;font-variant-numeric:tabular-nums;}'
   +'.cp-ov{position:fixed;inset:0;z-index:9100;background:rgba(10,20,30,.45);display:flex;align-items:center;justify-content:center;padding:14px;} .cp-modal{background:var(--t-surface,#fff);color:var(--t-text,#14202b);border-radius:14px;max-width:460px;width:100%;padding:16px;font:14px/1.5 Inter,sans-serif;} .cp-modal textarea{width:100%;box-sizing:border-box;min-height:130px;border:1px solid var(--t-line-strong,#99a);border-radius:10px;padding:10px;font:inherit;background:var(--t-surface,#fff);color:inherit;}'
+  +'.cp-ops{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;} .cp-ops button{border:1px solid #d9b26a;background:#fffaf0;color:#4d1a33;border-radius:999px;padding:6px 11px;font:600 12.5px Inter,sans-serif;cursor:pointer;} .cp-ops button:hover{background:#f3dfae;} .cp-ops button.neutro{border-color:var(--t-line,#dde);background:var(--t-surface,#fff);color:var(--t-text-soft,#556);}'
+  +'.cp-be{border:1px solid var(--t-line,#dde);border-radius:10px;padding:8px 10px;margin-top:8px;} .cp-be b{font-size:13.5px;} .cp-be .m{font-size:12px;color:var(--t-text-soft,#556);} .cp-be .r{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;} .cp-be .r span{font-size:11.5px;background:var(--t-surface-2,#f4f6f8);border-radius:6px;padding:1px 6px;}'
+  +'.cp-be .r span.ruim{background:#fde2e2;color:#8a1c1c;} .cp-be .r span.bom{background:#e3f4e9;color:#1f6b3a;} .cp-be details{margin-top:4px;font-size:12px;}'
   +'@media(max-width:600px){.cp-fab{right:12px;bottom:12px;width:54px;height:54px;} .cp-balao{right:74px;bottom:18px;}}'
   +'@media print{.cp-fab,.cp-balao,.cp-painel{display:none!important;}}'
   +'@media (prefers-reduced-motion:reduce){.cp-balao,.cp-painel{animation:none;} .cp-rosto.falando .cp-boca{animation:none;}}';
@@ -107,25 +114,26 @@
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
-  function balao(html, acoes){
-    fecharBalao(); if(S.aberto) return;
+  function balao(html, acoes, semPadrao){
+    fecharBalao(); if(S.aberto) return null;
     var d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status');
-    d.innerHTML = '<b class="cp-quem">Felipe</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b" data-cp="ouvir" title="Ouvir">'+ic('mensagem',13)+'Ouvir</button><button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button></div>';
+    d.innerHTML = '<b class="cp-quem">Felipe</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b" data-cp="ouvir" title="Ouvir">'+ic('mensagem',13)+'Ouvir</button>' + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
     document.body.appendChild(d);
     d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); ls(chave('pausa'), String(Date.now())); };
-    d.querySelector('[data-cp="abrir"]').onclick = function(){ fecharBalao(); abrirPainel(); };
-    d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar(d.textContent.replace(/^Felipe/,'').replace(/Ouvir.*$/,'')); };
-    clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, 25000);
+    var ab = d.querySelector('[data-cp="abrir"]'); if(ab) ab.onclick = function(){ fecharBalao(); abrirPainel(); };
+    d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Felipe/,'')); };
+    clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, semPadrao ? 60000 : 25000);
+    return d;
   }
   /** Loja escolhida no seletor do app (shell). */
   function lojaShell(){ try{ return (typeof lojaAtual !== 'undefined' && lojaAtual) || ''; }catch(e){ return ''; } }
   function chave(k){ return 'copiloto_' + k + '_' + (S.user && S.user.id) + '_' + hojeISO(); }
 
-  /** Dica que aparece "às vezes": no máximo 4 por dia, com pelo menos 75 min entre elas; "Agora não" dá 2 h de pausa. */
+  /** Saudação do dia (1x por dia, ao entrar). As outras dicas vêm por módulo (moduloAberto). */
   function talvezDica(){
     if(!S.dia || S.aberto || document.hidden) return;
     var n = Number(ls(chave('n'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
-    if(n >= 4 || Date.now() - ult < 75*60000 || Date.now() - pausa < 120*60000) return;
+    if(n >= 1 || Date.now() - ult < 75*60000 || Date.now() - pausa < 120*60000) return;
     var itens = [];
     if(n === 0){ itens.push(esc(S.dia.saudacao) + ' ' + (S.dia.meta && S.dia.meta.metaMes > 0 && S.dia.meta.hoje > 0 ? 'Sua meta de hoje é <b>' + brl0(S.dia.meta.hoje) + '</b>. ' : '') + ((S.dia.vendaAtiva||[]).length ? 'Separei <b>' + S.dia.vendaAtiva.length + ' clientes</b> para você chamar hoje.' : esc((S.dia.dicas||[])[0]||''))); }
     else {
@@ -135,7 +143,85 @@
     }
     if(!itens.length) return;
     ls(chave('n'), String(n+1)); ls(chave('ult'), String(Date.now()));
-    balao('<div>' + itens[0] + '</div>');
+    balao('<div class="cp-txt">' + itens[0] + '</div>');
+  }
+
+  /* ---------- v4: balão por MÓDULO ---------- */
+  var VENDA_MODS = ['venda','pedido','orcamento','chat'];
+  function chaveModulo(mod, sub){
+    if(mod==='pdvg') return ({ pdv:'venda', reserva:'venda', os:'pedido', orc:'orcamento', resumo:'adm' })[sub] || 'venda';
+    if(mod==='atendimento') return 'chat';
+    if(mod==='agenda') return 'agenda';
+    if(mod==='dashboard') return 'painel';
+    if(mod==='caixa' || mod==='lancamentos' || mod==='config' || mod==='site') return 'adm';
+    return 'outros';
+  }
+  function hashTxt(t){ var h=0; t=String(t); for(var i=0;i<t.length;i++){ h=(h*31 + t.charCodeAt(i))|0; } return String(h); }
+  function vistas(){ try{ return JSON.parse(ls('copiloto_vistas_'+(S.user&&S.user.id))||'[]'); }catch(e){ return []; } }
+  function marcarVista(t){ var v = vistas(); v.push(hashTxt(t)); ls('copiloto_vistas_'+(S.user&&S.user.id), JSON.stringify(v.slice(-200))); }
+  function moduloAberto(mod, sub){
+    if(!S.dia || S.aberto || document.hidden) return;
+    var k = chaveModulo(mod, sub);
+    var n = Number(ls(chave('nm'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
+    if(n >= 6 || Date.now() - ult < 12*60000 || Date.now() - pausa < 120*60000) return;
+    if(Math.random() > 0.45) return;   // "algumas vezes", não sempre
+    var dm = S.dia.dicasModulo || {}, lista = (dm[k] && dm[k].length ? dm[k] : (dm.geral || S.dia.dicas || []));
+    var poucas = !(dm[k] && dm[k].length >= 2), cheio = Number(S.dia.hojeAtendimentos||0) >= 8;
+    var podeBE = S.dia.consentimento !== false && Number(ls(chave('be'))||0) < 2 && Date.now() - Number(ls(chave('beUlt'))||0) > 150*60000;
+    ls(chave('ult'), String(Date.now())); ls(chave('nm'), String(n+1));
+    if(podeBE && (VENDA_MODS.indexOf(k) < 0 || poucas || cheio)) return perguntarBemEstar(cheio);
+    var v = vistas(), nova = lista.filter(function(t){ return v.indexOf(hashTxt(t)) < 0; }), dica = (nova.length ? nova : lista)[Math.floor(Math.random() * (nova.length || lista.length))];
+    if(!dica) return;
+    marcarVista(dica);
+    balao('<div class="cp-txt">' + esc(dica) + '</div>');
+  }
+
+  /* ---------- v4: BEM-ESTAR (consentimento, perguntas clicáveis, cuidado) ---------- */
+  var PERGUNTAS = [
+    { id:'humor', txt:'Como você está se sentindo hoje?', ops:[['otima','😄 Ótima'],['bem','🙂 Bem'],['cansada','😮‍💨 Cansada'],['preocupada','😟 Preocupada'],['triste','😔 Pra baixo']] },
+    { id:'agua', txt:'Pausa rápida: já bebeu água nas últimas horas?', ops:[['sim','💧 Já bebi'],['nao','🙈 Ainda não']] },
+    { id:'corpo', txt:'Como está o corpo hoje? Costas, pernas, cabeça…', ops:[['bem','💪 Tudo certo'],['dor','🤕 Com alguma dor'],['cansaco','🥱 Muito cansaço']] },
+    { id:'sono', txt:'Conseguiu dormir bem esta noite?', ops:[['bem','😴 Dormi bem'],['mais_ou_menos','😐 Mais ou menos'],['mal','😵 Dormi mal']] },
+    { id:'vida', txt:'E a vida fora da loja, como anda?', ops:[['tranquila','🌿 Tranquila'],['corrida','🏃 Corrida'],['dificil','🌧️ Difícil']], texto:true },
+    { id:'dia', txt:'O que deixaria o seu dia melhor hoje?', ops:[['musica','🎵 Uma música boa'],['cafe','☕ Um café'],['elogio','💛 Um elogio'],['descanso','🪑 Sentar um pouco']] },
+  ];
+  var CUIDADO = {
+    humor:{ otima:'Que bom! Essa energia contagia o cliente. Aproveita! ✨', bem:'Que bom! Bora fazer um dia leve e produtivo.', cansada:'Entendo. Que tal 2 minutos sentada, respirando fundo, e um copo d’água? Você rende mais descansada.', preocupada:'Obrigado por contar. Respira: inspira em 4 tempos, segura 4, solta em 6. Se quiser falar com alguém de confiança, faz bem.', triste:'Sinto muito que o dia esteja pesado. Seja gentil com você hoje. Se precisar conversar, procure alguém de confiança. Você não está sozinha. 💛' },
+    agua:{ sim:'Isso aí! Hidratada a gente atende melhor. 💧', nao:'Que tal agora? Um copo d’água já ajuda a cabeça e a voz. Eu espero. 😉' },
+    corpo:{ bem:'Ótimo! Lembre de alongar os ombros de vez em quando.', dor:'Tenta alongar o pescoço e os ombros devagar e, quando der, sentar um pouco. Se a dor continuar, vale procurar um médico.', cansaco:'Cansaço acumula. Se puder, faça uma pausa curta longe do balcão e beba água.' },
+    sono:{ bem:'Que bom! Dia de energia.', mais_ou_menos:'Vai com calma hoje. Água e uma pausa curta à tarde ajudam.', mal:'Puxado, né? Hoje, evite muito café de uma vez e tente dormir mais cedo. Cuida de você.' },
+    vida:{ tranquila:'Que bom! Isso aparece no sorriso. 🌿', corrida:'A vida corrida cansa. Tenta reservar um tempinho só seu hoje, nem que sejam 10 minutos.', dificil:'Obrigado por confiar. Momentos difíceis passam. Converse com quem você confia e, se for pesado demais, o CVV atende de graça no 188, 24 horas.' },
+    dia:{ musica:'Boa! Coloca aquela música no intervalo. 🎵', cafe:'Um café no intervalo cai bem! ☕', elogio:'Então lá vai: você faz diferença no atendimento da Vilaça. 💛', descanso:'Merecido! Na próxima pausa, senta e desliga 5 minutinhos.' },
+  };
+  async function enviarBE(pergunta, resposta, detalhe){ if(S.dia && S.dia.consentimento) await api({ op:'bemestar', pergunta:pergunta, resposta:resposta, detalhe:detalhe||'' }); }
+  function perguntarBemEstar(cheio){
+    if(S.dia.consentimento === null || S.dia.consentimento === undefined) return pedirConsentimento();
+    var feitas = (ls(chave('beFeitas'))||'').split(',');
+    var pool = PERGUNTAS.filter(function(q){ return feitas.indexOf(q.id) < 0; });
+    if(cheio) pool = PERGUNTAS.filter(function(q){ return ['agua','humor','corpo'].indexOf(q.id) >= 0 && feitas.indexOf(q.id) < 0; }).concat(pool);
+    var q = pool[0] ? pool[Math.floor(Math.random()*Math.min(pool.length, cheio ? 2 : pool.length))] : null; if(!q) return;
+    ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now())); ls(chave('beFeitas'), feitas.concat(q.id).join(','));
+    var d = balao('<div class="cp-txt">' + (cheio ? 'Dia cheio hoje, hein? ' : '') + esc(q.txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true);
+    if(!d) return;
+    d.querySelectorAll('[data-be]').forEach(function(b){ b.onclick = function(){
+      var r = b.dataset.be;
+      if(r === 'nao_dizer'){ enviarBE(q.id, r); balao('<div class="cp-txt">Tudo bem! Se precisar, estou aqui. 😊</div>', '', true); return; }
+      var resp = (CUIDADO[q.id]||{})[r] || 'Obrigado por contar!';
+      if(q.texto && r === 'dificil' || q.texto && r === 'corrida'){
+        var d2 = balao('<div class="cp-txt">' + esc(resp) + '</div><p style="margin:6px 0 4px;font-size:12.5px;">Se quiser, conte um pouco mais (opcional):</p><textarea id="cpBeTxt" maxlength="600" style="width:100%;box-sizing:border-box;min-height:60px;border:1px solid #d9b26a;border-radius:8px;padding:6px;font:inherit;"></textarea>', '<button type="button" class="cp-b pri" data-cp="beok">Enviar</button>', true);
+        if(d2){ d2.querySelector('[data-cp="beok"]').onclick = function(){ enviarBE(q.id, r, (d2.querySelector('#cpBeTxt')||{}).value||''); balao('<div class="cp-txt">Obrigado pela confiança. 💛</div>', '', true); }; }
+        return;
+      }
+      enviarBE(q.id, r);
+      balao('<div class="cp-txt">' + esc(resp) + '</div>', '', true);
+    }; });
+  }
+  function pedirConsentimento(){
+    ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now()));
+    var d = balao('<div class="cp-txt">Posso, de vez em quando, perguntar como você está? É rapidinho, com resposta de um toque. Suas respostas ajudam a <b>diretoria</b> a cuidar melhor da equipe e só ela vê. Você pode sempre escolher "prefiro não dizer".</div>', '<button type="button" class="cp-b" data-cp="nao">Não, obrigado</button><button type="button" class="cp-b pri" data-cp="sim">Pode perguntar</button>', true);
+    if(!d) return;
+    d.querySelector('[data-cp="sim"]').onclick = async function(){ await api({ op:'consentir', aceito:true }); S.dia.consentimento = true; balao('<div class="cp-txt">Combinado! 😊 E pra começar: já bebeu água hoje? 💧</div>', '', true); };
+    d.querySelector('[data-cp="nao"]').onclick = async function(){ await api({ op:'consentir', aceito:false }); S.dia.consentimento = false; balao('<div class="cp-txt">Sem problema! Vou continuar só com as dicas de vendas. 👍</div>', '', true); };
   }
 
   /* ---------- painel ---------- */
@@ -185,15 +271,41 @@
     h += '<div class="cp-card"><h4>'+ic('grafico',14)+'Seus números no mês</h4><div class="cp-nums">'
       + num('vendas', eu.vendas||0, mel?mel.vendas:null) + num('ticket médio', brl0(eu.ticketMedio), mel?brl0(mel.ticketMedio):null) + num('peças por venda', String(eu.pecasPorVenda||0).replace('.',','), mel?String(mel.pecasPorVenda).replace('.',','):null)
       + '</div>' + (mel && (parseInt(mel.vendasComServico)||parseInt(eu.vendasComServico)) ? '<div class="cp-meta-s" style="margin-top:6px;">A melhor da loja junta serviço em <b>'+esc(mel.vendasComServico)+'</b> das vendas. Você: <b>'+esc(eu.vendasComServico||'0%')+'</b>.</div>' : (eu.posicao===1?'<div class="cp-meta-s" style="margin-top:6px;">Você é a melhor da loja este mês. Continue assim!</div>':'')) + '</div>';
-    h += '<div class="cp-card"><h4>'+ic('info',14)+'Dicas de hoje</h4>' + (d.dicas||[]).map(function(x,i){ return '<div class="cp-dica"><span class="n">'+(i+1)+'</span><span>'+esc(x)+'</span></div>'; }).join('') + '</div>';
+    var ROT = { venda:'No balcão', pedido:'No pedido', orcamento:'No orçamento', chat:'No chat' };
+    var dmP = d.dicasModulo || {};
+    h += '<div class="cp-card"><h4>'+ic('info',14)+'Dicas de hoje</h4>' + (d.dicas||[]).map(function(x,i){ return '<div class="cp-dica"><span class="n">'+(i+1)+'</span><span>'+esc(x)+'</span></div>'; }).join('')
+      + Object.keys(ROT).filter(function(k){ return (dmP[k]||[]).length; }).map(function(k){ return '<details style="margin-top:6px;"><summary style="cursor:pointer;font-weight:700;font-size:12.5px;color:#8a3560;">'+ROT[k]+' ('+dmP[k].length+')</summary>' + dmP[k].map(function(x){ return '<div class="cp-dica"><span class="n">•</span><span>'+esc(x)+'</span></div>'; }).join('') + '</details>'; }).join('') + '</div>';
     var va = d.vendaAtiva||[];
     h += '<div class="cp-card"><h4>'+ic('telefone',14)+'Quem chamar hoje ('+va.length+')</h4>' + (va.length ? va.map(function(x,i){
       return '<div class="cp-cli '+esc(x.tipo)+'"><b>'+esc(x.cliente||'Cliente')+'</b><div class="m">'+esc(x.motivo)+'</div><div class="cp-acoes"><button type="button" class="cp-b wa" data-cpmsg="'+i+'">'+ic('whatsapp',13)+'Mensagem pronta</button></div></div>'; }).join('')
       : '<div class="cp-meta-s">Ninguém pendente hoje. Que tal pedir indicação aos clientes da semana?</div>') + '</div>';
+    if(S.user && S.user.nivel === 'diretoria') h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Equipe: bem-estar (só diretoria)</h4><div id="cpEquipe"><button type="button" class="cp-b" data-cp="equipe">Ver como a equipe está</button></div></div>';
     if(d.ranking && d.ranking.length) h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Ranking da loja (gerência)</h4><table class="cp-rank">' + d.ranking.map(function(r,i){ return '<tr><td>'+(i+1)+'º '+esc(r.nome)+'</td><td class="r">'+r.vendas+' vendas</td><td class="r">'+brl0(r.total)+'</td></tr>'; }).join('') + '</table></div>';
     h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Felipe</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
     c.innerHTML = h;
     c.querySelectorAll('[data-cpmsg]').forEach(function(b){ b.onclick = function(){ abrirMensagem(va[+b.dataset.cpmsg]); }; });
+    var be = c.querySelector('[data-cp="equipe"]'); if(be) be.onclick = verEquipe;
+  }
+
+  /* ---------- v4: perfil de bem-estar da equipe (só diretoria) ---------- */
+  var PESO = { otima:2, bem:1, tranquila:1, sim:1, musica:1, cafe:1, elogio:1, descanso:0, cansada:-1, corrida:-1, mais_ou_menos:-1, nao:-1, dor:-1, cansaco:-1, preocupada:-2, triste:-2, dificil:-2, mal:-2 };
+  var NOME_P = { humor:'Humor', agua:'Água', corpo:'Corpo', sono:'Sono', vida:'Vida fora da loja', dia:'O que alegra' };
+  async function verEquipe(){
+    var box = document.getElementById('cpEquipe'); if(!box) return;
+    box.innerHTML = '<div class="cp-meta-s">Carregando…</div>';
+    var r = await api({ op:'equipe' });
+    if(!r || !r.ok){ box.innerHTML = '<div class="cp-meta-s">'+esc((r&&r.error)||'Não consegui carregar.')+'</div>'; return; }
+    if(!r.pessoas.length){ box.innerHTML = '<div class="cp-meta-s">Ninguém respondeu ainda. As perguntas aparecem aos poucos, só para quem aceitar.</div>'; return; }
+    box.innerHTML = '<div class="cp-meta-s">Últimos 45 dias. Só aparece quem aceitou responder. Use para cuidar da equipe, nunca para cobrar ou punir.</div>' + r.pessoas.map(function(p){
+      var rs = p.respostas||[], soma = rs.reduce(function(s,x){ return s + (PESO[x.resposta]||0); }, 0), media = rs.length ? soma/rs.length : 0;
+      var sinal = !rs.length ? '' : media <= -0.8 ? ' <span style="color:#c62828;font-weight:700;">· atenção</span>' : media >= 0.8 ? ' <span style="color:#1f9a55;font-weight:700;">· bem</span>' : ' <span style="color:#a8803a;font-weight:700;">· oscilando</span>';
+      var ult = {}; rs.forEach(function(x){ if(!ult[x.pergunta]) ult[x.pergunta] = x; });
+      var textos = rs.filter(function(x){ return x.detalhe; }).slice(0,5);
+      return '<div class="cp-be"><b>'+esc(p.nome||'—')+'</b>'+sinal+'<div class="m">'+(p.aceito===false?'Preferiu não participar.':rs.length+' respostas')+'</div>'
+        + (Object.keys(ult).length ? '<div class="r">' + Object.keys(ult).map(function(k){ var x = ult[k], pz = PESO[x.resposta]||0; return '<span class="'+(pz<0?'ruim':pz>0?'bom':'')+'">'+esc(NOME_P[k]||k)+': '+esc(String(x.resposta).replace(/_/g,' '))+'</span>'; }).join('') + '</div>' : '')
+        + (textos.length ? '<details><summary>O que contou ('+textos.length+')</summary>' + textos.map(function(x){ return '<div style="margin-top:4px;">“'+esc(x.detalhe)+'” <span class="m">'+new Date(x.criado_em).toLocaleDateString('pt-BR')+'</span></div>'; }).join('') + '</details>' : '')
+        + '</div>';
+    }).join('');
   }
 
   /* ---------- mensagem pronta: a vendedora revisa e envia (clique) ---------- */
@@ -247,8 +359,7 @@
     var b = document.createElement('button'); b.type = 'button'; b.id = 'cpFab'; b.className = 'cp-fab';
     b.onclick = function(){ if(S.aberto) fecharPainel(); else abrirPainel(); };
     document.body.appendChild(b); pintarFab();
-    setTimeout(talvezDica, 5000);
-    vigia = setInterval(talvezDica, 5*60000);
+    setTimeout(talvezDica, 5000);   // saudação do dia; as outras dicas vêm ao abrir os módulos
   }
   function parar(){
     clearInterval(vigia); vigia = null; fecharBalao(); fecharPainel();
@@ -261,5 +372,5 @@
     var r = await api({ op:'dia', lojaId: lojaShell() });
     if(r && r.ok){ S.dia = r; pintarFab(); desenhar(); }
   }
-  window.Copiloto = { iniciar:iniciar, parar:parar, abrir:abrirPainel, trocouLoja:trocouLoja };
+  window.Copiloto = { iniciar:iniciar, parar:parar, abrir:abrirPainel, trocouLoja:trocouLoja, moduloAberto:moduloAberto };
 })();

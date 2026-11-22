@@ -12,7 +12,7 @@ module.exports = { casos: [
     const ix = ler('index.html'), j = ler('copiloto.js');
     t.ok(/<script src="copiloto\.js"><\/script>/.test(ix) && /Copiloto\.iniciar\(/.test(ix) && /Copiloto\.parar\(\)/.test(ix), 'ligado no shell');
     t.ok(/tipo:'chamar_cliente'/.test(j) && /data-x="enviar"/.test(j) && /MarketingOff\.permitir/.test(j), 'envio só pelo botão, respeitando MARKETING OFF');
-    t.ok(/n >= 4 \|\| Date\.now\(\) - ult < 75\*60000/.test(j), 'balão no máximo 4x por dia');
+    t.ok(/n >= 6 \|\| Date\.now\(\) - ult < 12\*60000/.test(j) && /Math\.random\(\) > 0\.45/.test(j), 'balão por módulo: às vezes, no máximo 6 por dia, 12 min entre eles');
     t.ok(/r\.sem\) return/.test(j), 'sem a função (treino): não aparece');
   } },
 ] };

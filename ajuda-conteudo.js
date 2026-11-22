@@ -344,6 +344,8 @@ window.AJUDA_TOPICOS = [
     </ol>
     <div class="dica">De vez em quando ele aparece num balão com uma dica (no máximo 4 por dia). Toque em <span class="btn-ref">Agora não</span> para ele esperar 2 horas.</div>
     <div class="aviso">Você vê a comparação com <b>a melhor da loja</b>, sem nome. A gerência vê o ranking completo. Nenhuma mensagem sai para o cliente sem você tocar em enviar.</div>
+    <div class="dica"><b>Dicas por tela:</b> ao abrir Venda, Pedido, Orçamento, Chat e outras telas, às vezes ele mostra uma dica daquela tela, de preferência uma que você ainda não viu. A meta é sempre a <b>próxima faixa</b> da loja: bateu, ele passa para a seguinte.</div>
+    <div class="dica"><b>Como você está?</b> De vez em quando ele pergunta do seu dia (água, cansaço, sono, vida fora da loja), com resposta de um toque e sempre com "prefiro não dizer". Só pergunta se você aceitar, e as respostas ficam visíveis apenas para a diretoria.</div>
   `
 },
 /* ─────────────── 22/11: ASSUNTOS NOVOS (módulos que não tinham ajuda) ─────────────── */
