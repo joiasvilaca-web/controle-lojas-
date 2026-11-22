@@ -1,4 +1,5 @@
-// acompanhamento-auto v28 (22/11/2026, pedido do Felipe): PRAZO DE RETIRADA do pedido PRONTO. Sem pagamento: aviso ao cliente com 15 dias e aviso final (desmanche) com 30. Com pagamento (parcial ou total): aviso com 30 e aviso final com 60, já com o crédito (pago − 20% de perda). No vencimento: tarefa na Agenda para a vendedora e os gerentes da loja (recolher a via e lançar ABANDONADA); 15 dias depois sem baixa: tarefa para a diretoria. Conta a partir do PRONTO (pedidos que já estavam prontos contam a partir de 22/11). Modelos os_retirada_lembrete / os_retirada_final só saem pela API oficial depois de aprovados (Reforma: chip). Tudo fica em payload.abandono (Histórico da via).
+// acompanhamento-auto v29 (22/11/2026, Felipe: "os avisos devem estar no cartão, não vamos mudar a msg do WhatsApp"): os avisos de prazo (lembrete e final) saem com a MESMA mensagem aprovada do pedido pronto (pedido_pronto_acompanhamento) e o link; prazo, desmanche e crédito aparecem só no cartão (acompanhar.html / get-order-status). Sem modelos novos na Meta.
+// acompanhamento-auto v28 (22/11/2026, pedido do Felipe): PRAZO DE RETIRADA do pedido PRONTO. Sem pagamento: aviso ao cliente com 15 dias e aviso final (desmanche) com 30. Com pagamento (parcial ou total): aviso com 30 e aviso final com 60, já com o crédito (pago − 20% de perda). No vencimento: tarefa na Agenda para a vendedora e os gerentes da loja (recolher a via e lançar ABANDONADA); 15 dias depois sem baixa: tarefa para a diretoria. Conta a partir do PRONTO (pedidos que já estavam prontos contam a partir de 22/11). (v29: sem modelos novos — mesma mensagem do pronto.) Tudo fica em payload.abandono (Histórico da via).
 // acompanhamento-auto v27 (22/11/2026, pedido do Felipe): pedido que fica PRONTO com PAGAMENTO EM ABERTO (saldo a pagar > 0) recebe o aviso de pronto SOZINHO (modelo pedido_pronto_acompanhamento). Pedido quitado continua só pelo botão (ou prontoAuto=true). Vale só para pedidos que ficaram prontos a partir de PRONTO_SALDO_DESDE (não dispara os antigos). Saldo pela mesma regra da tela (saldoAbertoOS = valorAReceberDe + fiado já pago).
 // acompanhamento-auto v26 (22/11/2026): pós-venda de venda da Reforma Joias/Ecommerce (peça enviada depois) só depois de 25 dias (pv.diasEnvio), não 7.
 // acompanhamento-auto v25 (22/11/2026): orçamento com MODELO POR SITUAÇÃO (orcModelo) — pronto / encerrado / aprovado nos modelos próprios de Utilidade (nº do orçamento + loja + botão "Ver orçamento") só depois que a Meta aprovar; lembretes (Ação de fixação, Prorrogado) sempre no modelo de lembrete (orc_lembrete, Marketing). Sem modelo próprio aprovado, cai no genérico "orcamento" como antes.
@@ -538,15 +539,11 @@ Deno.serve(async (req: Request) => {
           if (pz.dias >= pz.limite && !et.cliente_final) etapa = "cliente_final";
           else if (pz.dias >= pz.lembrete && pz.dias < pz.limite && !et.cliente_lembrete) etapa = "cliente_lembrete";
           if (!etapa) continue;
-          const chave = etapa === "cliente_final" ? "os_retirada_final" : "os_retirada_lembrete";
-          const md = await modeloAtivo(chave);
-          if (String(o.lojaId || "") !== "loja_rj" && (md as any).status !== "APPROVED") continue;   // espera a Meta aprovar o modelo
-          const link = `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(r.id)}`;
-          const texto = etapa === "cliente_final"
-            ? `Olá, {cliente}!${NL}${NL}O prazo para retirar o seu pedido ${via} terminou em ${dataBR(pz.diaLimite)}. Conforme o termo da via, a peça será destinada a desmanche para cobrir os custos. ${fraseCreditoAbandono(pago, pz.credito)}${NL}${NL}Detalhes no link:${NL}${link}`
-            : `Olá, {cliente}!${NL}${NL}Seu pedido ${via} está pronto para retirada desde ${dataBR(pz.diaBase)}. Pedimos que retire até ${dataBR(pz.diaLimite)}. Após essa data, conforme o termo da via, a peça será destinada a desmanche para cobrir os custos.${NL}${NL}Detalhes no link:${NL}${link}`;
+          // v29: mesma mensagem do pedido pronto (já aprovada); o prazo, o desmanche e o crédito ficam no cartão do link
+          const texto = (po.mensagemPronto && po.mensagemPronto.trim()) || (cfg.mensagens && cfg.mensagens.pronto) || MSG_OS_PRONTO;
           cand.push({ tipo: "os_abandono", etapa, tabela: "ordens_servico", id: r.id, reg: o, passo: etapa === "cliente_final" ? 1 : 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: etapa === "cliente_final" ? "aviso final de retirada (desmanche)" : "lembrete do prazo de retirada", agenda: o.autoAgenda || null,
             texto: preencherOS(texto, cfg, o) });
+          void via;
         }
         if (!data || data.length < 1000) break;
       }
@@ -562,14 +559,7 @@ Deno.serve(async (req: Request) => {
       // v23: {{2}} = texto do pós-venda (só vai se o modelo ativo tiver {{2}}) e botão Google da loja
       if (it.tipo === "posvenda" || it.tipo === "os_posvenda") return { nome: "pos_venda_garantia", params: [primeiroNome(reg.cliente), miolo(it.texto) || "Queremos agradecer a oportunidade de fazer parte de um momento especial com a sua nova joia."], botao: reviewDe(String(reg.lojaId || "")) };
       if (it.tipo === "orcamento") return await orcModelo(cfg, reg, it.statusDestino, it.id);   // v25: modelo da situação (v24: frase curta no genérico)
-      if (it.tipo === "os_abandono") {   // v28
-        let pago = pagoDiretoOS(reg); if (reg.fiadoDebitoId) pago += await fiadoPagoOS(reg);
-        const pz = prazoAbandono(reg, agora.dia, pago), via = String(reg.codigoVia || reg.via || "");
-        return it.etapa === "cliente_final"
-          ? { nome: "os_retirada_final", params: [primeiroNome(reg.cliente), via, nomeDaLoja(cfg, reg), dataBR(pz.diaLimite), fraseCreditoAbandono(pago, pz.credito)], botao: encodeURIComponent(it.id) }
-          : { nome: "os_retirada_lembrete", params: [primeiroNome(reg.cliente), via, nomeDaLoja(cfg, reg), dataBR(pz.diaBase), dataBR(pz.diaLimite)], botao: encodeURIComponent(it.id) };
-      }
-      if (it.tipo === "os_pronto") return { nome: "pedido_pronto_acompanhamento", params: [primeiroNome(reg.cliente), bonito(reg.vendedora || "") || "nossa equipe", nomeDaLoja(cfg, reg), `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(it.id)}`] };
+      if (it.tipo === "os_pronto" || it.tipo === "os_abandono") return { nome: "pedido_pronto_acompanhamento", params: [primeiroNome(reg.cliente), bonito(reg.vendedora || "") || "nossa equipe", nomeDaLoja(cfg, reg), `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(it.id)}`] };
       return null;
     };
     const agoraIso0 = new Date().toISOString();

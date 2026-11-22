@@ -76,6 +76,8 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   .loading, .error{ text-align:center; color:var(--muted); font-size:14px; padding:24px 0; line-height:1.55; }
   .error{ color:var(--ink-soft); }
   .refresh-note{ text-align:center; font-size:12px; color:var(--muted); margin-top:18px; line-height:1.5; }
+  .prazo-box{ margin:12px 0 4px; padding:12px 14px; border-radius:12px; background:#FFF6E0; color:#5a4300; border:1px solid #F0D48A; font-size:13.5px; line-height:1.5; }
+  .prazo-box.vencido{ background:#FDECEA; color:#7a1d14; border-color:#F2B8B0; }
   .termo-retirada{ font-size:11px; color:var(--muted); margin-top:12px; padding-top:10px; border-top:1px solid rgba(127,127,127,.25); line-height:1.45; text-align:left; }
   .confirm-box{ text-align:center; background:var(--surface-2); border-radius:12px; padding:22px 16px 18px; margin-top:6px; }
   .confirm-icon{ width:52px; height:52px; margin:0 auto 10px; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; }
@@ -132,6 +134,16 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
     abandonada:      { cls:"cancelado",  ico:"cancelar",   titulo:"PRAZO DE RETIRADA ENCERRADO", texto:"O prazo para retirar esta peça terminou e ela foi destinada a desmanche, conforme o termo da via. Se houve pagamento, o crédito (valor pago menos 20% de perda da fabricação) está no seu cadastro: fale com a loja." },
   };
   function etapa(s){ return ETAPAS[s] || ETAPAS.aguardando; }
+  // 22/11 (Felipe): aviso do PRAZO DE RETIRADA no cartão (o WhatsApp leva só a mensagem de pronto + este link)
+  function dataBR(d){ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d||"")); return m ? m[3]+"/"+m[2]+"/"+m[1] : ""; }
+  function brl(v){ return "R$ " + (Number(v)||0).toLocaleString("pt-BR", { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+  function prazoHtml(p){
+    if(!p) return "";
+    if(p.abandonada) return p.credito > 0.009 ? `<div class="prazo-box vencido"><b>Crédito no seu cadastro: ${brl(p.credito)}</b><br>Valor pago ${brl(p.pago)} menos 20% de perda da fabricação. Use em uma nova compra ou fale com a loja.</div>` : "";
+    const cred = p.comPagamento ? ` Do valor pago, <b>${brl(p.credito)}</b> ficará como crédito no seu cadastro (descontada a taxa de 20% de perda da fabricação).` : "";
+    if(p.vencido) return `<div class="prazo-box vencido"><b>Prazo de retirada encerrado em ${dataBR(p.limite)}.</b><br>Conforme o termo da via, a peça será destinada a desmanche para cobrir os custos.${cred} Fale com a loja.</div>`;
+    return `<div class="prazo-box"><b>Retire até ${dataBR(p.limite)}.</b><br>Após essa data, conforme o termo da via, a peça será destinada a desmanche para cobrir os custos.${cred}</div>`;
+  }
   // 22/11 (Felipe): termo de retirada, curto, no rodapé do cartão do pedido (via de serviço)
   const TERMO_RETIRADA = "<b>Termo de retirada:</b> o pedido pronto deve ser retirado em até 30 dias (sem pagamento) ou 60 dias (com pagamento). Após o prazo e os avisos, a peça é destinada a desmanche para cobrir os custos e, do valor pago, 80% fica como crédito no seu cadastro (20% de taxa de perda da fabricação).";
   function getOrderId(){
@@ -153,6 +165,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
       <div class="sub">Acompanhe a sua ordem de serviço</div>
       <div class="status-banner ${etapa(o.status).cls}">${ico(etapa(o.status).ico, 18)}${escapeHtml(etapa(o.status).titulo)}</div>
       <p class="etapa-texto">${escapeHtml(etapa(o.status).texto)}</p>
+      ${prazoHtml(o.prazoRetirada)}
       <div class="details">
         <div><span class="k">Loja</span><span class="v">${escapeHtml(o.loja)}</span></div>
         <div><span class="k">Serviço</span><span class="v">${escapeHtml(o.servico)}</span></div>
@@ -171,7 +184,7 @@ try{ if(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
   async function loadStatus(){
     // 22/11: ?demo=1 → página de EXEMPLO para a prévia em Modelos WhatsApp (sem dados reais, sem ciente/avaliação/código)
     const demo = new URLSearchParams(location.search).get("demo");
-    if(demo){ const st = ETAPAS[demo] ? demo : "pronto"; render({ cliente:"Maria", status: st, loja:"VILAÇA - UNIDADE HALFELD", servico:"AJUSTE DE ARO", data: new Date(Date.now()+5*864e5).toISOString().slice(0,10), descricao:"AJUSTAR ARO DO ANEL PARA 16 E POLIR." }); const n = document.createElement("div"); n.className = "refresh-note"; n.textContent = "Página de EXEMPLO (prévia). O cliente vê aqui também o \"Ciente\", a avaliação e o código de retirada."; document.getElementById("card").appendChild(n); return; }
+    if(demo){ const st = ETAPAS[demo] ? demo : "pronto"; render({ cliente:"Maria", status: st, loja:"VILAÇA - UNIDADE HALFELD", servico:"AJUSTE DE ARO", data: new Date(Date.now()+5*864e5).toISOString().slice(0,10), descricao:"AJUSTAR ARO DO ANEL PARA 16 E POLIR.", prazoRetirada: st === "pronto" ? { limite: new Date(Date.now()+45*864e5).toISOString().slice(0,10), comPagamento:true, vencido:false, credito: 320 } : st === "abandonada" ? { abandonada:true, pago:400, credito:320 } : null }); const n = document.createElement("div"); n.className = "refresh-note"; n.textContent = "Página de EXEMPLO (prévia). O cliente vê aqui também o \"Ciente\", a avaliação e o código de retirada."; document.getElementById("card").appendChild(n); return; }
     const id = getOrderId();
     if(!id){
       showError("Este link está incompleto. Abra de novo o link que a loja enviou ou fale com a loja.");

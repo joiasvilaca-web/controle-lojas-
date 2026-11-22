@@ -13,9 +13,11 @@ module.exports = { casos: [
     t.ok(antigo.dias === 0, 'pedido que já estava pronto conta a partir de 22/11 (não dispara de uma vez)');
     t.ok(/R\$ 400,00 ficará como crédito/.test(f.fraseCreditoAbandono(500, 400)) && /não há valor a devolver/.test(f.fraseCreditoAbandono(0, 0)), 'frase do crédito');
   } },
-  { nome: 'Robô: modelo só depois de aprovado; tarefas para equipe e diretoria', bug: 'aviso sem modelo aprovado / sem cobrança interna', rodar: async ({ t, ler }) => {
+  { nome: 'Robô: aviso com a MESMA mensagem do pedido pronto (sem modelo novo); tarefas para equipe e diretoria', bug: 'Felipe: os avisos ficam no cartão, a mensagem do WhatsApp não muda', rodar: async ({ t, ler }) => {
     const s = ler('acompanhamento-auto.ts');
-    t.ok(/\(md as any\)\.status !== "APPROVED"\) continue;/.test(s), 'espera a Meta aprovar (Reforma sai pelo chip)');
+    t.ok(/if \(it\.tipo === "os_pronto" \|\| it\.tipo === "os_abandono"\) return \{ nome: "pedido_pronto_acompanhamento"/.test(s) && !/os_retirada_/.test(s), 'usa o modelo aprovado do pedido pronto');
+    const g = ler('get-order-status.ts'), a = ler('acompanhar.html');
+    t.ok(/prazoRetirada: prazoRetirada\(order\)/.test(g) && /function prazoHtml\(p\)/.test(a) && /Retire até \$\{dataBR\(p\.limite\)\}/.test(a), 'prazo, desmanche e crédito no cartão do link');
     t.ok(/pz\.dias >= pz\.limite && !et\.equipe/.test(s) && /pz\.dias >= pz\.limite \+ 15 && !et\.diretoria/.test(s), 'tarefas no vencimento e +15 dias');
     t.ok(/eq\("payload->>status", "pronto"\)/.test(s), 'olha todos os pedidos prontos (não só os atualizados em 60 dias)');
   } },
