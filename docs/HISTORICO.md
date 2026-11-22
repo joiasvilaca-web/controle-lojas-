@@ -445,3 +445,4 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - 22/11 (Vilacinha): o copiloto "Felipe" virou **Vilacinha** (copiloto.js, copiloto.ts v5, Ajuda); ícone de ouvir novo (alto-falante com ondas, vira "Parar" enquanto fala) e microfone em SVG; celular: balão em largura total, painel em tela cheia com área segura (iPhone), botões de 44–46 px, campo de 16 px (sem zoom), janelas como folha embaixo.
 - 22/11 (Vilacinha): pergunta de bem-estar respondida no próprio balão (troca o conteúdo em vez de abrir outro); após "Pode perguntar" a água agora vem com opções (antes só texto, sem sim/não); respostas fecham sozinhas e não silenciam as dicas.
 - 22/11 (Vilacinha): novo avatar (ilustração própria em SVG: homem de cabelo escuro, sobrancelhas grossas, sorriso largo, camisa preta com gola dourada); boca anima ao falar.
+- 22/11 (Vilacinha): botão X em todos os balões.
