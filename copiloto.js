@@ -117,6 +117,8 @@
     d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar(d.textContent.replace(/^Felipe/,'').replace(/Ouvir.*$/,'')); };
     clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, 25000);
   }
+  /** Loja escolhida no seletor do app (shell). */
+  function lojaShell(){ try{ return (typeof lojaAtual !== 'undefined' && lojaAtual) || ''; }catch(e){ return ''; } }
   function chave(k){ return 'copiloto_' + k + '_' + (S.user && S.user.id) + '_' + hojeISO(); }
 
   /** Dica que aparece "às vezes": no máximo 4 por dia, com pelo menos 75 min entre elas; "Agora não" dá 2 h de pausa. */
@@ -125,7 +127,7 @@
     var n = Number(ls(chave('n'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
     if(n >= 4 || Date.now() - ult < 75*60000 || Date.now() - pausa < 120*60000) return;
     var itens = [];
-    if(n === 0){ itens.push(esc(S.dia.saudacao) + ' ' + (S.dia.meta && S.dia.meta.hoje > 0 ? 'Sua meta de hoje é <b>' + brl0(S.dia.meta.hoje) + '</b>. ' : '') + ((S.dia.vendaAtiva||[]).length ? 'Separei <b>' + S.dia.vendaAtiva.length + ' clientes</b> para você chamar hoje.' : esc((S.dia.dicas||[])[0]||''))); }
+    if(n === 0){ itens.push(esc(S.dia.saudacao) + ' ' + (S.dia.meta && S.dia.meta.metaMes > 0 && S.dia.meta.hoje > 0 ? 'Sua meta de hoje é <b>' + brl0(S.dia.meta.hoje) + '</b>. ' : '') + ((S.dia.vendaAtiva||[]).length ? 'Separei <b>' + S.dia.vendaAtiva.length + ' clientes</b> para você chamar hoje.' : esc((S.dia.dicas||[])[0]||''))); }
     else {
       var va = (S.dia.vendaAtiva||[])[n-1], di = (S.dia.dicas||[])[n % Math.max(1,(S.dia.dicas||[]).length)];
       if(va && n % 2 === 1) itens.push('Que tal chamar <b>' + esc(va.cliente.split(' ')[0]) + '</b> agora? ' + esc(va.motivo) + '.');
@@ -149,7 +151,7 @@
       + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+ic('telefone',18)+'</button><textarea id="cpTexto" maxlength="600" placeholder="Pergunte ao Felipe: como vender mais aliança?" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
     document.body.appendChild(p);
     p.querySelector('[data-cp="fechar"]').onclick = fecharPainel;
-    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = await api({ op:'dia', forcar:true }); if(r && r.ok){ S.dia = r; pintarFab(); } desenhar(); };
+    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; pintarFab(); } desenhar(); };
     p.querySelector('[data-cp="ler"]').onclick = function(){ falar(resumoFalado()); };
     var ta = p.querySelector('#cpTexto');
     p.querySelector('#cpForm').onsubmit = function(e){ e.preventDefault(); perguntar(ta.value); };
@@ -162,7 +164,7 @@
   function fecharPainel(){ var p = document.getElementById('cpPainel'); if(p) p.remove(); S.aberto = false; document.removeEventListener('keydown', escFecha); try{ speechSynthesis.cancel(); }catch(e){} }
   function resumoFalado(){
     var d = S.dia||{}, t = (d.saudacao||'') + ' ';
-    if(d.meta) t += 'Sua meta de hoje é ' + Math.round(d.meta.hoje) + ' reais. ';
+    if(d.meta && d.meta.metaMes > 0) t += 'Sua meta de hoje é ' + Math.round(d.meta.hoje) + ' reais. ';
     if((d.vendaAtiva||[]).length) t += 'Você tem ' + d.vendaAtiva.length + ' clientes para chamar hoje. ';
     (d.dicas||[]).forEach(function(x,i){ t += 'Dica ' + (i+1) + ': ' + x + ' '; });
     return t;
@@ -173,12 +175,14 @@
     if(!d){ c.innerHTML = '<div class="cp-card">Preparando o seu dia…</div>'; return; }
     var m = d.meta || {}, pct = m.metaMes ? Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100)) : 0, eu = d.eu || {}, mel = d.melhor;
     var num = function(rot, v, ref){ return '<div class="cp-num"><b>'+v+'</b><small>'+rot+'</small>'+(ref!=null?'<em>melhor da loja: '+ref+'</em>':'')+'</div>'; };
+    var semMeta = !(m.metaMes > 0);
     var h = '<div class="cp-card"><h4>'+ic('estrela',14)+'Meta de hoje</h4>'
-      + '<div class="cp-meta-v">'+brl0(m.hoje)+'</div><div class="cp-meta-s">'+(m.tipo==='loja' ? 'Sua parte da meta da loja, faltando '+m.diasRestantes+' dias no mês.' : 'Meta sugerida (sua média dos últimos 3 meses + 10%). A gerência pode cadastrar a meta da loja no Dashboard.')+'</div>'
-      + '<div class="cp-barra" aria-hidden="true"><i style="width:'+pct+'%"></i></div><div class="cp-meta-s">No mês: <b>'+brl0(m.vendidoMes)+'</b> de '+brl0(m.metaMes)+' ('+pct+'%)'+(eu.posicao?' · você está em <b>'+eu.posicao+'º de '+eu.deQuantas+'</b> na loja':'')+'</div></div>';
+      + (semMeta ? '<div class="cp-meta-v" style="font-size:18px;">Sem meta ainda</div><div class="cp-meta-s">Ainda não há meta da loja nem histórico seu para sugerir uma. A gerência cadastra a meta em PAINEL → Dashboard → Editar metas.</div><div class="cp-meta-s" style="margin-top:6px;">No mês: <b>'+brl0(m.vendidoMes)+'</b>'+(eu.posicao?' · você está em <b>'+eu.posicao+'º de '+eu.deQuantas+'</b> na loja':'')+'</div></div>' : '')
+      + (semMeta ? '' : '<div class="cp-meta-v">'+brl0(m.hoje)+'</div><div class="cp-meta-s">'+(m.tipo==='loja' ? 'Sua parte da meta da loja, faltando '+m.diasRestantes+' dias no mês.' : 'Meta sugerida (sua média dos últimos 3 meses + 10%). A gerência pode cadastrar a meta da loja no Dashboard.')+'</div>'
+      + '<div class="cp-barra" aria-hidden="true"><i style="width:'+pct+'%"></i></div><div class="cp-meta-s">No mês: <b>'+brl0(m.vendidoMes)+'</b> de '+brl0(m.metaMes)+' ('+pct+'%)'+(eu.posicao?' · você está em <b>'+eu.posicao+'º de '+eu.deQuantas+'</b> na loja':'')+'</div></div>');
     h += '<div class="cp-card"><h4>'+ic('grafico',14)+'Seus números no mês</h4><div class="cp-nums">'
       + num('vendas', eu.vendas||0, mel?mel.vendas:null) + num('ticket médio', brl0(eu.ticketMedio), mel?brl0(mel.ticketMedio):null) + num('peças por venda', String(eu.pecasPorVenda||0).replace('.',','), mel?String(mel.pecasPorVenda).replace('.',','):null)
-      + '</div>' + (mel ? '<div class="cp-meta-s" style="margin-top:6px;">A melhor da loja junta serviço em <b>'+esc(mel.vendasComServico)+'</b> das vendas. Você: <b>'+esc(eu.vendasComServico||'0%')+'</b>.</div>' : (eu.posicao===1?'<div class="cp-meta-s" style="margin-top:6px;">Você é a melhor da loja este mês. Continue assim!</div>':'')) + '</div>';
+      + '</div>' + (mel && (parseInt(mel.vendasComServico)||parseInt(eu.vendasComServico)) ? '<div class="cp-meta-s" style="margin-top:6px;">A melhor da loja junta serviço em <b>'+esc(mel.vendasComServico)+'</b> das vendas. Você: <b>'+esc(eu.vendasComServico||'0%')+'</b>.</div>' : (eu.posicao===1?'<div class="cp-meta-s" style="margin-top:6px;">Você é a melhor da loja este mês. Continue assim!</div>':'')) + '</div>';
     h += '<div class="cp-card"><h4>'+ic('info',14)+'Dicas de hoje</h4>' + (d.dicas||[]).map(function(x,i){ return '<div class="cp-dica"><span class="n">'+(i+1)+'</span><span>'+esc(x)+'</span></div>'; }).join('') + '</div>';
     var va = d.vendaAtiva||[];
     h += '<div class="cp-card"><h4>'+ic('telefone',14)+'Quem chamar hoje ('+va.length+')</h4>' + (va.length ? va.map(function(x,i){
@@ -234,7 +238,7 @@
     if(!o || !o.senha || !o.user || o.user.nivel === 'oficina') return;
     S.senha = o.senha; S.user = o.user; S.lojaNome = o.lojaNome || ''; S.hist = [];
     css();
-    var r = await api({ op:'dia' });
+    var r = await api({ op:'dia', lojaId: lojaShell() });
     if(!r || !r.ok || r.desligado || r.sem) return;   // fora da produção (sem a função) ou sem permissão: não aparece
     if(S.senha !== o.senha) return;
     S.dia = r;
@@ -249,5 +253,11 @@
     var b = document.getElementById('cpFab'); if(b) b.remove();
     S.senha = null; S.user = null; S.dia = null; S.hist = [];
   }
-  window.Copiloto = { iniciar:iniciar, parar:parar, abrir:abrirPainel };
+  /** O app trocou de loja: refaz o dia para a loja nova (fica guardado por loja). */
+  async function trocouLoja(){
+    if(!S.senha || !document.getElementById('cpFab')) return;
+    var r = await api({ op:'dia', lojaId: lojaShell() });
+    if(r && r.ok){ S.dia = r; pintarFab(); desenhar(); }
+  }
+  window.Copiloto = { iniciar:iniciar, parar:parar, abrir:abrirPainel, trocouLoja:trocouLoja };
 })();

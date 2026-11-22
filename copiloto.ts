@@ -1,3 +1,4 @@
+// copiloto v2 (22/11/2026): loja = a escolhida no app (diretoria/gerente com várias lojas; vendedora só as dela); sem histórico, meta sugerida vira "sem meta".
 // copiloto v1 (22/11/2026): COPILOTO DE VENDAS "Felipe" — o gerente-auxiliar que fica no canto da tela e ajuda as vendedoras.
 // Sessão sess_… validada contra gestao_config (igual ao db-gateway). Lê os dados com service_role e entrega SÓ o que a pessoa pode ver:
 //   - números dela (vendas do mês, ticket médio, peças por venda, orçamentos) e a posição na loja;
@@ -231,10 +232,12 @@ Deno.serve(async (req: Request) => {
     if (nivel === "oficina") return json({ ok: true, desligado: true });
     const fu = (config.funcionarios || []).find((f: any) => f.id === user.funcionarioId) || {};
     const meusNomes = [...new Set([user.nome, user.apelido, fu.nome, fu.apelido].map(norm).filter(Boolean))];
-    const lojas = lojasDaSessao(user, String(b.senha));
+    let lojas = lojasDaSessao(user, String(b.senha));
+    const pedida = String(b.lojaId || "");   // loja escolhida no seletor do app
+    if (pedida && (nivel === "diretoria" ? (config.lojas || []).some((l: any) => l.id === pedida) : lojas.includes(pedida))) lojas = [pedida, ...lojas.filter((x) => x !== pedida)];
     if (b.op === "analisarChat") { if (nivel !== "diretoria") return json({ error: "só a diretoria" }, 403); return json({ ok: true, ...(await analisarChat()) }); }
     if (b.op === "dia") {
-      const id = `${user.id}|${hojeBR()}`;
+      const id = `${user.id}|${hojeBR()}|${lojas[0] || "todas"}`;
       if (!b.forcar) { const { data: c } = await admin.from("copiloto_dia").select("payload").eq("id", id).maybeSingle(); if (c && c.payload) return json({ ok: true, ...c.payload, cache: true }); }
       const p = await montarDia(user, config, lojas, meusNomes, gestao);
       await admin.from("copiloto_dia").upsert({ id, user_id: String(user.id), dia: hojeBR(), payload: p });
@@ -242,7 +245,7 @@ Deno.serve(async (req: Request) => {
     }
     if (b.op === "perguntar") {
       const pergunta = String(b.pergunta || "").trim().slice(0, 600); if (!pergunta) return json({ error: "escreva a pergunta" }, 400);
-      const { data: c } = await admin.from("copiloto_dia").select("payload").eq("id", `${user.id}|${hojeBR()}`).maybeSingle();
+      const { data: c } = await admin.from("copiloto_dia").select("payload").like("id", `${user.id}|${hojeBR()}%`).order("criado_em", { ascending: false }).limit(1).maybeSingle();
       const dia = (c && c.payload) || {};
       const { data: ap } = await admin.from("copiloto_aprendizados").select("payload").order("criado_em", { ascending: false }).limit(3);
       const hist = (Array.isArray(b.historico) ? b.historico : []).slice(-6).map((m: any) => `${m && m.de === "ia" ? "Felipe" : "Vendedora"}: ${String((m && m.texto) || "").slice(0, 400)}`).join("\n");
