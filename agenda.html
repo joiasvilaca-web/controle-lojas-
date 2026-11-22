@@ -537,6 +537,8 @@ html[data-theme=dark] .msgs.inst-reforma, html[data-theme=dark] .msgs.inst-vilac
 .ag-tp:not(.on){text-decoration:line-through;opacity:.75;}
 .ag-tp.on{color:var(--ink);border-color:var(--tc,var(--accent));background:color-mix(in srgb,var(--tc,var(--accent)) 12%,var(--surface));text-decoration:none;}
 .ag-tp.on b{background:var(--tc,var(--accent));color:#fff;}
+.ag-tipos-sep{width:1px;height:20px;background:var(--line-strong);margin:0 4px;}
+.tp-fin{--tc:var(--ink-soft);}
 .tp-tarefa{--tc:var(--accent);} .tp-pedido{--tc:#1d7a8c;} .tp-venda{--tc:var(--ok);} .tp-orcamento{--tc:#7a4fb5;} .tp-aviso{--tc:var(--danger);} .tp-lembrete{--tc:var(--ink-faint);}
 .ag-ev.via.v-pedido{border-left:3px solid #1d7a8c;} .ag-ev.via.v-venda{border-left:3px solid var(--ok);} .ag-ev.via.v-orcamento{border-left:3px solid #7a4fb5;}
 .ag-dia-item.via.v-pedido{--tc:#1d7a8c;} .ag-dia-item.via.v-venda{--tc:var(--ok);} .ag-dia-item.via.v-orcamento{--tc:#7a4fb5;}
@@ -698,7 +700,7 @@ const AG_TIPOS = { privada:{ nome:'Privada', desc:'Só você vê' }, loja:{ nome
 const AG_CLASSES = { urgente:'Urgente', importante:'Importante', normal:'Normal', baixa:'Baixa' };
 const AG_COLUNAS = [ ['a_fazer','A fazer'], ['fazendo','Fazendo'], ['feito','Feito'] ];
 const AG_VIA = { orcamento:{ nome:'Orçamento', alvo:'orcamentos' }, venda:{ nome:'Venda', alvo:'pdv' }, pedido:{ nome:'Pedido', alvo:'os' } };
-estado.ag = { aba:'quadro', ini:null, tarefas:[], lembretes:[], vias:null, viasErro:null, filtroTipo:'', filtroCls:'', viaTipo:'', viaBusca:'', mes:null, mostrarVias:true, escopoVias:'minhas', tiposCal:{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:true, orcamento:true }, viasCal:{}, avisos:null, mostrarAvisos:true, avisosFechado:false, avGrupos:{} };
+estado.ag = { aba:'quadro', ini:null, tarefas:[], lembretes:[], vias:null, viasErro:null, filtroTipo:'', filtroCls:'', viaTipo:'', viaBusca:'', mes:null, mostrarVias:true, escopoVias:'minhas', tiposCal:{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:false, orcamento:true }, finalizadosCal:false, viasCal:{}, avisos:null, mostrarAvisos:true, avisosFechado:false, avGrupos:{} };
 
 function agDataISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function agFmtData(s){ if(!s) return ''; const [y,m,d] = String(s).slice(0,10).split('-'); return `${d}/${m}/${y}`; }
@@ -986,7 +988,8 @@ function agEditar(t, dataPadrao, modelo){
 function agEventosDoDia(iso, soltos){
   const ev = [];
   const TP = estado.ag.tiposCal || {};   // 22/11: o que aparece no calendário (abre com tudo ligado)
-  if(TP.tarefa!==false) estado.ag.tarefas.filter(t=>t.data===iso).sort((a,b)=>String(a.hora||'').localeCompare(String(b.hora||''))).forEach(t=> ev.push({ cls:`t-${t.tipo} ${t.coluna==='feito'?'feito':''}`, txt:(t.hora?t.hora+' ':'')+t.titulo, tarefa:t.id }));
+  const FIN = !!estado.ag.finalizadosCal;   // 22/11: finalizados (tarefa feita, pedido entregue, orçamento fechado, cancelados) só se ligar
+  if(TP.tarefa!==false) estado.ag.tarefas.filter(t=>t.data===iso && (FIN || t.coluna!=='feito')).sort((a,b)=>String(a.hora||'').localeCompare(String(b.hora||''))).forEach(t=> ev.push({ cls:`t-${t.tipo} ${t.coluna==='feito'?'feito':''}`, txt:(t.hora?t.hora+' ':'')+t.titulo, tarefa:t.id }));
   if(TP.lembrete!==false) estado.ag.lembretes.forEach(l=>{ const d = new Date(l.disparar_em); if(agDataISO(d)===iso) ev.push({ cls:'lemb', txt:'Lembrete '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' '+(l.descricao||'') }); });
   if(TP.aviso!==false){   // 22/11: avisos no dia; mais de um vira um só ("3 avisos") — o dia aberto lista todos
     const av = (estado.ag.avisos||[]).filter(a=>a.data===iso);
@@ -997,18 +1000,21 @@ function agEventosDoDia(iso, soltos){
   if(TP.pedido!==false || TP.venda!==false || TP.orcamento!==false) (agViasCal()||[]).forEach(v=>{
     const dia = v.tipo==='orcamento' ? v.validade : v.data;
     if(TP[v.tipo]===false) return;
-    if(dia===iso && v.status!=='entregue' && v.status!=='cancelada' && v.status!=='cancelado') ev.push({ cls:'via v-'+v.tipo, txt:(v.tipo==='pedido'?'Entrega ':v.tipo==='orcamento'?'Vence ':'Venda ')+(v.codigoVia||'')+' '+(v.cliente||'')+(estado.ag.escopoVias!=='minhas'&&!estado.ag.viasOficina&&v.vendedora?' ('+v.vendedora+')':''), via:v });
+    if(dia===iso && (FIN || !agViaFinalizada(v))) ev.push({ cls:'via v-'+v.tipo, txt:(v.tipo==='pedido'?'Entrega ':v.tipo==='orcamento'?'Vence ':'Venda ')+(v.codigoVia||'')+' '+(v.cliente||'')+(estado.ag.escopoVias!=='minhas'&&!estado.ag.viasOficina&&v.vendedora?' ('+v.vendedora+')':''), via:v });
   });
   return ev;
 }
 /* 22/11: escolher o que aparece no calendário (tarefas, lembretes, avisos, pedidos/serviços, vendas, orçamentos). Abre com tudo. */
+/** Via encerrada: pedido entregue, orçamento aprovado/recusado, qualquer cancelada. */
+function agViaFinalizada(v){ const st = String(v.status||'').toLowerCase(); return /cancel/.test(st) || (v.tipo==='pedido' && st==='entregue') || (v.tipo==='orcamento' && ['aprovado','recusado'].includes(st)); }
 const AG_TIPOS_CAL = [ ['tarefa','Tarefas','lista'], ['pedido','Pedidos (serviço)','recibo'], ['venda','Vendas','carrinho'], ['orcamento','Orçamentos','documento'], ['aviso','Avisos','sino'], ['lembrete','Lembretes','relogio'] ];
 function agFiltroTiposCal(m){
   const T = estado.ag.tiposCal, ini = agDataISO(new Date(m.getFullYear(), m.getMonth(), 1)), fim = agDataISO(new Date(m.getFullYear(), m.getMonth()+1, 0));
   const noMes = d => d && d >= ini && d <= fim;
-  const vias = (agViasCal()||[]).filter(v=> v.status!=='entregue' && !/cancel/.test(String(v.status||'')));
+  const FIN = !!estado.ag.finalizadosCal;
+  const vias = (agViasCal()||[]).filter(v=> FIN || !agViaFinalizada(v));
   const n = {
-    tarefa: estado.ag.tarefas.filter(t=>noMes(t.data)).length,
+    tarefa: estado.ag.tarefas.filter(t=>noMes(t.data) && (FIN || t.coluna!=='feito')).length,
     lembrete: estado.ag.lembretes.filter(l=>noMes(agDataISO(new Date(l.disparar_em)))).length,
     aviso: (estado.ag.avisos||[]).filter(a=>noMes(a.data)).length,
     pedido: vias.filter(v=>v.tipo==='pedido' && noMes(v.data)).length,
@@ -1019,6 +1025,8 @@ function agFiltroTiposCal(m){
   return `<div class="ag-tipos" role="group" aria-label="O que mostrar no calendário"><span class="ag-tipos-rot">Mostrar:</span>
     <button type="button" class="ag-tp ${todos?'on':''}" data-agtp="_tudo" aria-pressed="${todos}">Tudo</button>
     ${AG_TIPOS_CAL.map(([k,nome,ic])=>`<button type="button" class="ag-tp tp-${k} ${T[k]?'on':''}" data-agtp="${k}" aria-pressed="${!!T[k]}" title="${T[k]?'Esconder':'Mostrar'} ${nome.toLowerCase()} no calendário">${icn(ic,{tam:13})}${nome}<b>${n[k]}</b></button>`).join('')}
+    <span class="ag-tipos-sep" aria-hidden="true"></span>
+    <button type="button" class="ag-tp tp-fin ${FIN?'on':''}" data-agfin aria-pressed="${FIN}" title="${FIN?'Esconder':'Mostrar'} o que já foi finalizado: tarefas feitas, pedidos entregues, orçamentos aprovados ou recusados e cancelados">${icn('check',{tam:13})}Finalizados</button>
   </div>`;
 }
 function agRenderCalendario(c){
@@ -1051,6 +1059,7 @@ function agRenderCalendario(c){
   document.getElementById('agMesAnt').onclick = ()=>{ estado.ag.mes = new Date(m.getFullYear(), m.getMonth()-1, 1); agRender(); };
   document.getElementById('agMesProx').onclick = ()=>{ estado.ag.mes = new Date(m.getFullYear(), m.getMonth()+1, 1); agRender(); };
   document.getElementById('agMesHoje').onclick = ()=>{ estado.ag.mes = null; agRender(); };
+  const bFin = c.querySelector('[data-agfin]'); if(bFin) bFin.onclick = ()=>{ estado.ag.finalizadosCal = !estado.ag.finalizadosCal; agRender(); };
   c.querySelectorAll('[data-agtp]').forEach(b=> b.onclick = async ()=>{
     const k = b.dataset.agtp, T = estado.ag.tiposCal;
     if(k==='_tudo'){ const todos = Object.values(T).every(Boolean); Object.keys(T).forEach(x=> T[x] = !todos); }

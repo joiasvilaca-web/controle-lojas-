@@ -45,7 +45,8 @@ module.exports = { casos: [
     t.ok(/c\.innerHTML = agPainelAvisos\(\) \+/.test(h) && /Avisos do sistema/.test(h), 'painel acima do quadro');
     t.ok(/filter\(a=>a\.data===iso\)/.test(h) && /if\(TP\.aviso!==false\)/.test(h), 'calendário no dia do aviso, com opção de esconder');
     // 22/11: escolher o que aparece no calendário; abre com tudo ligado e com as vias do usuário
-    t.ok(/tiposCal:\{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:true, orcamento:true \}/.test(h) && /escopoVias:'minhas'/.test(h), 'abre com tudo e vias em meu nome');
+    t.ok(/tiposCal:\{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:false, orcamento:true \}, finalizadosCal:false,/.test(h) && /escopoVias:'minhas'/.test(h), 'abre sem vendas e sem finalizados, com as vias em meu nome');
+    t.ok(/function agViaFinalizada/.test(h) && /FIN \|\| t\.coluna!=='feito'/.test(h) && /data-agfin/.test(h), 'botão Finalizados');
     t.ok(/if\(TP\[v\.tipo\]===false\) return;/.test(h) && /data-agtp="_tudo"/.test(h) && /\['pedido','Pedidos \(serviço\)'/.test(h), 'filtro por tipo (pedido/serviço, venda, orçamento, tarefas, avisos, lembretes)');
     t.ok(/av\.length\+' avisos', grupoAvisos:true/.test(h) && /agEventosDoDia\(iso, true\)/.test(h), 'dia com mais de um aviso: um só item; o dia aberto lista todos');
     t.ok(/function agGruposAvisos/.test(h) && /if\(l\.length === 1\) return agItemAviso\(l\[0\]\)/.test(h), 'painel: mais de um do mesmo tipo vira grupo recolhido');
