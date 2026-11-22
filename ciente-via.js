@@ -37,7 +37,7 @@
       if(a && a.google && AV && AV.googleJaVisto && AV.googleJaVisto(o)) a.google=null;
       if(a && a.google && AV && AV.marcarGoogle) AV.marcarGoogle(o);
       if(a && a.pendente && AV && AV.etapas) AV.etapas(ov, a, chamar, fim);
-      else if(a && a.google && AV && AV.soGoogle) AV.soGoogle(ov, a, fim);
+      else if(a && a.google && AV && AV.soGoogle) AV.soGoogle(ov, a, fim, chamar);
       else fim();
     };
   }

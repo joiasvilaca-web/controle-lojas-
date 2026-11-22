@@ -26,7 +26,7 @@
   function chaveG(o){ return 'avGoogle:'+o.tipo+':'+o.id; }
   function googleJaVisto(o){ try{ return localStorage.getItem(chaveG(o))==='1'; }catch(e){ return false; } }
   function marcarGoogle(o){ try{ localStorage.setItem(chaveG(o),'1'); }catch(e){} }
-  function soGoogle(ov, a, fim){ etapas(ov, a, null, fim, true); }
+  function soGoogle(ov, a, fim, chamar){ etapas(ov, a, chamar||null, fim, true); }
   function etapas(ov, a, chamar, fim, direto){
     function etapaGoogle(){
       if(!a.google){ fim(); return; }
@@ -36,6 +36,7 @@
       ov.querySelector('[data-ok]').onclick=function(){ limpa(); fim(); };
       ov.querySelector('[data-g]').onclick=function(){
         abriu=true;
+        if(chamar) try{ chamar({acao:'google'}); }catch(e){}   // 22/11: registra no Histórico da via
         var w=null; try{ w=window.open(a.google,'avalGoogle','popup=yes,width=520,height=720,noopener'); }catch(e){}
         if(!w) window.open(a.google,'_blank','noopener');
         this.textContent='Abrir de novo';

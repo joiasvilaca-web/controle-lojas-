@@ -352,6 +352,10 @@ Deno.serve(async (req) => {
       const restante = (j + 1) * PERIODO - Math.floor(Date.now() / 1000);
       return json({ codigo: await codigoRotativo(tipo, id, j), restante, periodo: PERIODO, retirada: publico(reg), codigoTerceiro: await terceiroAtual(tipo, id, reg), ciente: cienteInfo(via, reg), avaliacao: await avalInfo(tipo, id, via) });
     }
+    if (acao === "google") {   // 22/11: o cliente tocou em "Avaliar no Google" no link — fica no Histórico da via
+      try { await admin.rpc("via_ciente_append", { p_tabela: TABELA[tipo], p_id: id, p_evento: { google: true, confirmadoEm: new Date().toISOString(), ua: String(req.headers.get("user-agent") || "").slice(0, 160) } }); } catch (_) { /* só registro */ }
+      return json({ ok: true });
+    }
     if (acao === "avaliar") {
       const info = await avalInfo(tipo, id, via);
       if (!info.pendente) return json({ ok: true, jaFeita: true, avaliacao: info });
@@ -433,6 +437,7 @@ Deno.serve(async (req) => {
       for (const h of (reg?.historico || [])) ev.push({ em: h.em, tipo: "retirada", quem: h.por || "", texto: h.acao + (h.loja ? " · " + h.loja : "") });
       for (const l of (Array.isArray(via.leituras) ? via.leituras : [])) {
         if (!l) continue;
+        if (l.google) { ev.push({ em: l.confirmadoEm, tipo: "cliente", quem: "CLIENTE", texto: "Abriu a avaliação do Google pelo link" + (l.ua ? " · aparelho: " + l.ua : "") }); continue; }
         ev.push({ em: l.confirmadoEm, tipo: "cliente", quem: "CLIENTE", texto: (l.ciente ? "CIENTE registrado pelo cliente" : "Visualização registrada automaticamente") + " — situação: " + String(l.status || "").replace("|retirada", " (após retirada)") + (l.ip ? " · IP " + l.ip : "") + (l.ua ? " · aparelho: " + l.ua : "") });
       }
       // 22/11: HISTÓRICO COMPLETO da via — também o que fica no próprio registro (pagamentos, status da Oficina, local da peça, avisos internos,

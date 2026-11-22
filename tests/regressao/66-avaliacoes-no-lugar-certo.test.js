@@ -7,7 +7,12 @@ module.exports = { casos: [
     t.ok(/google: tipo === "os" && via\.status === "entregue" \? li\.google : null/.test(r), 'servidor só devolve o Google do pedido entregue');
     t.ok(/via\.status !== "abandonada",/.test(r), 'via abandonada não pede avaliação');
     const c = ler('ciente-via.js'), a = ler('avaliacao-via.js');
-    t.ok(/else if\(a && a\.google && AV && AV\.soGoogle\) AV\.soGoogle\(ov, a, fim\);/.test(c) && /function soGoogle\(ov, a, fim\)/.test(a), 'pedido entregue já avaliado: mostra só o Google (uma vez por aparelho)');
+    t.ok(/else if\(a && a\.google && AV && AV\.soGoogle\) AV\.soGoogle\(ov, a, fim, chamar\);/.test(c) && /function soGoogle\(ov, a, fim(, chamar)?\)/.test(a), 'pedido entregue já avaliado: mostra só o Google (uma vez por aparelho)');
+  } },
+  { nome: 'Toque em Avaliar no Google fica no Histórico da via', bug: 'Histórico sem o registro do Google', rodar: async ({ t, ler }) => {
+    const r = ler('retirada-terceiro.ts');
+    t.ok(/if \(acao === "google"\)/.test(r) && /if \(l\.google\) \{ ev\.push/.test(r), 'servidor registra e o histórico mostra');
+    t.ok(/chamar\(\{acao:'google'\}\)/.test(ler('avaliacao-via.js')) && /AV\.soGoogle\(ov, a, fim, chamar\)/.test(ler('ciente-via.js')), 'link avisa o servidor no toque');
   } },
   { nome: 'Robô: pós-venda do pedido no dia da entrega (só entregas a partir de 22/11)', bug: 'Google do pedido só 7 dias depois', rodar: async ({ t, ler }) => {
     const s = ler('acompanhamento-auto.ts');
