@@ -1,3 +1,4 @@
+// ajuda-ia v2 (22/11/2026): sem "pensamento" do modelo (gastava o limite e a resposta saía cortada) e limite maior.
 // ajuda-ia v1 (22/11/2026): ASSISTENTE DA AJUDA — responde "como faço…" como um especialista do Vilaça App.
 // Qualquer pessoa logada usa (sessão sess_… validada contra gestao_config, igual ao db-gateway). NÃO lê nenhum dado do negócio:
 // a única base é o conteúdo da Ajuda publicado (APP_URL/ajuda-conteudo.js), lido do site e guardado por 10 min — a tela e o assistente
@@ -56,7 +57,7 @@ async function gemini(prompt: string): Promise<string> {
   const modelo = Deno.env.get("GEMINI_TEXT_MODEL") || "gemini-flash-latest";
   for (let t = 1; t <= 2; t++) {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent`, { method: "POST", headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 700 } }), signal: AbortSignal.timeout(30000) });
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } } }), signal: AbortSignal.timeout(30000) });
     if (r.ok) { const d = await r.json(); const txt = (d?.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim(); if (txt) return txt; throw new Error("resposta vazia"); }
     if (!(r.status === 429 || r.status === 503) || t === 2) throw new Error("IA respondeu " + r.status);
     await new Promise((res) => setTimeout(res, 900));
