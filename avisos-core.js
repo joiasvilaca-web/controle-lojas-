@@ -45,7 +45,7 @@
       if(o.status==='pendencia'){
         var ob = (o.observacoes||[]).filter(function(x){ return x && x.origem==='oficina'; }).sort(function(a,b){ return (b.criadoEm||0)-(a.criadoEm||0); })[0];
         var motivo = ob ? String(ob.descricao||'').replace(/^\[OFICINA\]\s*/,'').trim() : '';
-        add(Object.assign({}, base, { id:'os-pend-'+o.id, grupo:'Vias em pendência', nivel:'danger', titulo:via(o), sub: motivo ? 'Oficina: '+motivo : sub, tag:'pendência', data:o.data||null, rotuloData:'Pendência' }));
+        add(Object.assign({}, base, { id:'os-pend-'+o.id, grupo:'Vias em pendência', nivel:'danger', titulo:via(o), sub: motivo ? 'Oficina: '+motivo : sub, tag:'pendência', data:o.data||null, rotuloData:'Pendência', ordem:o, obsId: ob ? ob.id : null }));   // 22/11: ordem/obsId → Ciente e recado ao cliente
       } else if(o.status==='aguardando' && o.data && o.data < hj){
         add(Object.assign({}, base, { id:'os-venc-'+o.id, grupo:'Vencidos ainda na oficina', nivel:'danger', titulo:via(o), sub:sub+' · entrega prevista '+fmt(o.data), tag:plural(diasDesde(o.data),'dia','dias')+' de atraso', data:o.data, rotuloData:'Atrasado' }));
       } else if(o.status==='pronto' && o.data && (diasDesde(o.data)||0) >= DIAS_PRONTO_SEM_RETIRADA){

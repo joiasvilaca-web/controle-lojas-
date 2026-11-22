@@ -446,6 +446,7 @@ window.AJUDA_TOPICOS = [
       <li><span class="btn-ref">Virar tarefa</span> cria uma tarefa já preenchida para você acompanhar no quadro.</li>
     </ol>
     <div class="dica">Os avisos com data também aparecem no <b>Calendário</b>, no dia certo. Eles somem sozinhos quando o problema é resolvido.</div>
+    <div class="aviso"><b>Via em pendência:</b> leia o motivo da Oficina e toque em <span class="btn-ref">Ciente</span>. Para avisar o cliente, use <span class="btn-ref">Escrever recado para o cliente</span> e depois <span class="btn-ref">Enviar pelo WhatsApp</span>. O cliente recebe só a situação da via e o seu recado, nunca a observação interna da Oficina. O mesmo vale em <b>PAINEL → AVISOS</b>.</div>
     <p>Você só vê os avisos das vias em que participa. Gerente vê os da loja toda.</p>
   `
 },

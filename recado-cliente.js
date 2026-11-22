@@ -10,6 +10,7 @@
  *      gravar(orderId, obsId, recadoOuNull) → Promise<bool>   (grava o recado na observação, no servidor)
  *      senha, nomeUsuario, lojaNome(lojaId), statusNome(order), aoMudar()  (aoMudar: a tela se redesenha)
  * RecadoCliente.textoCliente(order, recado, statusNome) → texto que vai ao cliente (para teste)
+ * RecadoCliente.cienteHtml(order, ob)                   → 22/11: botão "Ciente" da observação (ou o selo "Ciente: NOME · data"). Precisa de ctx.ciente(orderId, obsId) → Promise<bool>.
  */
 (function(){
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
@@ -116,6 +117,11 @@
     if(ctx.aoMudar) ctx.aoMudar();
   }
 
+  /** 22/11: CIENTE da observação (pendência da Oficina): quem leu dá o ciente com o próprio nome. */
+  function cienteHtml(order, ob){
+    if(ob && ob.ciente) return '<span class="rc-sent" title="Ciente registrado">'+ic('check',13)+' Ciente: '+esc(ob.cienteNome||'')+(ob.cienteEm?' · '+esc(dh(ob.cienteEm)):'')+'</span>';
+    return '<button type="button" class="rc-b sm pri" data-rc="ciente" data-oid="'+esc(order.id)+'" data-obid="'+esc(ob.id)+'" title="Marcar que você leu esta observação">'+ic('check',14)+' Ciente</button>';
+  }
   function ligar(container, ctx){
     css();
     container.querySelectorAll('[data-rc]').forEach(function(b){
@@ -124,8 +130,9 @@
         var x=ctx.achar(b.dataset.oid,b.dataset.obid); if(!x) return;
         if(b.dataset.rc==='editar') abrirEditor(x.order,x.ob,ctx);
         else if(b.dataset.rc==='enviar') enviar(x.order,x.ob,ctx,b);
+        else if(b.dataset.rc==='ciente' && ctx.ciente){ b.disabled=true; Promise.resolve(ctx.ciente(x.order.id,x.ob.id)).then(function(ok){ if(!ok){ b.disabled=false; aviso('Não foi possível dar o ciente. Tente de novo.'); return; } aviso('Ciente registrado.'); if(ctx.aoMudar) ctx.aoMudar(); }); }
       });
     });
   }
-  window.RecadoCliente={ linhaHtml:linhaHtml, ligar:ligar, textoCliente:textoCliente, abrirEditor:abrirEditor, css:css };
+  window.RecadoCliente={ linhaHtml:linhaHtml, cienteHtml:cienteHtml, ligar:ligar, textoCliente:textoCliente, abrirEditor:abrirEditor, css:css };
 })();

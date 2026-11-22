@@ -7,6 +7,7 @@
 <script src="icones.js"></script>
 <script src="formato.js"></script>
 <script src="avisos-core.js"></script>
+<script src="recado-cliente.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agenda — Gestão e Controle</title>
@@ -521,6 +522,7 @@ html[data-theme=dark] .msgs.inst-reforma, html[data-theme=dark] .msgs.inst-vilac
 .av-item .av-tag{font-size:11px;font-weight:700;color:var(--tc);margin-right:auto;}
 .av-item .av-rod button{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);border-radius:7px;font-size:11.5px;padding:4px 9px;cursor:pointer;}
 .av-item .av-rod button:hover{border-color:var(--accent);color:var(--accent);}
+.av-item .av-obs{margin-top:8px;} .av-item .av-obs .rc-btns{margin-top:0;}
 .av-item .av-feita{font-size:11px;color:var(--ok);font-weight:600;display:inline-flex;align-items:center;gap:3px;}
 .av-vazio{padding:16px;text-align:center;color:var(--ink-soft);font-size:13px;}
 .av-ajuda{grid-column:1/-1;font-size:11.5px;color:var(--ink-faint);margin:0 2px;}
@@ -769,6 +771,7 @@ function agItemAviso(a){ return `<div class="av-item n-${a.nivel}">
           <div class="av-g">${escapeHtml(a.grupo)}</div>
           <div class="av-t">${escapeHtml(a.titulo)}</div>
           <div class="av-s">${escapeHtml(a.sub||'')}${a.data?` · ${escapeHtml(a.rotuloData||'Data')} ${agFmtData(a.data)}`:''}</div>
+          ${agObsAviso(a)}
           <div class="av-rod"><span class="av-tag">${escapeHtml(a.tag||'')}</span>
             ${agTemTarefaDoAviso(a) ? `<span class="av-feita">${icn('check',{tam:12})}Já virou tarefa</span>` : `<button type="button" data-avtarefa="${escapeHtml(a.id)}" title="Criar uma tarefa no quadro a partir deste aviso">${icn('mais',{tam:12})}Virar tarefa</button>`}
             <button type="button" data-avabrir="${escapeHtml(a.id)}" title="Abrir no módulo">${icn('externo',{tam:12})}Abrir</button></div>
@@ -785,7 +788,37 @@ function agGruposAvisos(mod, itens){
       ${aberto ? `<div class="av-glista">${l.map(agItemAviso).join('')}</div>` : ''}</div>`;
   }).join('');
 }
+/* 22/11: pendência da Oficina — Ciente e recado para o cliente (com envio pelo WhatsApp por clique), iguais aos de PAINEL › Avisos (recado-cliente.js). */
+function agObsDe(a){ const o = a && a.ordem; return o && a.obsId ? (o.observacoes||[]).find(x=>x.id===a.obsId) : null; }
+function agObsAviso(a){
+  const ob = agObsDe(a); if(!ob || !window.RecadoCliente) return '';
+  return `<div class="av-obs"><div class="rc-btns">${RecadoCliente.cienteHtml(a.ordem, ob)}</div>${a.ordem.telefone ? RecadoCliente.linhaHtml(a.ordem, ob) : ''}</div>`;
+}
+const AG_ST_OS = { pendencia:'PENDÊNCIA', em_producao:'EM PRODUÇÃO', enviado_fabrica:'ENVIADO P/ FÁBRICA', oficina_pronto:'LIBERADO FÁBRICA', pronto:'DISPONÍVEL PARA RETIRADA', aguardando:'APROVADO' };
+async function agGravarObs(oid, obid, mudar){
+  const r = await gatewayAg({ op:'selectOne', table:'ordens_servico', params:{ column:'id', value:oid } });
+  const row = r && r.data; if(!row || !row.payload) return null;
+  const ob = (row.payload.observacoes||[]).find(x=>x.id===obid); if(!ob) return null;
+  mudar(ob);
+  const w = await gatewayAg({ op:'upsert', table:'ordens_servico', params:{ row:{ id:oid, payload:row.payload, updated_at:new Date().toISOString() } } });
+  if(!w || w.error) return null;
+  (estado.ag.avisos||[]).forEach(a=>{ if(a.ordem && a.ordem.id===oid){ const lo = (a.ordem.observacoes||[]).find(x=>x.id===obid); if(lo) Object.keys(ob).forEach(k=> lo[k] = ob[k]); if(!ob.recado && lo) delete lo.recado; } });
+  return ob;
+}
+function agRecadoCtx(){
+  const nome = (currentUser && (currentUser.apelido || currentUser.nome)) || '';
+  return {
+    senha: __gatewaySenha, nomeUsuario: nome,
+    achar: (oid, obid)=>{ const a = (estado.ag.avisos||[]).find(x=>x.ordem && x.ordem.id===oid); const ob = a && (a.ordem.observacoes||[]).find(x=>x.id===obid); return ob ? { order:a.ordem, ob } : null; },
+    gravar: async (oid, obid, recado)=> !!(await agGravarObs(oid, obid, ob=>{ if(recado) ob.recado = recado; else delete ob.recado; })),
+    ciente: async (oid, obid)=> !!(await agGravarObs(oid, obid, ob=>{ if(!ob.ciente){ ob.ciente = true; ob.cienteNome = String(nome).toUpperCase(); ob.cienteEm = Date.now(); } })),
+    lojaNome: id=>{ const l = (__cfgAg.lojas||[]).find(x=>x.id===id); return l ? (l.nomeFantasia || l.nome) : ''; },
+    statusNome: o=> AG_ST_OS[o.status] || String(o.status||'').toUpperCase(),
+    aoMudar: ()=> agRender(),
+  };
+}
 function agLigarPainelAvisos(c){
+  if(window.RecadoCliente) RecadoCliente.ligar(c, agRecadoCtx());
   const cab = c.querySelector('#avCab'); if(cab) cab.onclick = ()=>{ estado.ag.avisosFechado = !estado.ag.avisosFechado; agRender(); };
   const achar = id => (estado.ag.avisos||[]).find(a=>a.id===id);
   c.querySelectorAll('[data-avgrupo]').forEach(b=> b.onclick = ()=>{ const k = b.dataset.avgrupo; estado.ag.avGrupos[k] = !estado.ag.avGrupos[k]; agRender(); });

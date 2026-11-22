@@ -203,7 +203,8 @@ function obsBlocoHtml(o){
     const of = ob.origem==='oficina';
     const txt = String(ob.descricao||'').replace(/^\[OFICINA\]\s*/,'');
     const pode = window.RecadoCliente && o.telefone && (of || (ob.notificarPara||[]).length>0);
-    return `<div class="obs-av-i"><div class="obs-av-t"><b>${of?'Oficina':escapeHtml(ob.nome||'Observação')}</b> <span class="muted">${of?'· interno · ':'· '}${escapeHtml(dhAv(ob.criadoEm))}${ob.ciente?' · ciente '+escapeHtml(ob.cienteNome||''):''}</span></div><div>${escapeHtml(txt)}</div>${pode ? RecadoCliente.linhaHtml(o, ob) : ''}</div>`;
+    const podeCiente = window.RecadoCliente && RecadoCliente.cienteHtml && (of || (ob.notificarPara||[]).length>0);   // 22/11: Ciente na observação da pendência
+    return `<div class="obs-av-i"><div class="obs-av-t"><b>${of?'Oficina':escapeHtml(ob.nome||'Observação')}</b> <span class="muted">${of?'· interno · ':'· '}${escapeHtml(dhAv(ob.criadoEm))}</span></div><div>${escapeHtml(txt)}</div>${podeCiente ? `<div class="rc-btns">${RecadoCliente.cienteHtml(o, ob)}</div>` : (ob.ciente?`<span class="muted">ciente ${escapeHtml(ob.cienteNome||'')}</span>`:'')}${pode ? RecadoCliente.linhaHtml(o, ob) : ''}</div>`;
   }).join('')}</div>`;
 }
 /** Contexto do recado para o cliente nesta tela: relê a via no servidor antes de gravar (não sobrescreve o que mudou enquanto a tela estava aberta). */
@@ -223,6 +224,17 @@ function recadoCtxAv(){
       return true;
     },
     lojaNome: nomeLoja,
+    ciente: async (oid, obid)=>{   // 22/11: relê a via no servidor e grava só o ciente desta observação
+      const nome = (currentUser && (currentUser.apelido || currentUser.nome)) || '';
+      const r = await gatewayCall({ op:'selectOne', table:'ordens_servico', params:{ column:'id', value:oid } });
+      const row = r && r.data; if(!row || !row.payload) return false;
+      const ob = (row.payload.observacoes||[]).find(x=>x.id===obid); if(!ob) return false;
+      if(!ob.ciente){ ob.ciente = true; ob.cienteNome = String(nome).toUpperCase(); ob.cienteEm = Date.now(); }
+      const w = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:oid, payload:row.payload, updated_at:new Date().toISOString() } } });
+      if(!w || w.error) return false;
+      const lo = __ordensAv.find(x=>x.id===oid); const lob = lo && (lo.observacoes||[]).find(x=>x.id===obid); if(lob){ lob.ciente = true; lob.cienteNome = ob.cienteNome; lob.cienteEm = ob.cienteEm; }
+      return true;
+    },
     statusNome: o=> ({ pendencia:'PENDÊNCIA', em_producao:'EM PRODUÇÃO', enviado_fabrica:'ENVIADO P/ FÁBRICA', oficina_pronto:'LIBERADO FÁBRICA', pronto:'DISPONÍVEL PARA RETIRADA', aguardando:'APROVADO' }[o.status] || String(o.status||'').toUpperCase()),
     aoMudar: ()=>{ render(__avisosAtuais); },
   };
