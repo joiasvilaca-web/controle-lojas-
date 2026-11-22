@@ -116,7 +116,7 @@
       // PÓS-VENDA / ANIVERSÁRIO
       var mdPv = corpoDe(modelos, 'posvenda');
       if(mdPv){ var gPv = function(cru){ return preencherModelo(mdPv.corpo, [nome1, miolo(String(cru || '').replace(/\{cliente\}/g, nome1).replace(/\{avaliacao\}/g, '').replace(/\{loja\}/g, loja))]); }, crPv = (cfg.posVendaAuto && cfg.posVendaAuto.mensagem) || '';
-        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido)', quando:'Automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois da venda / da entrega do pedido (9h–20h). Também pelo botão Enviar pós-venda. ', modelo: mdPv, texto: gPv(crPv), gerar: gPv, pagina:'',
+        lista.push({ grupo:'Pós-venda e aniversário', titulo:'Pós-venda (venda e pedido) — com o botão Avaliar no Google', quando:'Venda: automático ' + ((cfg.posVendaAuto && cfg.posVendaAuto.dias) || 7) + ' dias depois (9h–20h). Pedido: automático no dia em que fica ENTREGUE (9h–20h). Também pelo botão Enviar pós-venda. A avaliação do atendimento vai no link da 1ª mensagem; o Google, aqui e no link do pedido entregue.', modelo: mdPv, texto: gPv(crPv), gerar: gPv, pagina:'',
           edit: { tipo:'posVendaAuto', valor: crPv, vars:'{cliente} {loja}', nota:'Este texto vai só pelo número da Reforma. No WhatsApp oficial vai o modelo de garantia acima (Utilidade, mais barato).' } }); }
       var mdAn = corpoDe(modelos, 'aniversario');
       if(mdAn){ var gAn = function(cru){ return preencherModelo(mdAn.corpo, [nome1, miolo(String(cru || '').replace(/\{cliente\}/g, nome1))]); }, crAn = (cfg.mensagens && cfg.mensagens.aniversario) || '';

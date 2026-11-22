@@ -150,10 +150,12 @@ async function avalInfo(tipo: string, id: string, via: any) {
   const elegivel = criado >= AVAL_DESDE || (!criado && String(via.data || "") >= "2026-11-08");
   const li = await lojaInfo(via.lojaId);
   return {
-    pendente: !a && elegivel && via.status !== "cancelado" && via.status !== "cancelada",
+    pendente: !a && elegivel && via.status !== "cancelado" && via.status !== "cancelada" && via.status !== "abandonada",
     feita: !!a, estrelas: a ? a.estrelas : null,
     resposta: a && a.resposta ? { texto: a.resposta.texto, em: a.resposta.em } : null,
-    google: li.google, loja: li.nome, atendente: via.vendedora || via.criadoPor || "",
+    // 22/11 (Felipe): a avaliação do ATENDIMENTO vem na 1ª abertura (junto da 1ª mensagem); o GOOGLE só no PEDIDO ENTREGUE
+    // (na venda o Google vai no botão da mensagem de pós-venda). Por isso o link só devolve o Google do pedido entregue.
+    google: tipo === "os" && via.status === "entregue" ? li.google : null, status: String(via.status || ""), loja: li.nome, atendente: via.vendedora || via.criadoPor || "",
   };
 }
 async function lerReg(tipo: string, id: string) {

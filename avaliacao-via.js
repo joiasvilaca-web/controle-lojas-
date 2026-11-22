@@ -22,7 +22,12 @@
 
   function esc2(s){ return esc(s); }
   /* Etapas (estrelas -> Google) dentro de um overlay já criado pelo "Ciente". fim() é chamado quando terminar. */
-  function etapas(ov, a, chamar, fim){
+  /* 22/11: Google sozinho (pedido ENTREGUE, quando a avaliação do atendimento já foi feita na 1ª abertura). Mostra uma vez por aparelho. */
+  function chaveG(o){ return 'avGoogle:'+o.tipo+':'+o.id; }
+  function googleJaVisto(o){ try{ return localStorage.getItem(chaveG(o))==='1'; }catch(e){ return false; } }
+  function marcarGoogle(o){ try{ localStorage.setItem(chaveG(o),'1'); }catch(e){} }
+  function soGoogle(ov, a, fim){ etapas(ov, a, null, fim, true); }
+  function etapas(ov, a, chamar, fim, direto){
     function etapaGoogle(){
       if(!a.google){ fim(); return; }
       var abriu=false;
@@ -53,6 +58,7 @@
       if(!r.ok){ bs.forEach(function(b){ b.disabled=false; }); return; }
       etapaGoogle();
     }
+    if(direto){ etapaGoogle(); return; }
     ov.querySelector('[data-pular]').onclick=function(){ enviar(true); };
     ov.querySelector('[data-env]').onclick=function(){ enviar(false); };
   }
@@ -82,5 +88,5 @@
     }
     setTimeout(checar,1500);
   }
-  window.AvaliacaoVia = { montar: montar, etapas: etapas, css: css };
+  window.AvaliacaoVia = { montar: montar, etapas: etapas, soGoogle: soGoogle, googleJaVisto: googleJaVisto, marcarGoogle: marcarGoogle, css: css };
 })();

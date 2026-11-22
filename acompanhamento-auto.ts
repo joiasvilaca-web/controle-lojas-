@@ -1,3 +1,4 @@
+// acompanhamento-auto v30 (22/11/2026, Felipe): pós-venda do PEDIDO sai sozinho no dia em que fica ENTREGUE (antes: 7 dias depois) — modelo pos_venda_garantia (Utilidade) com o botão do Google da loja. Venda continua com o pós-venda depois de N dias.
 // acompanhamento-auto v29 (22/11/2026, Felipe: "os avisos devem estar no cartão, não vamos mudar a msg do WhatsApp"): os avisos de prazo (lembrete e final) saem com a MESMA mensagem aprovada do pedido pronto (pedido_pronto_acompanhamento) e o link; prazo, desmanche e crédito aparecem só no cartão (acompanhar.html / get-order-status). Sem modelos novos na Meta.
 // acompanhamento-auto v28 (22/11/2026, pedido do Felipe): PRAZO DE RETIRADA do pedido PRONTO. Sem pagamento: aviso ao cliente com 15 dias e aviso final (desmanche) com 30. Com pagamento (parcial ou total): aviso com 30 e aviso final com 60, já com o crédito (pago − 20% de perda). No vencimento: tarefa na Agenda para a vendedora e os gerentes da loja (recolher a via e lançar ABANDONADA); 15 dias depois sem baixa: tarefa para a diretoria. Conta a partir do PRONTO (pedidos que já estavam prontos contam a partir de 22/11). (v29: sem modelos novos — mesma mensagem do pronto.) Tudo fica em payload.abandono (Histórico da via).
 // acompanhamento-auto v27 (22/11/2026, pedido do Felipe): pedido que fica PRONTO com PAGAMENTO EM ABERTO (saldo a pagar > 0) recebe o aviso de pronto SOZINHO (modelo pedido_pronto_acompanhamento). Pedido quitado continua só pelo botão (ou prontoAuto=true). Vale só para pedidos que ficaram prontos a partir de PRONTO_SALDO_DESDE (não dispara os antigos). Saldo pela mesma regra da tela (saldoAbertoOS = valorAReceberDe + fiado já pago).
@@ -353,6 +354,7 @@ async function fiadoPagoOS(o: any): Promise<number> {
 }
 // v28: prazo de retirada (abandono). Valor PAGO pelo cliente (mesma regra da baixa ABANDONADA no painel-ordens: recebido + crédito comum usado + fiado quitado; crédito de ouro não conta).
 const ABANDONO_DESDE = Date.parse("2026-11-22T15:00:00Z");
+const POSVENDA_NA_ENTREGA_DESDE = Date.parse("2026-11-22T15:00:00Z");   // v30: entregas a partir daqui recebem o pós-venda no mesmo dia; as anteriores seguem a regra antiga (N dias)
 const TAXA_PERDA = 0.20;
 function pagoDiretoOS(o: any): number {
   return (Array.isArray(o.pagamentos) ? o.pagamentos : []).filter((p: any) => p && p._modo !== "editar").reduce((a: number, p: any) => {
@@ -482,7 +484,7 @@ Deno.serve(async (req: Request) => {
           if (o.status === "pronto" && (po.prontoAuto === true || prontoSaldo) && Number(o.statusEm || 0) >= desdeMs && !(o.msgEnviadas && o.msgEnviadas.pronto) && !jaLog("os_pronto")) {
             cand.push({ tipo: "os_pronto", tabela: "ordens_servico", id: r.id, reg: o, passo: 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: "aviso de pronto", agenda: o.autoAgenda || null,
               texto: preencherOS((po.mensagemPronto && po.mensagemPronto.trim()) || (cfg.mensagens && cfg.mensagens.pronto) || MSG_OS_PRONTO, cfg, o) });
-          } else if (o.status === "entregue" && Number(o.recebidoEm || 0) >= desdeMs && !o.posVendaEnviadoEm && diasEntre(diaDe(Number(o.recebidoEm)), agora.dia) >= diasPV) {
+          } else if (o.status === "entregue" && Number(o.recebidoEm || 0) >= desdeMs && !o.posVendaEnviadoEm && (Number(o.recebidoEm) >= POSVENDA_NA_ENTREGA_DESDE || diasEntre(diaDe(Number(o.recebidoEm)), agora.dia) >= diasPV)) {   // v30: pós-venda do PEDIDO sai no dia da ENTREGA (garantia + botão do Google; Utilidade)
             cand.push({ tipo: "os_posvenda", tabela: "ordens_servico", id: r.id, reg: o, passo: 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: "pós-venda", agenda: o.autoAgenda || null,
               texto: preencherOS((po.mensagemPosVenda && po.mensagemPosVenda.trim()) || MSG_OS_POSVENDA, cfg, o) });
           }

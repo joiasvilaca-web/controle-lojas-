@@ -1,7 +1,7 @@
 /* "Ciente" — PORTÃO de entrada da via (08/11).
  * Em TODA abertura do link a via fica coberta por uma tela cheia com o botão Ciente; só abre depois do clique, e cada clique grava
  * um registro de acesso em `leituras` (função retirada-terceiro, ação `ciente`, sem deduplicar: é o log de acesso do cliente).
- * Na 1ª abertura de via nova, depois do Ciente vêm: avaliação do atendente (estrelas) -> Google -> via.
+ * Na 1ª abertura de via nova, depois do Ciente vem a avaliação do atendente (estrelas). 22/11: o Google só aparece no PEDIDO ENTREGUE (venda: no pós-venda).
  * Uso: CienteVia.montar(elemento, { tipo:'os'|'venda'|'orc'|'res', id, client: supabaseClient })  (o elemento não é mais usado)
  */
 (function(){
@@ -32,7 +32,12 @@
       if(!r.ok){ b.disabled=false; b.textContent='Ciente — tentar de novo'; return; }
       var a=r.avaliacao;
       if(a && o.tipo==='orc') a.google=null;   // orçamento: só avalia o atendimento (sem Google)
-      if(a && a.pendente && window.AvaliacaoVia && window.AvaliacaoVia.etapas) window.AvaliacaoVia.etapas(ov, a, chamar, fim);
+      // 22/11: o servidor só manda o Google no PEDIDO ENTREGUE (venda: Google vai no pós-venda). Mostra uma vez por aparelho.
+      var AV=window.AvaliacaoVia;
+      if(a && a.google && AV && AV.googleJaVisto && AV.googleJaVisto(o)) a.google=null;
+      if(a && a.google && AV && AV.marcarGoogle) AV.marcarGoogle(o);
+      if(a && a.pendente && AV && AV.etapas) AV.etapas(ov, a, chamar, fim);
+      else if(a && a.google && AV && AV.soGoogle) AV.soGoogle(ov, a, fim);
       else fim();
     };
   }
