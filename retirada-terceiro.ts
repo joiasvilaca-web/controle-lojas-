@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2.119.0";
 
 /**
+ * 22/11: `comprovante` = HISTÓRICO COMPLETO da via (também pagamentos, status da Oficina, local, avisos, mensagens, prazo de retirada/abandono e fila de disparo).
  * Retirada da via na loja (v4, 09/11; 08/11: ação `achar` = busca a via pelo código do cliente).
  * - CÓDIGO ROTATIVO (6 dígitos, muda a cada 60 s): o cliente vê no link da via; a loja só entrega com ele.
  *   Não é gravado: sai de um HMAC (chave do servidor + via + janela de tempo). Vale a janela atual e a anterior.
@@ -64,6 +65,39 @@ async function staff(senha: string) {
     const j = await r.json();
     return j && j.ok && j.user ? j.user : null;
   } catch (_e) { return null; }
+}
+// 22/11: eventos guardados no próprio registro da via (pedido, venda, orçamento, reserva) para o Histórico da via.
+const ST_NOME: Record<string, string> = { rascunho: "RASCUNHO", aguardando: "APROVADO", enviado_fabrica: "ENVIADO P/ FÁBRICA", em_producao: "EM PRODUÇÃO", pendencia: "PENDÊNCIA", oficina_pronto: "LIBERADO FÁBRICA", pronto: "DISPONÍVEL PARA RETIRADA", entregue: "ENTREGUE", cancelado: "CANCELADO", abandonada: "ABANDONADA" };
+const isoDe = (x: any) => { if (x == null || x === "") return null; const n = typeof x === "number" ? x : (/^\d+$/.test(String(x)) ? Number(x) : Date.parse(String(x))); return isFinite(n) ? new Date(n).toISOString() : null; };
+const brl = (v: any) => "R$ " + (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function eventosDoRegistro(v: any): any[] {
+  const ev: any[] = []; if (!v) return ev;
+  const push = (em: any, tipo: string, quem: any, texto: string) => { const i = isoDe(em); if (i) ev.push({ em: i, tipo, quem: String(quem || ""), texto }); };
+  for (const p of (Array.isArray(v.pagamentos) ? v.pagamentos : [])) {
+    if (!p || p._modo === "editar") continue;
+    const nm = p.formaNome || p.forma || ({ __fiado: "SALDO PARA DEPOIS (FIADO)", __credito: "CRÉDITO DO CLIENTE", __cashback: "CASHBACK" } as any)[p.formaId] || p.formaId || "pagamento";
+    push(p.data ? String(p.data).length <= 10 ? p.data + "T12:00:00-03:00" : p.data : (v.criadoEm || null), "pagamento", p.por || p.usuario || "", "Pagamento: " + nm + " " + brl(p.valor) + (p.parcelas > 1 ? " em " + p.parcelas + "x" : "") + (Number(p.creditoOuro) > 0 ? " (crédito de ouro " + brl(p.creditoOuro) + ")" : ""));
+  }
+  for (const h of (Array.isArray(v.historicoOficina) ? v.historicoOficina : [])) push(h.em, "status", h.por, "Oficina mudou o status: " + (ST_NOME[h.de] || h.de || "—") + " → " + (ST_NOME[h.para] || h.para || "—"));
+  for (const h of (Array.isArray(v.historicoLocal) ? v.historicoLocal : [])) push(h.em, "local", h.por, "Local da peça: " + String(h.local || "—").toUpperCase());
+  for (const a of (Array.isArray(v.acoesLog) ? v.acoesLog : [])) if (a) push(a.em, a.via === "whatsapp" ? "disparo" : "acao", a.auto ? "sistema" : a.por, (a.nome || a.passo || a.acao || "ação") + (a.via ? " — " + a.via : "") + (a.auto ? " (automático)" : ""));
+  for (const o of (Array.isArray(v.observacoes) ? v.observacoes : [])) {
+    if (!o) continue;
+    push(o.criadoEm, "aviso", o.nome, "Aviso interno: " + String(o.descricao || "").slice(0, 200) + (o.recado ? " (recado ao cliente)" : ""));
+    if (o.ciente) push(o.cienteEm, "aviso", o.cienteNome, "Ciente do aviso interno");
+  }
+  for (const h of (Array.isArray(v.historico) ? v.historico : [])) if (h && h.acao) push(h.em, "acao", h.por, String(h.acao));
+  const ab = v.abandono || null;
+  if (ab) {
+    if (ab.base) push(ab.base, "prazo", "sistema", "Prazo de retirada começou a contar (pedido " + (Number(ab.pago) > 0 ? "com pagamento: 60 dias" : "sem pagamento: 30 dias") + ")");
+    for (const [k, quando] of Object.entries(ab.etapas || {})) push(quando, k.startsWith("cliente") ? "disparo" : "aviso", "sistema", ({ cliente_lembrete: "Aviso ao cliente: lembrete do prazo de retirada", cliente_final: "Aviso ao cliente: prazo vencido, peça vai para desmanche", equipe: "Aviso à vendedora e gerentes: recolher a via e lançar ABANDONADA", diretoria: "Aviso à diretoria: cobrar da loja a retirada da via" } as any)[k] || k);
+    if (ab.em) push(ab.em, "status", ab.por, "Via ABANDONADA: pago " + brl(ab.pago) + " − taxa de perda " + brl(ab.taxa) + " = crédito ao cliente " + brl(ab.credito) + (Number(ab.creditoOuro) > 0 ? " (crédito de ouro " + brl(ab.creditoOuro) + " não volta: o ouro retorna à diretoria)" : ""));
+  }
+  if (v.recebidoEm) push(v.recebidoEm, "status", v.recebidoPor, "Entregue ao cliente");
+  if (v.canceladoEm) push(v.canceladoEm, "status", v.canceladoPor, "Cancelada" + (v.motivoCancelamento ? " — motivo: " + v.motivoCancelamento : ""));
+  if (v.posVendaEnviadoEm) push(v.posVendaEnviadoEm, "disparo", v.posVendaPor || "sistema", "Pós-venda enviado");
+  for (const [k, quando] of Object.entries((v.msgEnviadas && typeof v.msgEnviadas === "object") ? v.msgEnviadas : {})) push(quando, "disparo", "", "Mensagem marcada como enviada: " + (ST_NOME[k] || k));
+  return ev;
 }
 async function lerVia(tipo: string, id: string) {
   const t = TABELA[tipo];
@@ -399,6 +433,20 @@ Deno.serve(async (req) => {
         if (!l) continue;
         ev.push({ em: l.confirmadoEm, tipo: "cliente", quem: "CLIENTE", texto: (l.ciente ? "CIENTE registrado pelo cliente" : "Visualização registrada automaticamente") + " — situação: " + String(l.status || "").replace("|retirada", " (após retirada)") + (l.ip ? " · IP " + l.ip : "") + (l.ua ? " · aparelho: " + l.ua : "") });
       }
+      // 22/11: HISTÓRICO COMPLETO da via — também o que fica no próprio registro (pagamentos, status da Oficina, local da peça, avisos internos,
+      //        mensagens enviadas/programadas, prazo de retirada/abandono) e a fila de disparo (marketing_fila / disparo_envios).
+      for (const e of eventosDoRegistro(via)) ev.push(e);
+      try {
+        const { data: fila } = await admin.from("marketing_fila").select("criado_em,enviado_em,status,rotulo,botao,erro,criado_por,tipo").eq("registro_id", id).order("criado_em", { ascending: true }).limit(100);
+        for (const f of (fila || [])) {
+          const nome = f.rotulo || f.botao || f.tipo || "mensagem";
+          ev.push({ em: f.criado_em, tipo: "disparo", quem: f.criado_por || "sistema", texto: "WhatsApp na fila: " + nome });
+          if (f.enviado_em) ev.push({ em: f.enviado_em, tipo: "disparo", quem: "sistema", texto: "WhatsApp ENVIADO ao cliente: " + nome });
+          else if (f.status === "falhou" || f.status === "cancelado") ev.push({ em: f.criado_em, tipo: "disparo", quem: "sistema", texto: "WhatsApp " + f.status.toUpperCase() + ": " + nome + (f.erro ? " — " + String(f.erro).slice(0, 120) : "") });
+        }
+        const { data: env } = await admin.from("disparo_envios").select("em,tipo,origem,modelo,vendedora").eq("registro_id", id).order("em", { ascending: true }).limit(100);
+        for (const d of (env || [])) ev.push({ em: d.em, tipo: "disparo", quem: d.vendedora || "sistema", texto: "WhatsApp entregue à Meta/aparelho" + (d.modelo ? " — modelo " + d.modelo : "") + (d.origem ? " (" + d.origem + ")" : "") });
+      } catch (_) { /* tabelas opcionais */ }
       const av = await lerAval(tipo, id);
       if (av) {
         ev.push({ em: av.criado_em, tipo: "cliente", quem: "CLIENTE", texto: av.pulou ? "Pulou a avaliação do atendimento" : "AVALIOU o atendimento de " + (av.atendente || "—") + ": " + av.estrelas + " estrela(s)" + (av.comentario ? " — \"" + av.comentario + "\"" : "") });

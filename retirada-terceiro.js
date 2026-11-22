@@ -164,7 +164,7 @@
     var r=await chamar({ acao:'comprovante', tipo:o.tipo, id:o.id, senha:o.senha, por:o.usuario });
     if(r.error){ box.innerHTML='<h3>Comprovante da via</h3><div class="rt-msg err">'+esc(r.error)+'</div><div class="rt-row"><button class="rt-btn" data-x>Fechar</button></div>'; box.querySelector('[data-x]').onclick=fechar; return; }
     var v=r.via||{}, ev=r.eventos||[];
-    var corpo='<h3>'+ic('documento',18)+' Comprovante da via'+(v.via?' '+esc(v.via):'')+'</h3>'
+    var corpo='<h3>'+ic('documento',18)+' Histórico da via'+(v.via?' '+esc(v.via):'')+'</h3>'
       +'<div class="rt-sub">'+esc(v.cliente||'')+(v.loja?' · '+esc(v.loja):'')+' · situação atual: <b>'+esc(v.status||'—')+'</b> · emitido em '+dh(r.geradoEm)+(r.por?' por '+esc(r.por):'')+'</div>'
       +'<div class="rt-hist" style="max-height:none;border-top:0;padding-top:0;">'+(ev.length?ev.map(function(e){ return '<div style="padding:6px 0;border-bottom:1px solid var(--t-line,#dde);"><b>'+dh(e.em)+'</b> · <span style="text-transform:uppercase;font-size:11px;">'+esc(e.tipo)+'</span>'+(e.quem?' · '+esc(e.quem):'')+'<br>'+esc(e.texto)+'</div>'; }).join(''):'<div>Nenhum registro encontrado.</div>')+'</div>'
       +'<div class="rt-row" style="justify-content:flex-end;margin-top:12px;"><button class="rt-btn" data-print>Imprimir / salvar em PDF</button><button class="rt-btn" data-x>Fechar</button></div>';

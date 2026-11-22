@@ -15,7 +15,7 @@ module.exports = { casos: [
   } },
   { nome: 'Sugestões pedem Utilidade; modelos-api aceita a categoria', bug: 'categoria herdada Marketing', rodar: async ({ t, ler }) => {
     const w = ler('modelos-whatsapp.html');
-    t.ok(/const SUG_CAT = \{ orcamento:'UTILITY', posvenda:'UTILITY', aniversario:'MARKETING' \}/.test(w) && /op:'salvar_rascunho', chave, corpo, categoria/.test(w), 'tela manda a categoria do texto sugerido');
+    t.ok(/const SUG_CAT = \{ orcamento:'UTILITY', posvenda:'UTILITY', aniversario:'MARKETING'[ ,][^}]*\}/.test(w) && /op:'salvar_rascunho', chave, corpo, categoria/.test(w), 'tela manda a categoria do texto sugerido');
     t.ok(/\["UTILITY", "MARKETING"\]\.includes\(String\(body\.categoria/.test(ler('modelos-api.ts')), 'servidor usa a categoria pedida');
   } },
   { nome: 'Cartão: logo original e sem o botão Falar com a Vilaça', bug: 'pedido do Felipe', rodar: async ({ t, ler }) => {

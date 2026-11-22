@@ -1,3 +1,4 @@
+// acompanhamento-auto v28 (22/11/2026, pedido do Felipe): PRAZO DE RETIRADA do pedido PRONTO. Sem pagamento: aviso ao cliente com 15 dias e aviso final (desmanche) com 30. Com pagamento (parcial ou total): aviso com 30 e aviso final com 60, já com o crédito (pago − 20% de perda). No vencimento: tarefa na Agenda para a vendedora e os gerentes da loja (recolher a via e lançar ABANDONADA); 15 dias depois sem baixa: tarefa para a diretoria. Conta a partir do PRONTO (pedidos que já estavam prontos contam a partir de 22/11). Modelos os_retirada_lembrete / os_retirada_final só saem pela API oficial depois de aprovados (Reforma: chip). Tudo fica em payload.abandono (Histórico da via).
 // acompanhamento-auto v27 (22/11/2026, pedido do Felipe): pedido que fica PRONTO com PAGAMENTO EM ABERTO (saldo a pagar > 0) recebe o aviso de pronto SOZINHO (modelo pedido_pronto_acompanhamento). Pedido quitado continua só pelo botão (ou prontoAuto=true). Vale só para pedidos que ficaram prontos a partir de PRONTO_SALDO_DESDE (não dispara os antigos). Saldo pela mesma regra da tela (saldoAbertoOS = valorAReceberDe + fiado já pago).
 // acompanhamento-auto v26 (22/11/2026): pós-venda de venda da Reforma Joias/Ecommerce (peça enviada depois) só depois de 25 dias (pv.diasEnvio), não 7.
 // acompanhamento-auto v25 (22/11/2026): orçamento com MODELO POR SITUAÇÃO (orcModelo) — pronto / encerrado / aprovado nos modelos próprios de Utilidade (nº do orçamento + loja + botão "Ver orçamento") só depois que a Meta aprovar; lembretes (Ação de fixação, Prorrogado) sempre no modelo de lembrete (orc_lembrete, Marketing). Sem modelo próprio aprovado, cai no genérico "orcamento" como antes.
@@ -349,7 +350,29 @@ async function fiadoPagoOS(o: any): Promise<number> {
     return Math.min(Number(d.valorPago) || 0, noPedido || (Number(d.valor) || 0));
   } catch (_) { return 0; }
 }
-type Item = { tipo: "orcamento" | "posvenda" | "os_pronto" | "os_posvenda"; tabela: string; id: string; reg: any; passo: number; tel: string | null; texto: string; statusDestino: string; nomeAcao: string; pulados: number; agenda: any };
+// v28: prazo de retirada (abandono). Valor PAGO pelo cliente (mesma regra da baixa ABANDONADA no painel-ordens: recebido + crédito comum usado + fiado quitado; crédito de ouro não conta).
+const ABANDONO_DESDE = Date.parse("2026-11-22T15:00:00Z");
+const TAXA_PERDA = 0.20;
+function pagoDiretoOS(o: any): number {
+  return (Array.isArray(o.pagamentos) ? o.pagamentos : []).filter((p: any) => p && p._modo !== "editar").reduce((a: number, p: any) => {
+    if (p.formaId === "__fiado" || p.formaId === "__cashback") return a;
+    if (p.formaId === "__credito") return a + Math.max(0, (Number(p.valor) || 0) - (Number(p.creditoOuro) || 0));
+    return a + (Number(p.valor) || 0);
+  }, 0);
+}
+function prazoAbandono(o: any, hoje: string, pago: number) {
+  const base = Math.max(Number(o.statusEm || 0), ABANDONO_DESDE);
+  const comPag = pago > 0.009, lembrete = comPag ? 30 : 15, limite = comPag ? 60 : 30;
+  const diaBase = diaDe(base);
+  const somaDias = (n: number) => { const d = new Date(Date.parse(diaBase + "T12:00:00Z") + n * 86400000); return d.toISOString().slice(0, 10); };
+  const credito = Math.round(pago * (1 - TAXA_PERDA) * 100) / 100;
+  return { base, comPag, lembrete, limite, dias: diasEntre(diaBase, hoje), diaBase, diaLimite: somaDias(limite), diaDiretoria: somaDias(limite + 15), credito };
+}
+const dataBR = (dia: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dia || "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : String(dia || ""); };
+function fraseCreditoAbandono(pago: number, credito: number) {
+  return pago > 0.009 ? `Do valor pago, ${fmtBRL(credito)} ficará como crédito no seu cadastro (já descontada a taxa de 20% de perda da fabricação).` : "Como não houve pagamento, não há valor a devolver.";
+}
+type Item = { etapa?: string; tipo: "orcamento" | "posvenda" | "os_pronto" | "os_posvenda" | "os_abandono"; tabela: string; id: string; reg: any; passo: number; tel: string | null; texto: string; statusDestino: string; nomeAcao: string; pulados: number; agenda: any };
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -466,17 +489,86 @@ Deno.serve(async (req: Request) => {
         if (!data || data.length < 1000) break;
       }
     }
+    // v28: PRAZO DE RETIRADA — todos os pedidos DISPONÍVEL PARA RETIRADA (sem limite de data de atualização)
+    if (po.auto && po.desde) {
+      const users: any[] = Array.isArray(cfg.users) ? cfg.users : [];
+      const idUser = (u: any) => String(u.funcionarioId || u.id || "");
+      const tarefa = async (titulo: string, descricao: string, participantes: string[], lojaId: string) => {
+        const parts = [...new Set(participantes.filter(Boolean))]; if (!parts.length || dryRun) return 0;
+        const agoraIso = new Date().toISOString();
+        const { data: ult } = await admin.from("agenda_tarefas").select("ordem").eq("coluna", "a_fazer").order("ordem", { ascending: false }).limit(1);
+        await admin.from("agenda_tarefas").insert({ titulo, descricao, tipo: "compartilhada", loja_id: null, participantes: parts, participantes_em: Object.fromEntries(parts.map((id) => [id, agoraIso])), cientes: {},
+          classificacao: "urgente", coluna: "a_fazer", data: agora.dia, hora: null, ordem: ((ult && ult[0] && Number(ult[0].ordem)) || 0) + 1, criador_id: "sistema", criador_nome: "SISTEMA (prazo de retirada)", origem: "abandono", updated_at: agoraIso });
+        return parts.length;
+      };
+      for (let from = 0; from < 20000; from += 1000) {
+        const { data } = await admin.from("ordens_servico").select("id,payload").eq("payload->>status", "pronto").range(from, from + 999);
+        for (const r of (data || [])) {
+          const o = r.payload || {};
+          if (o.rascunho || o.status !== "pronto") continue;
+          const ab = o.abandono || {}, et = ab.etapas || {};
+          let pago = pagoDiretoOS(o); if (o.fiadoDebitoId) pago += await fiadoPagoOS(o);
+          const pz = prazoAbandono(o, agora.dia, pago);
+          const via = String(o.codigoVia || o.via || "");
+          // avisos internos (não dependem de WhatsApp)
+          const marcar: Record<string, string> = {};
+          if (pz.dias >= pz.limite && !et.equipe) {
+            const lojaId = String(o.lojaId || "");
+            const gerentes = users.filter((u) => u && !u.bloqueado && u.nivel === "gerente" && Array.isArray(u.lojas) && u.lojas.includes(lojaId)).map(idUser);
+            const vend = users.filter((u) => u && !u.bloqueado && ((o.vendedoraId && String(u.funcionarioId || "") === String(o.vendedoraId)) || (o.vendedora && [u.nome, u.apelido].some((n: any) => n && semAcento(n) === semAcento(o.vendedora))))).map(idUser).slice(0, 1);
+            await tarefa(`Recolher a via ${via} (prazo de retirada vencido)`, `O cliente ${o.cliente || ""} não retirou o pedido ${via} no prazo (${pz.limite} dias desde ${dataBR(pz.diaBase)}). Recolha a peça, lance o status ABANDONADA no Pedido e entregue a peça à diretoria. ${pz.comPag ? "Na baixa, o sistema lança ao cliente o crédito de " + fmtBRL(pz.credito) + " (pago − 20%)." : "O pedido não tem pagamento."}`, [...vend, ...gerentes], lojaId);
+            marcar.equipe = new Date().toISOString();
+          }
+          if (pz.dias >= pz.limite + 15 && !et.diretoria) {
+            const dir = users.filter((u) => u && !u.bloqueado && u.nivel === "diretoria").map(idUser);
+            await tarefa(`Cobrar da loja a via ${via} abandonada`, `Passaram 15 dias do fim do prazo de retirada do pedido ${via} (${o.cliente || ""}) e a loja ainda não lançou ABANDONADA nem entregou a peça. Cobre a retirada da via da loja.`, dir, String(o.lojaId || ""));
+            marcar.diretoria = new Date().toISOString();
+          }
+          if (Object.keys(marcar).length && !dryRun) {
+            const { data: row } = await admin.from("ordens_servico").select("payload").eq("id", r.id).maybeSingle();
+            const reg = row && row.payload;
+            if (reg && reg.status === "pronto") {
+              reg.abandono = { ...(reg.abandono || {}), base: pz.base, pagoPrevisto: pago, creditoPrevisto: pz.credito, etapas: { ...((reg.abandono && reg.abandono.etapas) || {}), ...marcar } };
+              (reg.acoesLog = reg.acoesLog || []).push(...Object.keys(marcar).map((k) => ({ em: marcar[k], passo: "abandono_" + k, nome: k === "equipe" ? "Prazo vencido: tarefa para vendedora e gerentes (recolher e lançar ABANDONADA)" : "15 dias sem baixa: tarefa para a diretoria", por: "sistema", via: "agenda", auto: true })));
+              await admin.from("ordens_servico").update({ payload: reg, updated_at: new Date().toISOString() }).eq("id", r.id);
+            }
+          }
+          // avisos ao cliente (WhatsApp): o final substitui o lembrete se os dois já venceram
+          let etapa = "";
+          if (pz.dias >= pz.limite && !et.cliente_final) etapa = "cliente_final";
+          else if (pz.dias >= pz.lembrete && pz.dias < pz.limite && !et.cliente_lembrete) etapa = "cliente_lembrete";
+          if (!etapa) continue;
+          const chave = etapa === "cliente_final" ? "os_retirada_final" : "os_retirada_lembrete";
+          const md = await modeloAtivo(chave);
+          if (String(o.lojaId || "") !== "loja_rj" && (md as any).status !== "APPROVED") continue;   // espera a Meta aprovar o modelo
+          const link = `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(r.id)}`;
+          const texto = etapa === "cliente_final"
+            ? `Olá, {cliente}!${NL}${NL}O prazo para retirar o seu pedido ${via} terminou em ${dataBR(pz.diaLimite)}. Conforme o termo da via, a peça será destinada a desmanche para cobrir os custos. ${fraseCreditoAbandono(pago, pz.credito)}${NL}${NL}Detalhes no link:${NL}${link}`
+            : `Olá, {cliente}!${NL}${NL}Seu pedido ${via} está pronto para retirada desde ${dataBR(pz.diaBase)}. Pedimos que retire até ${dataBR(pz.diaLimite)}. Após essa data, conforme o termo da via, a peça será destinada a desmanche para cobrir os custos.${NL}${NL}Detalhes no link:${NL}${link}`;
+          cand.push({ tipo: "os_abandono", etapa, tabela: "ordens_servico", id: r.id, reg: o, passo: etapa === "cliente_final" ? 1 : 0, tel: celular(o.telefone), pulados: 0, statusDestino: "", nomeAcao: etapa === "cliente_final" ? "aviso final de retirada (desmanche)" : "lembrete do prazo de retirada", agenda: o.autoAgenda || null,
+            texto: preencherOS(texto, cfg, o) });
+        }
+        if (!data || data.length < 1000) break;
+      }
+    }
     if (dryRun) return json({ ok: true, simulacao: true, enviaria: cand.map((f) => ({ tipo: f.tipo, id: f.id, cliente: f.reg.cliente, acao: f.nomeAcao, passo: f.passo + 1, pulados: f.pulados, statusDestino: f.statusDestino, tel: f.tel ? "…" + f.tel.slice(-4) : "SEM TELEFONE VÁLIDO", texto: f.texto })), fecharia: fechar });
 
     const FL = await oficialFlags();
     const INST_D = await instanciaDisparo();
     const instanciaDe = (lojaId: string) => (lojaId === "loja_rj" ? "reformajoias" : INST_D);
-    const nuvem = (it: Item) => FL.tudo && instanciaDe(String(it.reg.lojaId || "")) === INST_D && (it.tipo === "posvenda" || it.tipo === "os_posvenda" || (it.tipo === "orcamento" && FL.orc) || (it.tipo === "os_pronto" && FL.pronto));
+    const nuvem = (it: Item) => FL.tudo && instanciaDe(String(it.reg.lojaId || "")) === INST_D && (it.tipo === "posvenda" || it.tipo === "os_posvenda" || (it.tipo === "orcamento" && FL.orc) || (it.tipo === "os_pronto" && FL.pronto) || it.tipo === "os_abandono");
     const reviewDe = (lojaId: string) => { const l = (cfg.lojas || []).find((x: any) => x && x.id === lojaId) || (cfg.lojas || []).find((x: any) => x && x.id === "loja_mc"); const g = String((l && l.googleReviewUrl) || "").match(/g[.]page[/]r[/](.+)$/); return g ? g[1] : ""; };
     const modeloRobot = async (it: Item, reg: any): Promise<{ nome: string; params: string[]; botao?: string } | null> => {
       // v23: {{2}} = texto do pós-venda (só vai se o modelo ativo tiver {{2}}) e botão Google da loja
       if (it.tipo === "posvenda" || it.tipo === "os_posvenda") return { nome: "pos_venda_garantia", params: [primeiroNome(reg.cliente), miolo(it.texto) || "Queremos agradecer a oportunidade de fazer parte de um momento especial com a sua nova joia."], botao: reviewDe(String(reg.lojaId || "")) };
       if (it.tipo === "orcamento") return await orcModelo(cfg, reg, it.statusDestino, it.id);   // v25: modelo da situação (v24: frase curta no genérico)
+      if (it.tipo === "os_abandono") {   // v28
+        let pago = pagoDiretoOS(reg); if (reg.fiadoDebitoId) pago += await fiadoPagoOS(reg);
+        const pz = prazoAbandono(reg, agora.dia, pago), via = String(reg.codigoVia || reg.via || "");
+        return it.etapa === "cliente_final"
+          ? { nome: "os_retirada_final", params: [primeiroNome(reg.cliente), via, nomeDaLoja(cfg, reg), dataBR(pz.diaLimite), fraseCreditoAbandono(pago, pz.credito)], botao: encodeURIComponent(it.id) }
+          : { nome: "os_retirada_lembrete", params: [primeiroNome(reg.cliente), via, nomeDaLoja(cfg, reg), dataBR(pz.diaBase), dataBR(pz.diaLimite)], botao: encodeURIComponent(it.id) };
+      }
       if (it.tipo === "os_pronto") return { nome: "pedido_pronto_acompanhamento", params: [primeiroNome(reg.cliente), bonito(reg.vendedora || "") || "nossa equipe", nomeDaLoja(cfg, reg), `https://vilaca.app/acompanhar.html?id=${encodeURIComponent(it.id)}`] };
       return null;
     };
@@ -553,6 +645,7 @@ Deno.serve(async (req: Request) => {
       if (f.tipo === "posvenda" && reg.posVendaEnviadoEm) continue;
       if (f.tipo === "os_pronto" && (reg.status !== "pronto" || (reg.msgEnviadas && reg.msgEnviadas.pronto))) continue;
       if (f.tipo === "os_posvenda" && (reg.status !== "entregue" || reg.posVendaEnviadoEm)) continue;
+      if (f.tipo === "os_abandono" && (reg.status !== "pronto" || (reg.abandono && reg.abandono.etapas && reg.abandono.etapas[f.etapa || ""]))) continue;
       if (f.tel && !viaNuvem && !(await aberta(inst))) continue;
       let motivoSem = "", ok = false, status = 0;
       if (!f.tel) motivoSem = "sem celular válido";
@@ -607,6 +700,11 @@ Deno.serve(async (req: Request) => {
       } else if (f.tipo === "os_pronto") {
         if (!motivoSem) { reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas.pronto = agoraIso; }
         (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: "os_pronto", nome: "Aviso de PRONTO", por: "sistema", via: motivoSem ? "sem mensagem (" + motivoSem + ")" : "whatsapp", auto: true });
+      } else if (f.tipo === "os_abandono") {   // v28
+        let pago = pagoDiretoOS(reg); if (reg.fiadoDebitoId) pago += await fiadoPagoOS(reg);
+        const pz = prazoAbandono(reg, agora.dia, pago);
+        reg.abandono = { ...(reg.abandono || {}), base: pz.base, pagoPrevisto: pago, creditoPrevisto: pz.credito, limite: pz.diaLimite, etapas: { ...((reg.abandono && reg.abandono.etapas) || {}), [f.etapa || "cliente_lembrete"]: agoraIso } };
+        (reg.acoesLog = reg.acoesLog || []).push({ em: agoraIso, passo: "abandono_" + f.etapa, nome: f.etapa === "cliente_final" ? "Aviso final ao cliente: prazo vencido, desmanche" + (pago > 0.009 ? " (crédito " + fmtBRL(pz.credito) + ")" : "") : "Lembrete ao cliente: retirar até " + dataBR(pz.diaLimite), por: "sistema", via: motivoSem ? "sem mensagem (" + motivoSem + ")" : "whatsapp", auto: true });
       } else if (f.tipo === "os_posvenda") {
         reg.posVendaEnviadoEm = agoraIso; reg.posVendaPor = motivoSem ? "sistema (sem mensagem: " + motivoSem + ")" : "sistema";
         if (!motivoSem) { reg.msgEnviadas = reg.msgEnviadas || {}; reg.msgEnviadas.posvenda = agoraIso; }

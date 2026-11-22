@@ -60,6 +60,10 @@
       var mdPr = corpoDe(modelos, 'pedido_pronto');
       if(mdPr) lista.push({ grupo:'Pedido', titulo:'Pedido — PRONTO com pagamento em aberto (automático)', quando:'Sai sozinho quando o pedido fica PRONTO e ainda falta pagar (9h–20h). Pedido já quitado: só pelo botão.', modelo: mdPr, texto: preencherModelo(mdPr.corpo, [nome1, vend, loja, base() + PAGINAS.os.url]), pagina:'os' });
       if(mdPr) lista.push({ grupo:'Pedido', titulo:'Pedido — botão do WhatsApp com o pedido DISPONÍVEL PARA RETIRADA', quando:'Só quando alguém toca no botão com o pedido em Disponível para retirada (modelo próprio).', modelo: mdPr, texto: preencherModelo(mdPr.corpo, [nome1, vend, loja, base() + PAGINAS.os.url]), pagina:'os' });
+      // 22/11: prazo de retirada do pedido pronto (automático; modelos próprios de Utilidade)
+      var mdRl = corpoDe(modelos, 'os_retirada_lembrete'), mdRf = corpoDe(modelos, 'os_retirada_final');
+      if(mdRl && mdRl.corpo) lista.push({ grupo:'Pedido', titulo:'Pedido — lembrete do prazo de retirada (automático)', quando:'Sai sozinho com 15 dias de PRONTO (sem pagamento) ou 30 dias (com pagamento). Só depois que a Meta aprovar o modelo.', modelo: mdRl, texto: preencherModelo(mdRl.corpo, [nome1, 'JB12P', loja, hojeMais(-15), hojeMais(15)]), pagina:'os' });
+      if(mdRf && mdRf.corpo) lista.push({ grupo:'Pedido', titulo:'Pedido — prazo vencido, desmanche (automático)', quando:'Sai sozinho com 30 dias (sem pagamento) ou 60 dias (com pagamento). Também abre tarefa na Agenda para a vendedora e os gerentes; 15 dias depois, para a diretoria.', modelo: mdRf, texto: preencherModelo(mdRf.corpo, [nome1, 'JB12P', loja, hojeMais(0), 'Do valor pago, ' + brl(estado.valor * 0.8) + ' ficará como crédito no seu cadastro (já descontada a taxa de 20% de perda da fabricação).']), pagina:'os' });
       // ORÇAMENTO
       var STs = Array.isArray(cfg.statusOrcamento) ? cfg.statusOrcamento : [];
       var passos = (cfg.orcamentoAcoes && Array.isArray(cfg.orcamentoAcoes.passos)) ? cfg.orcamentoAcoes.passos : [];

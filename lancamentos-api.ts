@@ -220,7 +220,7 @@ function calcularAutoCompleto(mes: string, base: any) {
   }
   for (const o of base.ordens) {
     if (!o || o.status === "rascunho") continue;
-    const cancelada = /^cancel/.test(String(o.status || ""));
+    const cancelada = /^cancel|^abandon/.test(String(o.status || ""));   // 22/11: via ABANDONADA sai da venda no mês da baixa
     const naVolta = o.momentoPagamento === "na_volta";
     const dataEntrega = o.status === "entregue" ? dataLocal(o.recebidoEm) : "";
     const dataCriacao = dataLocal(o.criadoEm) || dataLocal(o.data);
@@ -230,7 +230,7 @@ function calcularAutoCompleto(mes: string, base: any) {
       if (dt) { somar(o, "venda", dt, valorPg(p), "os"); houveEntrada = true; }
     }
     if (cancelada && houveEntrada) {
-      const saiu = o.caixaSaidaCancelamento != null && o.caixaSaidaCancelamento !== "" ? nb(o.caixaSaidaCancelamento) : recebido(o);
+      const saiu = o.status === "abandonada" ? recebido(o) : (o.caixaSaidaCancelamento != null && o.caixaSaidaCancelamento !== "" ? nb(o.caixaSaidaCancelamento) : recebido(o));   // abandonada: perde o valor integral
       somar(o, "devolucao", dataLocal(o.canceladoEm), saiu, "os");
     }
   }

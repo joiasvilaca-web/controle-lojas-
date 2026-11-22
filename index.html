@@ -4533,10 +4533,26 @@ function abrirCreditoModal(cli){
       </div>`:''}
     <div class="modal-actions">
       <button class="btn btn-ghost" id="crFechar">Fechar</button>
+      ${currentUser && currentUser.nivel==='diretoria' && Number(cli.credito)>0.009 ? '<button class="btn" id="crDevolverDir" title="O dinheiro sai da diretoria, não do caixa da loja">Devolver em dinheiro (diretoria)</button>' : ''}
       <button class="btn btn-accent" id="crAdicionar">Adicionar crédito</button>
     </div>
   `);
   document.getElementById('crFechar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
+  /* 22/11 (Felipe): crédito de via ABANDONADA (ou outro) pago em dinheiro pela DIRETORIA — não passa pelo caixa da loja; fica só no histórico do cliente. */
+  const btDev = document.getElementById('crDevolverDir');
+  if(btDev) btDev.addEventListener('click', async ()=>{
+    const saldo = Number(cli.credito)||0;
+    const txt = prompt('Valor devolvido ao cliente em dinheiro pela DIRETORIA (máximo ' + cadBrl(saldo) + '). Não entra no caixa da loja:', String(saldo.toFixed(2)).replace('.', ','));
+    if(txt==null) return;
+    const valor = Math.round((parseFloat(String(txt).replace(/\./g,'').replace(',','.'))||0)*100)/100;
+    if(!(valor>0) || valor>saldo+0.004){ showToast('Valor inválido (entre R$ 0,01 e o saldo).'); return; }
+    const obs = (prompt('Observação (ex.: pago em dinheiro pelo Felipe em ' + cadData(hojeLocalIso()) + '):')||'').trim();
+    cli.credito = Math.round((saldo - valor)*100)/100;
+    (cli.creditoMovimentos = cli.creditoMovimentos || []).push({ data:hojeLocalIso(), valor:-valor, tipo:'devolucao_diretoria', obs:'Devolvido em dinheiro pela diretoria (fora do caixa)' + (obs?' — '+obs:''), autorizadoPor:currentUser.nome });
+    await salvarClienteCadastro(cli);
+    showToast('Devolução registrada no histórico do cliente (sem lançamento no caixa).');
+    closeModal(); openClienteModalCadastro(cli);
+  });
   document.getElementById('crAdicionar').addEventListener('click', async ()=>{
     const valor=parseFloat(document.getElementById('crValor').value);
     const senha=document.getElementById('crSenha').value;

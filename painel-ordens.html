@@ -231,6 +231,7 @@
   .st-pronto{background:var(--ok-soft);color:var(--ok);}
   .st-entregue{background:var(--st-neutro-soft);color:var(--st-neutro);}
   .st-cancelado{background:var(--danger-soft);color:var(--danger);}
+  .st-abandonada{background:#3a2a1f;color:#ffd9b8;}
   .st-rascunho{background:transparent;color:var(--ink-soft);border:1px dashed var(--line-strong);}
   /* select de status com cara de selo (o tema dá estilo de campo a todo select: aqui precisa de mais peso) */
   /* o tema dá estilo de campo a todo select com seletor muito forte (:is com vários :not) — aqui é preciso !important */
@@ -250,6 +251,7 @@
   html[data-ds] select.status-oficina_pronto{background-color:var(--info-soft) !important;color:var(--info) !important;}
   html[data-ds] select.status-pronto{background-color:var(--ok-soft) !important;color:var(--ok) !important;}
   html[data-ds] select.status-cancelado{background-color:var(--danger-soft) !important;color:var(--danger) !important;}
+  html[data-ds] select.status-abandonada{background-color:#3a2a1f !important;color:#ffd9b8 !important;}
   html[data-ds] select.status-entregue{background-color:var(--st-neutro-soft) !important;color:var(--st-neutro) !important;}
 
   /* ---------- LISTA DE PEDIDOS ---------- */
@@ -761,20 +763,20 @@ function ordensDaAgenda(){
   return orders;
 }
 
-const STATUS = { AGUARDANDO:'aguardando', ENVIADO_FABRICA:'enviado_fabrica', EM_PRODUCAO:'em_producao', PENDENCIA:'pendencia', OFICINA_PRONTO:'oficina_pronto', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho' };
+const STATUS = { AGUARDANDO:'aguardando', ENVIADO_FABRICA:'enviado_fabrica', EM_PRODUCAO:'em_producao', PENDENCIA:'pendencia', OFICINA_PRONTO:'oficina_pronto', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho', ABANDONADA:'abandonada' };
 // enviado_fabrica = a via está na Oficina, em processo (fabricação/serviço).
 // oficina_pronto ("Fábrica pronto") = a Oficina terminou (card OFICINA); a loja ainda confere e marca Pronto.
 /** Status que ainda ocupam vaga da agenda (trabalho por fazer na Oficina). */
 const STATUS_OCUPA_VAGA = ['aguardando','enviado_fabrica','em_producao','pendencia'];
 /* Nomes (sempre em MAIÚSCULAS). As chaves gravadas NÃO mudam: aguardando = APROVADO, oficina_pronto = LIBERADO FÁBRICA. */
-const STATUS_ORDEM = ['rascunho','aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto','pronto','entregue','cancelado'];
-const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'LIBERADO FÁBRICA', pronto:'DISPONÍVEL PARA RETIRADA', entregue:'ENTREGUE', cancelado:'CANCELADO' };
+const STATUS_ORDEM = ['rascunho','aguardando','enviado_fabrica','em_producao','pendencia','oficina_pronto','pronto','entregue','cancelado','abandonada'];
+const STATUS_NOMES = { rascunho:'RASCUNHO', aguardando:'APROVADO', enviado_fabrica:'ENVIADO P/ FÁBRICA', em_producao:'EM PRODUÇÃO', pendencia:'PENDÊNCIA', oficina_pronto:'LIBERADO FÁBRICA', pronto:'DISPONÍVEL PARA RETIRADA', entregue:'ENTREGUE', cancelado:'CANCELADO' , abandonada:'ABANDONADA' };
 /* Quem pode colocar cada status (10/11, Felipe):
    Vendedora e Gerente → APROVADO, ENVIADO P/ FÁBRICA, PRONTO, ENTREGUE e CANCELADO — e NÃO mudam o status de via EM PRODUÇÃO ou PENDÊNCIA (só a Oficina; o resto da via continua editável);
    Oficina → EM PRODUÇÃO / PENDÊNCIA / LIBERADO FÁBRICA, e só enquanto a via está ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA; Diretoria → todos. */
 const STATUS_LOJA = ['aguardando','enviado_fabrica','pronto','entregue','cancelado'];
 const STATUS_TRAVADOS_LOJA = ['em_producao','pendencia'];
-const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'], gerente:STATUS_LOJA, vendedora:STATUS_LOJA };
+const STATUS_POR_NIVEL = { oficina:['em_producao','pendencia','oficina_pronto'], gerente:STATUS_LOJA.concat('abandonada'), vendedora:STATUS_LOJA };   // 22/11: ABANDONADA só gerente e diretoria
 function statusPermitidos(){
   const n = currentUser && currentUser.nivel;
   if(n==='diretoria') return STATUS_ORDEM;
@@ -785,13 +787,17 @@ function viaTravadaParaLoja(o){ const n = currentUser && currentUser.nivel; retu
 /** De um status para outro: respeita o que o perfil pode colocar e os status que travam a troca. */
 function podeMudarStatus(de, para){
   if(de===para) return true;
+  if(de==='abandonada') return false;   // 22/11: via abandonada não volta (o crédito já foi lançado ao cliente)
+  if(para==='abandonada' && de!=='pronto') return false;   // só pedido DISPONÍVEL PARA RETIRADA vai para ABANDONADA
   if(!podeColocarStatus(para)) return false;
   const n = currentUser && currentUser.nivel;
   if(n==='oficina') return ['enviado_fabrica','em_producao','pendencia'].includes(de);
   if(n==='gerente' || n==='vendedora') return !STATUS_TRAVADOS_LOJA.includes(de);
   return true;
 }
-function motivoSemMudarStatus(de){
+function motivoSemMudarStatus(de, para){
+  if(de==='abandonada') return 'Via ABANDONADA não muda mais de status (o crédito já foi lançado ao cliente).';
+  if(para==='abandonada') return de==='pronto' ? 'Só gerente ou diretoria lança a via como ABANDONADA.' : 'Só pedido DISPONÍVEL PARA RETIRADA pode ir para ABANDONADA.';
   if(currentUser && currentUser.nivel==='oficina') return 'A Oficina só muda o status de via ENVIADA P/ FÁBRICA, EM PRODUÇÃO ou PENDÊNCIA.';
   if(STATUS_TRAVADOS_LOJA.includes(de)) return 'Via ' + statusLabel(de) + ': só a Oficina muda o status (o resto da via você pode editar).';
   return 'Seu perfil não pode colocar esse status.';
@@ -1708,6 +1714,72 @@ async function abrirCancelarOrdem(order){
     closeModal();
     renderView();
   });
+}
+/* ============================================================
+   22/11 (Felipe) — VIA ABANDONADA (pedido pronto que o cliente não buscou no prazo)
+   - Só gerente/diretoria, só de DISPONÍVEL PARA RETIRADA. A peça é recolhida e entregue à diretoria (desmanche).
+   - Pago = dinheiro/pix/cartão/ouro recebidos + crédito comum usado + fiado já quitado. Taxa de perda da fabricação = 20% do pago.
+     O resto (80%) vira CRÉDITO no cadastro do cliente, SEM movimento no caixa (o valor já foi recolhido à diretoria).
+   - Crédito de OURO usado na via não volta (o ouro retorna à diretoria). Débito de fiado em aberto é apagado. Cashback ganho é estornado.
+   - A venda sai da meta/comissão da loja e da vendedora no mês da baixa (canceladoEm = data da baixa; valor = pago).
+   ============================================================ */
+const TAXA_PERDA_ABANDONO = 0.20;
+async function calculoAbandonoOrdem(order){
+  const r2 = n => Math.round((Number(n)||0)*100)/100;
+  const direto = valorRecebidoDe(order);
+  const credComum = (order.pagamentos||[]).filter(p=>p && p.formaId==='__credito' && p._modo!=='editar').reduce((a,p)=> a + Math.max(0, (Number(p.valor)||0) - (Number(p.creditoOuro)||0)), 0);
+  const fiadoPago = order.fiadoDebitoId ? await fiadoPagoDaOrdem(order) : 0;
+  const pago = r2(direto + credComum + fiadoPago), taxa = r2(pago * TAXA_PERDA_ABANDONO);
+  return { pago, taxa, credito: r2(pago - taxa), creditoOuro: r2(creditoOuroDe(order)), direto: r2(direto), credComum: r2(credComum), fiadoPago: r2(fiadoPago) };
+}
+function confirmarAbandono(order, c){
+  return new Promise(resolve=>{
+    openModal(`
+      <h3>Lançar via como ABANDONADA</h3>
+      <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(viaTxt(order)||'—')} · <b>${fmtMoeda(order.valorTotal)}</b></p>
+      <div class="aviso-linha excede" style="margin-bottom:10px;">${ico('alerta')}<span>A peça é recolhida e entregue à diretoria (desmanche). Esta baixa não pode ser desfeita.</span></div>
+      <ul style="margin:0 0 12px 18px;font-size:13px;line-height:1.7;">
+        <li>Valor pago pelo cliente: <b>${fmtMoeda(c.pago)}</b></li>
+        <li>Taxa de perda da fabricação (20%): <b>${fmtMoeda(c.taxa)}</b></li>
+        <li>Fica como <b>crédito no cadastro do cliente: ${fmtMoeda(c.credito)}</b> (não passa pelo caixa)</li>
+        ${c.creditoOuro>0 ? `<li>Crédito de ouro usado (${fmtMoeda(c.creditoOuro)}) <b>não volta</b>: o ouro retorna à diretoria.</li>` : ''}
+        <li>A venda sai da meta e da comissão da loja e da vendedora neste mês (${fmtMoeda(c.pago)}).</li>
+      </ul>
+      <div class="field"><label for="ab_obs">Observação <span class="muted">(opcional)</span></label><input id="ab_obs" placeholder="Ex.: peça entregue ao Felipe em 22/11"></div>
+      <div class="modal-actions"><button class="btn btn-ghost" id="ab_voltar">Voltar</button><button class="btn btn-danger" id="ab_ok">Lançar ABANDONADA</button></div>`);
+    document.getElementById('ab_voltar').addEventListener('click', ()=>{ closeModal(); resolve(null); });
+    document.getElementById('ab_ok').addEventListener('click', ()=> resolve({ obs: maiusc(document.getElementById('ab_obs').value||'') }));
+  });
+}
+/** Retorna false se voltou atrás (nada foi alterado). */
+async function aplicarAbandonoOrdem(order){
+  if(!currentUser || !['gerente','diretoria'].includes(currentUser.nivel)){ showToast('Só gerente ou diretoria lança a via como ABANDONADA.'); return false; }
+  if(order.status!=='pronto'){ showToast('Só pedido DISPONÍVEL PARA RETIRADA pode ir para ABANDONADA.'); return false; }
+  const c = await calculoAbandonoOrdem(order);
+  const ok = await confirmarAbandono(order, c);
+  if(!ok) return false;
+  const cli = await localizarClienteDaOrdem(order);
+  if(!cli && c.credito > 0.009){ showToast('Cliente não encontrado no cadastro: o crédito não pode ser lançado. Corrija o cadastro e tente de novo.'); return false; }
+  if(cli){
+    let mudou = false;
+    if(order.fiadoDebitoId && Array.isArray(cli.fiadoDebitos)){ const i = cli.fiadoDebitos.findIndex(d=>d.id===order.fiadoDebitoId); if(i>-1){ cli.fiadoDebitos.splice(i,1); mudou = true; } }
+    if(c.credito > 0.009){
+      cli.credito = Math.round(((Number(cli.credito)||0) + c.credito)*100)/100;
+      (cli.creditoMovimentos = cli.creditoMovimentos || []).push({ data: hojeStr(), valor: c.credito, tipo:'abandono', obs:`Via ${viaTxt(order)||''} ABANDONADA: pago ${fmtMoeda(c.pago)} − taxa de perda 20% ${fmtMoeda(c.taxa)}`, por: currentUser.nome, viaId: order.id });
+      mudou = true;
+    }
+    if(mudou) await salvarUmCliente(cli);
+  }
+  if(order.cashback && order.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, order.cashback.clienteId, order.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback deste pedido.'); }
+  const agora = Date.now();
+  order.abandono = Object.assign({}, order.abandono||{}, { em: agora, por: currentUser.nome, pago: c.pago, direto: c.direto, taxa: c.taxa, credito: c.credito, creditoOuro: c.creditoOuro, obs: ok.obs||'' });
+  order.status = 'abandonada'; order.statusEm = agora;
+  order.motivoCancelamento = 'VIA ABANDONADA' + (ok.obs ? ' — ' + ok.obs : '');
+  order.canceladoPor = currentUser.nome; order.canceladoEm = agora;   // a venda sai da meta/comissão no mês da baixa
+  order.caixaSaidaCancelamento = 0;                                  // não passa pelo caixa
+  order.cancelamentoDestino = { tipo:'abandono', valor: c.credito };
+  closeModal();
+  return true;
 }
 /* ============================================================
    EXCLUSÃO DE O.S. (só gerente/diretoria)
@@ -5981,9 +6053,17 @@ function openEditModalCompleto(order, opts){
         return;
       }
     }
-    if(status !== order.status && !podeMudarStatus(order.status, status)){ showToast(motivoSemMudarStatus(order.status)); return; }
+    if(status !== order.status && !podeMudarStatus(order.status, status)){ showToast(motivoSemMudarStatus(order.status, status)); return; }
     // Cancelamento pedido pelo dropdown de status desta tela (via alternativa ao
     // botão "Cancelar O.S." da lista): exige motivo e reverte fiado/crédito igual.
+    if(status === 'abandonada' && order.status !== 'abandonada'){
+      if(await aplicarAbandonoOrdem(order) === false){ renderView(); return; }
+      await saveOrders();
+      closeModal();
+      showToast('Via lançada como ABANDONADA. Crédito lançado no cadastro do cliente.');
+      renderView();
+      return;
+    }
     if(status === 'cancelado' && order.status !== 'cancelado'){
       if(!podeCancelarPorStatus()){ showToast('Seu perfil não pode cancelar uma O.S.'); return; }
       const motivo = (prompt('Motivo do cancelamento (obrigatório):')||'').trim();
@@ -6163,6 +6243,7 @@ function renderPainel(main){
         <option value="pronto">DISPONÍVEL PARA RETIRADA</option>
         <option value="entregue">ENTREGUE</option>
         <option value="cancelado">CANCELADO</option>
+        <option value="abandonada">ABANDONADA</option>
       </select>
       <select id="filtroLoja" aria-label="Loja"><option value="">Todas as lojas</option>${lojaOptionsHtml('')}</select>
       <select id="filtroServico" aria-label="Tipo de serviço"><option value="">Todos os serviços</option>${st.map(s=>`<option value="${s.id}">${escapeHtml(s.nome)}</option>`).join('')}</select>
@@ -6245,7 +6326,7 @@ function renderPainel(main){
     desfazer = desfazer || (()=>renderTable());
     const previous = ord.status;
     if(novo===previous) return;
-    if(!podeMudarStatus(previous, novo)){ showToast(motivoSemMudarStatus(previous)); desfazer(); return; }
+    if(!podeMudarStatus(previous, novo)){ showToast(motivoSemMudarStatus(previous, novo)); desfazer(); return; }
     if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
       if(await bloqueioSaldoEntrega(ord)){ desfazer(); return; }
@@ -6255,6 +6336,13 @@ function renderPainel(main){
       await estoqueAoEntregar(ord);
       await saveOrders();
       showToast('Ordem entregue para ' + ret.recebidoPor + '.');
+      renderTable();
+      return;
+    }
+    if(novo === 'abandonada' && previous !== 'abandonada'){
+      if(await aplicarAbandonoOrdem(ord) === false){ desfazer(); return; }
+      await saveOrders();
+      showToast('Via lançada como ABANDONADA. Crédito lançado no cadastro do cliente.');
       renderTable();
       return;
     }
@@ -6298,8 +6386,8 @@ function renderPainel(main){
     const fimRecente = o=> { const t = Number(o.recebidoEm || o.canceladoEm || o.atualizadoEm || o.criadoEm || 0); return t >= limite; };
     const colunas = STATUS_ORDEM.filter(st=> st!=='rascunho' || list.some(o=>o.status==='rascunho'));
     const totalRecebido = list.reduce((acc,o)=> acc + valorRecebidoExibir(o), 0);
-    const totalAReceber = list.filter(o=>o.status!=='cancelado').reduce((acc,o)=> acc + valorAReceberDe(o), 0);
-    document.getElementById('resumoValores').innerHTML = `<span><b>${list.filter(o=>!['entregue','cancelado'].includes(o.status)).length}</b> em andamento</span><span class="sep"></span><span class="ok">Recebido <b>${fmtMoeda(totalRecebido)}</b></span><span class="perigo">A receber <b>${fmtMoeda(totalAReceber)}</b></span>`;
+    const totalAReceber = list.filter(o=>o.status!=='cancelado'&&o.status!=='abandonada').reduce((acc,o)=> acc + valorAReceberDe(o), 0);
+    document.getElementById('resumoValores').innerHTML = `<span><b>${list.filter(o=>!['entregue','cancelado','abandonada'].includes(o.status)).length}</b> em andamento</span><span class="sep"></span><span class="ok">Recebido <b>${fmtMoeda(totalRecebido)}</b></span><span class="perigo">A receber <b>${fmtMoeda(totalAReceber)}</b></span>`;
     const cartao = o=>{
       const pode = podeEditarRegistro(o) || __pedidosLiberados.has(o.id);
       const falta = valorAReceberDe(o);
@@ -6307,7 +6395,7 @@ function renderPainel(main){
       return `<div class="quadro-card${pode?'':' travado'}" data-qid="${escapeHtml(o.id)}" ${pode?'draggable="true"':''} title="${pode?'Arraste para mudar o status · toque para abrir':'Toque para ver'}">
         <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||viaTxt(o)||'—')}</span><span class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}${vistoMsgHtml(o)}</span><span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}${vistoMsgHtml(o)}</span>${(pode && o.telefone && o.status!=='rascunho') ? `<button type="button" class="btn-icone wa qc-wa" data-qwa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status agora pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(16)}</button>` : ''}${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
         <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(o.data)}${atraso?' (atrasado)':''}</span>`:''}</div>
-        ${falta>0.009 && o.status!=='cancelado' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
+        ${falta>0.009 && o.status!=='cancelado' && o.status!=='abandonada' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
         ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho')}</select>` : ''}
       </div>`;
     };
@@ -6494,6 +6582,10 @@ function renderPainel(main){
     wrap.querySelectorAll('[data-mail]').forEach(b=>{
       b.addEventListener('click', ()=> sendEmail(orders.find(x=>x.id===b.dataset.mail)) );
     });
+    wrap.querySelectorAll('[data-hist]').forEach(b=> b.addEventListener('click', ()=>{   // 22/11: histórico completo da via (status, pagamentos, disparos, cientes, prazos)
+      const o = orders.find(x=>x.id===b.dataset.hist); if(!o || !window.RetiradaTerceiro) return;
+      RetiradaTerceiro.comprovante({ tipo:'os', id:o.id, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'' });
+    }));
     wrap.querySelectorAll('[data-retirada]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         const o = orders.find(x=>x.id===b.dataset.retirada); if(!o || !window.RetiradaTerceiro) return;
@@ -6540,7 +6632,7 @@ function renderPainel(main){
         if(a.status==='recusado') return `<span class="badge badge-aut-rec" title="Recusado${a.por?' por '+escapeHtml(a.por):''}${a.motivoRecusa?': '+escapeHtml(a.motivoRecusa):''}. Data original ${a.dataAnterior?fmtDate(a.dataAnterior):''} voltou para a mais próxima aceita.">${ico('alerta',12)} Autorização recusada · data ajustada</span>`;
         return o.encaixe ? `<span class="badge badge-encaixe">Encaixe</span>` : ''; })(),
       pendObs ? `<span class="badge badge-flag">${ico('sino',12)} Observação pendente</span>` : '',
-      semPag && o.status!=='cancelado' ? `<span class="badge badge-flag">Sem pagamento lançado</span>` : '',
+      semPag && o.status!=='cancelado' && o.status!=='abandonada' ? `<span class="badge badge-flag">Sem pagamento lançado</span>` : '',
     ].filter(Boolean).join('');
     return `
       <tr>
@@ -6571,7 +6663,7 @@ function renderPainel(main){
         <td class="acoes">
           <div class="acoes-linha">
           ${oficina ? `<button class="btn-icone" data-view="${o.id}" title="Ver detalhes" aria-label="Ver detalhes">${ico('olho')}</button>` : ''}
-          ${(!oficina && aReceber>0.009 && o.status!=='cancelado' && !isRascunho) ? `<button class="btn btn-pagar btn-sm" data-pagar="${o.id}" title="Ir direto para o pagamento deste pedido" style="white-space:nowrap;">${recebido>0.009 ? 'Pagar parcial' : 'Pagar'}</button>` : ''}
+          ${(!oficina && aReceber>0.009 && o.status!=='cancelado' && o.status!=='abandonada' && !isRascunho) ? `<button class="btn btn-pagar btn-sm" data-pagar="${o.id}" title="Ir direto para o pagamento deste pedido" style="white-space:nowrap;">${recebido>0.009 ? 'Pagar parcial' : 'Pagar'}</button>` : ''}
           <button class="btn-icone" data-edit="${o.id}" title="${oficina?'Observações':'Editar pedido'}" aria-label="${oficina?'Observações':'Editar pedido'}">${ico('lapis')}</button>
           <button class="btn-icone" data-print="${o.id}" title="Imprimir via" aria-label="Imprimir via">${ico('impressora')}</button>
           ${!oficina ? `
@@ -6582,6 +6674,7 @@ function renderPainel(main){
               <button type="button" role="menuitem" data-view="${o.id}">${ico('olho')} Ver detalhes</button>
               <button type="button" role="menuitem" data-mail="${o.id}">${ico('email')} Enviar e-mail ao cliente</button>
               <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada na loja (conferir código)</button>
+              <button type="button" role="menuitem" data-hist="${o.id}">${ico('documento')} Histórico da via</button>
               ${podeExcluirOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
             </div>
           </div>
@@ -6719,8 +6812,8 @@ function abrirReceberDaFabrica(aoConcluir){
 function applyStatusClass(sel){
   sel.className = 'status-select status-' + sel.value;
 }
-function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo-soft)' : s==='pendencia' ? 'var(--st-laranja-soft)' : s==='oficina_pronto' ? 'var(--info-soft)' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--st-neutro-soft)' : 'var(--danger-soft)'; }
-function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo)' : s==='pendencia' ? 'var(--st-laranja)' : s==='oficina_pronto' ? 'var(--info)' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--st-neutro)' : 'var(--danger)'; }
+function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo-soft)' : s==='pendencia' ? 'var(--st-laranja-soft)' : s==='oficina_pronto' ? 'var(--info-soft)' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--st-neutro-soft)' : s==='abandonada' ? '#3a2a1f' : 'var(--danger-soft)'; }
+function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo)' : s==='pendencia' ? 'var(--st-laranja)' : s==='oficina_pronto' ? 'var(--info)' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--st-neutro)' : s==='abandonada' ? '#ffd9b8' : 'var(--danger)'; }
 
 /* ============================================================
    AGENDA
