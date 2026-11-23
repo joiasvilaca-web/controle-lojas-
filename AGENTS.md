@@ -374,3 +374,8 @@ As seções 15 a 26 (menos a 17 acima) foram movidas, sem alteração, para **`d
 | 26 | Auditoria técnica de 11/11 e pendências | `Pendente desta auditoria` |
 
 Ao concluir uma mudança relevante, acrescente uma linha **no fim de `docs/HISTORICO.md`** (não aqui).
+
+### 23/11 (1) — Lançamentos por nível + câmera
+- `lancamentos-api` v28: diretoria/gerente veem tudo (todas as lojas); **vendedora só vê os próprios lançamentos** (sem lojas, outras vendedoras, histórico alheio) e **não grava/exclui**; oficina e demais níveis → 403. Folha só da diretoria.
+- `lancamentos.html` `aplicarNivel()`: vendedora sem abas Lojas/Conferência, sem Incluir/Editar/Excluir, Fator só leitura.
+- `index.html` `mountFotosProduto`: botões "Tirar foto" (capture=environment) e "Escolher da galeria".
