@@ -813,13 +813,15 @@
     }
     if(L.length && !S.aberto && ls(chave('licBalao')) !== L[0].id){
       ls(chave('licBalao'), L[0].id);
-      balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Toque em "Abrir" e leia em 1 minuto.</div>', '<button type="button" class="cp-b" data-cp="abrir">Abrir</button>', true, 20000);
+      var balAula = balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrelic="'+esc(L[0].id)+'">Ler a aula</button>', true, 20000);
+      if(balAula){ var bA = balAula.querySelector('[data-cp-abrelic]'); if(bA) bA.onclick = function(){ var id = bA.dataset.cpAbrelic; fecharBalao(); lerLicao(id); }; }
       return;
     }
     var pd = S.pd, hj = new Date().toISOString().slice(0,10);
     if(pd && pd.ok && !pd.indisponivel && !pd.respondida && !S.aberto && ls(chave('pdBalao')) !== hj){
       ls(chave('pdBalao'), hj);
-      balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b" data-cp="abrir">Abrir</button>', true, 20000);
+      var balPd = balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrepd="1">Responder agora</button>', true, 20000);
+      if(balPd){ var bP = balPd.querySelector('[data-cp-abrepd]'); if(bP) bP.onclick = function(){ fecharBalao(); perguntaDoDia(); }; }
     }
   }
 

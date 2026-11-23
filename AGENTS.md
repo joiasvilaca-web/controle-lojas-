@@ -407,7 +407,7 @@ Ao concluir uma mudança relevante, acrescente uma linha **no fim de `docs/HISTO
 
 **Data da Oficina = 1 dia antes** (`painel-ordens.html`): `diaMenosUm(iso)` e `dataExibicaoVia(iso)` (só desloca se `currentUser.nivel==='oficina'`). Aplicado na lista, no quadro, na ficha, no "pronto sem retirada", no agrupamento da agenda, no filtro por data e em `estaAtrasada`. **Não** mexe na data gravada nem no cálculo de vagas/capacidade (`checkSlot` continua na data real).
 
-**Impressão** (`painel-ordens.html`): `escolherViaEImprimir(order)` pergunta antes — VIA DO CLIENTE (como era) ou VIA FÁBRICA. A da fábrica: faixa "VIA FÁBRICA", bloco grande "ENTREGA ATÉ" com a data -1 dia, aviso de **CRAVAÇÃO** (`viaEnvolveCravacao`: procura CRAVA no tipo, na descrição e nos itens), sem telefone, sem valores, sem pagamento, sem assinatura e sem cashback. `printOrder(order, tipoVia)`.
+**Impressão** (`painel-ordens.html`): `escolherViaEImprimir(order)` pergunta antes — VIA DO CLIENTE ou VIA FÁBRICA. **23/11 (correção do Felipe): as duas têm o MESMO conteúdo, inclusive valores, pagamento e assinatura** — a fábrica vê os valores normalmente. A da fábrica muda só: faixa "VIA FÁBRICA", bloco grande "ENTREGA ATÉ" com a data -1 dia e aviso de **CRAVAÇÃO** (`viaEnvolveCravacao`: procura CRAVA no tipo, na descrição e nos itens). `printOrder(order, tipoVia)`.
 
 **Função nova `copiloto-extra`** (Supabase, verify_jwt=false) — o `copiloto` (v6) ficou intacto:
 - **Vilacinha da Oficina** (`dia`, `perguntar`, `consentir`, `bemestar`, `quizIniciar`, `quizResponder`): produção do dia (para hoje, atrasadas, em produção, na fábrica, prontas, semana, cravação, por tipo, próximos 7 dias e fila do que fazer primeiro), dicas de bancada pela IA, chat técnico e quiz de 16 perguntas de ourivesaria. **Nenhum valor**: sem preço, comissão, meta em R$, faturamento ou ranking — regra escrita também dentro dos prompts. Todas as datas saem com -1 dia.
@@ -418,3 +418,7 @@ Ao concluir uma mudança relevante, acrescente uma linha **no fim de `docs/HISTO
 **`copiloto.js`**: `apiX` (copiloto-extra), `ehOficina()`, cartão **Recados para você** no topo (com "Entendi" nos recados da diretoria), tela própria da Oficina (`desenharOficina`/`cartaoOficina`), elogio do bem-estar com números da produção, quiz/chat/bem-estar roteados para a função certa, contador do botão flutuante contando recados e balão de recado novo ao entrar.
 
 **`avisos.html`**: ganhou abas — "Pendências" (como era) e **"Recado pelo Vilacinha"** (só diretoria): título, texto, quem recebe (com lista de pessoas), urgente, validade em dias, e a lista do que já foi mandado com quem leu e botão "Tirar da tela".
+
+### 23/11 (6) — Ajustes do Felipe
+- Via da fábrica passou a sair **igual à do cliente** (com valores): o que muda é só o cabeçalho, a data de entrega (-1 dia, em destaque) e o aviso de cravação.
+- Balão de **aula nova** e de **pergunta do dia** agora abrem o conteúdo DIRETO (`lerLicao` / `perguntaDoDia` a partir do próprio balão), em vez de abrir o painel inteiro e exigir um segundo toque.
