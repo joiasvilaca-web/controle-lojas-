@@ -763,13 +763,15 @@ let currentTab = SO_CODIGO ? 'codigo' : 'painel';
 let modoNovaOrdem = false;
 let agendaYear, agendaMonth;
 let agendaEscopo = 'todas';   // 19/11: 'minhas' (vendedora = eu) | 'loja' (loja selecionada) | 'todas' (todas que posso ver)
-let agendaFiltroVia = '';     // 23/11: '' (todas) | 'alianca' | 'fabricacao' | 'servico' — localizar só essas vias na agenda
+let agendaFiltroTipo = '';    // 23/11: '' (todos) | id do tipo de ordem — separa a agenda por serviço (Aliança, Fabricação, Serviço, Conserto…)
+let agendaFiltroStatus = '';  // 23/11: '' (todos) | status da via — separa a agenda por etapa (em produção, pendência, liberado fábrica…)
 function ordemEhMinha(o){ const eu=[currentUser&&currentUser.nome,currentUser&&currentUser.apelido].map(x=>String(x||'').trim().toLowerCase()).filter(Boolean); return eu.includes(String(o.vendedora||'').trim().toLowerCase()); }
 function ordensDaAgenda(){
   let lista = orders;
   if(agendaEscopo==='minhas') lista = lista.filter(ordemEhMinha);
   else if(agendaEscopo==='loja'){ const lj=window.__lojaAtual&&window.__lojaAtual.id; lista = lj ? lista.filter(o=>o.lojaId===lj) : lista; }
-  if(agendaFiltroVia) lista = lista.filter(o=>categoriaDestaqueVia(o.serviceTypeName)===agendaFiltroVia);
+  if(agendaFiltroTipo) lista = lista.filter(o=>o.serviceTypeId===agendaFiltroTipo);
+  if(agendaFiltroStatus) lista = lista.filter(o=>o.status===agendaFiltroStatus);
   return lista;
 }
 
@@ -6944,28 +6946,27 @@ function renderAgenda(main){
           <button class="btn btn-ghost btn-sm" id="agToday">Hoje</button>
         </div>
         <select id="agEscopo" aria-label="Quais pedidos mostrar" title="Quais pedidos mostrar na agenda"><option value="minhas">Em meu nome</option><option value="loja">Da minha loja</option><option value="todas">De todas as lojas</option></select>
-        <div class="agenda-legend" id="agLegend"></div>
-        <div class="ag-filtro-via" id="agFiltroVia" role="group" aria-label="Localizar por tipo de via">
-          <button type="button" class="ag-fv-btn all ${agendaFiltroVia===''?'ativo':''}" data-via="">Todas as vias</button>
-          ${Object.keys(LABEL_CATEGORIA_VIA).map(cat=>`
-            <button type="button" class="ag-fv-btn ${agendaFiltroVia===cat?'ativo':''}" data-via="${cat}" style="--fv-cor:${CORES_CATEGORIA_VIA[cat]}">${LABEL_CATEGORIA_VIA[cat]}</button>
-          `).join('')}
+        <select id="agStatus" aria-label="Mostrar só um status" title="Mostrar só um status da via">
+          <option value="">Todos os status</option>
+          ${STATUS_ORDEM.filter(st=>st!=='entregue').map(st=>`<option value="${st}" ${agendaFiltroStatus===st?'selected':''}>${STATUS_NOMES[st]}</option>`).join('')}
+        </select>
+        <div class="ag-filtro-via" id="agFiltroTipo" role="group" aria-label="Separar por tipo de serviço">
+          ${config.serviceTypes.length ? `<button type="button" class="ag-fv-btn all ${agendaFiltroTipo===''?'ativo':''}" data-tipo="">Todos os serviços</button>`
+            + tiposServicoOrdenados().map(t=>`<button type="button" class="ag-fv-btn ${agendaFiltroTipo===t.id?'ativo':''}" data-tipo="${escapeHtml(t.id)}" style="--fv-cor:${serviceColor(t.id)}" title="Mostrar só ${escapeHtml(t.nome)}">${escapeHtml(t.nome)}</button>`).join('')
+            : '<span class="muted">Nenhum tipo de serviço cadastrado. Cadastre em CONFIGURAÇÕES › Cadastro › Produto › Tipos de ordem.</span>'}
         </div>
       </div>
       <div class="cal-grid" id="calGrid"></div>
     </div>
   `;
 
-  document.getElementById('agLegend').innerHTML = (config.serviceTypes.length ? '' : '<span class="muted">Nenhum tipo de serviço cadastrado. Cadastre em CONFIGURAÇÕES › Cadastro › Produto › Tipos de ordem.</span>') + tiposServicoOrdenados().map(s=>`
-    <span class="legend-item"><span class="legend-dot" style="background:${serviceColor(s.id)}"></span>${escapeHtml(s.nome)}</span>
-  `).join('');
-
   document.getElementById('agEscopo').value = agendaEscopo;
   document.getElementById('agEscopo').addEventListener('change', e=>{ agendaEscopo = e.target.value; drawCalendar(); });
-  document.getElementById('agFiltroVia').addEventListener('click', e=>{
+  document.getElementById('agStatus').addEventListener('change', e=>{ agendaFiltroStatus = e.target.value; drawCalendar(); });
+  document.getElementById('agFiltroTipo').addEventListener('click', e=>{
     const btn = e.target.closest('.ag-fv-btn'); if(!btn) return;
-    agendaFiltroVia = btn.dataset.via || '';
-    document.querySelectorAll('#agFiltroVia .ag-fv-btn').forEach(b=>b.classList.toggle('ativo', b===btn));
+    agendaFiltroTipo = btn.dataset.tipo || '';
+    document.querySelectorAll('#agFiltroTipo .ag-fv-btn').forEach(b=>b.classList.toggle('ativo', b===btn));
     drawCalendar();
   });
   document.getElementById('agPrev').addEventListener('click', ()=>{
@@ -7003,14 +7004,19 @@ function renderAgenda(main){
         byService[chave].total += (Number(o.vagas)||1);
         if(STATUS_OCUPA_VAGA.includes(o.status)) byService[chave].aguardando += (Number(o.vagas)||1);
       });
+      /* com filtro de status ligado o número mostrado é o de vias daquele status (a conta de vagas
+         só faz sentido quando a agenda está mostrando todas as etapas). */
+      const porStatus = !!agendaFiltroStatus;
       const chips = Object.keys(byService).slice(0,3).map(sid=>{
         const info = byService[sid];
         const st = config.serviceTypes.find(s=>s.id===info.tipoId);
         const max = st ? st.maxPorDia : '?';
-        const over = st && info.aguardando > st.maxPorDia;
+        const over = !porStatus && st && info.aguardando > st.maxPorDia;
         const rotulo = info.grupoId ? ((config.gruposTipoOrdem||[]).find(g=>g.id===info.grupoId)||{}).nome || 'GRUPO' : (st?st.nome:info.nome);
-        return `<span class="cal-chip ${over?'over':''}" style="background:${serviceColor(info.tipoId)}" title="${escapeHtml(rotulo)}: ${info.aguardando} de ${max} vagas${over?' — acima do máximo':''}">
-          <span>${escapeHtml(String(rotulo||'—').slice(0,10))}</span><span>${agendaEscopo==='todas' ? info.aguardando+'/'+max : info.aguardando}</span>
+        const titulo = porStatus ? `${rotulo}: ${info.total} ${info.total===1?'via':'vias'} em ${STATUS_NOMES[agendaFiltroStatus]||''}`
+                                 : `${rotulo}: ${info.aguardando} de ${max} vagas${over?' — acima do máximo':''}`;
+        return `<span class="cal-chip ${over?'over':''}" style="background:${serviceColor(info.tipoId)}" title="${escapeHtml(titulo)}">
+          <span>${escapeHtml(String(rotulo||'—').slice(0,10))}</span><span>${porStatus ? info.total : (agendaEscopo==='todas' ? info.aguardando+'/'+max : info.aguardando)}</span>
         </span>`;
       }).join('');
       const extra = Object.keys(byService).length > 3 ? `<div class="cal-more">+${Object.keys(byService).length-3} ${Object.keys(byService).length-3===1?'serviço':'serviços'}</div>` : '';
@@ -7035,7 +7041,13 @@ function renderAgenda(main){
 
 function openDayModal(iso){
   const dayOrders = ordensDaAgenda().filter(o=>dataExibicaoVia(o.data)===iso && o.status!=='entregue').sort((a,b)=>a.serviceTypeName.localeCompare(b.serviceTypeName));
-  const capacityRows = tiposServicoOrdenados().map(s=>{
+  /* 23/11: com o filtro de serviço ligado, o dia mostra só a vaga daquele serviço. */
+  const tiposDoDia = agendaFiltroTipo ? tiposServicoOrdenados().filter(t=>t.id===agendaFiltroTipo) : tiposServicoOrdenados();
+  const filtrosAtivos = [
+    agendaFiltroTipo ? ('serviço: ' + ((config.serviceTypes||[]).find(t=>t.id===agendaFiltroTipo)||{}).nome) : '',
+    agendaFiltroStatus ? ('status: ' + (STATUS_NOMES[agendaFiltroStatus]||'')) : '',
+  ].filter(Boolean).join(' · ');
+  const capacityRows = tiposDoDia.map(s=>{
     const res = checkSlot(s.id, iso, null);
     return `<div class="legend-item" style="font-size:13px;">
       <span class="legend-dot" style="background:${serviceColor(s.id)}"></span>
@@ -7046,7 +7058,7 @@ function openDayModal(iso){
 
   openModal(`
     <h3>${ico('calendario',18)} ${(s=>s.charAt(0).toUpperCase()+s.slice(1))(new Date(iso+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long'}))}, ${fmtDate(iso)}</h3>
-    <p>${dayOrders.length===0 ? 'Nenhum pedido agendado neste dia.' : dayOrders.length + (dayOrders.length===1?' pedido agendado':' pedidos agendados') + ' neste dia (sem contar os entregues).'}</p>
+    <p>${dayOrders.length===0 ? 'Nenhum pedido agendado neste dia.' : dayOrders.length + (dayOrders.length===1?' pedido agendado':' pedidos agendados') + ' neste dia (sem contar os entregues).'}${filtrosAtivos ? ` <span class="muted">— filtrando por ${escapeHtml(filtrosAtivos)}</span>` : ''}</p>
     <div class="section-label">Vagas por serviço</div>
     <div class="ocupacao-lista">${capacityRows || '<span class="muted">Nenhum tipo de serviço cadastrado.</span>'}</div>
     <div class="section-label">Pedidos do dia</div>

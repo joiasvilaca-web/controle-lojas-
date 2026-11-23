@@ -465,6 +465,20 @@ window.AJUDA_TOPICOS = [
   `
 },
 {
+  cat:'Pedidos e O.S.', ico:'calendario', tit:'Agenda da oficina: cores e filtros',
+  chave:'agenda oficina calendario cores alianca fabricacao servico filtro status tipo de servico vagas',
+  body:`
+    <p>Em <span class="btn-ref">PEDIDO</span> → <span class="btn-ref">Agenda</span> você vê o mês inteiro: cada dia mostra as vias agendadas e as vagas ocupadas por serviço.</p>
+    <ol class="passos">
+      <li><b>Cores fortes</b>: <b>Aliança</b> (dourado), <b>Fabricação</b> (azul) e <b>Serviço</b> (vermelho) têm cor fixa, para pular aos olhos. Os outros tipos usam as cores da paleta.</li>
+      <li><b>Filtro por serviço</b>: os botões coloridos embaixo do mês mostram só um tipo de cada vez (Aliança, Fabricação, Serviço, Conserto, Gravação… cada tipo cadastrado vira um botão). <span class="btn-ref">Todos os serviços</span> volta ao normal.</li>
+      <li><b>Filtro por status</b>: a caixinha <span class="btn-ref">Todos os status</span> separa a agenda por etapa — aprovado, enviado p/ fábrica, em produção, pendência, liberado fábrica, disponível para retirada.</li>
+      <li>Clique em um dia para ver as vias daquele dia. Com filtro ligado, o dia mostra só o que você filtrou.</li>
+    </ol>
+    <div class="dica">Os dois filtros funcionam juntos: dá para ver, por exemplo, só as <b>aliança em produção</b> do mês.</div>
+  `
+},
+{
   cat:'Pedidos e O.S.', ico:'impressora', tit:'Imprimir: via do cliente e via da fábrica',
   chave:'imprimir via cliente fabrica oficina data entrega um dia antes cravacao impressao',
   body:`
