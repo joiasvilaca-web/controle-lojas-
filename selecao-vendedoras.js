@@ -76,6 +76,10 @@
   var CRITERIOS = ['Comunicação', 'Atendimento consultivo', 'Venda e fechamento', 'Honestidade', 'Organização e sistema', 'Trabalho em equipe', 'Vontade de aprender', 'Aderência ao perfil Vilaça'];
   var PROIBIDO = 'Não pergunte nem use para decidir: gravidez ou planos de ter filhos, estado civil, idade, religião, saúde ou deficiência, orientação sexual, política, cor ou raça, aparência física. A Lei 9.029/1995 proíbe práticas discriminatórias na admissão. Anote só o que se refere ao trabalho.';
 
+  var STATUS = [['triagem','Triagem','#7a7f87'],['entrevista','Entrevista marcada','#1c6fd1'],['segunda','2ª entrevista','#8a4fd1'],['aprovada','Aprovada','#1f9a55'],['contratada','Contratada','#0f7a3d'],['banco','Banco de talentos','#a8803a'],['reprovada','Não seguiu','#b3261e']];
+  function stRot(id){ var x = STATUS.filter(function(s){ return s[0]===id; })[0]; return x ? x[1] : 'Triagem'; }
+  function stCor(id){ var x = STATUS.filter(function(s){ return s[0]===id; })[0]; return x ? x[2] : '#7a7f87'; }
+
   var CSS = '.sv-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;} .sv-tabs button{min-height:38px;padding:0 14px;border-radius:999px;border:1px solid var(--line,#dde);background:var(--surface,#fff);color:inherit;font:600 13.5px Inter,sans-serif;cursor:pointer;} .sv-tabs button.on{background:var(--primary,#1f6f8b);border-color:var(--primary,#1f6f8b);color:#fff;}'
    +'.sv-card{background:var(--surface,#fff);border:1px solid var(--line,#dde);border-radius:12px;padding:14px 16px;margin:0 0 12px;} .sv-card h3{margin:0 0 8px;font-size:15px;} .sv-card ul{margin:0;padding-left:18px;} .sv-card li{margin:4px 0;line-height:1.45;}'
    +'.sv-aviso{border-color:#c62828;background:rgba(198,40,40,.06);} .sv-ok{border-color:#1f9a55;background:rgba(31,154,85,.06);}'
@@ -87,7 +91,7 @@
 
   function render(el, opts){
     if(!document.getElementById('svCss')){ var st = document.createElement('style'); st.id = 'svCss'; st.textContent = CSS; document.head.appendChild(st); }
-    var senha = opts && opts.senha, aba = 'perfil', cand = null, extras = [], lista = null;
+    var senha = opts && opts.senha, aba = 'perfil', cand = null, extras = [], lista = null, metr = null, funil = null, filtro = '';
     el.innerHTML = '<div class="sv-wrap"></div>'; var raiz = el.firstChild;
 
     function cab(){
@@ -134,14 +138,32 @@
       raiz.querySelector('#svLista') && (raiz.querySelector('#svLista').innerHTML = '<div style="color:var(--muted,#667);">Carregando…</div>');
       var r = await chamar(senha, { op:'rhListar' });
       lista = r && r.ok ? r.candidatas : [];
+      metr = r && r.ok ? r.metricas : null; funil = r && r.ok ? r.funil : null;
       if(aba==='cands' && !cand) pintar();
     }
     function telaLista(){
-      var L = lista;
-      return '<div class="sv-row" style="margin-bottom:10px;"><span style="color:var(--muted,#667);font-size:13.5px;">'+(L ? L.length+' candidata'+(L.length===1?'':'s') : 'Carregando…')+'</span><button type="button" class="sv-b pri" id="svNova">+ Nova candidata</button></div>'
-        + '<div id="svLista">'+((L||[]).map(function(c){ return '<div class="sv-card"><div class="sv-row"><div><b>'+esc(c.nome)+'</b> <span class="sv-badge">'+(c.pontos!=null?c.pontos+' pts':'sem nota')+'</span><div style="font-size:12.5px;color:var(--muted,#667);">'+esc(c.vaga||'Vendedora')+(c.contato?' · '+esc(c.contato):'')+' · '+new Date(c.atualizado_em).toLocaleDateString('pt-BR')+'</div></div><button type="button" class="sv-b" data-abrir="'+esc(c.id)+'">Abrir</button></div>'+(c.parecer?'<div style="margin-top:8px;font-size:13.5px;line-height:1.45;">'+esc(c.parecer).slice(0,240)+'</div>':'')+'</div>'; }).join('') || (L?'<div class="sv-card">Nenhuma candidata ainda. Toque em "Nova candidata" para registrar a primeira entrevista.</div>':''))+'</div>';
+      var L = lista, vis = (L||[]).filter(function(c){ return !filtro || (c.status||'triagem') === filtro; });
+      var h = '<div class="sv-row" style="margin-bottom:10px;"><span style="color:var(--muted,#667);font-size:13.5px;">'+(L ? L.length+' candidata'+(L.length===1?'':'s')+' no total' : 'Carregando…')+'</span><button type="button" class="sv-b pri" id="svNova">+ Nova candidata</button></div>';
+      if(metr) h += '<div class="sv-card"><h3>Como está o processo</h3><div class="sv-grid">'
+        + [['Em andamento', metr.emAndamento], ['Aprovadas', metr.aprovadas], ['Contratadas', metr.contratadas],
+           ['Nota média', metr.notaMedia != null ? metr.notaMedia + ' pts' : '—'],
+           ['Aproveitamento', metr.taxaAprovacao + '%'],
+           ['Dias até decidir', metr.diasAteDecidir != null ? metr.diasAteDecidir + ' d' : '—']]
+          .map(function(x){ return '<div><div style="font-size:20px;font-weight:800;">'+esc(String(x[1]))+'</div><div style="font-size:12px;color:var(--muted,#667);">'+esc(x[0])+'</div></div>'; }).join('')
+        + '</div></div>';
+      if(funil) h += '<div class="sv-row" style="gap:6px;margin-bottom:10px;">'
+        + '<button type="button" class="sv-b'+(filtro===''?' pri':'')+'" data-f="">Todas</button>'
+        + STATUS.filter(function(st){ return funil[st[0]]; }).map(function(st){ return '<button type="button" class="sv-b'+(filtro===st[0]?' pri':'')+'" data-f="'+st[0]+'">'+esc(st[1])+' ('+funil[st[0]]+')</button>'; }).join('')
+        + '</div>';
+      h += '<div id="svLista">'+(vis.map(function(c){ var st = c.status || 'triagem';
+          return '<div class="sv-card"><div class="sv-row"><div><b>'+esc(c.nome)+'</b> <span class="sv-badge" style="background:'+stCor(st)+';color:#fff;">'+esc(stRot(st))+'</span> <span class="sv-badge">'+(c.pontos!=null?c.pontos+' pts':'sem nota')+'</span>'
+            + '<div style="font-size:12.5px;color:var(--muted,#667);">'+esc(c.vaga||'Vendedora')+(c.contato?' · '+esc(c.contato):'')+' · '+new Date(c.atualizado_em).toLocaleDateString('pt-BR')+'</div></div><button type="button" class="sv-b" data-abrir="'+esc(c.id)+'">Abrir</button></div>'
+            + (c.parecer?'<div style="margin-top:8px;font-size:13.5px;line-height:1.45;">'+esc(c.parecer).slice(0,240)+'</div>':'')+'</div>'; }).join('')
+        || (L?'<div class="sv-card">'+(filtro?'Nenhuma candidata nesta etapa.':'Nenhuma candidata ainda. Toque em "Nova candidata" para registrar a primeira entrevista.')+'</div>':''))+'</div>';
+      return h;
     }
     function ligarLista(){
+      raiz.querySelectorAll('[data-f]').forEach(function(b){ b.onclick = function(){ filtro = b.dataset.f; pintar(); }; });
       var n = raiz.querySelector('#svNova'); if(n) n.onclick = function(){ cand = { nome:'', contato:'', vaga:'Vendedora', dados:{ respostas:{}, criterios:{}, experiencia:'', observacoes:'' } }; pintar(); };
       raiz.querySelectorAll('[data-abrir]').forEach(function(b){ b.onclick = function(){ var c = (lista||[]).filter(function(x){ return x.id===b.dataset.abrir; })[0]; if(c){ cand = JSON.parse(JSON.stringify(c)); cand.dados = cand.dados || {}; cand.dados.respostas = cand.dados.respostas || {}; cand.dados.criterios = cand.dados.criterios || {}; pintar(); } }; });
     }
@@ -151,15 +173,33 @@
       var d = cand.dados, Q = todasPerguntas();
       return '<div class="sv-row" style="margin-bottom:8px;"><button type="button" class="sv-b" id="svVoltar">← Candidatas</button><span style="font-size:12.5px;color:var(--muted,#667);">'+esc(PROIBIDO.split('.')[0])+'.</span></div>'
         + '<div class="sv-card"><h3>Dados</h3><div class="sv-grid"><div><label style="font-size:12.5px;">Nome *</label><input class="sv-in" id="svNome" maxlength="120" value="'+esc(cand.nome)+'"></div><div><label style="font-size:12.5px;">Contato</label><input class="sv-in" id="svContato" maxlength="80" value="'+esc(cand.contato||'')+'"></div><div><label style="font-size:12.5px;">Vaga</label><input class="sv-in" id="svVaga" maxlength="80" value="'+esc(cand.vaga||'Vendedora')+'"></div></div>'
+        + '<div style="margin-top:8px;"><label style="font-size:12.5px;display:block;">Etapa do processo</label><select class="sv-in" id="svStatus" style="max-width:260px;">'
+        + STATUS.map(function(st){ return '<option value="'+st[0]+'"'+((cand.status||'triagem')===st[0]?' selected':'')+'>'+esc(st[1])+'</option>'; }).join('') + '</select></div>'
         + '<label style="font-size:12.5px;display:block;margin-top:8px;">Experiência (resumo)</label><textarea class="sv-in" id="svExp" maxlength="300" style="min-height:52px;">'+esc(d.experiencia||'')+'</textarea></div>'
         + '<div class="sv-card"><h3>Entrevista: anote e dê nota de 1 a 5</h3>'+Q.map(function(q,i){ var r = d.respostas[i] || {}; return '<div class="sv-q"><b>'+(i+1)+'. '+esc(q)+'</b><textarea data-r="'+i+'" maxlength="600" placeholder="O que ela respondeu">'+esc(r.resposta||'')+'</textarea>'+notaHtml('n'+i, r.nota)+'</div>'; }).join('')+'</div>'
         + '<div class="sv-card"><h3>Avaliação geral (1 a 5)</h3><div class="sv-grid">'+CRITERIOS.map(function(c,i){ return '<div><div style="font-size:13px;font-weight:600;">'+esc(c)+'</div>'+notaHtml('c'+i, d.criterios[c])+'</div>'; }).join('')+'</div>'
         + '<label style="font-size:12.5px;display:block;margin-top:10px;">Observações do entrevistador</label><textarea class="sv-in" id="svObs" maxlength="800" style="min-height:70px;">'+esc(d.observacoes||'')+'</textarea></div>'
         + '<div class="sv-card" id="svResultado"><h3>Resultado</h3><div id="svPontos" style="font-size:14px;">'+resumoPontos()+'</div><div id="svParecer" style="margin-top:8px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;">'+esc(cand.parecer||'')+'</div></div>'
+        + '<div class="sv-card" id="svPlanoBox"><h3>Primeiros 30 dias</h3><p style="margin:0 0 8px;font-size:13px;color:var(--muted,#667);">Se ela for aprovada, o Vilacinha monta o plano de integração semana a semana, com meta e forma de medir. O plano fica salvo na ficha.</p>'
+        + '<button type="button" class="sv-b" id="svPlano">'+((cand.etapas&&cand.etapas.plano)?'Refazer o plano de 30 dias':'Montar plano de 30 dias')+'</button>'
+        + '<div id="svPlano30" style="margin-top:10px;">'+planoHtml((cand.etapas||{}).plano)+'</div></div>'
         + '<div class="sv-row"><button type="button" class="sv-b" id="svAnalisar">Pedir parecer ao Vilacinha (IA)</button><span><button type="button" class="sv-b pri" id="svSalvar">Salvar candidata</button> '+(cand.id?'<button type="button" class="sv-b" id="svExcluir" style="color:#b3261e;">Excluir</button>':'')+'</span></div><div id="svMsg" style="margin-top:8px;font-size:13px;"></div>';
+    }
+    function planoHtml(p){
+      if(!p || !(p.semanas||[]).length) return '';
+      return (p.semanas||[]).map(function(sm,i){ return '<div class="sv-q"><b>'+esc(sm.titulo||('Semana '+(i+1)))+'</b>'
+          + (sm.objetivo?'<div style="font-size:13px;">'+esc(sm.objetivo)+'</div>':'')
+          + ((sm.acoes||[]).length?'<ul style="margin:4px 0 0;padding-left:18px;font-size:13px;">'+sm.acoes.map(function(a){ return '<li>'+esc(a)+'</li>'; }).join('')+'</ul>':'')
+          + (sm.meta?'<div style="margin-top:4px;font-size:13px;"><b>Meta:</b> '+esc(sm.meta)+'</div>':'')
+          + (sm.comoMedir?'<div style="font-size:12.5px;color:var(--muted,#667);"><b>Como medir:</b> '+esc(sm.comoMedir)+'</div>':'')
+          + '</div>'; }).join('')
+        + ((p.indicadores||[]).length?'<div class="sv-q"><b>Indicadores para acompanhar</b><ul style="margin:4px 0 0;padding-left:18px;font-size:13px;">'+p.indicadores.map(function(x){ return '<li>'+esc(x.nome||'')+(x.alvo?' — alvo: '+esc(x.alvo):'')+'</li>'; }).join('')+'</ul></div>':'')
+        + ((p.conversas||[]).length?'<div class="sv-q"><b>Conversas de acompanhamento</b><ul style="margin:4px 0 0;padding-left:18px;font-size:13px;">'+p.conversas.map(function(x){ return '<li>'+esc(x.quando||'')+': '+esc(x.assunto||'')+'</li>'; }).join('')+'</ul></div>':'')
+        + ((p.sinaisDeAlerta||[]).length?'<div class="sv-q"><b>Sinais de alerta</b><ul style="margin:4px 0 0;padding-left:18px;font-size:13px;">'+p.sinaisDeAlerta.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul></div>':'');
     }
     function coletar(){
       var d = cand.dados; cand.nome = raiz.querySelector('#svNome').value.trim(); cand.contato = raiz.querySelector('#svContato').value.trim(); cand.vaga = raiz.querySelector('#svVaga').value.trim();
+      var stEl = raiz.querySelector('#svStatus'); cand.status = stEl ? stEl.value : (cand.status||'triagem');
       d.experiencia = raiz.querySelector('#svExp').value; d.observacoes = raiz.querySelector('#svObs').value; d.respostas = {}; d.criterios = {};
       raiz.querySelectorAll('[data-r]').forEach(function(t){ var i = t.dataset.r, n = raiz.querySelector('input[name="n'+i+'"]:checked'); if(t.value.trim() || n) d.respostas[i] = { resposta:t.value.trim(), nota:n?Number(n.value):null }; });
       CRITERIOS.forEach(function(c,i){ var n = raiz.querySelector('input[name="c'+i+'"]:checked'); if(n) d.criterios[c] = Number(n.value); });
@@ -195,10 +235,22 @@
       raiz.querySelector('#svSalvar').onclick = async function(){
         coletar(); if(!cand.nome){ msg('Informe o nome da candidata.', true); return; }
         var b = this; b.disabled = true;
-        var r = await chamar(senha, { op:'rhSalvar', candidata:{ id:cand.id, nome:cand.nome, contato:cand.contato, vaga:cand.vaga, dados:cand.dados, pontos:pontos(), parecer:cand.parecer||'' } });
+        var r = await chamar(senha, { op:'rhSalvar', candidata:{ id:cand.id, nome:cand.nome, contato:cand.contato, vaga:cand.vaga, dados:cand.dados, pontos:pontos(), parecer:cand.parecer||'', status:cand.status||'triagem', etapas:cand.etapas||{} } });
         b.disabled = false;
         if(!r || !r.ok){ msg((r&&r.error)||'Não consegui salvar.', true); return; }
         cand.id = r.id; lista = null; msg('Candidata salva.'); await carregarListaSilenciosa();
+      };
+      var bp = raiz.querySelector('#svPlano');
+      if(bp) bp.onclick = async function(){
+        coletar(); var b2 = this; b2.disabled = true;
+        var box2 = raiz.querySelector('#svPlano30'); box2.innerHTML = '<div style="color:var(--muted,#667);">O Vilacinha está montando o plano…</div>';
+        var cr = cand.dados.criterios || {}, fortes = [], aten = [];
+        Object.keys(cr).forEach(function(k){ if(cr[k] >= 4) fortes.push(k); else if(cr[k] <= 2) aten.push(k); });
+        var r = await chamar(senha, { op:'rhPlano', candidata:{ nome:cand.nome, experiencia:cand.dados.experiencia, fortes:fortes.join(', '), atencao:aten.join(', ') } });
+        b2.disabled = false;
+        if(!r || !r.ok || !r.plano || !(r.plano.semanas||[]).length){ box2.innerHTML = '<div style="color:#c62828;">'+esc((r&&r.error)||'Não consegui montar agora.')+'</div>'; return; }
+        cand.etapas = cand.etapas || {}; cand.etapas.plano = r.plano;
+        box2.innerHTML = planoHtml(r.plano); msg('Plano pronto. Clique em Salvar para guardar na ficha.');
       };
       var ex = raiz.querySelector('#svExcluir');
       if(ex) ex.onclick = async function(){
@@ -208,7 +260,7 @@
         cand = null; lista = null; pintar(); carregarLista();
       };
     }
-    async function carregarListaSilenciosa(){ var r = await chamar(senha, { op:'rhListar' }); if(r && r.ok) lista = r.candidatas; }
+    async function carregarListaSilenciosa(){ var r = await chamar(senha, { op:'rhListar' }); if(r && r.ok){ lista = r.candidatas; metr = r.metricas; funil = r.funil; } }
     pintar();
   }
   window.SelecaoUI = { render:render };

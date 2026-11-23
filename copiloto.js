@@ -11,7 +11,7 @@
 (function(){
   'use strict';
   if(window.Copiloto) return;
-  var S = { senha:null, user:null, lojaNome:'', dia:null, hist:[], aberto:false, balaoTimer:null, rodizio:0, falando:false };
+  var S = { senha:null, user:null, lojaNome:'', dia:null, hist:[], aberto:false, balaoTimer:null, rodizio:0, falando:false, licoes:null, pd:null, prog:null };
   var URL_FN = function(n){ return (window.SUPABASE_URL||'') + '/functions/v1/' + n; };
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function ic(n,t){ try{ return window.Icone ? window.Icone(n,{tam:t||16}) : ''; }catch(e){ return ''; } }
@@ -36,6 +36,27 @@
     try{ var r = await fetch(URL_FN('copiloto-dia'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
       if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
+  }
+
+  /* telefone: mostra bonito e monta o link de ligação (nunca envia nada sozinho) */
+  function soDig(t){ return String(t==null?'':t).replace(/\D/g,''); }
+  function telNacional(t){ var d = soDig(t); if(d.length > 11 && d.slice(0,2) === '55') d = d.slice(2); return d; }
+  function telBonito(t){ var d = telNacional(t); if(d.length < 10) return d || '—';
+    return '(' + d.slice(0,2) + ') ' + (d.length === 11 ? d.slice(2,7) + '-' + d.slice(7) : d.slice(2,6) + '-' + d.slice(6)); }
+  function telLink(t){ var d = telNacional(t); return d.length >= 10 ? 'tel:+55' + d : ''; }
+  function telWa(t){ var d = telNacional(t); return d.length >= 10 ? 'https://wa.me/55' + d : ''; }
+
+  /* elogio DE VERDADE: usa os números dela, não elogio vazio */
+  function elogio(){
+    var d = S.dia || {}, eu = d.eu || {}, m = d.meta || {}, q = S.pd || {}, L = [];
+    if(eu.posicao === 1 && (eu.vendas||0) > 0) L.push('E olha só: você está em 1º na loja este mês. Isso não é sorte, é atendimento.');
+    if(m.minha && m.minha.atingida) L.push('Sua meta do mês já está batida. Daqui para frente é lucro e confiança.');
+    if((d.hojeAtendimentos||0) >= 3) L.push('Você já atendeu ' + d.hojeAtendimentos + ' pessoas hoje. Que ritmo bom!');
+    if((q.sequencia||0) >= 3) L.push('E ainda são ' + q.sequencia + ' dias seguidos respondendo a pergunta do dia. Isso é disciplina.');
+    if((eu.vendas||0) >= 1) L.push('No mês já são ' + eu.vendas + ' vendas suas, com ticket médio de ' + brl0(eu.ticketMedio||0) + '. Isso é resultado de verdade.');
+    if(eu.posicao && eu.deQuantas > 1 && eu.posicao <= Math.ceil(eu.deQuantas/2) && eu.posicao !== 1) L.push('Você está em ' + eu.posicao + 'º de ' + eu.deQuantas + ' na loja. Está no caminho certo.');
+    L.push('Atendimento bom é o que faz a cliente voltar, e isso você tem feito.');
+    return L[0];
   }
 
   /* ícone de ouvir: alto-falante com ondas (anima enquanto fala) */
@@ -144,6 +165,14 @@
   +'.cp-rank{font-size:13px;} .cp-be .r span{font-size:12px;}'
   +'}'
   +'@media(max-width:760px) and (max-height:480px){.cp-balao{bottom:12px;right:84px;left:12px;}}'
+  +'.cp-chips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0 2px;} .cp-chips span{font-size:11.5px;background:var(--t-surface-2,#f4f6f8);border-radius:6px;padding:2px 7px;}'
+  +'.cp-tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:999px;background:var(--cc,#8a3560);color:#fff;margin-left:6px;vertical-align:1px;}'
+  +'a.cp-b{text-decoration:none;} .cp-b.fone{font-variant-numeric:tabular-nums;}'
+  +'.cp-cli details{margin-top:6px;} .cp-cli summary{cursor:pointer;font-weight:700;font-size:12.5px;color:#8a3560;} .cp-cli ol{margin:6px 0 0;padding-left:18px;} .cp-cli ol li{margin:4px 0;font-size:12.5px;line-height:1.45;}'
+  +'.cp-deg{display:flex;gap:8px;align-items:flex-start;padding:7px 2px;border-top:1px dashed var(--t-line,#dde);font-size:12.5px;line-height:1.4;} .cp-deg:first-of-type{border-top:0;}'
+  +'.cp-deg .mk{width:20px;flex-shrink:0;text-align:center;font-weight:800;color:#a8803a;} .cp-deg.ok{opacity:.6;} .cp-deg.ok .mk{color:#1f9a55;}'
+  +'.cp-deg.alvo{background:#fffaf0;border:1px solid #d9b26a;border-radius:9px;padding:8px;margin-top:4px;}'
+  +'.cp-placar{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--t-line,#dde);}'
   +'@media print{.cp-fab,.cp-balao,.cp-painel{display:none!important;}}'
   +'@media (prefers-reduced-motion:reduce){.cp-balao,.cp-painel{animation:none;} .cp-rosto.falando .cp-boca{animation:none;}}';
   function css(){ if(document.getElementById('cpCss')) return; var s=document.createElement('style'); s.id='cpCss'; s.textContent=CSS; document.head.appendChild(s); }
@@ -264,7 +293,7 @@
     corpo:{ bem:'Ótimo! Lembre de alongar os ombros de vez em quando.', dor:'Tenta alongar o pescoço e os ombros devagar e, quando der, sentar um pouco. Se a dor continuar, vale procurar um médico.', cansaco:'Cansaço acumula. Se puder, faça uma pausa curta longe do balcão e beba água.' },
     sono:{ bem:'Que bom! Dia de energia.', mais_ou_menos:'Vai com calma hoje. Água e uma pausa curta à tarde ajudam.', mal:'Puxado, né? Hoje, evite muito café de uma vez e tente dormir mais cedo. Cuida de você.' },
     vida:{ tranquila:'Que bom! Isso aparece no sorriso. 🌿', corrida:'A vida corrida cansa. Tenta reservar um tempinho só seu hoje, nem que sejam 10 minutos.', dificil:'Obrigado por confiar. Momentos difíceis passam. Converse com quem você confia e, se for pesado demais, o CVV atende de graça no 188, 24 horas.' },
-    dia:{ musica:'Boa! Coloca aquela música no intervalo. 🎵', cafe:'Um café no intervalo cai bem! ☕', elogio:'Então lá vai: você faz diferença no atendimento da Vilaça. 💛', descanso:'Merecido! Na próxima pausa, senta e desliga 5 minutinhos.' },
+    dia:{ musica:'Boa! Coloca aquela música no intervalo. 🎵', cafe:'Um café no intervalo cai bem! ☕', elogio:'Então lá vai, e é verdade:', descanso:'Merecido! Na próxima pausa, senta e desliga 5 minutinhos.' },
   };
   async function enviarBE(pergunta, resposta, detalhe){ if(S.dia && S.dia.consentimento) await api({ op:'bemestar', pergunta:pergunta, resposta:resposta, detalhe:detalhe||'' }); }
   function perguntarBemEstar(cheio){
@@ -284,12 +313,14 @@
       var r = b.dataset.be;
       if(r === 'nao_dizer'){ enviarBE(q.id, r); balao('<div class="cp-txt">Tudo bem! Se precisar, estou aqui. 😊</div>', '', true, 8000); return; }
       var resp = (CUIDADO[q.id]||{})[r] || 'Obrigado por contar!';
+      if(['otima','bem','sim','tranquila'].indexOf(r) >= 0) resp += ' ' + elogio();
       if(q.texto && r === 'dificil' || q.texto && r === 'corrida'){
         var d2 = balao('<div class="cp-txt">' + esc(resp) + '</div><p style="margin:6px 0 4px;font-size:12.5px;">Se quiser, conte um pouco mais (opcional):</p><textarea id="cpBeTxt" maxlength="600" style="width:100%;box-sizing:border-box;min-height:60px;border:1px solid #d9b26a;border-radius:8px;padding:6px;font:inherit;"></textarea>', '<button type="button" class="cp-b pri" data-cp="beok">Enviar</button>', true);
         if(d2){ d2.querySelector('[data-cp="beok"]').onclick = function(){ enviarBE(q.id, r, (d2.querySelector('#cpBeTxt')||{}).value||''); balao('<div class="cp-txt">Obrigado pela confiança. 💛</div>', '', true, 12000); }; }
         return;
       }
       enviarBE(q.id, r);
+      if(q.id === 'dia' && r === 'elogio') resp += ' ' + elogio();
       balao('<div class="cp-txt">' + esc(resp) + '</div>', '', true, 15000);
     }; });
   }
@@ -339,12 +370,7 @@
     var m = d.meta || {}, pct = m.metaMes ? Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100)) : 0, eu = d.eu || {}, mel = d.melhor;
     var num = function(rot, v, ref){ return '<div class="cp-num"><b>'+v+'</b><small>'+rot+'</small>'+(ref!=null?'<em>melhor da loja: '+ref+'</em>':'')+'</div>'; };
     var semMeta = !(m.metaMes > 0);
-    var h = '<div class="cp-card"><h4>'+ic('estrela',14)+'Meta de hoje</h4>'
-      + (semMeta ? '<div class="cp-meta-v" style="font-size:18px;">Sem meta ainda</div><div class="cp-meta-s">Ainda não há meta desta loja no Lançamentos (fator da loja) nem histórico seu para sugerir uma.</div><div class="cp-meta-s" style="margin-top:6px;">No mês: <b>'+brl0(m.vendidoMes)+'</b>'+(eu.posicao?' · você está em <b>'+eu.posicao+'º de '+eu.deQuantas+'</b> na loja':'')+'</div></div>' : '')
-      + (semMeta ? '' : '<div class="cp-meta-v">'+brl0(m.hoje)+'</div><div class="cp-meta-s">'+(m.tipo==='lancamentos' ? 'Sua parte ('+m.participacao+'%) da meta da loja no Lançamentos, faltando '+m.diasRestantes+' dias no mês.' : 'Meta sugerida (sua média dos últimos 3 meses + 10%).')+'</div>'
-      + '<div class="cp-barra" aria-hidden="true"><i style="width:'+pct+'%"></i></div><div class="cp-meta-s">No mês: <b>'+brl0(m.vendidoMes)+'</b> de '+brl0(m.metaMes)+' ('+pct+'%)'+(eu.posicao?' · você está em <b>'+eu.posicao+'º de '+eu.deQuantas+'</b> na loja':'')+'</div>'
-      + (m.loja ? '<div class="cp-meta-s" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--t-line,#dde);">'+ic('loja',13)+' <b>Loja no mês:</b> '+brl0(m.loja.vendido)+' de '+brl0(m.loja.meta)+(m.loja.faixaAtual?' · faixa de <b>'+String(m.loja.faixaAtual.percentual).replace('.',',')+'%</b>':'')+(m.loja.proxima?' · faltam <b>'+brl0(m.loja.falta)+'</b> para '+String(m.loja.proxima.percentual).replace('.',',')+'%':'')+'</div>' : '')
-      + '</div>');
+    var h = cartaoMeta(d);
     h += '<div class="cp-card"><h4>'+ic('grafico',14)+'Seus números no mês</h4><div class="cp-nums">'
       + num('vendas', eu.vendas||0, mel?mel.vendas:null) + num('ticket médio', brl0(eu.ticketMedio), mel?brl0(mel.ticketMedio):null) + num('peças por venda', String(eu.pecasPorVenda||0).replace('.',','), mel?String(mel.pecasPorVenda).replace('.',','):null)
       + '</div>' + (mel && (parseInt(mel.vendasComServico)||parseInt(eu.vendasComServico)) ? '<div class="cp-meta-s" style="margin-top:6px;">A melhor da loja junta serviço em <b>'+esc(mel.vendasComServico)+'</b> das vendas. Você: <b>'+esc(eu.vendasComServico||'0%')+'</b>.</div>' : (eu.posicao===1?'<div class="cp-meta-s" style="margin-top:6px;">Você é a melhor da loja este mês. Continue assim!</div>':'')) + '</div>';
@@ -354,25 +380,145 @@
       + Object.keys(ROT).filter(function(k){ return (dmP[k]||[]).length; }).map(function(k){ return '<details style="margin-top:6px;"><summary style="cursor:pointer;font-weight:700;font-size:12.5px;color:#8a3560;">'+ROT[k]+' ('+dmP[k].length+')</summary>' + dmP[k].map(function(x){ return '<div class="cp-dica"><span class="n">•</span><span>'+esc(x)+'</span></div>'; }).join('') + '</details>'; }).join('') + '</div>';
     h += cartaoAprender();
     var va = d.vendaAtiva||[];
-    h += '<div class="cp-card"><h4>'+ic('telefone',14)+'Quem chamar hoje ('+va.length+')</h4>' + (va.length ? va.map(function(x,i){
-      return '<div class="cp-cli '+esc(x.tipo)+'"><b>'+esc(x.cliente||'Cliente')+'</b><div class="m">'+esc(x.motivo)+'</div><div class="cp-acoes"><button type="button" class="cp-b wa" data-cpmsg="'+i+'">'+ic('whatsapp',13)+'Mensagem pronta</button></div></div>'; }).join('')
-      : '<div class="cp-meta-s">Ninguém pendente hoje. Que tal pedir indicação aos clientes da semana?</div>') + '</div>';
+    h += cartaoChamar(va, d);
+    if(S.user && (S.user.nivel === 'diretoria' || S.user.nivel === 'gerente')) h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Base de clientes: quem volta e quem sumiu</h4><div id="cpBase"><button type="button" class="cp-b" data-cp="base">Ver a base e a recompra</button></div></div>';
     if(S.user && S.user.nivel === 'diretoria') h += '<div class="cp-card"><h4>'+ic('estrela',14)+'Avisos e quiz da equipe (só diretoria)</h4><div id="cpAvisos"><button type="button" class="cp-b" data-cp="avisos">Ver avisos e resultados</button></div></div>';
     if(S.user && S.user.nivel === 'diretoria') h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Equipe: bem-estar (só diretoria)</h4><div id="cpEquipe"><button type="button" class="cp-b" data-cp="equipe">Ver como a equipe está</button></div></div>';
     if(d.ranking && d.ranking.length) h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Ranking da loja (gerência)</h4><table class="cp-rank">' + d.ranking.map(function(r,i){ return '<tr><td>'+(i+1)+'º '+esc(r.nome)+'</td><td class="r">'+r.vendas+' vendas</td><td class="r">'+brl0(r.total)+'</td></tr>'; }).join('') + '</table></div>';
     h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
     c.innerHTML = h;
-    c.querySelectorAll('[data-cpmsg]').forEach(function(b){ b.onclick = function(){ abrirMensagem(va[+b.dataset.cpmsg]); }; });
+
     var be = c.querySelector('[data-cp="equipe"]'); if(be) be.onclick = verEquipe;
     var bav = c.querySelector('[data-cp="avisos"]'); if(bav) bav.onclick = verAvisos;
+    var bb2 = c.querySelector('[data-cp="base"]'); if(bb2) bb2.onclick = verBase;
     c.querySelectorAll('[data-cp-lic]').forEach(function(b){ b.onclick = function(){ lerLicao(b.dataset.cpLic); }; });
     c.querySelectorAll('[data-cp-tema]').forEach(function(b){ b.onclick = function(){ abrirTema(b.dataset.cpTema); }; });
-    var bq = c.querySelector('[data-cp="quiz"]'); if(bq) bq.onclick = iniciarQuiz;
+    var bq = c.querySelector('[data-cp="quiz"]'); if(bq) bq.onclick = function(){ iniciarQuiz(); };
+    var bqf = c.querySelector('[data-cp="quizfoco"]'); if(bqf) bqf.onclick = function(){ iniciarQuiz('fracos'); };
     var bd = c.querySelector('[data-cp="dia"]'); if(bd) bd.onclick = perguntaDoDia;
     var bb = c.querySelector('[data-cp="biblioteca"]'); if(bb) bb.onclick = abrirBiblioteca;
   }
 
   /* ---------- v6: AULAS (pedras, ouro, ourivesaria), QUIZ e AVISOS ---------- */
+  /* ---------- v6: META EM ESCADA, QUEM LIGAR e BASE DE CLIENTES ---------- */
+  function pc(x){ return String(x).replace('.',','); }
+  function vendasTxt(n){ return pc(n) + ' venda' + (n > 1 ? 's' : ''); }
+  /** Meta: o que falta vira caminho (por dia e em vendas por dia). Nunca cobrança. */
+  function cartaoMeta(d){
+    var m = d.meta || {}, eu = d.eu || {}, mm = m.minha || {}, dias = m.diasRestantes || 1;
+    var h = '<div class="cp-card"><h4>' + ic('estrela',14) + 'Meta: o caminho até o fim do mês</h4>';
+    if(!(m.metaMes > 0)){
+      return h + '<div class="cp-meta-v" style="font-size:18px;">Sem meta ainda</div>'
+        + '<div class="cp-meta-s">Ainda não há faixa desta loja no Lançamentos nem histórico seu para sugerir uma. Assim que houver, o caminho aparece aqui.</div>'
+        + '<div class="cp-meta-s" style="margin-top:6px;">No mês você já fez <b>' + brl0(m.vendidoMes) + '</b>'
+        + (eu.posicao ? ' · você está em <b>' + eu.posicao + 'º de ' + eu.deQuantas + '</b> na loja' : '') + '</div></div>';
+    }
+    var pct = Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100));
+    h += '<div class="cp-meta-v">' + brl0(m.hoje) + '</div>'
+      + '<div class="cp-meta-s">é o ritmo de hoje para fechar o mês na meta'
+      + (m.tipo === 'lancamentos' ? ' (sua parte é ' + m.participacao + '% da loja)' : ' (meta sugerida pela sua média)') + '.</div>';
+    if(mm.atingida) h += '<div class="cp-meta-s" style="margin-top:5px;color:#1f9a55;font-weight:700;">Meta do mês batida! Tudo o que vier agora é a mais. 🎉</div>';
+    else h += '<div class="cp-meta-s" style="margin-top:5px;">Faltam <b>' + brl0(mm.falta) + '</b> em <b>' + dias + ' dia' + (dias > 1 ? 's' : '') + '</b>'
+      + (mm.vendasPorDia ? ' — dá cerca de <b>' + vendasTxt(mm.vendasPorDia) + ' por dia</b> no seu ticket médio.' : '.') + '</div>';
+    h += '<div class="cp-barra" aria-hidden="true"><i style="width:' + pct + '%"></i></div>'
+      + '<div class="cp-meta-s">No mês: <b>' + brl0(m.vendidoMes) + '</b> de ' + brl0(m.metaMes) + ' (' + pct + '% do caminho)'
+      + (eu.posicao ? ' · ' + eu.posicao + 'º de ' + eu.deQuantas + ' na loja' : '') + '</div>';
+    if(m.hojeVendido > 0 || m.hoje > 0){
+      var falta = Math.max(0, (m.hoje||0) - (m.hojeVendido||0));
+      h += '<div class="cp-placar"><span class="cp-meta-s">Hoje: <b>' + brl0(m.hojeVendido||0) + '</b></span>'
+        + '<span class="cp-meta-s">' + (falta <= 0 ? '· ritmo de hoje já alcançado. Excelente!' : '· faltam ' + brl0(falta) + ' para o ritmo de hoje') + '</span></div>';
+    }
+    if(m.projecaoMinha > 0){
+      var sobra = m.projecaoMinha - m.metaMes;
+      h += '<div class="cp-meta-s" style="margin-top:4px;">No seu ritmo deste mês você fecha em <b>' + brl0(m.projecaoMinha) + '</b>'
+        + (sobra >= 0 ? ' — acima da meta. Segura esse ritmo!' : ' — com mais ' + (mm.vendasPorDia ? vendasTxt(Math.max(0.1, Math.round((Math.abs(sobra)/Math.max(1,dias)/Math.max(1,m.ticketRef||1))*10)/10)) + ' por dia' : brl0(Math.abs(sobra)) + ' no mês') + ' você chega lá.') + '</div>';
+    }
+    var esc2 = m.escada || [];
+    if(esc2.length){
+      var prox = -1;
+      for(var i = 0; i < esc2.length; i++){ if(!esc2[i].atingida){ prox = i; break; } }
+      h += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--t-line,#dde);">'
+        + '<b style="font-size:12px;color:#8a3560;text-transform:uppercase;letter-spacing:.04em;">Escada da loja (Lançamentos)</b>'
+        + esc2.map(function(f, i){
+            var alvo = i === prox, mp = f.minhaParte || {};
+            return '<div class="cp-deg ' + (f.atingida ? 'ok' : '') + (alvo ? ' alvo' : '') + '"><span class="mk">' + (f.atingida ? '✔' : (alvo ? '→' : '·')) + '</span><span><b>' + pc(f.percentual) + '%</b> · ' + brl0(f.valor)
+              + (f.atingida ? ' — <b>batida</b>' : ' — faltam <b>' + brl0(f.falta) + '</b>' + (f.porDia ? ' (' + brl0(f.porDia) + ' por dia)' : ''))
+              + (alvo && mp.falta > 0 ? '<br><small>Sua parte: faltam ' + brl0(mp.falta) + (mp.vendasPorDia ? ' · ' + vendasTxt(mp.vendasPorDia) + ' por dia' : '') + '</small>' : '')
+              + '</span></div>';
+          }).join('')
+        + (m.loja ? '<div class="cp-meta-s" style="margin-top:6px;">' + ic('loja',13) + ' Loja no mês: <b>' + brl0(m.loja.vendido) + '</b>' + (m.projecaoLoja ? ' · no ritmo atual fecha em <b>' + brl0(m.projecaoLoja) + '</b>' : '') + '</div>' : '')
+        + '</div>';
+    }
+    return h + '</div>';
+  }
+
+  /** Quem ligar hoje: contato na mão + roteiro da conversa. Nada é enviado por aqui. */
+  var ROT_TIPO = { orcamento:'Orçamento', aniversario:'Aniversário', retorno:'Mesma época', reativar:'Reativar' };
+  function cartaoChamar(va, d){
+    var rel = d.relacionamento || {};
+    var h = '<div class="cp-card"><h4>' + ic('telefone',14) + 'Quem ligar hoje (' + va.length + ')</h4>'
+      + '<div class="cp-meta-s" style="margin-bottom:8px;">Ligue você mesma: a voz fecha o que a mensagem não fecha. Aviso de pedido pronto já sai sozinho, não entra nesta lista.</div>';
+    h += va.length ? va.map(function(x){
+      var tel = x.telefone || '', lk = telLink(tel), wa = telWa(tel);
+      return '<div class="cp-cli ' + esc(x.tipo) + '"><b>' + esc(x.cliente || 'Cliente') + '</b><span class="cp-tag">' + esc(ROT_TIPO[x.tipo] || 'Chamar') + '</span>'
+        + '<div class="m">' + esc(x.motivo) + '</div>'
+        + ((x.metricas||[]).length ? '<div class="cp-chips">' + x.metricas.map(function(t){ return '<span>' + esc(t) + '</span>'; }).join('') + '</div>' : '')
+        + '<div class="cp-acoes">'
+        + (lk ? '<a class="cp-b pri fone" href="' + lk + '">' + ic('telefone',13) + ' ' + esc(telBonito(tel)) + '</a>' : '<span class="cp-meta-s">Sem telefone no cadastro</span>')
+        + (wa ? '<a class="cp-b wa" href="' + wa + '" target="_blank" rel="noopener">' + ic('whatsapp',13) + 'Abrir conversa</a>' : '')
+        + '</div>'
+        + ((x.roteiro||[]).length ? '<details><summary>O que dizer na ligação</summary><ol>' + x.roteiro.map(function(p){ return '<li>' + esc(p) + '</li>'; }).join('') + '</ol></details>' : '')
+        + '</div>';
+    }).join('') : '<div class="cp-meta-s">Ninguém na fila hoje. Aproveite para pedir indicação a quem comprou esta semana.</div>';
+    if(rel.total) h += '<div class="cp-meta-s" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--t-line,#dde);">Sua carteira: <b>' + rel.total + '</b> clientes · '
+      + (rel.campea||0) + ' campeãs · ' + (rel.fiel||0) + ' fiéis · ' + ((rel.em_risco||0) + (rel.dormindo||0)) + ' esfriando · ' + (rel.unica||0) + ' de uma compra só.</div>';
+    return h + '</div>';
+  }
+
+  /** Base de clientes (gerência/diretoria): recompra, intervalo e quem está esfriando. */
+  var FAIXA_ROT = { campea:'Campeãs — 3+ compras e em dia', fiel:'Fiéis — 2 compras e em dia', nova:'Novas — 1ª compra recente', em_risco:'Esfriando — passou do intervalo dela', dormindo:'Dormindo — sumiram faz tempo', unica:'Compraram 1 vez e não voltaram' };
+  async function verBase(){
+    var box = document.getElementById('cpBase'); if(!box) return;
+    box.innerHTML = '<div class="cp-meta-s">Calculando a base…</div>';
+    var r = await api({ op:'clientes' });
+    if(!r || !r.ok){ box.innerHTML = '<div class="cp-meta-s" style="color:#c62828;">' + esc((r && r.error) || 'Não consegui calcular agora.') + '</div>'; return; }
+    var h = '<div class="cp-nums"><div class="cp-num"><b>' + r.total + '</b><small>clientes com compra</small></div>'
+      + '<div class="cp-num"><b>' + r.taxaRecompra + '%</b><small>voltaram a comprar</small></div>'
+      + '<div class="cp-num"><b>' + (r.intervaloMedio ? r.intervaloMedio + ' d' : '—') + '</b><small>entre uma compra e outra</small></div></div>';
+    h += Object.keys(FAIXA_ROT).filter(function(k){ return (r.faixas||{})[k]; }).map(function(k){
+      return '<div class="cp-dica"><span class="n">' + r.faixas[k] + '</span><span>' + esc(FAIXA_ROT[k]) + '</span></div>'; }).join('');
+    if((r.porVendedora||[]).length) h += '<div class="cp-meta-s" style="margin-top:8px;"><b>Por vendedora</b></div><table class="cp-rank">'
+      + r.porVendedora.map(function(p){ return '<tr><td>' + esc(p.nome) + '</td><td class="r">' + p.clientes + ' clientes</td><td class="r">' + p.taxaRecompra + '% voltam</td><td class="r">' + p.emRisco + ' p/ reativar</td></tr>'; }).join('') + '</table>';
+    h += '<div class="cp-meta-s" style="margin-top:8px;">O app tem <b>' + r.mesesDeHistorico + ' mês(es)</b> de histórico de compras. Quanto mais tempo passa, mais certeira fica a hora de ligar — a conta de frequência já está rodando.</div>';
+    if(S.user && S.user.nivel === 'diretoria') h += '<div style="margin-top:8px;"><button type="button" class="cp-b" data-cp="cfgreat">Ajustar quando o Vilacinha sugere reativar</button></div>';
+    box.innerHTML = h;
+    var bc = box.querySelector('[data-cp="cfgreat"]'); if(bc) bc.onclick = function(){ abrirConfigReativacao(r.cfg); };
+  }
+  var CFG_ROT = [
+    ['diasMinimos', 'Só sugerir depois de quantos dias sem comprar', 'Abaixo disso a cliente ainda é recente.'],
+    ['fatorAtraso', 'Quantas vezes o intervalo dela para considerar atraso', 'Ex.: 1,3 = passou 30% do tempo que ela costuma levar.'],
+    ['minCompras', 'Mínimo de compras para contar como cliente de frequência', ''],
+    ['unicaCompraDias', 'Cliente de 1 compra só: ligar depois de quantos dias', ''],
+    ['maxPorVendedora', 'Quantas clientes para reativar por dia, por vendedora', 'Lista curta é lista que a vendedora cumpre.'],
+    ['ticketMinimo', 'Ticket médio mínimo para entrar na lista (0 = todas)', '']
+  ];
+  function abrirConfigReativacao(cfg){
+    var c = cfg || {};
+    modal('<h3 style="margin:0 0 4px;font-size:16px;">Quando sugerir reativar</h3>'
+      + '<p style="margin:0 0 10px;font-size:13px;color:var(--t-text-soft,#556);">O Vilacinha compara o tempo que cada cliente costuma levar entre compras com o tempo que ela está sumida.</p>'
+      + CFG_ROT.map(function(f){ return '<div style="margin-bottom:8px;"><label style="font-size:12.5px;font-weight:600;display:block;">' + esc(f[1]) + '</label>'
+          + (f[2] ? '<div style="font-size:11.5px;color:var(--t-text-soft,#667);margin-bottom:3px;">' + esc(f[2]) + '</div>' : '')
+          + '<input id="cfg_' + f[0] + '" type="number" step="0.1" min="0" value="' + esc(c[f[0]] != null ? c[f[0]] : '') + '" style="width:120px;border:1px solid var(--t-line-strong,#99a);border-radius:8px;padding:7px 9px;font:inherit;background:var(--t-surface,#fff);color:inherit;"></div>'; }).join('')
+      + '<div class="cp-acoes" style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;"><button type="button" class="cp-b" data-x="fechar">Cancelar</button><button type="button" class="cp-b pri" data-x="salvar">Salvar</button></div>',
+      function(ov, fecha){
+        ov.querySelector('[data-x="salvar"]').onclick = async function(){
+          var env = {}; CFG_ROT.forEach(function(f){ var el = ov.querySelector('#cfg_' + f[0]); if(el && el.value !== '') env[f[0]] = Number(String(el.value).replace(',', '.')); });
+          var r = await api({ op:'config', salvar: env });
+          if(r && r.ok){ toast('Pronto. Vale a partir do próximo dia do Vilacinha.'); fecha(); } else toast((r && r.error) || 'Não consegui salvar.');
+        };
+      });
+  }
+
   function cartaoAprender(){
     var L = (S.licoes && S.licoes.pendentes) || [];
     var pd = S.pd, h = '<div class="cp-card"><h4>'+ic('joia',14)+'Aprenda com o Vilacinha'+(L.length?' ('+L.length+' nova'+(L.length>1?'s':'')+')':'')+'</h4>';
@@ -384,12 +530,29 @@
     if(L.length){
       h += L.slice(0,3).map(function(l){ return '<div class="cp-dica"><span class="n">'+ic('info',12)+'</span><span><b>'+esc(l.titulo)+'</b>'+(l.via_codigo?' <small style="color:#8a3560;">· apareceu na via '+esc(l.via_codigo)+'</small>':'')+'<br><button type="button" class="cp-b" style="margin-top:4px;" data-cp-lic="'+esc(l.id)+'">Ler a aula</button></span></div>'; }).join('');
     } else h += '<div class="cp-meta-s">Sem aula nova agora. Quando uma via trouxer uma pedra ou assunto novo, a aula aparece aqui para todas.</div>';
-    h += '<div class="cp-acoes" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" class="cp-b" data-cp="biblioteca">'+ic('documento',13)+'Biblioteca de pedras e ouro</button><button type="button" class="cp-b" data-cp="quiz">'+ic('estrela',13)+'Fazer o quiz</button></div></div>';
+    var pg = S.prog;
+    if(pg && pg.ok){
+      h += '<div class="cp-be" style="margin-top:8px;"><b>' + esc(pg.nivel) + ' · ' + pg.pontos + ' pontos</b>'
+        + (pg.proximoNivel ? ' <span class="m">faltam ' + pg.proximoNivel.faltam + ' para ' + esc(pg.proximoNivel.nome) + '</span>' : ' <span class="m">nível máximo!</span>')
+        + '<div class="r">' + [pg.diasSeguidos ? pg.diasSeguidos + ' dias seguidos' : '', pg.mediaQuiz != null ? 'média no quiz ' + pg.mediaQuiz + '%' : '', pg.licoesLidas ? pg.licoesLidas + ' aulas lidas' : '']
+            .filter(Boolean).map(function(t){ return '<span>' + esc(t) + '</span>'; }).join('') + '</div>'
+        + ((pg.dominio||[]).length ? '<details><summary>Meu domínio por assunto</summary><div class="r">'
+            + pg.dominio.map(function(dm){ return '<span class="' + (dm.pct >= 70 ? 'bom' : 'ruim') + '">' + esc(dm.tema) + ' ' + dm.pct + '%</span>'; }).join('') + '</div></details>' : '')
+        + (pg.fracos && pg.fracos.length ? '<div class="m" style="margin-top:4px;">Para subir rápido, estude: <b>' + esc(pg.fracos.join(', ')) + '</b>.</div>' : '')
+        + '</div>';
+    }
+    h += '<div class="cp-acoes" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" class="cp-b" data-cp="biblioteca">'+ic('documento',13)+'Biblioteca de pedras e ouro</button><button type="button" class="cp-b" data-cp="quiz">'+ic('estrela',13)+'Fazer o quiz</button>'
+      + (pg && pg.fracos && pg.fracos.length ? '<button type="button" class="cp-b pri" data-cp="quizfoco">Treinar o que eu erro</button>' : '') + '</div></div>';
     return h;
   }
   async function carregarLicoes(){
     var r = await apiS({ op:'licoes' });
     if(r && r.ok){ S.licoes = r; pintarFab(); }
+    return r;
+  }
+  async function carregarProgresso(){
+    var r = await apiS({ op:'meuProgresso' });
+    if(r && r.ok) S.prog = r;
     return r;
   }
   function modal(html, aoMontar){
@@ -461,8 +624,8 @@
     }; });
   }
   /* quiz: 8 perguntas por função; a correção é feita no servidor */
-  async function iniciarQuiz(){
-    var r = await apiS({ op:'quizIniciar' });
+  async function iniciarQuiz(foco){
+    var r = await apiS({ op:'quizIniciar', foco: foco || '' });
     if(!r || !r.ok){ toast((r && r.error) || 'Não consegui abrir o quiz agora.'); return; }
     var P = r.perguntas, i = 0, resp = [];
     var ov = modal('<div id="cpQz"></div>');
@@ -480,8 +643,10 @@
       var f = await apiS({ op:'quizResponder', respostas:resp });
       if(!f || !f.ok){ box.innerHTML = '<p>'+esc((f&&f.error)||'Não consegui corrigir agora.')+'</p><div class="cp-acoes"><button type="button" class="cp-b" data-x="fechar">Fechar</button></div>'; box.querySelector('[data-x="fechar"]').onclick = function(){ ov.remove(); }; return; }
       var cor = f.pct>=90?'#1f9a55':f.pct>=70?'#2f7bd0':f.pct>=40?'#a8803a':'#c62828';
+      carregarProgresso().then(function(){ desenhar(); });
       box.innerHTML = '<div style="text-align:center;"><div style="font-size:34px;font-weight:800;color:'+cor+';">'+f.pct+'%</div><div style="font-weight:700;">'+esc(f.nivel)+' · '+f.acertos+' de '+f.total+' certas</div></div>'
         + '<div style="margin-top:10px;max-height:46vh;overflow:auto;">' + f.detalhes.map(function(d){ return '<div style="padding:8px 0;border-top:1px dashed var(--t-line,#dde);"><b style="color:'+(d.ok?'#1f9a55':'#c62828')+';">'+(d.ok?'Acertou':'Errou')+'</b> · '+esc(d.q)+(d.ok?'':'<br><small>Sua resposta: '+esc(d.sua||'—')+'<br>Correta: <b>'+esc(d.certa)+'</b></small>')+'<br><small style="color:var(--t-text-soft,#556);">'+esc(d.e)+'</small></div>'; }).join('') + '</div>'
+        + ((f.estudar||[]).length ? '<div class="cp-meta-s" style="margin-top:8px;">Para a próxima: estude <b>' + esc(f.estudar.join(', ')) + '</b>. O botão "Treinar o que eu erro" traz só esses assuntos.</div>' : '')
         + '<div class="cp-acoes" style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;"><button type="button" class="cp-b" data-x="fechar">Fechar</button></div>';
       box.querySelector('[data-x="fechar"]').onclick = function(){ ov.remove(); };
     }
@@ -511,7 +676,7 @@
   async function avisosIniciais(){
     var r = await carregarLicoes();
     var L = r && r.ok ? r.pendentes : [];
-    await carregarDia();
+    await carregarDia(); await carregarProgresso();
     if(S.user && S.user.nivel==='diretoria'){
       var av = await apiS({ op:'avisos' });
       if(av && av.ok && av.avisos.length && !S.aberto){
@@ -555,32 +720,7 @@
   }
 
   /* ---------- mensagem pronta: a vendedora revisa e envia (clique) ---------- */
-  function abrirMensagem(x){
-    if(!x) return;
-    var ov = document.createElement('div'); ov.className = 'cp-ov';
-    ov.innerHTML = '<div class="cp-modal" role="dialog" aria-modal="true" aria-label="Mensagem para '+esc(x.cliente)+'"><h3 style="margin:0 0 4px;font-size:16px;">Mensagem para '+esc(x.cliente)+'</h3><p style="margin:0 0 8px;color:var(--t-text-soft,#556);font-size:13px;">'+esc(x.motivo)+'. Revise e ajuste do seu jeito antes de enviar.</p>'
-      + '<textarea id="cpMsgTxt">'+esc(x.mensagem)+'</textarea><div class="cp-acoes" style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px;"><button type="button" class="cp-b" data-x="fechar">Cancelar</button><button type="button" class="cp-b" data-x="copiar">'+ic('copiar',13)+'Copiar</button><button type="button" class="cp-b pri" data-x="enviar">'+ic('whatsapp',13)+'Enviar pelo WhatsApp</button></div></div>';
-    document.body.appendChild(ov);
-    var fecha = function(){ ov.remove(); };
-    ov.addEventListener('click', function(e){ if(e.target===ov) fecha(); });
-    ov.querySelector('[data-x="fechar"]').onclick = fecha;
-    ov.querySelector('[data-x="copiar"]').onclick = function(){ try{ navigator.clipboard.writeText(ov.querySelector('#cpMsgTxt').value); toast('Mensagem copiada.'); }catch(e){} };
-    ov.querySelector('[data-x="enviar"]').onclick = async function(){
-      var b = this, txt = ov.querySelector('#cpMsgTxt').value.trim(); if(!txt) return;
-      if(window.MarketingOff && MarketingOff.permitir && !(await MarketingOff.permitir({ telefone:x.telefone, nome:x.cliente, tags:[] }))) return;
-      b.disabled = true;
-      var vend = (S.user && (S.user.apelido || S.user.nome)) || '';
-      var rod = '\n\n—\n' + (vend ? vend + ' · ' : '') + (S.dia && S.dia.loja || S.lojaNome || 'Vilaça Joias') + '\nPara continuar a conversa, é só responder esta mensagem.';
-      var r = null;
-      try{ var res = await fetch(URL_FN('enviar-via'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY },
-        body: JSON.stringify({ senha:S.senha, telefone:x.telefone, cliente:x.cliente||'', texto: txt + rod, tipo:'chamar_cliente', registroId:x.id||'', via:'CHAMAR CLIENTE' }) }); r = await res.json().catch(function(){ return {}; }); }
-      catch(e){ r = { erro:'Sem conexão.' }; }
-      b.disabled = false;
-      if(r && r.ok){ toast('Mensagem enviada para ' + (x.cliente||'o cliente') + '.'); fecha(); S.dia.vendaAtiva = (S.dia.vendaAtiva||[]).filter(function(y){ return y !== x; }); pintarFab(); desenhar(); }
-      else toast((r && (r.erro || r.error)) || 'Não foi possível enviar. Tente de novo.');
-    };
-  }
-
+  /* 23/11: a mensagem automática saiu daqui. Quem chama a cliente é a vendedora, pelo telefone, com o roteiro na tela. */
   async function perguntar(texto){
     texto = String(texto||'').trim(); if(!texto) return;
     var ta = document.getElementById('cpTexto'); if(ta) ta.value = '';

@@ -339,14 +339,18 @@ window.AJUDA_TOPICOS = [
     <p>A carinha no <b>canto de baixo da tela</b> é o <b>Vilacinha</b>, seu gerente-auxiliar. Ele olha os seus números e te ajuda a vender mais.</p>
     <ol class="passos">
       <li>Toque na carinha para abrir <b>o seu dia</b>: meta de hoje, seus números no mês e dicas.</li>
-      <li><b>Quem chamar hoje</b>: orçamentos vencendo, aniversariantes, clientes que compraram há um ano e pedidos prontos. Toque em <span class="btn-ref">Mensagem pronta</span>, ajuste o texto e toque em <span class="btn-ref">Enviar pelo WhatsApp</span>.</li>
+      <li><b>Quem ligar hoje</b>: orçamentos vencendo ou parados, aniversariantes, quem comprou nesta mesma época em anos anteriores e <b>quem comprava sempre e sumiu</b>. O telefone aparece na tela: toque no número para <b>ligar</b>. Aviso de pedido pronto não entra aqui, porque já sai sozinho.</li>
+      <li>Em cada cliente, abra <span class="btn-ref">O que dizer na ligação</span>: são 4 passos (como abrir, o motivo, o que perguntar e como marcar o dia). Fale com as suas palavras.</li>
       <li>Pergunte o que quiser sobre vendas, digitando ou pelo <b>microfone</b>. O botão <b>Ouvir</b> (alto-falante) <b>lê em voz alta</b>; toque de novo para parar.</li>
     </ol>
     <div class="dica">De vez em quando ele aparece num balão com uma dica. Toque em <span class="btn-ref">Agora não</span> para ele esperar 2 horas.</div>
     <div class="aviso">Você vê a comparação com <b>a melhor da loja</b>, sem nome. A gerência vê o ranking completo. Nenhuma mensagem sai para o cliente sem você tocar em enviar.</div>
     <div class="dica"><b>Dicas por tela:</b> ao abrir Venda, Pedido, Orçamento, Chat e outras telas, às vezes ele mostra uma dica daquela tela, de preferência uma que você ainda não viu. A meta é sempre a <b>próxima faixa</b> da loja: bateu, ela passa para a seguinte.</div>
     <div class="dica"><b>Aulas:</b> quando uma via (venda, pedido ou orçamento) trouxer uma pedra ou assunto de ourivesaria, o Vilacinha manda uma <b>aula curta para todas</b>, com como argumentar com a cliente. Toque em <span class="btn-ref">Abrir</span> no balão ou veja em <b>Aprenda com o Vilacinha</b>. Há também a <b>Biblioteca</b> (pedras, teor do ouro, liga, prata, cravação) e, se você perguntar algo novo, ele explica e guarda o assunto lá.</div>
+    <div class="dica"><b>Meta em escada:</b> o cartão de meta mostra quanto falta até cada faixa da loja, <b>quanto por dia</b> e <b>quantas vendas por dia</b> no seu ticket médio. Mostra também quanto você já fez hoje e em quanto fecha o mês no seu ritmo.</div>
+    <div class="dica"><b>Seu nível:</b> você ganha pontos respondendo a pergunta do dia (3), acertando no quiz (2 por acerto) e lendo as aulas (1). Os pontos viram níveis: Aprendiz, Bronze, Prata, Ouro e Diamante. O cartão mostra o seu domínio por assunto e o que estudar.</div>
     <div class="dica"><b>Pergunta do dia:</b> todo dia o Vilacinha traz 1 pergunta nova (sobre pedras, ouro, ourivesaria, vendas e gestão, sempre renovada). Toque em <span class="btn-ref">Responder agora</span> no cartão "Aprenda com o Vilacinha". Você vê a resposta certa e o porquê, e acompanha a sua sequência de dias.</div>
+    <div class="dica"><b>Treinar o que eu erro:</b> esse botão monta um quiz só com os assuntos em que você mais errou. É o caminho mais rápido para subir de nível.</div>
     <div class="dica"><b>Quiz:</b> toque em <span class="btn-ref">Fazer o quiz</span> para responder 8 perguntas do seu nível (vendedora ou gerência). Ao final você vê o que acertou e por quê. A diretoria acompanha os resultados.</div>
     <div class="dica"><b>Como você está?</b> De vez em quando ele pergunta do seu dia (água, cansaço, sono, vida fora da loja), com resposta de um toque e sempre com "prefiro não dizer". Só pergunta se você aceitar, e as respostas ficam visíveis apenas para a diretoria.</div>
   `
