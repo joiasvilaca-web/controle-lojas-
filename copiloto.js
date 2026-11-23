@@ -32,6 +32,12 @@
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
   }
 
+  async function apiD(body){
+    try{ var r = await fetch(URL_FN('copiloto-dia'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
+      if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
+    catch(e){ return { ok:false, error:'Sem conexão.' }; }
+  }
+
   /* ícone de ouvir: alto-falante com ondas (anima enquanto fala) */
   function icOuvir(t){
     return '<svg class="cp-som" width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -362,13 +368,19 @@
     c.querySelectorAll('[data-cp-lic]').forEach(function(b){ b.onclick = function(){ lerLicao(b.dataset.cpLic); }; });
     c.querySelectorAll('[data-cp-tema]').forEach(function(b){ b.onclick = function(){ abrirTema(b.dataset.cpTema); }; });
     var bq = c.querySelector('[data-cp="quiz"]'); if(bq) bq.onclick = iniciarQuiz;
+    var bd = c.querySelector('[data-cp="dia"]'); if(bd) bd.onclick = perguntaDoDia;
     var bb = c.querySelector('[data-cp="biblioteca"]'); if(bb) bb.onclick = abrirBiblioteca;
   }
 
   /* ---------- v6: AULAS (pedras, ouro, ourivesaria), QUIZ e AVISOS ---------- */
   function cartaoAprender(){
     var L = (S.licoes && S.licoes.pendentes) || [];
-    var h = '<div class="cp-card"><h4>'+ic('joia',14)+'Aprenda com o Vilacinha'+(L.length?' ('+L.length+' nova'+(L.length>1?'s':'')+')':'')+'</h4>';
+    var pd = S.pd, h = '<div class="cp-card"><h4>'+ic('joia',14)+'Aprenda com o Vilacinha'+(L.length?' ('+L.length+' nova'+(L.length>1?'s':'')+')':'')+'</h4>';
+    if(pd && pd.ok && !pd.indisponivel && !pd.desligado){
+      h += '<div class="cp-be" style="margin:0 0 8px;border-color:#d9b26a;background:#fffaf0;"><b>Pergunta do dia'+(pd.respondida?(pd.acertou?' · você acertou':' · respondida'):' · 1 minuto')+'</b>'
+        + '<div class="m">'+(pd.respondida ? 'Volte amanhã para a próxima.' : 'Uma pergunta por dia, sobre o que aparece nas vias e na loja.')+(pd.sequencia>1?' Sequência: <b>'+pd.sequencia+' dias</b>.':'')+'</div>'
+        + '<button type="button" class="cp-b '+(pd.respondida?'':'pri')+'" style="margin-top:6px;" data-cp="dia">'+(pd.respondida?'Rever a resposta':'Responder agora')+'</button></div>';
+    }
     if(L.length){
       h += L.slice(0,3).map(function(l){ return '<div class="cp-dica"><span class="n">'+ic('info',12)+'</span><span><b>'+esc(l.titulo)+'</b>'+(l.via_codigo?' <small style="color:#8a3560;">· apareceu na via '+esc(l.via_codigo)+'</small>':'')+'<br><button type="button" class="cp-b" style="margin-top:4px;" data-cp-lic="'+esc(l.id)+'">Ler a aula</button></span></div>'; }).join('');
     } else h += '<div class="cp-meta-s">Sem aula nova agora. Quando uma via trouxer uma pedra ou assunto novo, a aula aparece aqui para todas.</div>';
@@ -416,6 +428,38 @@
     modal('<h3 style="margin:0 0 8px;font-size:16px;">'+esc(r.nome)+'</h3>'+paragrafos(r.texto)+'<div class="cp-acoes" style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;"><button type="button" class="cp-b" data-x="ouvir">'+icOuvir(14)+' Ouvir</button><button type="button" class="cp-b" data-x="fechar">Fechar</button></div>',
       function(ov){ ov.querySelector('[data-x="ouvir"]').onclick = function(){ falar(r.nome+'. '+r.texto); }; });
   }
+  /* pergunta do dia: 1 por dia, renovada pela IA a partir das vias, das aulas e de assuntos importantes */
+  async function carregarDia(){
+    var r = await apiD({ op:'hoje' });
+    if(r && r.ok){ S.pd = r; }
+    return r;
+  }
+  async function perguntaDoDia(){
+    var r = S.pd && S.pd.ok && !S.pd.indisponivel ? S.pd : await carregarDia();
+    if(!r || !r.ok || r.indisponivel){ toast('A pergunta de hoje ainda não ficou pronta. Tente em instantes.'); return; }
+    var ov = modal('<div id="cpPd"></div>');
+    function resultado(f){
+      var box = ov.querySelector('#cpPd'), cor = f.acertou ? '#1f9a55' : '#c62828';
+      box.innerHTML = '<div style="font-size:12px;color:#8a3560;font-weight:700;">Pergunta do dia · '+esc(r.tema||'')+'</div><h3 style="margin:6px 0 10px;font-size:16px;line-height:1.35;">'+esc(r.q)+'</h3>'
+        + r.opcoes.map(function(o,i){ var cert = i===f.certa, mine = i===f.escolha; return '<div style="padding:8px 10px;margin-bottom:6px;border-radius:9px;border:1px solid '+(cert?'#1f9a55':mine?'#c62828':'var(--t-line,#dde)')+';background:'+(cert?'#e3f4e9':mine?'#fde2e2':'transparent')+';line-height:1.35;">'+(cert?'<b>Certa: </b>':mine?'<b>Sua resposta: </b>':'')+esc(o)+'</div>'; }).join('')
+        + '<div style="margin:8px 0;"><b style="color:'+cor+';">'+(f.acertou?'Acertou!':'Não foi dessa vez.')+'</b> '+esc(f.explicacao||'')+'</div>'
+        + '<div class="cp-meta-s">Sequência: <b>'+(f.sequencia||0)+' dia'+((f.sequencia||0)===1?'':'s')+'</b> · últimos 30 dias: <b>'+(f.acertos30||0)+' de '+(f.respondidas30||0)+'</b> certas.</div>'
+        + '<div class="cp-acoes" style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;"><button type="button" class="cp-b" data-x="fechar">Fechar</button></div>';
+      box.querySelector('[data-x="fechar"]').onclick = function(){ ov.remove(); };
+    }
+    if(r.respondida){ resultado(r); return; }
+    var box = ov.querySelector('#cpPd');
+    box.innerHTML = '<div style="font-size:12px;color:#8a3560;font-weight:700;">Pergunta do dia · '+esc(r.tema||'')+'</div><h3 style="margin:6px 0 10px;font-size:16px;line-height:1.35;">'+esc(r.q)+'</h3>'
+      + r.opcoes.map(function(o,i){ return '<button type="button" class="cp-b" style="display:block;width:100%;text-align:left;margin-bottom:7px;white-space:normal;line-height:1.35;" data-op="'+i+'">'+esc(o)+'</button>'; }).join('')
+      + '<div class="cp-acoes" style="display:flex;justify-content:flex-end;margin-top:6px;"><button type="button" class="cp-b" data-x="fechar">Depois</button></div>';
+    box.querySelector('[data-x="fechar"]').onclick = function(){ ov.remove(); };
+    box.querySelectorAll('[data-op]').forEach(function(b){ b.onclick = async function(){
+      box.querySelectorAll('button').forEach(function(x){ x.disabled = true; });
+      var f = await apiD({ op:'responder', escolha:+b.dataset.op });
+      if(!f || !f.ok || !f.respondida){ toast((f && f.error) || 'Não consegui registrar agora.'); ov.remove(); return; }
+      S.pd = Object.assign({}, r, f); resultado(S.pd); desenhar();
+    }; });
+  }
   /* quiz: 8 perguntas por função; a correção é feita no servidor */
   async function iniciarQuiz(){
     var r = await apiS({ op:'quizIniciar' });
@@ -447,7 +491,7 @@
   async function verAvisos(){
     var box = document.getElementById('cpAvisos'); if(!box) return;
     box.innerHTML = '<div class="cp-meta-s">Carregando…</div>';
-    var rs = await Promise.all([ apiS({ op:'avisos' }), apiS({ op:'quizEquipe' }) ]), av = rs[0], qz = rs[1];
+    var rs = await Promise.all([ apiS({ op:'avisos' }), apiS({ op:'quizEquipe' }), apiD({ op:'equipe' }) ]), av = rs[0], qz = rs[1], pdq = rs[2];
     var h = '';
     if(av && av.ok && av.avisos.length){
       h += av.avisos.map(function(a){ var bom = a.tipo==='destaque'; return '<div class="cp-be"><b style="color:'+(bom?'#1f9a55':'#c62828')+';">'+(bom?'Destaque':'Atenção')+' · '+esc(a.titulo)+'</b><div class="m">'+esc(a.texto)+' <span class="m">'+new Date(a.criado_em).toLocaleDateString('pt-BR')+'</span></div></div>'; }).join('')
@@ -456,6 +500,9 @@
     if(qz && qz.ok && qz.pessoas.length){
       h += '<div class="cp-meta-s" style="margin-top:8px;"><b>Quiz — média por pessoa (90 dias)</b></div><table class="cp-rank">' + qz.pessoas.map(function(p){ return '<tr><td>'+esc(p.nome||'—')+'</td><td class="r">'+p.feitos+'x</td><td class="r"><b>'+p.media+'%</b></td><td class="r" style="font-size:11px;">'+esc((p.pontosFracos||[]).join(', ')||'')+'</td></tr>'; }).join('') + '</table>';
     } else h += '<div class="cp-meta-s" style="margin-top:6px;">Ninguém fez o quiz ainda.</div>';
+    if(pdq && pdq.ok && pdq.pessoas.length){
+      h += '<div class="cp-meta-s" style="margin-top:8px;"><b>Pergunta do dia — últimos 30 dias</b></div><table class="cp-rank">' + pdq.pessoas.map(function(p){ return '<tr><td>'+esc(p.nome||'—')+'</td><td class="r">'+p.respondidas+' resp.</td><td class="r"><b>'+Math.round(p.acertos/p.respondidas*100)+'%</b></td></tr>'; }).join('') + '</table>';
+    }
     box.innerHTML = h;
     var bl = box.querySelector('[data-cp="lidos"]');
     if(bl) bl.onclick = async function(){ await apiS({ op:'avisoLido', ids:av.avisos.map(function(a){ return a.id; }) }); S.avisosN = 0; pintarFab(); verAvisos(); };
@@ -464,6 +511,7 @@
   async function avisosIniciais(){
     var r = await carregarLicoes();
     var L = r && r.ok ? r.pendentes : [];
+    await carregarDia();
     if(S.user && S.user.nivel==='diretoria'){
       var av = await apiS({ op:'avisos' });
       if(av && av.ok && av.avisos.length && !S.aberto){
@@ -476,6 +524,12 @@
     if(L.length && !S.aberto && ls(chave('licBalao')) !== L[0].id){
       ls(chave('licBalao'), L[0].id);
       balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Toque em "Abrir" e leia em 1 minuto.</div>', '<button type="button" class="cp-b" data-cp="abrir">Abrir</button>', true, 20000);
+      return;
+    }
+    var pd = S.pd, hj = new Date().toISOString().slice(0,10);
+    if(pd && pd.ok && !pd.indisponivel && !pd.respondida && !S.aberto && ls(chave('pdBalao')) !== hj){
+      ls(chave('pdBalao'), hj);
+      balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b" data-cp="abrir">Abrir</button>', true, 20000);
     }
   }
 
