@@ -352,6 +352,9 @@ window.AJUDA_TOPICOS = [
     <div class="dica"><b>Pergunta do dia:</b> todo dia o Vilacinha traz 1 pergunta nova (sobre pedras, ouro, ourivesaria, vendas e gestão, sempre renovada). Toque em <span class="btn-ref">Responder agora</span> no cartão "Aprenda com o Vilacinha". Você vê a resposta certa e o porquê, e acompanha a sua sequência de dias.</div>
     <div class="dica"><b>Treinar o que eu erro:</b> esse botão monta um quiz só com os assuntos em que você mais errou. É o caminho mais rápido para subir de nível.</div>
     <div class="dica"><b>Quiz:</b> toque em <span class="btn-ref">Fazer o quiz</span> para responder 8 perguntas do seu nível (vendedora ou gerência). Ao final você vê o que acertou e por quê. A diretoria acompanha os resultados.</div>
+    <div class="dica"><b>Recados:</b> o Vilacinha também é o portador de avisos. Recado da diretoria e aviso automático do sistema aparecem <b>no topo do painel dele</b>, em destaque, até você tocar em <span class="btn-ref">Entendi</span>. O aviso automático (como uma via esperando liberação da Oficina) some sozinho quando o problema é resolvido.</div>
+    <div class="dica"><b>Via esperando liberação:</b> se você lançou uma via fora do prazo ou acima das vagas do dia, o Vilacinha avisa você todo dia até a Oficina liberar. Enquanto não liberarem, essa via <b>não vai para a fábrica</b>.</div>
+    <div class="dica"><b>Oficina:</b> quem é da Oficina também tem Vilacinha, com a produção do dia (o que vence hoje, o que está atrasado, o que tem cravação), dicas de bancada e quiz técnico de ourivesaria. Ele não mostra valor de venda, comissão nem meta em dinheiro para a Oficina.</div>
     <div class="dica"><b>Como você está?</b> De vez em quando ele pergunta do seu dia (água, cansaço, sono, vida fora da loja), com resposta de um toque e sempre com "prefiro não dizer". Só pergunta se você aceitar, e as respostas ficam visíveis apenas para a diretoria.</div>
   `
 },
@@ -456,6 +459,21 @@ window.AJUDA_TOPICOS = [
       <li>Eles geram em <span class="btn-ref">ADM</span> → <span class="btn-ref">CÓDIGO</span>.</li>
       <li>Digite o código no pedido e salve.</li>
     </ol>
+    <p>Se você <b>não tem o código</b>, toque em <span class="btn-ref">Solicitar permissão</span>: a venda fecha normalmente, mas a via fica com <b>pendência de autorização</b>.</p>
+    <div class="aviso"><b>Via com pendência não anda:</b> enquanto a Oficina não liberar, ela <b>não pode ser enviada para a fábrica</b> nem mudar para os status seguintes. O Vilacinha fica lembrando você e a Oficina todo dia, até resolver. Se a Oficina recusar, a via volta sozinha para a data mais próxima com vaga.</div>
+    <div class="dica">Qualquer pessoa da <b>Oficina</b> pode liberar, não só a diretoria. O número de vias esperando aparece na própria aba <b>Código</b>.</div>
+  `
+},
+{
+  cat:'Pedidos e O.S.', ico:'impressora', tit:'Imprimir: via do cliente e via da fábrica',
+  chave:'imprimir via cliente fabrica oficina data entrega um dia antes cravacao impressao',
+  body:`
+    <p>Ao tocar em <span class="btn-ref">Imprimir via</span>, o sistema pergunta <b>qual via</b> você vai imprimir.</p>
+    <ol class="passos">
+      <li><b>VIA DO CLIENTE</b>: a de sempre — com os valores, o pagamento, a assinatura e a <b>data combinada com o cliente</b>.</li>
+      <li><b>VIA FÁBRICA</b>: a que vai junto com a peça para a Oficina. Sai <b>sem valores</b>, com a entrega em destaque e um aviso grande quando o serviço <b>envolve cravação</b>.</li>
+    </ol>
+    <div class="dica">Na via da fábrica a data de entrega sai sempre <b>um dia antes</b> da combinada com o cliente. É uma folga proposital, para a peça ficar pronta com sobra. Quem entra no sistema com o perfil <b>Oficina</b> também vê essa data (um dia antes) na lista, na agenda e na ficha da via.</div>
   `
 },
 {

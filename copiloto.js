@@ -11,7 +11,7 @@
 (function(){
   'use strict';
   if(window.Copiloto) return;
-  var S = { senha:null, user:null, lojaNome:'', dia:null, hist:[], aberto:false, balaoTimer:null, rodizio:0, falando:false, licoes:null, pd:null, prog:null };
+  var S = { senha:null, user:null, lojaNome:'', dia:null, hist:[], aberto:false, balaoTimer:null, rodizio:0, falando:false, licoes:null, pd:null, prog:null, recados:[] };
   var URL_FN = function(n){ return (window.SUPABASE_URL||'') + '/functions/v1/' + n; };
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function ic(n,t){ try{ return window.Icone ? window.Icone(n,{tam:t||16}) : ''; }catch(e){ return ''; } }
@@ -32,6 +32,15 @@
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
   }
 
+  /* 23/11: função irmã `copiloto-extra` — Vilacinha da OFICINA (sem nenhum dado de venda) e os RECADOS. */
+  async function apiX(body){
+    try{ var r = await fetch(URL_FN('copiloto-extra'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
+      if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
+    catch(e){ return { ok:false, error:'Sem conexão.' }; }
+  }
+  function ehOficina(){ return !!(S.user && S.user.nivel === 'oficina'); }
+  function dataBR(iso){ var p = String(iso||'').slice(0,10).split('-'); return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : String(iso||''); }
+
   async function apiD(body){
     try{ var r = await fetch(URL_FN('copiloto-dia'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
       if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
@@ -49,6 +58,15 @@
   /* elogio DE VERDADE: usa os números dela, não elogio vazio */
   function elogio(){
     var d = S.dia || {}, eu = d.eu || {}, m = d.meta || {}, q = S.pd || {}, L = [];
+    if(d.oficina){
+      var pr = d.producao || {};
+      if(!pr.atrasadas) L.push('E olha: nenhuma via atrasada na bancada. Isso é controle de verdade.');
+      if((pr.prontasNaOficina||0) >= 1) L.push('Você já deixou ' + pr.prontasNaOficina + ' via(s) prontas para a loja. Bom ritmo!');
+      if((q.sequencia||0) >= 3) L.push('E são ' + q.sequencia + ' dias seguidos respondendo a pergunta do dia. Isso é disciplina.');
+      if((pr.comCravacao||0) >= 1) L.push('Serviço com cravação na mesa pede mão firme — e a sua é.');
+      L.push('Peça bem acabada é o que faz o cliente voltar. Isso você entrega.');
+      return L[0];
+    }
     if(eu.posicao === 1 && (eu.vendas||0) > 0) L.push('E olha só: você está em 1º na loja este mês. Isso não é sorte, é atendimento.');
     if(m.minha && m.minha.atingida) L.push('Sua meta do mês já está batida. Daqui para frente é lucro e confiança.');
     if((d.hojeAtendimentos||0) >= 3) L.push('Você já atendeu ' + d.hojeAtendimentos + ' pessoas hoje. Que ritmo bom!');
@@ -206,9 +224,10 @@
   function pintarFab(){
     document.querySelectorAll('.cp-ouvir,.cp-ler').forEach(function(x){ x.classList.toggle('tocando', !!S.falando); var sp=x.querySelector('span'); if(sp) sp.textContent = S.falando ? 'Parar' : 'Ouvir'; });
     var b = document.getElementById('cpFab'); if(!b) return;
-    var n = S.dia && S.dia.vendaAtiva ? S.dia.vendaAtiva.length : 0;
+    var nRec = (S.recados || []).length;
+    var n = nRec || (S.dia && S.dia.vendaAtiva ? S.dia.vendaAtiva.length : 0);
     b.innerHTML = rosto(b.offsetWidth || 62, S.falando) + (n ? '<span class="cp-n" aria-hidden="true">'+n+'</span>' : '');
-    b.title = 'Vilacinha, seu gerente-auxiliar' + (n ? ' — ' + n + ' clientes para chamar hoje' : '');
+    b.title = 'Vilacinha, seu gerente-auxiliar' + (nRec ? ' — ' + nRec + ' recado(s) para você' : n ? ' — ' + n + ' clientes para chamar hoje' : '');
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
@@ -295,7 +314,7 @@
     vida:{ tranquila:'Que bom! Isso aparece no sorriso. 🌿', corrida:'A vida corrida cansa. Tenta reservar um tempinho só seu hoje, nem que sejam 10 minutos.', dificil:'Obrigado por confiar. Momentos difíceis passam. Converse com quem você confia e, se for pesado demais, o CVV atende de graça no 188, 24 horas.' },
     dia:{ musica:'Boa! Coloca aquela música no intervalo. 🎵', cafe:'Um café no intervalo cai bem! ☕', elogio:'Então lá vai, e é verdade:', descanso:'Merecido! Na próxima pausa, senta e desliga 5 minutinhos.' },
   };
-  async function enviarBE(pergunta, resposta, detalhe){ if(S.dia && S.dia.consentimento) await api({ op:'bemestar', pergunta:pergunta, resposta:resposta, detalhe:detalhe||'' }); }
+  async function enviarBE(pergunta, resposta, detalhe){ if(S.dia && S.dia.consentimento) await (ehOficina()?apiX:api)({ op:'bemestar', pergunta:pergunta, resposta:resposta, detalhe:detalhe||'' }); }
   function perguntarBemEstar(cheio){
     if(S.dia.consentimento === null || S.dia.consentimento === undefined) return pedirConsentimento();
     var feitas = (ls(chave('beFeitas'))||'').split(',');
@@ -328,8 +347,8 @@
     ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now()));
     var d = balao('<div class="cp-txt">Posso, de vez em quando, perguntar como você está? É rapidinho, com resposta de um toque. Suas respostas ajudam a <b>diretoria</b> a cuidar melhor da equipe e só ela vê. Você pode sempre escolher "prefiro não dizer".</div>', '<button type="button" class="cp-b" data-cp="nao">Não, obrigado</button><button type="button" class="cp-b pri" data-cp="sim">Pode perguntar</button>', true);
     if(!d) return;
-    d.querySelector('[data-cp="sim"]').onclick = async function(){ await api({ op:'consentir', aceito:true }); S.dia.consentimento = true; ls(chave('beFeitas'), 'agua'); mostrarPergunta(PERGUNTAS[1], 'Combinado! 😊 '); };
-    d.querySelector('[data-cp="nao"]').onclick = async function(){ await api({ op:'consentir', aceito:false }); S.dia.consentimento = false; balao('<div class="cp-txt">Sem problema! Vou continuar só com as dicas de vendas. 👍</div>', '', true, 8000); };
+    d.querySelector('[data-cp="sim"]').onclick = async function(){ await (ehOficina()?apiX:api)({ op:'consentir', aceito:true }); S.dia.consentimento = true; ls(chave('beFeitas'), 'agua'); mostrarPergunta(PERGUNTAS[1], 'Combinado! 😊 '); };
+    d.querySelector('[data-cp="nao"]').onclick = async function(){ await (ehOficina()?apiX:api)({ op:'consentir', aceito:false }); S.dia.consentimento = false; balao('<div class="cp-txt">Sem problema! Vou continuar só com as dicas de vendas. 👍</div>', '', true, 8000); };
   }
 
   /* ---------- painel ---------- */
@@ -345,7 +364,7 @@
       + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+icMic(22)+'</button><textarea id="cpTexto" maxlength="600" placeholder="Pergunte ao Vilacinha: como vender mais aliança?" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
     document.body.appendChild(p);
     p.querySelector('[data-cp="fechar"]').onclick = fecharPainel;
-    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; pintarFab(); } desenhar(); };
+    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = ehOficina() ? await apiX({ op:'dia', forcar:true }) : await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; S.recados = r.recados || S.recados; pintarFab(); } desenhar(); };
     p.querySelector('[data-cp="ler"]').onclick = function(){ falar(resumoFalado()); };
     var ta = p.querySelector('#cpTexto');
     p.querySelector('#cpForm').onsubmit = function(e){ e.preventDefault(); perguntar(ta.value); };
@@ -354,10 +373,25 @@
     document.addEventListener('keydown', escFecha);
     desenhar();
   }
+  function desenharOficina(c, d){
+    var h = cartaoRecados() + cartaoOficina(d);
+    h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte o que quiser da bancada: solda, cravação, liga, pedra que não pode ir ao ultrassom, ordem da fila…</div>') + '</div></div>';
+    c.innerHTML = h;
+    ligarRecados(c);
+    var bq = c.querySelector('[data-cp="quiz"]'); if(bq) bq.onclick = function(){ iniciarQuiz(); };
+    var bd = c.querySelector('[data-cp="dia"]'); if(bd) bd.onclick = perguntaDoDia;
+  }
   function escFecha(e){ if(e.key==='Escape' && !document.querySelector('.cp-ov')) fecharPainel(); }
   function fecharPainel(){ var p = document.getElementById('cpPainel'); if(p) p.remove(); S.aberto = false; document.removeEventListener('keydown', escFecha); try{ speechSynthesis.cancel(); }catch(e){} }
   function resumoFalado(){
     var d = S.dia||{}, t = (d.saudacao||'') + ' ';
+    if(d.oficina){
+      var pr = d.producao || {};
+      t += 'Hoje vencem ' + (pr.paraHoje||0) + ' vias' + ((pr.atrasadas||0) ? ', e ' + pr.atrasadas + ' estão atrasadas' : '') + '. ';
+      if(pr.comCravacao) t += 'Tem ' + pr.comCravacao + ' com cravação. ';
+      (d.dicas||[]).forEach(function(x,i){ t += 'Dica ' + (i+1) + ': ' + x + ' '; });
+      return t;
+    }
     if(d.meta && d.meta.metaMes > 0) t += 'Sua meta de hoje é ' + Math.round(d.meta.hoje) + ' reais. ';
     if((d.vendaAtiva||[]).length) t += 'Você tem ' + d.vendaAtiva.length + ' clientes para chamar hoje. ';
     (d.dicas||[]).forEach(function(x,i){ t += 'Dica ' + (i+1) + ': ' + x + ' '; });
@@ -367,10 +401,11 @@
     var c = document.getElementById('cpCorpo'); if(!c) return;
     var d = S.dia;
     if(!d){ c.innerHTML = '<div class="cp-card">Preparando o seu dia…</div>'; return; }
+    if(d.oficina){ desenharOficina(c, d); return; }
     var m = d.meta || {}, pct = m.metaMes ? Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100)) : 0, eu = d.eu || {}, mel = d.melhor;
     var num = function(rot, v, ref){ return '<div class="cp-num"><b>'+v+'</b><small>'+rot+'</small>'+(ref!=null?'<em>melhor da loja: '+ref+'</em>':'')+'</div>'; };
     var semMeta = !(m.metaMes > 0);
-    var h = cartaoMeta(d);
+    var h = cartaoRecados() + cartaoMeta(d);
     h += '<div class="cp-card"><h4>'+ic('grafico',14)+'Seus números no mês</h4><div class="cp-nums">'
       + num('vendas', eu.vendas||0, mel?mel.vendas:null) + num('ticket médio', brl0(eu.ticketMedio), mel?brl0(mel.ticketMedio):null) + num('peças por venda', String(eu.pecasPorVenda||0).replace('.',','), mel?String(mel.pecasPorVenda).replace('.',','):null)
       + '</div>' + (mel && (parseInt(mel.vendasComServico)||parseInt(eu.vendasComServico)) ? '<div class="cp-meta-s" style="margin-top:6px;">A melhor da loja junta serviço em <b>'+esc(mel.vendasComServico)+'</b> das vendas. Você: <b>'+esc(eu.vendasComServico||'0%')+'</b>.</div>' : (eu.posicao===1?'<div class="cp-meta-s" style="margin-top:6px;">Você é a melhor da loja este mês. Continue assim!</div>':'')) + '</div>';
@@ -388,6 +423,7 @@
     h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
     c.innerHTML = h;
 
+    ligarRecados(c);
     var be = c.querySelector('[data-cp="equipe"]'); if(be) be.onclick = verEquipe;
     var bav = c.querySelector('[data-cp="avisos"]'); if(bav) bav.onclick = verAvisos;
     var bb2 = c.querySelector('[data-cp="base"]'); if(bb2) bb2.onclick = verBase;
@@ -519,6 +555,85 @@
       });
   }
 
+  /* ---------- RECADOS: o Vilacinha como portador de avisos ----------
+     Vem de duas fontes: o que a diretoria escreveu e o que o sistema calcula na hora
+     (hoje: via fora do padrão esperando a Oficina liberar). O do sistema some sozinho quando resolve. */
+  function cartaoRecados(){
+    var R = S.recados || []; if(!R.length) return '';
+    var corDe = function(t){ return t==='urgente' ? '#c62828' : t==='pendencia' ? '#d98324' : '#2f7bd0'; };
+    return '<div class="cp-card" style="border-color:' + corDe(R[0].tipo) + ';">'
+      + '<h4>'+ic('sino',14)+'Recados para você'+(R.length>1?' ('+R.length+')':'')+'</h4>'
+      + R.map(function(a){
+          return '<div class="cp-be" style="border-color:'+corDe(a.tipo)+';background:'+(a.tipo==='urgente'?'#fdecec':a.tipo==='pendencia'?'#fff6ec':'#eef4fb')+';">'
+            + '<b style="color:'+corDe(a.tipo)+';">'+esc(a.titulo||'Recado')+'</b>'
+            + '<div class="m" style="white-space:pre-wrap;">'+esc(a.texto||'')+'</div>'
+            + '<div class="m" style="opacity:.75;">'+(a.origem==='sistema'?'Aviso automático do sistema':'De '+esc(a.de||'Diretoria'))+'</div>'
+            + (a.podeMarcarLido ? '<button type="button" class="cp-b" style="margin-top:6px;" data-cp-rec="'+esc(a.id)+'">Entendi</button>' : '')
+            + '</div>';
+        }).join('') + '</div>';
+  }
+  async function carregarRecados(){
+    var r = await apiX({ op:'recados' });
+    S.recados = (r && r.ok && Array.isArray(r.recados)) ? r.recados : [];
+    pintarFab();
+    return S.recados;
+  }
+  function ligarRecados(c){
+    c.querySelectorAll('[data-cp-rec]').forEach(function(b){ b.onclick = async function(){
+      b.disabled = true; await apiX({ op:'recadoLido', id:b.dataset.cpRec });
+      S.recados = (S.recados||[]).filter(function(x){ return String(x.id) !== String(b.dataset.cpRec); });
+      pintarFab(); desenhar();
+    }; });
+  }
+
+  /* ---------- OFICINA: o dia da produção (nunca com valores) ---------- */
+  function cartaoOficina(d){
+    var pr = d.producao || {}, h = '';
+    var num = function(rot, v, destaque){ return '<div class="cp-num"><b'+(destaque?' style="color:#c62828;"':'')+'>'+v+'</b><small>'+rot+'</small></div>'; };
+    h += '<div class="cp-card"><h4>'+ic('engrenagem',14)+'A produção de hoje</h4><div class="cp-nums">'
+       + num('para hoje', pr.paraHoje||0) + num('atrasadas', pr.atrasadas||0, (pr.atrasadas||0) > 0) + num('em produção', pr.emProducao||0)
+       + '</div><div class="cp-nums" style="margin-top:6px;">'
+       + num('na fábrica', pr.naFabrica||0) + num('prontas aqui', pr.prontasNaOficina||0) + num('na semana', pr.naSemana||0)
+       + '</div>'
+       + '<div class="cp-meta-s" style="margin-top:6px;">'
+       + ((pr.comCravacao||0) ? '<b>'+pr.comCravacao+'</b> via(s) com cravação em aberto. ' : '')
+       + ((pr.comPendencia||0) ? '<b>'+pr.comPendencia+'</b> com pendência para resolver com a loja. ' : '')
+       + 'Os prazos aqui já são os da Oficina.</div></div>';
+
+    var fila = pr.fila || [];
+    h += '<div class="cp-card"><h4>'+ic('lista',14)+'O que fazer primeiro</h4>';
+    if(!fila.length) h += '<div class="cp-meta-s">Nada atrasado nem vencendo hoje. Aproveite para adiantar o que vence amanhã ('+(pr.amanha||0)+').</div>';
+    else h += fila.map(function(v){
+      return '<div class="cp-cli"><div class="cp-cli-topo"><b>'+esc(v.via||'—')+'</b> <span class="cp-tag" style="background:'+(v.atrasada?'#c62828':'#d98324')+';">'+(v.atrasada?'ATRASADA':'HOJE')+'</span>'
+        + (v.cravacao ? ' <span class="cp-tag" style="background:#6E45A8;">CRAVAÇÃO</span>' : '') + '</div>'
+        + '<div class="cp-meta-s">'+esc(v.cliente||'')+' · '+esc(v.servico||'')+' · entrega '+dataBR(v.prazo)+' · '+esc(v.status||'')+'</div></div>';
+    }).join('');
+    h += '</div>';
+
+    var prox = (pr.proximos||[]).filter(function(x){ return x.qtd; });
+    if(prox.length) h += '<div class="cp-card"><h4>'+ic('calendario',14)+'Próximos 7 dias</h4>'
+      + prox.map(function(x){ return '<div class="cp-deg"><span>'+dataBR(x.dia)+'</span><span><b>'+x.qtd+'</b> via'+(x.qtd>1?'s':'')+'</span></div>'; }).join('') + '</div>';
+
+    if((pr.porTipo||[]).length) h += '<div class="cp-card"><h4>'+ic('joia',14)+'Por tipo de serviço (em aberto)</h4>'
+      + pr.porTipo.map(function(t){ return '<div class="cp-deg"><span>'+esc(t.tipo)+'</span><span><b>'+t.qtd+'</b></span></div>'; }).join('') + '</div>';
+
+    var ROT = { producao:'Na bancada', prazo:'Prazo e fila', qualidade:'Acabamento e cuidado' };
+    var dm = d.dicasModulo || {};
+    h += '<div class="cp-card"><h4>'+ic('info',14)+'Dicas de hoje</h4>' + (d.dicas||[]).map(function(x,i){ return '<div class="cp-dica"><span class="n">'+(i+1)+'</span><span>'+esc(x)+'</span></div>'; }).join('')
+      + Object.keys(ROT).filter(function(k){ return (dm[k]||[]).length; }).map(function(k){ return '<details style="margin-top:6px;"><summary style="cursor:pointer;font-weight:700;font-size:12.5px;color:#8a3560;">'+ROT[k]+' ('+dm[k].length+')</summary>' + dm[k].map(function(x){ return '<div class="cp-dica"><span class="n">•</span><span>'+esc(x)+'</span></div>'; }).join('') + '</details>'; }).join('') + '</div>';
+
+    var pd = S.pd;
+    h += '<div class="cp-card"><h4>'+ic('estrela',14)+'Aprender e treinar</h4>';
+    if(pd && pd.ok && !pd.indisponivel && !pd.desligado){
+      h += '<div class="cp-be" style="margin:0 0 8px;border-color:#d9b26a;background:#fffaf0;"><b>Pergunta do dia'+(pd.respondida?(pd.acertou?' · você acertou':' · respondida'):' · 1 minuto')+'</b>'
+        + '<div class="m">'+(pd.respondida ? 'Volte amanhã para a próxima.' : 'Uma pergunta por dia, técnica, de ourivesaria.')+(pd.sequencia>1?' Sequência: <b>'+pd.sequencia+' dias</b>.':'')+'</div>'
+        + '<button type="button" class="cp-b '+(pd.respondida?'':'pri')+'" style="margin-top:6px;" data-cp="dia">'+(pd.respondida?'Rever a resposta':'Responder agora')+'</button></div>';
+    }
+    h += '<div class="cp-meta-s">Quiz técnico: ouro e ligas, pedras, solda, cravação, polimento, banho e cuidado com a peça.</div>'
+      + '<div class="cp-acoes" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;"><button type="button" class="cp-b pri" data-cp="quiz">'+ic('estrela',13)+'Fazer o quiz da oficina</button></div></div>';
+    return h;
+  }
+
   function cartaoAprender(){
     var L = (S.licoes && S.licoes.pendentes) || [];
     var pd = S.pd, h = '<div class="cp-card"><h4>'+ic('joia',14)+'Aprenda com o Vilacinha'+(L.length?' ('+L.length+' nova'+(L.length>1?'s':'')+')':'')+'</h4>';
@@ -625,7 +740,8 @@
   }
   /* quiz: 8 perguntas por função; a correção é feita no servidor */
   async function iniciarQuiz(foco){
-    var r = await apiS({ op:'quizIniciar', foco: foco || '' });
+    var qApi = ehOficina() ? apiX : apiS;
+    var r = await qApi({ op:'quizIniciar', foco: foco || '' });
     if(!r || !r.ok){ toast((r && r.error) || 'Não consegui abrir o quiz agora.'); return; }
     var P = r.perguntas, i = 0, resp = [];
     var ov = modal('<div id="cpQz"></div>');
@@ -640,10 +756,10 @@
     }
     async function fim(){
       var box = ov.querySelector('#cpQz'); box.innerHTML = '<p>Corrigindo…</p>';
-      var f = await apiS({ op:'quizResponder', respostas:resp });
+      var f = await qApi({ op:'quizResponder', respostas:resp });
       if(!f || !f.ok){ box.innerHTML = '<p>'+esc((f&&f.error)||'Não consegui corrigir agora.')+'</p><div class="cp-acoes"><button type="button" class="cp-b" data-x="fechar">Fechar</button></div>'; box.querySelector('[data-x="fechar"]').onclick = function(){ ov.remove(); }; return; }
       var cor = f.pct>=90?'#1f9a55':f.pct>=70?'#2f7bd0':f.pct>=40?'#a8803a':'#c62828';
-      carregarProgresso().then(function(){ desenhar(); });
+      if(ehOficina()) desenhar(); else carregarProgresso().then(function(){ desenhar(); });
       box.innerHTML = '<div style="text-align:center;"><div style="font-size:34px;font-weight:800;color:'+cor+';">'+f.pct+'%</div><div style="font-weight:700;">'+esc(f.nivel)+' · '+f.acertos+' de '+f.total+' certas</div></div>'
         + '<div style="margin-top:10px;max-height:46vh;overflow:auto;">' + f.detalhes.map(function(d){ return '<div style="padding:8px 0;border-top:1px dashed var(--t-line,#dde);"><b style="color:'+(d.ok?'#1f9a55':'#c62828')+';">'+(d.ok?'Acertou':'Errou')+'</b> · '+esc(d.q)+(d.ok?'':'<br><small>Sua resposta: '+esc(d.sua||'—')+'<br>Correta: <b>'+esc(d.certa)+'</b></small>')+'<br><small style="color:var(--t-text-soft,#556);">'+esc(d.e)+'</small></div>'; }).join('') + '</div>'
         + ((f.estudar||[]).length ? '<div class="cp-meta-s" style="margin-top:8px;">Para a próxima: estude <b>' + esc(f.estudar.join(', ')) + '</b>. O botão "Treinar o que eu erro" traz só esses assuntos.</div>' : '')
@@ -674,6 +790,15 @@
   }
   /* ao entrar: aula nova aparece no balão (1x por aula) e a diretoria recebe aviso de destaque/baixa */
   async function avisosIniciais(){
+    await carregarRecados();
+    /* recado novo (da diretoria ou do sistema) fala mais alto que qualquer dica */
+    var R = S.recados || [];
+    if(R.length && !S.aberto && ls(chave('recBalao')) !== String(R[0].id)){
+      ls(chave('recBalao'), String(R[0].id));
+      balao('<div class="cp-txt"><b>'+esc(R[0].titulo||'Recado')+':</b> '+esc(String(R[0].texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000);
+      return;
+    }
+    if(ehOficina()){ await carregarDia(); return; }
     var r = await carregarLicoes();
     var L = r && r.ok ? r.pendentes : [];
     await carregarDia(); await carregarProgresso();
@@ -726,8 +851,10 @@
     var ta = document.getElementById('cpTexto'); if(ta) ta.value = '';
     S.hist.push({ de:'eu', texto:texto }); desenhar();
     var chat = document.getElementById('cpChat'); if(chat){ chat.insertAdjacentHTML('beforeend','<div class="cp-msg ia" id="cpPensa">Pensando…</div>'); chat.scrollIntoView({ block:'end' }); }
-    var r = await apiS({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) });
-    if(r && r.sem) r = await api({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) });
+    var r = ehOficina()
+      ? await apiX({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) })
+      : await apiS({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) });
+    if(r && r.sem && !ehOficina()) r = await api({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) });
     var resp = r && r.ok ? r.resposta : ((r && r.error) || 'Não consegui responder agora.');
     S.hist.push({ de:'ia', texto:resp }); desenhar();
     var c2 = document.getElementById('cpChat'); if(c2) c2.scrollIntoView({ block:'end' });
@@ -736,28 +863,29 @@
   var vigia = null;
   async function iniciar(o){
     parar();
-    if(!o || !o.senha || !o.user || o.user.nivel === 'oficina') return;
-    S.senha = o.senha; S.user = o.user; S.lojaNome = o.lojaNome || ''; S.hist = [];
+    if(!o || !o.senha || !o.user) return;
+    S.senha = o.senha; S.user = o.user; S.lojaNome = o.lojaNome || ''; S.hist = []; S.recados = [];
     css();
-    var r = await api({ op:'dia', lojaId: lojaShell() });
+    var r = ehOficina() ? await apiX({ op:'dia' }) : await api({ op:'dia', lojaId: lojaShell() });
     if(!r || !r.ok || r.desligado || r.sem) return;   // fora da produção (sem a função) ou sem permissão: não aparece
     if(S.senha !== o.senha) return;
-    S.dia = r;
+    S.dia = r; S.recados = r.recados || [];
     var b = document.createElement('button'); b.type = 'button'; b.id = 'cpFab'; b.className = 'cp-fab';
     b.onclick = function(){ if(S.aberto) fecharPainel(); else abrirPainel(); };
     document.body.appendChild(b); pintarFab();
+    if(!ehOficina()) carregarRecados().catch(function(){});   // recado/pendência já aparece no contador do botão
     setTimeout(talvezDica, 5000);   // saudação do dia; as outras dicas vêm ao abrir os módulos
     setTimeout(function(){ avisosIniciais().catch(function(){}); }, 12000);   // v6: aula nova / avisos da diretoria
-    clearInterval(vigia); vigia = setInterval(function(){ if(!document.hidden && !S.aberto) carregarLicoes().catch(function(){}); }, 20*60000);
+    clearInterval(vigia); vigia = setInterval(function(){ if(!document.hidden && !S.aberto){ carregarRecados().catch(function(){}); if(!ehOficina()) carregarLicoes().catch(function(){}); } }, 10*60000);
   }
   function parar(){
     clearInterval(vigia); vigia = null; fecharBalao(); fecharPainel();
     var b = document.getElementById('cpFab'); if(b) b.remove();
-    S.senha = null; S.user = null; S.dia = null; S.hist = [];
+    S.senha = null; S.user = null; S.dia = null; S.hist = []; S.recados = [];
   }
   /** O app trocou de loja: refaz o dia para a loja nova (fica guardado por loja). */
   async function trocouLoja(){
-    if(!S.senha || !document.getElementById('cpFab')) return;
+    if(!S.senha || !document.getElementById('cpFab') || ehOficina()) return;
     var r = await api({ op:'dia', lojaId: lojaShell() });
     if(r && r.ok){ S.dia = r; pintarFab(); desenhar(); }
   }

@@ -166,6 +166,92 @@ let __gatewaySenha = null;
 let currentUser = null;
 let config = {};
 
+/* 23/11 (Felipe): o Vilacinha vira o portador de avisos. Esta aba é onde a diretoria escreve o recado
+   e escolhe quem recebe (todas as vendedoras, gerentes, oficina, ou pessoa por pessoa). Função: copiloto-extra. */
+let abaAtual = 'pendencias';
+let __pessoasRecado = null;
+async function apiRecado(body){
+  try{
+    const r = await fetch(SUPABASE_URL + '/functions/v1/copiloto-extra', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
+    return await r.json();
+  }catch(e){ return { error:'Sem conexão.' }; }
+}
+function ehDiretoria(){ return !!(currentUser && currentUser.nivel === 'diretoria'); }
+function abasDoModulo(){
+  const t = [{ id:'pendencias', label:'Pendências' }];
+  if(ehDiretoria()) t.push({ id:'vilacinha', label:'Recado pelo Vilacinha' });
+  return t;
+}
+const DESTINOS = [['todos','Todo mundo'],['vendedoras','Só as vendedoras'],['gerentes','Gerentes e diretoria'],['oficina','Só a oficina'],['pessoas','Escolher quem recebe']];
+function rotDestino(d, ids){
+  const r = (DESTINOS.find(x=>x[0]===d)||[])[1] || d;
+  return d==='pessoas' ? r + ' (' + ((ids||[]).length) + ')' : r;
+}
+async function renderVilacinha(){
+  const cont = document.getElementById('conteudo');
+  const resumo = document.getElementById('resumo'); if(resumo) resumo.innerHTML = '';
+  const av = document.getElementById('avaliacoesBox'); if(av) av.innerHTML = '';
+  document.getElementById('subtitulo').textContent = 'Escreva um recado: o Vilacinha mostra na tela de quem você escolher, até a pessoa dizer que entendeu.';
+  cont.innerHTML = `
+    <div class="aba" id="abaRecado">
+      <div class="aba-head"><b>Novo recado</b></div>
+      <div style="display:grid;gap:10px;padding:4px 0 10px;">
+        <label style="display:block;"><span style="font-size:12.5px;font-weight:600;">Título (opcional)</span>
+          <input id="recTitulo" maxlength="120" placeholder="Ex.: Reunião quinta às 9h" style="width:100%;border:1px solid var(--line-strong,#bcc);border-radius:8px;padding:9px 10px;font:inherit;background:var(--surface,#fff);color:inherit;"></label>
+        <label style="display:block;"><span style="font-size:12.5px;font-weight:600;">Recado</span>
+          <textarea id="recTexto" maxlength="1200" rows="4" placeholder="Escreva como você falaria com a equipe." style="width:100%;border:1px solid var(--line-strong,#bcc);border-radius:8px;padding:9px 10px;font:inherit;background:var(--surface,#fff);color:inherit;"></textarea></label>
+        <label style="display:block;"><span style="font-size:12.5px;font-weight:600;">Quem recebe</span>
+          <select id="recDestino" style="width:100%;max-width:320px;border:1px solid var(--line-strong,#bcc);border-radius:8px;padding:9px 10px;font:inherit;background:var(--surface,#fff);color:inherit;">
+            ${DESTINOS.map(d=>`<option value="${d[0]}">${escapeHtml(d[1])}</option>`).join('')}
+          </select></label>
+        <div id="recPessoas" style="display:none;border:1px solid var(--line,#dde);border-radius:10px;padding:10px;max-height:260px;overflow:auto;"></div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;"><input type="checkbox" id="recUrgente"> Marcar como urgente (vermelho)</label>
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;">Sai da tela depois de <input type="number" id="recDias" min="0" max="60" value="0" style="width:64px;border:1px solid var(--line-strong,#bcc);border-radius:8px;padding:6px 8px;font:inherit;background:var(--surface,#fff);color:inherit;"> dias (0 = fica até lerem)</label>
+        </div>
+        <div><button class="btn" id="recEnviar" type="button" style="background:var(--accent,#8a3560);border-color:var(--accent,#8a3560);color:#fff;">Mandar pelo Vilacinha</button></div>
+      </div>
+    </div>
+    <div class="aba" id="abaRecadosEnviados"><div class="aba-head"><b>Recados mandados</b></div><div id="recLista"><div class="esq-linha"><span class="esq" style="width:60%"></span></div></div></div>`;
+
+  const sel = document.getElementById('recDestino'), box = document.getElementById('recPessoas');
+  sel.addEventListener('change', async ()=>{
+    if(sel.value !== 'pessoas'){ box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    if(!__pessoasRecado){ box.innerHTML = 'Carregando…'; const r = await apiRecado({ op:'pessoas' }); __pessoasRecado = (r && r.ok && r.pessoas) || []; }
+    box.innerHTML = __pessoasRecado.length
+      ? __pessoasRecado.map(p=>`<label style="display:flex;gap:8px;align-items:center;padding:5px 0;font-size:13.5px;"><input type="checkbox" value="${escapeHtml(p.id)}"> ${escapeHtml(p.nome||'—')} <span style="color:var(--ink-faint);font-size:12px;">${escapeHtml(p.nivel||'')}</span></label>`).join('')
+      : '<span style="color:var(--ink-faint);">Ninguém encontrado.</span>';
+  });
+
+  document.getElementById('recEnviar').addEventListener('click', async (e)=>{
+    const b = e.currentTarget; b.disabled = true;
+    const destino = sel.value;
+    const userIds = destino==='pessoas' ? Array.from(box.querySelectorAll('input:checked')).map(x=>x.value) : [];
+    const r = await apiRecado({ op:'recadoEnviar', titulo: document.getElementById('recTitulo').value, texto: document.getElementById('recTexto').value,
+      destino, userIds, urgente: document.getElementById('recUrgente').checked, dias: Number(document.getElementById('recDias').value)||0 });
+    b.disabled = false;
+    if(r && r.ok){ document.getElementById('recTitulo').value = ''; document.getElementById('recTexto').value = ''; listarRecados(); alert('Recado mandado. Ele aparece no Vilacinha de quem você escolheu.'); }
+    else alert((r && r.error) || 'Não consegui mandar agora.');
+  });
+  listarRecados();
+}
+async function listarRecados(){
+  const box = document.getElementById('recLista'); if(!box) return;
+  const r = await apiRecado({ op:'recadoListar' });
+  const L = (r && r.ok && r.recados) || [];
+  if(!L.length){ box.innerHTML = '<div style="color:var(--ink-faint);padding:6px 0;">Nenhum recado mandado ainda.</div>'; return; }
+  box.innerHTML = L.map(x=>`
+    <div class="item" style="align-items:flex-start;">
+      <div class="txt"><b>${escapeHtml(x.titulo||'Recado')}</b>
+        <span class="sub" style="white-space:pre-wrap;">${escapeHtml(x.texto||'')}</span>
+        <span class="sub">${escapeHtml(rotDestino(x.destino, x.user_ids))} · ${new Date(x.criado_em).toLocaleDateString('pt-BR')} · lido por ${x.lidos}${x.quemLeu && x.quemLeu.length ? ' (' + escapeHtml(x.quemLeu.join(', ')) + ')' : ''}${x.ativo ? '' : ' · tirado da tela'}</span></div>
+      <span class="tag tag-${x.tipo==='urgente'?'danger':'info'}">${x.tipo==='urgente'?'Urgente':'Recado'}</span>
+      ${x.ativo ? `<button class="btn btn-sm" type="button" data-recoff="${escapeHtml(x.id)}">Tirar da tela</button>` : '<span></span>'}
+    </div>`).join('');
+  box.querySelectorAll('[data-recoff]').forEach(b=> b.addEventListener('click', async ()=>{ b.disabled = true; await apiRecado({ op:'recadoApagar', id:b.dataset.recoff }); listarRecados(); }));
+}
+
 /* ===== Regras (dias) ===== */
 const DIAS_ORCAMENTO_ABERTO = 5;   // orçamento aberto há X dias sem mudar de status
 const DIAS_PRONTO_SEM_RETIRADA = 7; // O.S. pronta e não retirada há X dias
@@ -580,11 +666,15 @@ window.addEventListener('message', async ev=>{
       const r = await gatewayCall({ op:'getConfig' });
       if(r && r.data) config = r.data;
     }
-    if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'avisos', tabs:[], active:null }, '*');
+    if(EMBEDDED) parent.postMessage({ type:'tabs', modulo:'avisos', tabs: abasDoModulo(), active: abaAtual }, '*');
     carregarAvaliacoes();
     await carregar();
+  } else if(d.type==='gotoTab'){
+    abaAtual = (d.tabId === 'vilacinha' && ehDiretoria()) ? 'vilacinha' : 'pendencias';
+    if(abaAtual === 'vilacinha') renderVilacinha();
+    else { document.getElementById('subtitulo').textContent = 'Procurando pendências…'; carregarAvaliacoes(); carregar(); }
   } else if(d.type==='recarregarAvisos'){
-    if(__gatewaySenha) carregar();
+    if(__gatewaySenha && abaAtual === 'pendencias') carregar();
   }
 });
 /* Avaliações dos clientes (09/11): gerente/diretoria veem aviso de nota baixa; o atendente vê só a própria média. */
@@ -602,7 +692,7 @@ async function carregarAvaliacoes(){
     box.innerHTML = m ? `<div style="padding:12px 14px;border-radius:12px;border:1px solid var(--t-line,#dde);background:var(--t-surface,#fff);">Sua pontuação média nas avaliações dos clientes: ${AvaliacoesUI.estrelas(Math.round(m.media))} <b>${String(m.media).replace('.',',')}</b> (${m.total} avaliações)</div>` : '';
   }
 }
-document.getElementById('btnAtualizar').addEventListener('click', ()=>{ carregarAvaliacoes(); carregar(); });
+document.getElementById('btnAtualizar').addEventListener('click', ()=>{ if(abaAtual==='vilacinha') return renderVilacinha(); carregarAvaliacoes(); carregar(); });
 renderEsqueleto();
 window.addEventListener('load', ()=>{ if(EMBEDDED) parent.postMessage({ type:'ready', modulo:'avisos' }, '*'); });
 

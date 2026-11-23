@@ -826,10 +826,14 @@ document.addEventListener('click', e=>{
 /** A Oficina só mexe na via depois que a loja enviou para a fábrica e enquanto ela está lá. */
 const STATUS_FABRICA_OFICINA = ['enviado_fabrica','em_producao','pendencia','oficina_pronto'];
 /** <option>s do status: os que o perfil não pode colocar ficam desabilitados (o atual sempre aparece). */
-function statusOptionsHtml(atual, comRascunho){
+function statusOptionsHtml(atual, comRascunho, ordem){
+  const travada = viaTravadaPorAutorizacao(ordem);
   return STATUS_ORDEM.filter(st=> st!=='rascunho' || comRascunho || atual==='rascunho').map(st=>{
-    const bloqueado = st!==atual && !podeMudarStatus(atual, st);
-    return `<option value="${st}" ${st===atual?'selected':''} ${bloqueado?'disabled':''}>${STATUS_NOMES[st]}${bloqueado?' (SEM PERMISSÃO)':''}</option>`;
+    const semPerm = st!==atual && !podeMudarStatus(atual, st);
+    const travAut = st!==atual && travada && !STATUS_LIVRES_COM_PENDENCIA.includes(st);
+    const bloqueado = semPerm || travAut;
+    const nota = travAut ? ' (AGUARDA LIBERAÇÃO)' : semPerm ? ' (SEM PERMISSÃO)' : '';
+    return `<option value="${st}" ${st===atual?'selected':''} ${bloqueado?'disabled':''}>${STATUS_NOMES[st]}${nota}</option>`;
   }).join('');
 }
 function podeCancelarPorStatus(){ return !!currentUser && currentUser.nivel!=='oficina'; }
@@ -943,6 +947,33 @@ function fmtDate(s){
   const [y,m,d] = s.split('-');
   return `${d}/${m}/${y}`;
 }
+/* 23/11 (Felipe): a Oficina trabalha SEMPRE com um dia de folga escondido — a via que o cliente
+   recebeu para o dia 10 chega na Oficina (tela e impressão) como dia 9. Reduz o risco de atraso.
+   É só exibição: a data gravada, as vagas e a capacidade do dia continuam na data real. */
+function diaMenosUm(iso){
+  if(!iso) return iso;
+  const d = new Date(iso + 'T12:00:00');
+  if(isNaN(d)) return iso;
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function ehOficina(){ return !!currentUser && currentUser.nivel==='oficina'; }
+/** Data da via como ESTE usuário deve ver (Oficina vê sempre 1 dia antes). */
+function dataExibicaoVia(iso){ return ehOficina() ? diaMenosUm(iso) : iso; }
+/** Via que envolve cravação — destaque na via da fábrica (serviço delicado, pede atenção). */
+function viaEnvolveCravacao(o){
+  if(!o) return false;
+  const txt = [o.serviceTypeName, o.descricao, ...((o.itens||[]).map(it=>it&&it.produto))].filter(Boolean).join(' ');
+  return /CRAVA/.test(semAcento(txt));
+}
+/* 23/11: via fora do prazo/vaga lançada com pendência NÃO anda na produção até a Oficina liberar. */
+function viaTravadaPorAutorizacao(o){ return !!(o && o.autorizacao && o.autorizacao.status==='pendente'); }
+const STATUS_LIVRES_COM_PENDENCIA = ['rascunho','aguardando','cancelado'];
+function bloqueioAutorizacao(o, novoStatus){
+  if(!viaTravadaPorAutorizacao(o)) return '';
+  if(STATUS_LIVRES_COM_PENDENCIA.includes(novoStatus)) return '';
+  return 'Via fora do prazo/vaga: aguarda a liberação da Oficina. Enquanto não liberarem, ela não vai para a fábrica.';
+}
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -1027,7 +1058,7 @@ function siglaLojaHtml(lojaId, nomeFallback){
   return `<span class="sigla-loja"${cor} title="${escapeHtml(l ? l.nome : (nomeFallback||''))}">${escapeHtml(sigla)}</span>`;
 }
 /** Data agendada já passou e a peça ainda não ficou pronta (só para mostrar o aviso "Atrasado"). */
-function estaAtrasada(o){ return !!(o && o.data && STATUS_OCUPA_VAGA.includes(o.status) && o.data < hojeStr()); }
+function estaAtrasada(o){ return !!(o && o.data && STATUS_OCUPA_VAGA.includes(o.status) && dataExibicaoVia(o.data) < hojeStr()); }
 function fecharMenusMais(){ document.querySelectorAll('.menu-mais.aberto').forEach(m=>m.classList.remove('aberto')); }
 /** Abre o menu "Mais" de uma linha (lista flutuante presa à tela, para não ser cortada pela tabela). */
 function alternarMenuMais(btn){
@@ -1881,12 +1912,24 @@ function abrirExcluirOrdem(order){
 }
 /* ── Solicitações de permissão (pedido fora do padrão → Oficina libera no cartão CÓDIGO) ──
    Lista em painel_ordens_kv chave 'autorizacoes': [{id, criadoEm, lojaId, solicitante, status: pendente|liberado|recusado|cancelado, motivo, via:{…}, codigo, liberadoPor}] */
+/** 23/11: quantas solicitações estão esperando resposta — vira contador na aba Código (Oficina/Diretoria). */
+let __pendAutCount = 0;
+function atualizarContadorAutorizacoes(lista){
+  if(!currentUser || (currentUser.nivel!=='oficina' && currentUser.nivel!=='diretoria')) return;
+  const n = (lista||[]).filter(r=>r.status==='pendente').length;
+  if(n===__pendAutCount) return;
+  __pendAutCount = n;
+  try{ buildTabs(); renderTabs(); }catch(e){}
+}
 /** Aplica nos pedidos da loja a resposta da Oficina (liberado → encaixe verde; recusado → amarelo + data mais próxima aceita). */
 async function sincronizarAutorizacoesPendentes(){
   try{
     const pend = orders.filter(o=> o && o.autorizacao && o.autorizacao.status==='pendente');
-    if(!pend.length) return;
+    const souLiberador = !!currentUser && (currentUser.nivel==='oficina' || currentUser.nivel==='diretoria');
+    if(!pend.length && !souLiberador) return;
     const lista = await autorizacoesGet();
+    atualizarContadorAutorizacoes(lista);
+    if(!pend.length) return;
     let mudou = false;
     for(const o of pend){
       const r = lista.find(x=> x.id===o.autorizacao.solicitacaoId);
@@ -3658,8 +3701,9 @@ function tabsForLevel(){
   if(SO_CODIGO) return t;
   t.push({ id:'painel', label:'Lançados', icon:'lista' });
   t.push({ id:'agenda', label:'Agenda', icon:'calendario' });
-  if(currentUser.nivel==='diretoria'){   // Oficina usa o cartão CÓDIGO do CAIXA
-    t.push({ id:'codigo', label:'Código', icon:'cadeado' });
+  // 23/11: Oficina também libera — qualquer pessoa da Oficina abre a aba, vê as solicitações e libera.
+  if(currentUser.nivel==='diretoria' || currentUser.nivel==='oficina'){
+    t.push({ id:'codigo', label: __pendAutCount ? `Código · ${__pendAutCount}` : 'Código', icon:'cadeado' });
   }
   if(window.__permissoesAbasOverride){
     return t.filter(tab => window.__permissoesAbasOverride[tab.id] !== false);
@@ -3927,23 +3971,50 @@ function montarMensagemOS(order, template){
  * Abre uma janela com um documento formatado da ordem de serviço, pronto para impressão
  * (ou salvar como PDF pelo próprio diálogo de impressão do navegador).
  */
-function printOrder(order){
+/** 23/11 (Felipe): toda impressão de via pergunta antes se é a VIA DO CLIENTE ou a VIA FÁBRICA.
+ *  A via da fábrica sai sem valores e com a data de entrega um dia antes da combinada com o cliente. */
+function escolherViaEImprimir(order){
+  if(!order) return;
+  const crav = viaEnvolveCravacao(order);
+  openModal(`
+    <h3>${ico('impressora',18)} Qual via você vai imprimir?</h3>
+    <p class="muted" style="margin:-4px 0 14px;">Cliente ${escapeHtml(order.cliente||'—')} · via ${escapeHtml(viaTxt(order)||'—')}${crav?' · <b>envolve cravação</b>':''}</p>
+    <div style="display:grid;gap:10px;">
+      <button class="btn btn-accent btn-block" id="viaPrintCliente">VIA DO CLIENTE<span style="display:block;font-weight:500;font-size:12.5px;opacity:.9;">Entrega ${fmtDate(order.data)} · com valores e assinatura</span></button>
+      <button class="btn btn-block" id="viaPrintFabrica" style="background:#0B63D6;border-color:#0B63D6;color:#fff;">VIA FÁBRICA<span style="display:block;font-weight:500;font-size:12.5px;opacity:.9;">Entrega ${fmtDate(diaMenosUm(order.data))} · sem valores</span></button>
+    </div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="viaPrintCancelar">Cancelar</button></div>
+  `);
+  document.getElementById('viaPrintCancelar').addEventListener('click', closeModal);
+  document.getElementById('viaPrintCliente').addEventListener('click', ()=>{ closeModal(); printOrder(order, 'cliente'); });
+  document.getElementById('viaPrintFabrica').addEventListener('click', ()=>{ closeModal(); printOrder(order, 'fabrica'); });
+}
+function printOrder(order, tipoVia){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
   paymentTypesMap['__credito'] = 'CRÉDITO CLIENTE'; paymentTypesMap['__cashback'] = 'CASHBACK'; paymentTypesMap['__fiado'] = 'Fiado';
   const imp = (config.impressao && config.impressao.os) || {};
   const larguraMm = (config.impressao && config.impressao.larguraBobina) || 80;
 
+  const fabrica = tipoVia === 'fabrica';
+  const dataEntrega = fabrica ? diaMenosUm(order.data) : order.data;
+
   const linhas = [];
   linhas.push(`<div class="titulo">ORDEM DE SERVIÇO</div>`);
+  linhas.push(`<div style="text-align:center;margin:2px 0 4px;padding:4px 6px;border:2px solid #000;font-weight:800;font-size:1.15em;letter-spacing:.04em;">${fabrica ? 'VIA FÁBRICA' : 'VIA DO CLIENTE'}</div>`);
   linhas.push(`<div class="destaque" style="text-align:center;">Loja ${escapeHtml(nomeLojaOrder(order))}</div>`);
-  linhas.push(`<div class="destaque" style="text-align:center;">Entrega prevista: ${fmtDate(order.data)}</div>`);
+  if(fabrica){
+    linhas.push(`<div style="text-align:center;margin:4px 0;padding:6px;border:2px solid #000;font-weight:800;font-size:1.2em;">ENTREGA ATÉ<br>${fmtDate(dataEntrega)}</div>`);
+    if(viaEnvolveCravacao(order)) linhas.push(`<div style="text-align:center;margin:4px 0;padding:5px;border:2px dashed #000;font-weight:800;text-transform:uppercase;">ATENÇÃO: SERVIÇO COM CRAVAÇÃO — CONFERIR PEDRAS</div>`);
+  } else {
+    linhas.push(`<div class="destaque" style="text-align:center;">Entrega prevista: ${fmtDate(dataEntrega)}</div>`);
+  }
   linhas.push(`<div class="linha"></div>`);
 
   if(imp.cliente !== false){
     linhas.push(`<div class="destaque">Cliente: ${escapeHtml(order.cliente||'—')}</div>`);
   }
-  if(imp.telefone !== false && order.telefone){
+  if(!fabrica && imp.telefone !== false && order.telefone){
     linhas.push(`<div><b>Telefone:</b> ${escapeHtml(order.telefone)}</div>`);
   }
   if(imp.servico !== false){
@@ -3964,7 +4035,7 @@ function printOrder(order){
     linhas.push(`<div class="linha"></div><div><b>ITENS</b></div>`);
     (order.itens||[]).forEach((it,i)=>{
       const nome = it.produto || (typeof nomeItemOs==='function' ? nomeItemOs(it,i) : '') || 'Item';
-      linhas.push(`<div>${escapeHtml(nome)} x${it.quantidade||1}${it.semCobranca ? ' — '+(it.semCobranca==='cortesia'?'CORTESIA':'GARANTIA')+' (sem cobrança)' : (it.valorUnitario!==''&&it.valorUnitario!=null ? ' — '+fmtMoeda(it.valorUnitario) : '')}</div>`);
+      linhas.push(`<div>${escapeHtml(nome)} x${it.quantidade||1}${fabrica ? '' : (it.semCobranca ? ' — '+(it.semCobranca==='cortesia'?'CORTESIA':'GARANTIA')+' (sem cobrança)' : (it.valorUnitario!==''&&it.valorUnitario!=null ? ' — '+fmtMoeda(it.valorUnitario) : ''))}</div>`);
       linhas.push(CondPag.obsItemHtml(it, escapeHtml));
     });
   }
@@ -3972,7 +4043,7 @@ function printOrder(order){
     linhas.push(`<div class="linha"></div><div><b>Obs.:</b> ${escapeHtml(order.descricao)}</div>`);
   }
 
-  if(imp.valores !== false){
+  if(!fabrica && imp.valores !== false){
     linhas.push(`<div class="linha"></div>`);
     linhas.push(`<div><b>PAGAMENTO</b></div>`);
     linhas.push(`<div>Momento: ${order.momentoPagamento==='na_volta' ? 'Na retirada' : 'No ato'}</div>`);
@@ -3987,14 +4058,15 @@ function printOrder(order){
   // — ex: "Fulano: confirmado com fornecedor"), não é uma nota pro cliente. De
   // propósito, isso NUNCA entra na impressão.
 
-  if(imp.assinatura !== false){
+  if(!fabrica && imp.assinatura !== false){
     linhas.push(`<div class="linha"></div>`);
     linhas.push(`<div class="assinatura"></div>`);
     linhas.push(`<div class="sub" style="text-align:center;">Assinatura do cliente</div>`);
   }
-  if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, (order.valorAVista != null ? order.valorAVista : order.valorTotal), fmtMoeda));
+  if(!fabrica && imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, (order.valorAVista != null ? order.valorAVista : order.valorTotal), fmtMoeda));
 
-  abrirImpressaoBobina('Ordem de Serviço', linhas.join('') + (window.Cashback ? Cashback.cupomHtml(order, escapeHtml) : ''), larguraMm, order.codigoVia);
+  const extraCupom = (!fabrica && window.Cashback) ? Cashback.cupomHtml(order, escapeHtml) : '';
+  abrirImpressaoBobina(fabrica ? 'Via Fábrica' : 'Ordem de Serviço', linhas.join('') + extraCupom, larguraMm, order.codigoVia);
 }
 
 /** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
@@ -5766,7 +5838,7 @@ async function openEditModal(orderId, somenteLeitura, soPagamento){
 function openEditModalOficina(order){
   openModal(`
     <h3>Pedido ${escapeHtml(viaTxt(order)||'')} · ${escapeHtml(order.cliente)}</h3>
-    <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <span>${escapeHtml(order.serviceTypeName||'')}</span> <span>Agendado para ${fmtDate(order.data)}</span></div>
+    <div class="resumo-ordem">${seloStatusHtml(order.status)} ${siglaLojaHtml(order.lojaId, nomeLojaOrder(order))} <span>${escapeHtml(order.serviceTypeName||'')}</span> <span>Agendado para ${fmtDate(dataExibicaoVia(order.data))}</span></div>
     <div class="locked-note">${ico('cadeado')}<span>Aqui você pode incluir observações, dar ciência e atualizar onde está a peça. Para mudar outros dados, fale com a vendedora ou a diretoria.</span></div>
     ${order.descricao ? `<div class="field"><label>Descrição do serviço</label><textarea readonly style="min-height:60px;">${escapeHtml(order.descricao)}</textarea></div>` : ''}
     <div class="modal-secao" id="fotoContainerEditOficina"></div>
@@ -5779,7 +5851,7 @@ function openEditModalOficina(order){
   `);
   mountFotos(document.getElementById('fotoContainerEditOficina'), order, false, true);
   mountObservacoes(document.getElementById('obsContainerEdit'), order, true);
-  document.getElementById('printBtnOficina').addEventListener('click', ()=> printOrder(order) );
+  document.getElementById('printBtnOficina').addEventListener('click', ()=> escolherViaEImprimir(order) );
   document.getElementById('editCancel').addEventListener('click', ()=>{ closeModal(); renderView(); });
 }
 
@@ -5831,7 +5903,7 @@ function openEditModalCompleto(order, opts){
       <div class="field"><label for="e_loja">Loja</label><select id="e_loja">${lojaOptionsHtml(order.lojaId)}</select></div>
     <div class="field"><label for="e_status">Status</label>
       <select id="e_status">
-        ${statusOptionsHtml(order.status, true)}
+        ${statusOptionsHtml(order.status, true, order)}
       </select>
     </div>
     </div>
@@ -5965,7 +6037,7 @@ function openEditModalCompleto(order, opts){
       });
     });
   }
-  document.getElementById('printBtnCompleto').addEventListener('click', ()=> printOrder(order) );
+  document.getElementById('printBtnCompleto').addEventListener('click', ()=> escolherViaEImprimir(order) );
 
   if(somenteLeitura){
     document.querySelectorAll('#modalBox input, #modalBox select, #modalBox textarea').forEach(el=>{ el.disabled = true; });
@@ -6068,6 +6140,10 @@ function openEditModalCompleto(order, opts){
     if(status !== 'rascunho' && (!cliente || !vendedora || !loja || !sid || !dt)){
       showToast('Preencha cliente, vendedora, loja, tipo de serviço e data.');
       return;
+    }
+    if(status !== order.status){
+      const travaEd = bloqueioAutorizacao(order, status);
+      if(travaEd){ showToast(travaEd); return; }
     }
     if(status === 'rascunho' && !cliente){
       showToast('Informe ao menos o nome do cliente.');
@@ -6308,7 +6384,7 @@ function renderPainel(main){
         <div>
           <span class="via" style="font-family:var(--mono);font-weight:700;">${escapeHtml(viaTxt(o)||'')}</span>
           <b style="margin-left:6px;">${escapeHtml(o.cliente)}</b>
-          <span class="muted"> · ${escapeHtml(o.serviceTypeName||'')} · ${escapeHtml(nomeLojaOrder(o))} · agendado para ${fmtDate(o.data)}</span>
+          <span class="muted"> · ${escapeHtml(o.serviceTypeName||'')} · ${escapeHtml(nomeLojaOrder(o))} · agendado para ${fmtDate(dataExibicaoVia(o.data))}</span>
           ${jaAv(o) ? `<div class="muted" style="font-size:12px;">${ico('check',12)} Avisado em ${new Date(o.avisoCliente.em).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}${o.avisoCliente.por?' por '+escapeHtml(o.avisoCliente.por):''} (${escapeHtml((o.avisoCliente.meios||[]).join(' + '))})</div>` : ''}
         </div>
         ${podeAvisar ? `
@@ -6354,6 +6430,8 @@ function renderPainel(main){
     const previous = ord.status;
     if(novo===previous) return;
     if(!podeMudarStatus(previous, novo)){ showToast(motivoSemMudarStatus(previous, novo)); desfazer(); return; }
+    const travaAut = bloqueioAutorizacao(ord, novo);
+    if(travaAut){ showToast(travaAut); desfazer(); return; }
     if(novo !== 'rascunho' && novo !== 'cancelado') await garantirCodigoVia(ord);   // saiu de rascunho: gera o código da via
     if(novo === 'entregue'){
       if(await bloqueioSaldoEntrega(ord)){ desfazer(); return; }
@@ -6404,7 +6482,7 @@ function renderPainel(main){
     if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
     if(fLoja.value) list = list.filter(o=>o.lojaId===fLoja.value);
     if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
-    if(fData.value) list = list.filter(o=>o.data===fData.value);
+    if(fData.value) list = list.filter(o=>dataExibicaoVia(o.data)===fData.value);
     if(fBusca.value.trim()){
       const q = fBusca.value.trim(), qDig = onlyDigits(q);
       list = list.filter(o=> Busca.testa([o.cliente,viaTxt(o),o.codigoVia].join(' '), q) || (qDig.length>=4 && onlyDigits(o.telefone||'').includes(qDig)));
@@ -6421,9 +6499,9 @@ function renderPainel(main){
       const atraso = estaAtrasada(o);
       return `<div class="quadro-card${pode?'':' travado'}" data-qid="${escapeHtml(o.id)}" ${pode?'draggable="true"':''} title="${pode?'Arraste para mudar o status · toque para abrir':'Toque para ver'}">
         <div class="qc-top"><span class="qc-via">${escapeHtml(o.codigoVia||viaTxt(o)||'—')}</span><span class="qc-cli">${escapeHtml(o.cliente||'Sem cliente')}${vistoMsgHtml(o)}</span><span class="qc-cli-curto">${escapeHtml(String(o.cliente||'Sem cliente').trim().split(/\s+/)[0])}${vistoMsgHtml(o)}</span>${(pode && o.telefone && o.status!=='rascunho') ? `<button type="button" class="btn-icone wa qc-wa" data-qwa="${escapeHtml(o.id)}" title="Enviar a mensagem deste status agora pelo WhatsApp" aria-label="Enviar WhatsApp">${waIconSvg(16)}</button>` : ''}${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</div>
-        <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(o.data)}${atraso?' (atrasado)':''}</span>`:''}</div>
+        <div class="qc-sub">${escapeHtml(o.serviceTypeName||'')}${o.data?` · <span class="${atraso?'qc-atraso':''}">${fmtDate(dataExibicaoVia(o.data))}${atraso?' (atrasado)':''}</span>`:''}</div>
         ${falta>0.009 && o.status!=='cancelado' && o.status!=='abandonada' ? `<div class="qc-sub">A receber <b style="color:var(--danger);">${fmtMoeda(falta)}</b></div>` : ''}
-        ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho')}</select>` : ''}
+        ${pode ? `<select class="status-select" data-qstatus="${escapeHtml(o.id)}" aria-label="Mudar status">${statusOptionsHtml(o.status, o.status==='rascunho', o)}</select>` : ''}
       </div>`;
     };
     const abertas = quadroAbertas();
@@ -6551,7 +6629,7 @@ function renderPainel(main){
     if(fServico.value) list = list.filter(o=>o.serviceTypeId===fServico.value);
     if(fLoja.value) list = list.filter(o=>o.lojaId===fLoja.value);
     if(fLocal.value) list = list.filter(o=>localDaOrdem(o)===fLocal.value);
-    if(fData.value) list = list.filter(o=>o.data===fData.value);
+    if(fData.value) list = list.filter(o=>dataExibicaoVia(o.data)===fData.value);
     if(fBusca.value.trim()) {
       const q = fBusca.value.trim();
       const qDig = onlyDigits(q);
@@ -6633,7 +6711,7 @@ function renderPainel(main){
       b.addEventListener('click', ()=> openEditModal(b.dataset.edit, false) );
     });
     wrap.querySelectorAll('[data-print]').forEach(b=>{
-      b.addEventListener('click', ()=> printOrder(orders.find(x=>x.id===b.dataset.print)) );
+      b.addEventListener('click', ()=> escolherViaEImprimir(orders.find(x=>x.id===b.dataset.print)) );
     });
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', ()=> abrirExcluirOrdem(orders.find(x=>x.id===b.dataset.del)) );
@@ -6674,7 +6752,7 @@ function renderPainel(main){
         <td class="c-servico">${escapeHtml(o.serviceTypeName||'—')}<div class="sub">${o.vendedora ? 'Vendedora: '+escapeHtml(o.vendedora) : ''}</div></td>
         <td class="c-loja">${siglaLojaHtml(o.lojaId, nomeLojaOrder(o))}</td>
         <td class="c-entrada" data-rotulo="Entrada" style="white-space:nowrap;">${o.criadoEm ? fmtDate(dataLocalDeMs(o.criadoEm)) : '—'}</td>
-        <td class="c-data" data-rotulo="Agenda" style="white-space:nowrap;">${fmtDate(o.data)}${atrasada ? `<span class="data-atraso">Atrasado</span>` : ''}</td>
+        <td class="c-data" data-rotulo="Agenda" style="white-space:nowrap;">${fmtDate(dataExibicaoVia(o.data))}${atrasada ? `<span class="data-atraso">Atrasado</span>` : ''}</td>
         <td class="num c-rec valor-ok" data-rotulo="Recebido">${fmtMoeda(recebido)}</td>
         <td class="num c-areceber ${aReceber>0?'valor-receber':''}" data-rotulo="A receber">${fmtMoeda(aReceber)}</td>
         <td class="c-status"><div class="status-com-local">${bolinhaLocalHtml(o)}
@@ -6683,7 +6761,7 @@ function renderPainel(main){
             : (oficina && !STATUS_FABRICA_OFICINA.includes(o.status))
               ? seloStatusHtml(o.status)
               : `<select class="status-select" data-id="${o.id}" aria-label="Status do pedido ${escapeHtml(viaTxt(o)||'')}">
-                  ${statusOptionsHtml(o.status, false)}
+                  ${statusOptionsHtml(o.status, false, o)}
                 </select>`
           }${vistoMsgHtml(o)}</div>
         </td>
@@ -6915,7 +6993,7 @@ function renderAgenda(main){
 
     for(let d=1; d<=daysInMonth; d++){
       const iso = `${agendaYear}-${String(agendaMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const dayOrders = ordensDaAgenda().filter(o=>o.data===iso && o.status!=='entregue');
+      const dayOrders = ordensDaAgenda().filter(o=>dataExibicaoVia(o.data)===iso && o.status!=='entregue');
       const byService = {};
       dayOrders.forEach(o=>{
         const stO = config.serviceTypes.find(s=>s.id===o.serviceTypeId);
@@ -6955,7 +7033,7 @@ function renderAgenda(main){
 }
 
 function openDayModal(iso){
-  const dayOrders = ordensDaAgenda().filter(o=>o.data===iso && o.status!=='entregue').sort((a,b)=>a.serviceTypeName.localeCompare(b.serviceTypeName));
+  const dayOrders = ordensDaAgenda().filter(o=>dataExibicaoVia(o.data)===iso && o.status!=='entregue').sort((a,b)=>a.serviceTypeName.localeCompare(b.serviceTypeName));
   const capacityRows = tiposServicoOrdenados().map(s=>{
     const res = checkSlot(s.id, iso, null);
     return `<div class="legend-item" style="font-size:13px;">
