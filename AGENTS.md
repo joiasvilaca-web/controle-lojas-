@@ -379,3 +379,10 @@ Ao concluir uma mudança relevante, acrescente uma linha **no fim de `docs/HISTO
 - `lancamentos-api` v28: diretoria/gerente veem tudo (todas as lojas); **vendedora só vê os próprios lançamentos** (sem lojas, outras vendedoras, histórico alheio) e **não grava/exclui**; oficina e demais níveis → 403. Folha só da diretoria.
 - `lancamentos.html` `aplicarNivel()`: vendedora sem abas Lojas/Conferência, sem Incluir/Editar/Excluir, Fator só leitura.
 - `index.html` `mountFotosProduto`: botões "Tirar foto" (capture=environment) e "Escolher da galeria".
+
+### 23/11 (2) — Vilacinha professor/RH + Seleção de vendedoras
+- Vilacinha é **MASCULINO** ("o gerente"). `copiloto.js`: cartão "Aprender", biblioteca de temas, quiz (8 perguntas por função), avisos para a diretoria.
+- Edge `copiloto-saber` v3 (verify_jwt=false, valida sessão em `gestao_config`): ops licoes/licaoVista/biblioteca/tema/perguntar/quizIniciar/quizResponder/quizEquipe/avisos/avisoLido/scan e `rh*` (só diretoria: rhListar/rhSalvar/rhExcluir/rhPerguntas/rhAvaliar). Base de temas e quiz em `base.ts`.
+- `scan`: pg_cron `copiloto-saber-vias` (*/30 min, header `x-cron-token`) lê vendas_pdv/ordens_servico/orcamentos (últimos 3 dias); tema novo → lição para todas (6 dias de intervalo por tema, máx. 4 por rodada; dedupe em `copiloto_vias_vistas`).
+- Tabelas: copiloto_licoes, copiloto_licoes_vistas, copiloto_vias_vistas, copiloto_conhecimento, copiloto_quiz, copiloto_avisos, rh_candidatas.
+- `selecao-vendedoras.js` (`SelecaoUI.render`) + aba `selecao` em `dp.html` (soDiretoria): perfil ideal, roteiro de entrevista (sem perguntas discriminatórias), fichas de candidatas com notas 1–5, pontuação e parecer da IA.
