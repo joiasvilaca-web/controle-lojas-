@@ -397,3 +397,7 @@ Ao concluir uma mudança relevante, acrescente uma linha **no fim de `docs/HISTO
 - Bem-estar: resposta positiva (ótima/bem/sim/tranquila) agora vem com **elogio real** montado dos números dela (`elogio()` em copiloto.js).
 - `copiloto-saber` v4: `meuProgresso` (pontos, nível Aprendiz→Diamante, domínio por tema, dias seguidos), `quizIniciar{foco:'fracos'}`, RH com `status` (triagem→contratada), funil + métricas em `rhListar`, `rhStatus` e `rhPlano` (plano de integração de 30 dias com meta e como medir). Tabela `rh_candidatas` ganhou `status` e `etapas`.
 - `copiloto-dia` v2: avisa a diretoria em 7 acertos seguidos (destaque) ou 1 acerto em 5 (atenção).
+
+### 23/11 (4) — Agenda da oficina: cores fortes pra Aliança/Fabricação/Serviço + filtro de via
+- `painel-ordens.html`: `serviceColor(id)` agora reconhece as 3 categorias que fecham a folha (mesma regra de prefixo do `lancamentos-api.ts: catDoPedido` — nome do tipo de ordem começando com ALIANCA/FABRICA/SERVIC, sem acento) e usa cor fixa forte pra cada uma (`CORES_CATEGORIA_VIA`: Aliança `#E0A100`, Fabricação `#0B63D6`, Serviço `#D7263D`), em vez da cor do rodízio da paleta. Vale nos chips do calendário, na legenda e nas vagas do dia (modal).
+- Novo filtro de vias na Agenda (`#agFiltroVia`, estado `agendaFiltroVia`): botões "Todas as vias / Aliança / Fabricação / Serviço" acima do calendário — filtra os pedidos do mês (chips e lista "Pedidos do dia") só pra essa categoria, sem mexer no quadro de vagas por serviço (esse continua mostrando a capacidade real de todos os tipos).

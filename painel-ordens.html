@@ -418,6 +418,13 @@
   .agenda-month::first-letter{text-transform:uppercase;}
   .agenda-legend{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-soft);}
   .legend-item{display:flex;align-items:center;gap:6px;}
+  .ag-filtro-via{display:flex;gap:6px;flex-wrap:wrap;width:100%;order:9;}
+  .ag-fv-btn{display:flex;align-items:center;gap:6px;border:1.5px solid var(--line-strong);background:var(--surface);color:var(--ink-soft);font-size:12.5px;font-weight:700;padding:5px 12px 5px 10px;border-radius:999px;cursor:pointer;transition:border-color .15s,background-color .15s,color .15s;}
+  .ag-fv-btn::before{content:'';width:9px;height:9px;border-radius:50%;background:var(--fv-cor,var(--ink-faint));flex-shrink:0;}
+  .ag-fv-btn.all::before{display:none;}
+  .ag-fv-btn:hover{border-color:var(--fv-cor,var(--accent));}
+  .ag-fv-btn.ativo{background:var(--fv-cor,var(--accent));border-color:var(--fv-cor,var(--accent));color:#fff;}
+  .ag-fv-btn.ativo::before{background:#fff;}
   .legend-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
   .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;}
   .cal-dow{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);text-align:center;padding-bottom:4px;}
@@ -756,11 +763,14 @@ let currentTab = SO_CODIGO ? 'codigo' : 'painel';
 let modoNovaOrdem = false;
 let agendaYear, agendaMonth;
 let agendaEscopo = 'todas';   // 19/11: 'minhas' (vendedora = eu) | 'loja' (loja selecionada) | 'todas' (todas que posso ver)
+let agendaFiltroVia = '';     // 23/11: '' (todas) | 'alianca' | 'fabricacao' | 'servico' — localizar só essas vias na agenda
 function ordemEhMinha(o){ const eu=[currentUser&&currentUser.nome,currentUser&&currentUser.apelido].map(x=>String(x||'').trim().toLowerCase()).filter(Boolean); return eu.includes(String(o.vendedora||'').trim().toLowerCase()); }
 function ordensDaAgenda(){
-  if(agendaEscopo==='minhas') return orders.filter(ordemEhMinha);
-  if(agendaEscopo==='loja'){ const lj=window.__lojaAtual&&window.__lojaAtual.id; return lj ? orders.filter(o=>o.lojaId===lj) : orders; }
-  return orders;
+  let lista = orders;
+  if(agendaEscopo==='minhas') lista = lista.filter(ordemEhMinha);
+  else if(agendaEscopo==='loja'){ const lj=window.__lojaAtual&&window.__lojaAtual.id; lista = lj ? lista.filter(o=>o.lojaId===lj) : lista; }
+  if(agendaFiltroVia) lista = lista.filter(o=>categoriaDestaqueVia(o.serviceTypeName)===agendaFiltroVia);
+  return lista;
 }
 
 const STATUS = { AGUARDANDO:'aguardando', ENVIADO_FABRICA:'enviado_fabrica', EM_PRODUCAO:'em_producao', PENDENCIA:'pendencia', OFICINA_PRONTO:'oficina_pronto', CANCELADO:'cancelado', PRONTO:'pronto', ENTREGUE:'entregue', RASCUNHO:'rascunho', ABANDONADA:'abandonada' };
@@ -844,6 +854,20 @@ function lojaAbreviacao(lojaId){
   return l ? l.abreviacao : (lojaId||'').slice(0,2).toUpperCase();
 }
 const COLOR_PALETTE = ['#C97A2B','#3D7DD8','#2E7D53','#B23A3A','#6E45A8','#1B8F9E','#C23B77','#7A8C1F'];
+/** 23/11 (Felipe): Aliança, Fabricação e Serviço são as 3 categorias que fecham a folha (ver lancamentos-api.ts) —
+ * na agenda elas sempre usam estas 3 cores fortes (fixas, não entram no rodízio da COLOR_PALETTE), pra pular aos olhos. */
+const CORES_CATEGORIA_VIA = { alianca:'#E0A100', fabricacao:'#0B63D6', servico:'#D7263D' };
+const LABEL_CATEGORIA_VIA = { alianca:'Aliança', fabricacao:'Fabricação', servico:'Serviço' };
+function semAcento(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().trim(); }
+/** Mesma regra de prefixo usada no fechamento (lancamentos-api.ts: catDoPedido) — só que aqui sem RELÓGIO,
+ * que fica com a cor normal do rodízio. Tipo de ordem fora dessas 3 categorias (Conserto, Gravação, etc.) também. */
+function categoriaDestaqueVia(nomeTipo){
+  const n = semAcento(nomeTipo);
+  if(n.startsWith('ALIANCA')) return 'alianca';
+  if(n.startsWith('FABRICA')) return 'fabricacao';
+  if(n.startsWith('SERVIC')) return 'servico';
+  return null;
+}
 
 const DEFAULT_TEMPLATE_ANIVERSARIO =
 `Olá {cliente}! 🎉
@@ -1024,6 +1048,9 @@ window.addEventListener('scroll', fecharMenusMais, true);
 window.addEventListener('resize', fecharMenusMais);
 function levelLabel(n){ return n==='diretoria' ? 'Diretoria' : n==='oficina' ? 'Oficina' : 'Vendedora'; }
 function serviceColor(id){
+  const st = config.serviceTypes.find(s=>s.id===id);
+  const cat = st && categoriaDestaqueVia(st.nome);
+  if(cat) return CORES_CATEGORIA_VIA[cat];
   const i = config.serviceTypes.findIndex(s=>s.id===id);
   return COLOR_PALETTE[(i<0?0:i) % COLOR_PALETTE.length];
 }
@@ -6839,6 +6866,12 @@ function renderAgenda(main){
         </div>
         <select id="agEscopo" aria-label="Quais pedidos mostrar" title="Quais pedidos mostrar na agenda"><option value="minhas">Em meu nome</option><option value="loja">Da minha loja</option><option value="todas">De todas as lojas</option></select>
         <div class="agenda-legend" id="agLegend"></div>
+        <div class="ag-filtro-via" id="agFiltroVia" role="group" aria-label="Localizar por tipo de via">
+          <button type="button" class="ag-fv-btn all ${agendaFiltroVia===''?'ativo':''}" data-via="">Todas as vias</button>
+          ${Object.keys(LABEL_CATEGORIA_VIA).map(cat=>`
+            <button type="button" class="ag-fv-btn ${agendaFiltroVia===cat?'ativo':''}" data-via="${cat}" style="--fv-cor:${CORES_CATEGORIA_VIA[cat]}">${LABEL_CATEGORIA_VIA[cat]}</button>
+          `).join('')}
+        </div>
       </div>
       <div class="cal-grid" id="calGrid"></div>
     </div>
@@ -6850,6 +6883,12 @@ function renderAgenda(main){
 
   document.getElementById('agEscopo').value = agendaEscopo;
   document.getElementById('agEscopo').addEventListener('change', e=>{ agendaEscopo = e.target.value; drawCalendar(); });
+  document.getElementById('agFiltroVia').addEventListener('click', e=>{
+    const btn = e.target.closest('.ag-fv-btn'); if(!btn) return;
+    agendaFiltroVia = btn.dataset.via || '';
+    document.querySelectorAll('#agFiltroVia .ag-fv-btn').forEach(b=>b.classList.toggle('ativo', b===btn));
+    drawCalendar();
+  });
   document.getElementById('agPrev').addEventListener('click', ()=>{
     agendaMonth--; if(agendaMonth<0){agendaMonth=11; agendaYear--;} drawCalendar();
   });
