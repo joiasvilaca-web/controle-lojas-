@@ -903,7 +903,9 @@ function mensagemConfiavel(ev){
     let canceladasVendasBase = vendas.filter(v=> v.status==='cancelada' && dentroPeriodo(dataDeTimestamp(v.canceladoEm)));
     let canceladasOSBase = caixaOrdens.filter(o=> o.status==='cancelado' && dentroPeriodo(dataDeTimestamp(o.canceladoEm)));
     let trocasBase = [];
-    vendas.forEach(v=> (v.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:v}); }));
+    vendas.forEach(v=> (v.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:v, _lojaId:v.lojaId, _lojaNome:v.loja||'—'}); }));
+    /* 23/11: devolução de item do PEDIDO entra no caixa igual à da venda (mesma forma em order.trocas). */
+    caixaOrdens.forEach(o=> (o.trocas||[]).forEach(t=>{ if(dentroPeriodo(t.data)) trocasBase.push({...t, venda:o, _lojaId:o.lojaId, _lojaNome:nomeLojaCaixa(o.lojaId)||'—'}); }));
 
     if(lojaId){
       contasPagasBase = contasPagasBase.filter(g=> lojaIdDoGasto(g) === lojaId);
@@ -913,7 +915,7 @@ function mensagemConfiavel(ev){
       aReceberOSBase = aReceberOSBase.filter(o=> o.lojaId === lojaId);
       canceladasVendasBase = canceladasVendasBase.filter(v=> v.lojaId === lojaId);
       canceladasOSBase = canceladasOSBase.filter(o=> o.lojaId === lojaId);
-      trocasBase = trocasBase.filter(t=> t.venda.lojaId === lojaId);
+      trocasBase = trocasBase.filter(t=> t._lojaId === lojaId);
     }
 
     const grupos = {};
@@ -923,7 +925,7 @@ function mensagemConfiavel(ev){
     contasPagasBase.forEach(g=>{ const lid = lojaIdDoGasto(g); grupo(lid ? (nomeLojaCaixa(lid)||'—') : '__geral__').gastos.push(g); });
     canceladasVendasBase.forEach(v=> grupo(v.loja||'—').canceladasV.push(v));
     canceladasOSBase.forEach(o=> grupo(nomeLojaCaixa(o.lojaId)||'—').canceladasO.push(o));
-    trocasBase.forEach(t=> grupo(t.venda.loja||'—').trocas.push(t));
+    trocasBase.forEach(t=> grupo(t._lojaNome||'—').trocas.push(t));
 
     function metricasGrupo(g){
       const contasPagas = g.gastos.reduce((a,x)=>a+(Number(x.valor)||0),0);
@@ -1047,9 +1049,9 @@ function mensagemConfiavel(ev){
       `, ['Cliente / motivo','Tipo','Cancelada em','Loja','Saiu do caixa'], { icone:'cancelar', total: vSaida(soma(canceladasTodas, x=>x.valor)) });
     }
     if(tipos.includes('trocas')){
-      html += detalheSecao('Trocas', trocasBase, t=>`
-        <tr>${celula('Cliente', `${escapeHtml(t.venda.cliente||'—')}<span class="sub">${escapeHtml(t.itemAntigoDescricao)} → ${escapeHtml(t.itemNovo.quantidade)}x ${escapeHtml(t.itemNovo.produto)}</span>`, 'principal')}${celula('Data', fmtDate(t.data))}${celula('Loja', escapeHtml(t.venda.loja))}${celula('Diferença', vDiferenca(t.diferenca), 'r')}</tr>
-      `, ['Cliente / item antigo → novo','Data','Loja','Diferença'], { icone:'trocar', total: vDiferenca(soma(trocasBase, t=>t.diferenca)) });
+      html += detalheSecao('Trocas e devoluções', trocasBase, t=>`
+        <tr>${celula('Cliente', `${escapeHtml((t.venda&&t.venda.cliente)||'—')}<span class="sub">${t.tipoMov==='devolucao' ? 'Devolução: '+escapeHtml(t.itemAntigoDescricao||'') : escapeHtml(t.itemAntigoDescricao||'')+' → '+escapeHtml(String((t.itemNovo&&t.itemNovo.quantidade)||0))+'x '+escapeHtml((t.itemNovo&&t.itemNovo.produto)||'—')}</span>`, 'principal')}${celula('Data', fmtDate(t.data))}${celula('Loja', escapeHtml(t._lojaNome||'—'))}${celula('Diferença', vDiferenca(t.diferenca), 'r')}</tr>
+      `, ['Cliente / item','Data','Loja','Diferença'], { icone:'trocar', total: vDiferenca(soma(trocasBase, t=>t.diferenca)) });
     }
     if(tipos.includes('aReceber')){
       const aReceberTodos = [

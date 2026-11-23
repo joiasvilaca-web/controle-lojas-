@@ -4255,7 +4255,7 @@ async function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
   if(!podeCancelarVenda(venda) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id, venda.lojaId); if(!a) return; __vendasLiberadas.add(venda.id); }
   if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
-  if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item(ns) trocado(s) — cancelamento direto não é permitido para evitar inconsistência de estoque/caixa. Fale com quem programou o sistema se precisar desfazer essa venda.'); return; }
+  if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item devolvido ou trocado. Para encerrar o resto, devolva os itens que sobraram um a um em vez de cancelar a venda inteira (cancelar devolveria ao estoque também a peça que já voltou).'); return; }
   const recebido = valorRecebidoDe(venda);
   openModal(`
     <h3>Cancelar venda</h3>
@@ -4472,6 +4472,85 @@ function encontrarClienteDaVenda(venda){
   return clientes.find(c=> (telD && (c.telefone||'').replace(/\D/g,'')===telD) || (nomeL && (c.nome||'').trim().toLowerCase()===nomeL)) || null;
 }
 /* ============================================================
+   DEVOLVER / TROCAR ITEM — porta de entrada e camada fiscal
+   Fiscalmente TROCA NÃO EXISTE. O que existe é DEVOLUÇÃO (a loja emite NF-e de
+   entrada, modelo 55, finalidade 4, CFOP 1.202, referenciando a nota da venda,
+   só com o item devolvido) e, quando o cliente leva outra peça no lugar, uma
+   VENDA NOVA dessa peça. "Cancelamento parcial" também não existe: nota não
+   cancela pela metade. Por isso as duas opções moram na mesma porta e as duas
+   geram a mesma pendência de nota de devolução.
+   Quem pode: todo mundo menos a oficina (mesma regra do cancelamento) — fica no
+   LOG e no fechamento do caixa.
+   ============================================================ */
+function podeDevolverItem(){ return !!(currentUser && currentUser.nivel!=='oficina'); }
+/** Bloco fiscal gravado em cada devolução/troca: diz se precisa de nota de entrada e guarda o número dela. */
+function fiscalDevolucaoDe(origem){
+  const comNota = !!(origem && origem.emissaoNota === 'sim');
+  return { precisa: comNota, notaOriginal: comNota ? String(origem.numeroNota||'') : '', notaDevolucao: '', emitidaEm: null };
+}
+/** Explica, na hora, o que o contador precisa emitir. */
+function avisoFiscalDevolucaoHtml(origem){
+  if(!origem || origem.emissaoNota !== 'sim'){
+    return `<div class="aviso aviso-info">${ic('info')}<div>Esta venda saiu <b>sem nota</b> — não precisa emitir nota de devolução.</div></div>`;
+  }
+  return `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Esta venda saiu com nota${origem.numeroNota?' nº '+escapeHtml(origem.numeroNota):''}.</b><small>Troca não existe no fiscal. O contador precisa emitir uma <b>NF-e de entrada</b> (modelo 55, finalidade 4 — devolução, CFOP 1.202) referenciando essa nota, só com o item devolvido. Se a cliente levar outra peça, essa peça sai em <b>nota nova</b>. Depois de emitida, lance o número aqui na venda.</small></div></div>`;
+}
+/** Devolução/troca com a nota de entrada ainda não lançada. */
+function temPendenciaFiscal(reg){ return !!(reg && reg.fiscal && reg.fiscal.precisa && !String(reg.fiscal.notaDevolucao||'').trim()); }
+function pendenciasFiscais(origem){ return ((origem && origem.trocas) || []).filter(temPendenciaFiscal); }
+/** Porta única: pergunta o que o cliente leva no lugar e manda pro fluxo certo. */
+function abrirDevolverOuTrocar(venda){
+  if(!venda || venda.status==='cancelada') return;
+  if(!podeDevolverItem()){ showToast('A oficina não registra devolução nem troca.'); return; }
+  const disponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado && !x.it.devolvido);
+  if(disponiveis.length===0){ showToast('Não há itens desta venda disponíveis — todos já foram trocados ou devolvidos.'); return; }
+  openModal(`
+    <h3>Devolver / Trocar item</h3>
+    <p class="muted">Venda de ${escapeHtml(venda.cliente||'cliente não identificado')} · ${fmtDate(venda.data)} · <b>${fmtMoeda(venda.valorTotal)}</b></p>
+    <p style="margin-bottom:6px;">O que o cliente leva no lugar?</p>
+    <div class="field" style="display:grid;gap:8px;">
+      <label class="cv-radio"><input type="radio" name="dtmodo" value="nada" checked> <span><b>Nada</b> — devolver o valor (dinheiro, PIX, cartão ou crédito dele)</span></label>
+      <label class="cv-radio"><input type="radio" name="dtmodo" value="outro"> <span><b>Outra peça</b> — a diferença é cobrada ou devolvida</span></label>
+    </div>
+    ${avisoFiscalDevolucaoHtml(venda)}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="dt_fechar">Voltar</button>
+      <button class="btn btn-accent" id="dt_seguir">Continuar</button>
+    </div>
+  `);
+  document.getElementById('dt_fechar').addEventListener('click', closeModal);
+  document.getElementById('dt_seguir').addEventListener('click', ()=>{
+    const modo = (document.querySelector('input[name=dtmodo]:checked')||{}).value;
+    closeModal();
+    if(modo==='outro') abrirTrocaVenda(venda); else abrirDevolucaoItem(venda);
+  });
+}
+/** Lança o número da NF-e de entrada depois que o contador emitiu. */
+function abrirLancarNotaDevolucao(venda, trocaId){
+  const reg = (venda.trocas||[]).find(t=>t.id===trocaId);
+  if(!reg) return;
+  if(!reg.fiscal) reg.fiscal = fiscalDevolucaoDe(venda);
+  openModal(`
+    <h3>Nota de devolução</h3>
+    <p class="muted">${escapeHtml(reg.tipoMov==='devolucao' ? 'Devolução: '+(reg.itemAntigoDescricao||'') : 'Troca: '+(reg.itemAntigoDescricao||''))} · ${fmtDate(reg.data)}</p>
+    <div class="aviso aviso-info">${ic('info')}<div>NF-e de entrada (modelo 55, finalidade 4 — devolução, CFOP 1.202)${reg.fiscal.notaOriginal?`, referenciando a nota nº <b>${escapeHtml(reg.fiscal.notaOriginal)}</b>`:''}.</div></div>
+    <div class="field"><label for="nd_num">Número da nota de devolução</label><input id="nd_num" autocomplete="off" placeholder="Ex.: 12345" value="${escapeHtml(reg.fiscal.notaDevolucao||'')}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="nd_fechar">Voltar</button>
+      <button class="btn btn-accent" id="nd_salvar">Salvar</button>
+    </div>
+  `);
+  document.getElementById('nd_fechar').addEventListener('click', closeModal);
+  document.getElementById('nd_salvar').addEventListener('click', async ()=>{
+    const n = String(document.getElementById('nd_num').value||'').trim();
+    if(!n){ showToast('Digite o número da nota de devolução.'); return; }
+    reg.fiscal.notaDevolucao = n; reg.fiscal.emitidaEm = Date.now();
+    const ok = await vendaSalvar(venda);
+    if(ok){ showToast('Nota de devolução lançada.'); closeModal(); renderTabs(); renderView(); }
+  });
+}
+
+/* ============================================================
    DEVOLUÇÃO DE ITEM (sem item novo)
    Devolve UM item inteiro da venda: volta o estoque do item (igual à troca/cancelamento) e o valor
    do item sai do caixa (dinheiro/PIX/cartão) ou vira crédito do cliente. É gravada em venda.trocas
@@ -4504,7 +4583,7 @@ async function devolverEstoqueDoItem(venda, item, lojaEstoque){
 }
 function abrirDevolucaoItem(venda){
   if(!venda || venda.status==='cancelada') return;
-  if(!podeCancelarVenda(venda)){ showToast('Só gerente ou diretoria podem registrar uma devolução (vendedora: só nas lojas dela).'); return; }
+  if(!podeDevolverItem()){ showToast('A oficina não registra devolução.'); return; }
   const disponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado && !x.it.devolvido);
   if(disponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra devolução.'); return; }
   const lojaEstoqueDev = venda.estoqueLojaId || venda.lojaId;
@@ -4557,6 +4636,7 @@ function abrirDevolucaoItem(venda){
         itemNovo: { produto:'(devolução — sem item novo)', metal:'', quantidade:0, valorUnitario:0, produtoEstoqueId:'', estoqueConsumidoItem:{} }, itemNovoValor: 0,
         diferenca: -valor, formaDiferenca: forma, fiadoDebitoId: null,
         data: hoje(), feitoPor: currentUser.nome, criadoEm: Date.now(),
+        fiscal: fiscalDevolucaoDe(venda),
       };
       item.trocado = true; item.devolvido = true; item.trocaId = reg.id;
       if(!venda.trocas) venda.trocas = [];
@@ -4575,7 +4655,7 @@ function abrirDevolucaoItem(venda){
 
 function abrirTrocaVenda(venda){
   if(!venda || venda.status==='cancelada') return;
-  if(!podeCancelarVenda(venda)){ showToast('Só gerente ou diretoria podem registrar uma troca (vendedora: só nas lojas dela).'); return; }
+  if(!podeDevolverItem()){ showToast('A oficina não registra troca.'); return; }
   const itensDisponiveis = (venda.itens||[]).map((it,idx)=>({it,idx})).filter(x=>!x.it.trocado);
   if(itensDisponiveis.length===0){ showToast('Não há itens desta venda disponíveis pra troca (todos já foram trocados).'); return; }
   const vendaveis = (produtosEstoque||[]).filter(p=>p.vendavel!==false);
@@ -4776,6 +4856,7 @@ function abrirTrocaVenda(venda){
       data: hoje(),
       feitoPor: currentUser.nome,
       criadoEm: Date.now(),
+      fiscal: fiscalDevolucaoDe(venda),
     };
     antigo.trocado = true;
     antigo.trocaId = troca.id;
@@ -4988,6 +5069,7 @@ function renderVendas(main){
               cancelada ? `<span class="badge selo-danger" title="${escapeHtml(v.motivoCancelamento||'')}">Cancelada${v.canceladoPor?' por '+escapeHtml(v.canceladoPor):''}</span>` : '',
               semPag && !cancelada ? `<span class="badge selo-wait">Sem pagamento lançado</span>` : '',
               !cancelada && (v.trocas||[]).length ? `<span class="badge selo-info">${(v.trocas||[]).length===1?'1 troca/devolução':(v.trocas||[]).length+' trocas/devoluções'}</span>` : '',
+              !cancelada && pendenciasFiscais(v).length ? `<span class="badge selo-wait" title="Falta emitir e lançar a NF-e de entrada (devolução)">Nota de devolução pendente</span>` : '',
             ].filter(Boolean).join('');
             const itensBtn = `<button type="button" class="btn-link btn-link-itens" data-itens="${v.id}" title="Ver itens da venda">${qtdItens} ${qtdItens===1?'item':'itens'}</button>`;
             const notaBtn = `<button type="button" class="btn-link-nota" data-nota="${v.id}" title="Ver dados da nota fiscal" style="background:none;border:0;padding:0;cursor:pointer;"><span class="badge ${temNota?'selo-ok':'selo-neutro'}" style="white-space:nowrap;">${temNota?escapeHtml(notaTextoLista(v)):'Sem nota'}</span></button>`;
@@ -5021,6 +5103,7 @@ function renderVendas(main){
                 </div>
                 ${temMais ? `<div class="menu-acoes" role="menu" data-menu="${v.id}">
                   <button type="button" role="menuitem" data-editar="${v.id}">${ic('lapis')} Editar venda</button>
+                  <button type="button" role="menuitem" data-devtroca="${v.id}">${ic('devolver')} Devolver / Trocar item</button>
                   <hr>
                   <button type="button" role="menuitem" class="perigo" data-cancelar="${v.id}">${ic('cancelar')} Cancelar venda</button>
                 </div>` : ''}
@@ -5047,6 +5130,7 @@ function renderVendas(main){
     wrap.querySelectorAll('[data-nota]').forEach(b=> b.addEventListener('click', ()=> abrirNotaVenda(vendas.find(x=>x.id===b.dataset.nota)) ));
     wrap.querySelectorAll('[data-editar]').forEach(b=> b.addEventListener('click', ()=> abrirEditarVenda(vendas.find(x=>x.id===b.dataset.editar)) ));
     wrap.querySelectorAll('[data-cancelar]').forEach(b=> b.addEventListener('click', ()=> abrirCancelarVenda(vendas.find(x=>x.id===b.dataset.cancelar)) ));
+    wrap.querySelectorAll('[data-devtroca]').forEach(b=> b.addEventListener('click', ()=> abrirDevolverOuTrocar(vendas.find(x=>x.id===b.dataset.devtroca)) ));
   }
   [fLoja,fData,fBusca,fSemPagamento].forEach(el=>el.addEventListener('input', renderTable));
   document.getElementById('btnLimparFiltroVendas').addEventListener('click', ()=>{
@@ -5494,9 +5578,13 @@ function abrirDetalheVenda(v){
     ${(v.trocas&&v.trocas.length>0) ? `
     <div class="section-label">Trocas e devoluções</div>
     <div style="overflow-x:auto;"><table>
-      <thead><tr><th>Data</th><th>O que aconteceu</th><th class="num">Diferença</th><th>Feito por</th></tr></thead>
+      <thead><tr><th>Data</th><th>O que aconteceu</th><th class="num">Diferença</th><th>Feito por</th><th>Nota de devolução</th></tr></thead>
       <tbody>
-        ${v.trocas.map(t=>`<tr><td>${fmtDate(t.data)}</td><td>${t.tipoMov==='devolucao' ? 'Devolução: ' + escapeHtml(t.itemAntigoDescricao||'') : 'Troca por '+escapeHtml(t.itemNovo.quantidade)+'× '+escapeHtml(t.itemNovo.produto)}</td><td class="num" style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">${fmtMoeda(t.diferenca)}</td><td>${escapeHtml(t.feitoPor||'—')}</td></tr>`).join('')}
+        ${v.trocas.map(t=>`<tr><td>${fmtDate(t.data)}</td><td>${t.tipoMov==='devolucao' ? 'Devolução: ' + escapeHtml(t.itemAntigoDescricao||'') : 'Troca por '+escapeHtml(t.itemNovo.quantidade)+'× '+escapeHtml(t.itemNovo.produto)}</td><td class="num" style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">${fmtMoeda(t.diferenca)}</td><td>${escapeHtml(t.feitoPor||'—')}</td><td>${
+          !(t.fiscal && t.fiscal.precisa) ? '<span class="muted">não precisa</span>'
+          : (String((t.fiscal||{}).notaDevolucao||'').trim() ? `<span class="badge selo-ok">nº ${escapeHtml(t.fiscal.notaDevolucao)}</span>`
+          : `<button type="button" class="btn btn-ghost btn-sm" data-notadev="${escapeHtml(t.id)}">${ic('alerta',14)} Lançar nota</button>`)
+        }</td></tr>`).join('')}
       </tbody>
     </table></div>
     ` : ''}
@@ -5528,6 +5616,7 @@ function abrirDetalheVenda(v){
   { const be = document.getElementById('btnEditarDetVenda'); if(be) be.addEventListener('click', ()=>{ closeModal(); abrirEditarVenda(v); }); }
   document.getElementById('fecharDetalheVenda').addEventListener('click', closeModal);
   document.getElementById('btnImprimirVenda').addEventListener('click', ()=> printVenda(v));
+  document.querySelectorAll('[data-notadev]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); abrirLancarNotaDevolucao(v, b.dataset.notadev); }));
 }
 
 /** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura

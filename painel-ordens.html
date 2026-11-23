@@ -1751,6 +1751,9 @@ async function aplicarCancelamentoOrdem(order, motivo){
 /** Botão dedicado "Cancelar O.S." na lista — abre modal pedindo motivo. */
 async function abrirCancelarOrdem(order){
   if(!order || order.status==='cancelado') return;
+  /* 23/11: pedido que já teve devolução de item não pode ser cancelado direto — o cancelamento
+     devolveria ao estoque também a peça que já voltou, e tiraria do caixa um valor já devolvido. */
+  if((order.trocas||[]).length>0){ showToast('Este pedido já teve item devolvido. Para encerrar o resto, devolva os itens que sobraram um a um em vez de cancelar o pedido inteiro.'); return; }
   if(!podeCancelarOrdem(order)){ const a = await autorizarGerencia('cancelar_pedido', 'Cancelar o pedido '+(viaTxt(order)||'')+' de '+(order.cliente||''), order.id, order.lojaId); if(!a) return; }
   if(await bloqueadoPorCaixaFechado(order.lojaId)) return;
   const recebido = valorRecebidoDe(order);
@@ -4288,7 +4291,8 @@ function validarCatalogoItensOs(holder, itensApi){
   showToast('Vincule ao catálogo: ' + nomes.join(', ') + '.');
   return false;
 }
-function itensCatalogoDaOrdem(o){ return (o && o.itens ? o.itens : []).filter(it=> it && it.produtoEstoqueId && !it.avulso); }
+/* Item devolvido sai do cálculo de reserva/baixa — a peça já voltou pro estoque. */
+function itensCatalogoDaOrdem(o){ return (o && o.itens ? o.itens : []).filter(it=> it && it.produtoEstoqueId && !it.avulso && !it.devolvido); }
 /** Planeja o consumo (com composição/BOM) dos itens de catálogo. Se faltar estoque
  * para um item, reserva o próprio produto na quantidade cheia (permite vender sem saldo). */
 function planoConsumoDaOrdem(o){
@@ -4407,6 +4411,148 @@ function estoqueStatusLinhaHtml(order){
   const n = itensCatalogoDaOrdem(order).reduce((a,it)=> a + (Number(it.quantidade)||1), 0);
   if(!n) return '';
   return `<div class="muted" style="${estilo}">${ico('pacote',14)} Estoque: ${n} ${n===1?'item reservado':'itens reservados'} na loja ${escapeHtml(nomeLojaPorId(order.reservaLojaId))}</div>`;
+}
+
+/* ============================================================
+   DEVOLVER ITEM DO PEDIDO
+   Fiscalmente TROCA NÃO EXISTE: o que existe é DEVOLUÇÃO (NF-e de entrada,
+   modelo 55, finalidade 4, CFOP 1.202, referenciando a nota do pedido, só com o
+   item devolvido) e, se o cliente levar outra peça, uma VENDA NOVA dessa peça —
+   que é lançada no módulo Vendas, não aqui. Por isso aqui só existe devolução.
+   Grava em order.trocas[] com a MESMA forma de venda.trocas[], pra o Caixa, o DP
+   e o faturamento (lancamentos-api) lerem os dois do mesmo jeito.
+   Quem pode: todo mundo menos a oficina (mesma regra do cancelamento).
+   ============================================================ */
+function podeDevolverItemOrdem(){ return !!(currentUser && currentUser.nivel!=='oficina'); }
+function fiscalDevolucaoDeOrdem(order){
+  const comNota = !!(order && order.emissaoNota === 'sim');
+  return { precisa: comNota, notaOriginal: comNota ? String(order.numeroNota||'') : '', notaDevolucao: '', emitidaEm: null };
+}
+function temPendenciaFiscalOrdem(reg){ return !!(reg && reg.fiscal && reg.fiscal.precisa && !String(reg.fiscal.notaDevolucao||'').trim()); }
+function pendenciasFiscaisOrdem(order){ return ((order && order.trocas) || []).filter(temPendenciaFiscalOrdem); }
+/** O que esse item consome de estoque (com composição), pra devolver a mesma coisa. */
+function consumoDoItemOrdem(it, lojaId){
+  const reservas = {};
+  if(!it || !it.produtoEstoqueId || it.avulso) return reservas;
+  const qtd = Number(it.quantidade) || 1;
+  const r = planejarConsumoEstoque(it.produtoEstoqueId, qtd, reservas, lojaId);
+  if(!r || !r.ok) reservas[it.produtoEstoqueId] = (reservas[it.produtoEstoqueId]||0) + qtd;
+  return reservas;
+}
+async function abrirDevolverItemOrdem(order){
+  if(!order) return;
+  if(order.status==='cancelado' || order.status==='rascunho'){ showToast('Pedido cancelado ou rascunho não tem devolução.'); return; }
+  if(!podeDevolverItemOrdem()){ showToast('A oficina não registra devolução.'); return; }
+  if(await bloqueadoPorCaixaFechado(order.lojaId)) return;
+  const disponiveis = (order.itens||[]).map((it,idx)=>({it,idx})).filter(x=> x.it && !x.it.devolvido && Number(x.it.valorUnitario)>0);
+  if(!disponiveis.length){ showToast('Não há itens com valor disponíveis para devolução neste pedido.'); return; }
+  const lojaEstoque = estoqueLojaIdDaOrdem(order) || order.reservaLojaId || order.lojaId;
+  const comNota = order.emissaoNota === 'sim';
+  const formas = (config.formasPagamento || config.paymentTypes || []);
+  openModal(`
+    <h3>Devolver item do pedido</h3>
+    <p>${escapeHtml(order.cliente||'Cliente não identificado')} · Via ${escapeHtml(viaTxt(order)||'—')} · <b>${fmtMoeda(order.valorTotal)}</b></p>
+    <div class="campo"><label for="do_item">Item devolvido</label>
+      <select id="do_item" style="width:100%">${disponiveis.map(x=>`<option value="${x.idx}">${escapeHtml(String(x.it.quantidade))}× ${escapeHtml(x.it.produto||'Item')}${x.it.metal?' ('+escapeHtml(x.it.metal)+')':''} — ${fmtMoeda(Number(x.it.quantidade)*Number(x.it.valorUnitario||0))}</option>`).join('')}</select></div>
+    <div class="campo"><label for="do_forma">Devolver o valor como</label>
+      <select id="do_forma" style="width:100%">${formas.map(f=>`<option value="${escapeHtml(f.id)}">${escapeHtml(String(f.nome||f.label||f.id).toUpperCase())}</option>`).join('')}<option value="__credito">CRÉDITO DO CLIENTE (fica para a próxima compra)</option></select></div>
+    <div class="campo"><label for="do_motivo">Motivo</label><input id="do_motivo" style="width:100%" placeholder="Ex.: cliente desistiu, defeito"></div>
+    <div class="aviso-linha" id="do_hint" style="margin:10px 0;font-weight:700;"></div>
+    ${comNota
+      ? `<div class="aviso-linha excede" style="margin-bottom:10px;">${ico('alerta')}<span><b>Este pedido saiu com nota${order.numeroNota?' nº '+escapeHtml(order.numeroNota):''}.</b> O contador precisa emitir uma <b>NF-e de entrada</b> (modelo 55, finalidade 4 — devolução, CFOP 1.202) referenciando essa nota, só com o item devolvido. Depois lance o número aqui.</span></div>`
+      : `<div class="aviso-linha" style="margin-bottom:10px;">${ico('info')}<span>Este pedido saiu <b>sem nota</b> — não precisa emitir nota de devolução.</span></div>`}
+    <div class="aviso-linha" style="margin-bottom:10px;">${ico('info')}<span>Se o cliente levar <b>outra peça</b> no lugar, registre essa peça como uma <b>venda nova</b> no módulo Vendas (é o que acontece no fiscal) e use o crédito dele como pagamento.</span></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="do_fechar" type="button">Voltar</button>
+      <button class="btn btn-danger" id="do_confirmar" type="button">${ico('devolver')} Confirmar devolução</button>
+    </div>
+  `);
+  const elItem = document.getElementById('do_item'), elForma = document.getElementById('do_forma'), elHint = document.getElementById('do_hint');
+  const valorDoItem = ()=>{ const it = order.itens[Number(elItem.value)]; return Math.round(Number(it.quantidade)*Number(it.valorUnitario||0)*100)/100; };
+  const atualizarHint = ()=>{ elHint.innerHTML = `${ico('info')}<span>Valor a devolver: ${fmtMoeda(valorDoItem())}</span>`; };
+  elItem.addEventListener('input', atualizarHint); atualizarHint();
+  document.getElementById('do_fechar').addEventListener('click', closeModal);
+  document.getElementById('do_confirmar').addEventListener('click', async ()=>{
+    const btn = document.getElementById('do_confirmar'); btn.disabled = true;
+    try{
+      const idx = Number(elItem.value); const item = order.itens[idx];
+      if(!item || item.devolvido){ showToast('Esse item já foi devolvido.'); return; }
+      const valor = valorDoItem(); const forma = elForma.value; const motivo = String(document.getElementById('do_motivo').value||'').trim();
+      if(!(valor>0)){ showToast('Este item não tem valor — não há o que devolver.'); return; }
+      let cliente = null;
+      if(forma === '__credito'){
+        cliente = await localizarClienteDaOrdem(order);
+        if(!cliente){ showToast('Para devolver como crédito, o cliente precisa estar cadastrado. Escolha outra forma ou cadastre o cliente.'); return; }
+      } else {
+        const trocasAnt = order.trocas||[];
+        const recebidoLiquido = valorRecebidoDe(order)
+          - trocasAnt.filter(t=> Number(t.diferenca)<0 && t.formaDiferenca!=='__credito').reduce((a,t)=> a + Math.abs(Number(t.diferenca)||0), 0);
+        if(valor > recebidoLiquido + 0.005 && !confirm(`Este pedido recebeu só ${fmtMoeda(Math.max(0,recebidoLiquido))} em dinheiro/PIX/cartão, mas a devolução é de ${fmtMoeda(valor)}.\n\nDevolver mesmo assim?`)) return;
+      }
+      // Estoque: se já baixou, a peça volta agora. Se era só reserva, marcar como devolvido já tira da reserva.
+      if(order.estoqueBaixadoEm && !item.avulso && item.produtoEstoqueId){
+        const consumo = consumoDoItemOrdem(item, lojaEstoque);
+        for(const [pid, q] of Object.entries(consumo)){
+          if(!q) continue;
+          const g = await gatewayCall({ op:'registrarMovimentoEstoque', params:{ produtoId:pid, lojaId:lojaEstoque, tipoMovimento:'CANCELAMENTO_PEDIDO', quantidade:q, referenciaId:order.id } });
+          const p = produtosEstoque.find(x=>x.id===pid);
+          if(p){
+            if(!p.estoquePorLoja) p.estoquePorLoja = {};
+            if(g && !g.error && typeof g.saldoNovo==='number') p.estoquePorLoja[lojaEstoque] = g.saldoNovo;
+            else { console.error('erro ao devolver item do pedido', pid, g && g.error); p.estoquePorLoja[lojaEstoque] = (Number(p.estoquePorLoja[lojaEstoque])||0) + q; }
+          }
+        }
+      }
+      if(cliente){
+        cliente.credito = (Number(cliente.credito)||0) + valor;
+        if(!cliente.creditoMovimentos) cliente.creditoMovimentos = [];
+        cliente.creditoMovimentos.push({ data: hojeStr(), valor, tipo:'estorno', obs:`Devolução de item — O.S. ${viaTxt(order)||''}` });
+        await salvarUmCliente(cliente);
+      }
+      const reg = {
+        id: uid('troca'), tipoMov:'devolucao', motivo,
+        itemAntigoDescricao: `${item.quantidade}x ${item.produto||'Item'}${item.metal?' ('+item.metal+')':''}`, itemAntigoValor: valor,
+        itemNovo: { produto:'(devolução — sem item novo)', metal:'', quantidade:0, valorUnitario:0, produtoEstoqueId:'', estoqueConsumidoItem:{} }, itemNovoValor: 0,
+        diferenca: -valor, formaDiferenca: forma, fiadoDebitoId: null,
+        data: hojeStr(), feitoPor: (currentUser&&currentUser.nome)||'', criadoEm: Date.now(),
+        fiscal: fiscalDevolucaoDeOrdem(order),
+      };
+      item.devolvido = true; item.trocado = true; item.trocaId = reg.id;
+      if(!order.trocas) order.trocas = [];
+      order.trocas.push(reg);
+      // Reserva: o item devolvido saiu de itensCatalogoDaOrdem, então re-sincronizar libera a parte dele.
+      if(!order.estoqueBaixadoEm){ try{ await sincronizarReservasOrdem(order); }catch(e){ console.error('reserva após devolução', e); } }
+      const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
+      if(rr && rr.error){ showToast('Não consegui salvar a devolução: '+rr.error); return; }
+      showToast('Devolução registrada.' + (comNota ? ' Falta emitir a nota de devolução.' : ''));
+      closeModal(); renderView();
+    } finally { btn.disabled = false; }
+  });
+}
+/** Lança o número da NF-e de entrada do pedido depois que o contador emitiu. */
+function abrirLancarNotaDevolucaoOrdem(order, trocaId){
+  const reg = ((order&&order.trocas)||[]).find(t=>t.id===trocaId);
+  if(!reg) return;
+  if(!reg.fiscal) reg.fiscal = fiscalDevolucaoDeOrdem(order);
+  openModal(`
+    <h3>Nota de devolução</h3>
+    <p class="muted">${escapeHtml(reg.itemAntigoDescricao||'')} · Via ${escapeHtml(viaTxt(order)||'—')}</p>
+    <div class="aviso-linha" style="margin-bottom:10px;">${ico('info')}<span>NF-e de entrada (modelo 55, finalidade 4 — devolução, CFOP 1.202)${reg.fiscal.notaOriginal?`, referenciando a nota nº <b>${escapeHtml(reg.fiscal.notaOriginal)}</b>`:''}.</span></div>
+    <div class="campo"><label for="ndo_num">Número da nota de devolução</label><input id="ndo_num" style="width:100%" autocomplete="off" placeholder="Ex.: 12345" value="${escapeHtml(reg.fiscal.notaDevolucao||'')}"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="ndo_fechar" type="button">Voltar</button>
+      <button class="btn btn-accent" id="ndo_salvar" type="button">Salvar</button>
+    </div>
+  `);
+  document.getElementById('ndo_fechar').addEventListener('click', closeModal);
+  document.getElementById('ndo_salvar').addEventListener('click', async ()=>{
+    const n = String(document.getElementById('ndo_num').value||'').trim();
+    if(!n){ showToast('Digite o número da nota de devolução.'); return; }
+    reg.fiscal.notaDevolucao = n; reg.fiscal.emitidaEm = Date.now();
+    const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
+    if(rr && rr.error){ showToast('Não consegui salvar: '+rr.error); return; }
+    showToast('Nota de devolução lançada.'); closeModal(); renderView();
+  });
 }
 
 /* ===== CONVERTER ORÇAMENTO EM PEDIDO ===== */
@@ -6719,6 +6865,9 @@ function renderPainel(main){
     wrap.querySelectorAll('[data-del]').forEach(b=>{
       b.addEventListener('click', ()=> abrirExcluirOrdem(orders.find(x=>x.id===b.dataset.del)) );
     });
+    wrap.querySelectorAll('[data-devitem]').forEach(b=>{
+      b.addEventListener('click', ()=> abrirDevolverItemOrdem(orders.find(x=>x.id===b.dataset.devitem)) );
+    });
     wrap.querySelectorAll('.menu-mais-btn').forEach(b=>{
       b.addEventListener('click', (e)=>{ e.stopPropagation(); alternarMenuMais(b); });
     });
@@ -6783,6 +6932,7 @@ function renderPainel(main){
               <button type="button" role="menuitem" data-mail="${o.id}">${ico('email')} Enviar e-mail ao cliente</button>
               <button type="button" role="menuitem" data-retirada="${o.id}">${ico('usuarios')} Retirada na loja (conferir código)</button>
               <button type="button" role="menuitem" data-hist="${o.id}">${ico('documento')} Histórico da via</button>
+              ${(o.status!=='cancelado' && o.status!=='rascunho') ? `<button type="button" role="menuitem" data-devitem="${o.id}">${ico('devolver')} Devolver item</button>` : ''}
               ${podeExcluirOrdem(o) ? `<hr><button type="button" role="menuitem" class="perigo" data-del="${o.id}">${ico('lixeira')} Excluir pedido</button>` : ''}
             </div>
           </div>
