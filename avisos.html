@@ -369,8 +369,13 @@ async function calcularAvisos(){
     const prontas = ordens.filter(o=> o.status==='pronto' && o.data && (diasDesde(o.data)||0) >= DIAS_PRONTO_SEM_RETIRADA)
       .sort((a,b)=> (a.data||'').localeCompare(b.data||''));
     // 10/11: vias EM PENDÊNCIA (a Oficina parou por um problema): mostra em vermelho o que falta e abre a via para editar
-    const pendentes = ordens.filter(o=> o.status==='pendencia')
+    // 23/11: diretoria não vê pendência já com CIENTE da funcionária (segue para vendedora/gerente até o status mudar)
+    const obsOficinaRecente = o=> (o.observacoes||[]).filter(x=> x && x.origem==='oficina').sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0))[0];
+    const pendentes = ordens.filter(o=> o.status==='pendencia' && !(ehDiretoria() && (obsOficinaRecente(o)||{}).ciente===true))
       .sort((a,b)=> (a.data||'').localeCompare(b.data||''));
+    // 23/11: diretoria vê só as vias que ENTRARAM como abandonada (últimos 7 dias), no lugar das "prontas sem retirada"
+    const abandonadas = ordens.filter(o=> o.status==='abandonada' && (Date.now() - (Number((o.abandono&&o.abandono.em)||o.statusEm)||0)) <= 7*86400000)
+      .sort((a,b)=> (Number((b.abandono&&b.abandono.em)||b.statusEm)||0) - (Number((a.abandono&&a.abandono.em)||a.statusEm)||0));
     const motivoPendencia = o=>{
       const obs = (o.observacoes||[]).filter(x=> x && x.origem==='oficina').sort((a,b)=> (b.criadoEm||0)-(a.criadoEm||0))[0];
       return obs ? String(obs.descricao||'').replace(/^\[OFICINA\]\s*/,'').trim() : '';
@@ -391,7 +396,13 @@ async function calcularAvisos(){
       tag: `${plural(diasDesde(o.data),'dia','dias')} de atraso`, tagTipo:'danger',
       abrir:{ alvo:'os', registroId:o.id },
     }))});
-    if(prontas.length) grupos.push({ titulo:`Prontos há ${DIAS_PRONTO_SEM_RETIRADA}+ dias sem retirada`, tipo:'wait', itens: prontas.map(o=>({
+    if(ehDiretoria() && abandonadas.length) grupos.push({ titulo:'Vias que entraram como abandonada', tipo:'danger', itens: abandonadas.map(o=>({
+      titulo: `${o.codigoVia ? o.codigoVia+' — ' : ''}${o.cliente||'Sem cliente'}`,
+      sub: `${o.serviceTypeName||o.descricao||'Serviço'} · abandonada em ${fmtDate(new Date(Number((o.abandono&&o.abandono.em)||o.statusEm)||Date.now()).toISOString())}${o.loja?' · '+o.loja:''}${o.abandono&&o.abandono.por?' · por '+o.abandono.por:''}`,
+      tag: 'abandonada', tagTipo:'danger',
+      abrir:{ alvo:'os', registroId:o.id },
+    }))});
+    if(!ehDiretoria() && prontas.length) grupos.push({ titulo:`Prontos há ${DIAS_PRONTO_SEM_RETIRADA}+ dias sem retirada`, tipo:'wait', itens: prontas.map(o=>({
       titulo: `${o.codigoVia ? o.codigoVia+' — ' : ''}${o.cliente||'Sem cliente'}`,
       sub: `${o.serviceTypeName||o.descricao||'Serviço'} · previsto ${fmtDate(o.data)}${o.telefone?' · '+o.telefone:''}`,
       tag: `${plural(diasDesde(o.data),'dia','dias')}`, tagTipo:'wait',
@@ -401,7 +412,7 @@ async function calcularAvisos(){
   }
 
   // ---------- CAIXA › Orçamento ----------
-  let orcs = await lerTabela('orcamentos');
+  let orcs = ehDiretoria() ? null : await lerTabela('orcamentos');   // 23/11: diretoria não recebe aviso de orçamento
   if(orcs){
     // 04/11: vendedora = gerente — vê os orçamentos de todas as vendedoras das lojas dela
     const abertos = orcs.filter(o=> !STATUS_ORC_FECHADOS.includes(o.status));
