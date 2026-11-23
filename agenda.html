@@ -703,7 +703,7 @@ const AG_TIPOS = { privada:{ nome:'Privada', desc:'Só você vê' }, loja:{ nome
 const AG_CLASSES = { urgente:'Urgente', importante:'Importante', normal:'Normal', baixa:'Baixa' };
 const AG_COLUNAS = [ ['a_fazer','A fazer'], ['fazendo','Fazendo'], ['feito','Feito'] ];
 const AG_VIA = { orcamento:{ nome:'Orçamento', alvo:'orcamentos' }, venda:{ nome:'Venda', alvo:'pdv' }, pedido:{ nome:'Pedido', alvo:'os' } };
-estado.ag = { aba:'quadro', ini:null, tarefas:[], lembretes:[], vias:null, viasErro:null, filtroTipo:'', filtroCls:'', viaTipo:'', viaBusca:'', mes:null, mostrarVias:true, escopoVias:'minhas', tiposCal:{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:false, orcamento:true }, finalizadosCal:false, viasCal:{}, avisos:null, mostrarAvisos:true, avisosFechado:false, avGrupos:{} };
+estado.ag = { aba:'quadro', ini:null, tarefas:[], lembretes:[], vias:null, viasErro:null, filtroTipo:'', filtroCls:'', viaTipo:'', viaStatus:'', viaBusca:'', mes:null, filtroServico:'', mostrarVias:true, escopoVias:'minhas', tiposCal:{ tarefa:true, lembrete:true, aviso:true, pedido:true, venda:false, orcamento:true }, finalizadosCal:false, viasCal:{}, avisos:null, mostrarAvisos:true, avisosFechado:false, avGrupos:{} };
 
 function agDataISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function agFmtData(s){ if(!s) return ''; const [y,m,d] = String(s).slice(0,10).split('-'); return `${d}/${m}/${y}`; }
@@ -1003,6 +1003,7 @@ function agEventosDoDia(iso, soltos){
   if(TP.pedido!==false || TP.venda!==false || TP.orcamento!==false) (agViasCal()||[]).forEach(v=>{
     const dia = v.tipo==='orcamento' ? v.validade : v.data;
     if(TP[v.tipo]===false) return;
+    if(estado.ag.filtroServico && v.tipo==='pedido' && v.serviceTypeId!==estado.ag.filtroServico) return;
     if(dia===iso && (FIN || !agViaFinalizada(v))) ev.push({ cls:'via v-'+v.tipo, txt:(v.tipo==='pedido'?'Entrega ':v.tipo==='orcamento'?'Vence ':'Venda ')+(v.codigoVia||'')+' '+(v.cliente||'')+(estado.ag.escopoVias!=='minhas'&&!estado.ag.viasOficina&&v.vendedora?' ('+v.vendedora+')':''), via:v });
   });
   return ev;
@@ -1010,17 +1011,34 @@ function agEventosDoDia(iso, soltos){
 /* 22/11: escolher o que aparece no calendário (tarefas, lembretes, avisos, pedidos/serviços, vendas, orçamentos). Abre com tudo. */
 /** Via encerrada: pedido entregue, orçamento aprovado/recusado, qualquer cancelada. */
 function agViaFinalizada(v){ const st = String(v.status||'').toLowerCase(); return /cancel/.test(st) || (v.tipo==='pedido' && st==='entregue') || (v.tipo==='orcamento' && ['aprovado','recusado'].includes(st)); }
+const AG_COR_CAT = { alianca:'#E0A100', fabricacao:'#0B63D6', servico:'#D7263D' };
+const AG_PALETA_SV = ['#6b5b95','#88b04b','#dd8ab8','#4e89ae','#955251','#20639b','#3cab6e','#b5651d'];
+function agSemAcento(s){ return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); }
+function agCategoriaServico(nome){ const n = agSemAcento(nome); if(/alian/.test(n)) return 'alianca'; if(/fabrica/.test(n)) return 'fabricacao'; if(/servi/.test(n)) return 'servico'; return null; }
+function agTiposServicoOrdenados(){ return (__cfgAg.serviceTypes||[]).slice().sort((a,b)=>String(a.nome||'').localeCompare(String(b.nome||''),'pt-BR',{sensitivity:'base',numeric:true})); }
+function agCorServico(id){ const lista = agTiposServicoOrdenados(); const st = lista.find(s=>s.id===id); const cat = st && agCategoriaServico(st.nome); if(cat) return AG_COR_CAT[cat]; const i = lista.findIndex(s=>s.id===id); return AG_PALETA_SV[(i<0?0:i)%AG_PALETA_SV.length]; }
+/* 23/11: filtro do calendário por tipo de serviço (Aliança, Fabricação, Serviço etc.), aplicado só aos pedidos. */
+function agFiltroServicoCal(){
+  const tipos = agTiposServicoOrdenados();
+  if(!estado.ag.tiposCal.pedido || !tipos.length) return '';
+  return `<div class="ag-tipos" role="group" aria-label="Filtrar pedidos por tipo de serviço" style="margin-top:6px;">
+    <span class="ag-tipos-rot">Serviço:</span>
+    <button type="button" class="ag-tp ${!estado.ag.filtroServico?'on':''}" data-agsv="">Todos</button>
+    ${tipos.map(t=>{ const cor = agCorServico(t.id); const on = estado.ag.filtroServico===t.id; return `<button type="button" class="ag-tp" data-agsv="${t.id}" style="border-color:${cor};${on?`background:${cor};color:#fff;`:`color:${cor};`}" aria-pressed="${on}">${escapeHtml(t.nome)}</button>`; }).join('')}
+  </div>`;
+}
 const AG_TIPOS_CAL = [ ['tarefa','Tarefas','lista'], ['pedido','Pedidos (serviço)','recibo'], ['venda','Vendas','carrinho'], ['orcamento','Orçamentos','documento'], ['aviso','Avisos','sino'], ['lembrete','Lembretes','relogio'] ];
 function agFiltroTiposCal(m){
   const T = estado.ag.tiposCal, ini = agDataISO(new Date(m.getFullYear(), m.getMonth(), 1)), fim = agDataISO(new Date(m.getFullYear(), m.getMonth()+1, 0));
   const noMes = d => d && d >= ini && d <= fim;
   const FIN = !!estado.ag.finalizadosCal;
   const vias = (agViasCal()||[]).filter(v=> FIN || !agViaFinalizada(v));
+  const svOk = v => !estado.ag.filtroServico || v.serviceTypeId===estado.ag.filtroServico;
   const n = {
     tarefa: estado.ag.tarefas.filter(t=>noMes(t.data) && (FIN || t.coluna!=='feito')).length,
     lembrete: estado.ag.lembretes.filter(l=>noMes(agDataISO(new Date(l.disparar_em)))).length,
     aviso: (estado.ag.avisos||[]).filter(a=>noMes(a.data)).length,
-    pedido: vias.filter(v=>v.tipo==='pedido' && noMes(v.data)).length,
+    pedido: vias.filter(v=>v.tipo==='pedido' && noMes(v.data) && svOk(v)).length,
     venda: vias.filter(v=>v.tipo==='venda' && noMes(v.data)).length,
     orcamento: vias.filter(v=>v.tipo==='orcamento' && noMes(v.validade)).length,
   };
@@ -1048,6 +1066,7 @@ function agRenderCalendario(c){
       ${agLegenda()}${estado.ag.tiposCal.aviso && (estado.ag.avisos||[]).length ? `<div class="ag-legenda" title="Avisos dos módulos">${['danger','wait','info'].map(n=>`<span class="n-${n}"><i style="background:var(--tc)"></i>${AV_NIVEL[n]}</span>`).join('')}</div>` : ''}
     </div>
     ${agFiltroTiposCal(m)}
+    ${agFiltroServicoCal()}
     <div class="ag-cal">
       ${['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map(d=>`<div class="dow">${d}</div>`).join('')}
       ${dias.map(d=>{
@@ -1072,6 +1091,7 @@ function agRenderCalendario(c){
     agRender();
   });
   const selE = document.getElementById('agEscopoVias'); if(selE) selE.onchange = async e=>{ estado.ag.escopoVias = e.target.value; if(estado.ag.mostrarVias && !agViasCal()) await agCarregarViasCal(); agRender(); };
+  c.querySelectorAll('[data-agsv]').forEach(b=> b.onclick = ()=>{ estado.ag.filtroServico = b.dataset.agsv; agRender(); });
   if(estado.ag.mostrarVias && !agViasCal()) agCarregarViasCal().then(()=>agRender());
   c.querySelectorAll('.ag-dia').forEach(el=> el.addEventListener('click', e=>{
     const iso = el.dataset.agdia; const evEl = e.target.closest('[data-agev]');
@@ -1120,16 +1140,21 @@ function agAbrirVia(v){
   const info = AG_VIA[v.tipo]; if(!info) return;
   if(EMBEDDED) parent.postMessage({ type:'irParaModulo', modulo:'agenda', alvo: info.alvo, registroId: v.id }, '*');
 }
+const ST_OFICINA_NOMES = { enviado_fabrica:'Enviado p/ fábrica', em_producao:'Em produção', pendencia:'Pendência', oficina_pronto:'Liberado fábrica' };
 function agRenderVias(c){
   const f = estado.ag;
   if(!f.vias){ c.innerHTML = '<p class="muted">Buscando as vias com o seu nome…</p>'; return; }
   const seloVia = st => { const x = String(st||'').toLowerCase(); const cl = /cancel|abandon/.test(x) ? 'danger' : /entreg|pago|ativa|aprov|pronto/.test(x) ? 'ok' : /aguard|pend|oficina|fabrica|pendencia/.test(x) ? 'wait' : ''; const rot = { aguardando:'Aprovado', enviado_fabrica:'Enviado p/ fábrica', em_producao:'Em produção', pendencia:'Pendência', oficina_pronto:'Liberado fábrica', pronto:'Disponível para retirada', entregue:'Entregue', cancelado:'Cancelado', cancelada:'Cancelada', ativa:'Ativa', aberto:'Aberto' }[x] || st; return `<span class="selo ${cl}">${escapeHtml(rot||'—')}</span>`; };
   const q = f.viaBusca.trim().toLowerCase();
-  const lista = Busca.filtrar(f.vias.filter(v=> (!f.viaTipo || v.tipo===f.viaTipo)), q, v=>[v.codigoVia,v.cliente,v.loja,v.vendedora,v.status]);
+  const lista = Busca.filtrar(f.vias.filter(v=> (!f.viaTipo || v.tipo===f.viaTipo) && (!f.viaStatus || v.status===f.viaStatus)), q, v=>[v.codigoVia,v.cliente,v.loja,v.vendedora,v.status]);
   const cont = t => f.vias.filter(v=>!t || v.tipo===t).length;
   c.innerHTML = `
     <div class="ag-filtros" style="margin-bottom:10px;">
       ${[['','Todas'],['orcamento','Orçamentos'],['venda','Vendas'],['pedido','Pedidos']].map(([k,n])=>`<button type="button" class="ag-chip ${f.viaTipo===k?'on':''}" data-agvt="${k}">${n} (${cont(k)})</button>`).join('')}
+      ${f.viasOficina ? `<select class="busca" id="agViaStatus" aria-label="Filtrar por status" style="max-width:200px;">
+        <option value="">Todos os status</option>
+        ${Object.entries(ST_OFICINA_NOMES).map(([k,n])=>`<option value="${k}" ${f.viaStatus===k?'selected':''}>${n}</option>`).join('')}
+      </select>` : ''}
       <input class="busca" id="agViaBusca" type="search" placeholder="Buscar código, cliente ou loja…" value="${escapeHtml(f.viaBusca)}" style="max-width:260px;" aria-label="Buscar via">
     </div>
     ${f.viasErro?`<p class="muted erro-txt">${escapeHtml(f.viasErro)} Clique em atualizar para tentar de novo.</p>`:''}
@@ -1138,6 +1163,7 @@ function agRenderVias(c){
     </tbody></table></div>` : `<div class="lista-vazia"><b>Nenhuma via com o seu nome${f.viaTipo?' neste filtro':''}</b>${f.viaBusca?'Confira o que foi digitado na busca.':'As vendas, pedidos e orçamentos em que você é a vendedora aparecem aqui.'}</div>`}
     <p class="muted" style="font-size:11.5px;margin-top:8px;">${f.viasOficina ? 'Pedidos que estão em poder da Oficina (enviados para a fábrica, em produção, pendência ou liberados pela fábrica), de todas as lojas. Clique numa linha para abrir.' : 'Vias em que você é a vendedora; as marcadas “Na Oficina” estão com a Oficina agora. Clique numa linha para abrir.'}</p>`;
   c.querySelectorAll('[data-agvt]').forEach(b=> b.onclick = ()=>{ f.viaTipo = b.dataset.agvt; agRender(); });
+  const selSt = document.getElementById('agViaStatus'); if(selSt) selSt.onchange = e=>{ f.viaStatus = e.target.value; agRender(); };
   const busca = document.getElementById('agViaBusca');
   busca.oninput = ()=>{ f.viaBusca = busca.value; const pos = busca.selectionStart; agRender(); const nb = document.getElementById('agViaBusca'); nb.focus(); nb.setSelectionRange(pos,pos); };
   c.querySelectorAll('[data-agvia]').forEach(tr=>{ tr.onclick = ()=> agAbrirVia(lista[+tr.dataset.agvia]); tr.onkeydown = e=>{ if(e.key==='Enter') agAbrirVia(lista[+tr.dataset.agvia]); }; });
