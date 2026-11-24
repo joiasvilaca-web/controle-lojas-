@@ -5526,16 +5526,24 @@ async function renderProdutoUnificadoTab(main, opts){
         : cadVazio('Nenhum produto encontrado', 'Confira a digitação ou troque a categoria e a subcategoria.');
       return;
     }
-    wrap.innerHTML = `<div class="cad-pager"><span>${lista.length} produto${lista.length===1?'':'s'}${lista.length!==produtosEstoque.length?` de ${produtosEstoque.length}`:''}</span></div>
-      <table class="cad-tab cartoes"><thead><tr><th>Produto</th><th>Categoria</th><th class="r">Estoque</th><th class="r">Preço de venda</th><th>Situação</th><th class="acoes"></th></tr></thead><tbody>
+    wrap.innerHTML = `<div class="cad-pager" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <span>${lista.length} produto${lista.length===1?'':'s'}${lista.length!==produtosEstoque.length?` de ${produtosEstoque.length}`:''}</span>
+        <span id="peEtqBarra" style="display:none; align-items:center; gap:10px;">
+          <span id="peEtqContagem" class="muted" style="font-size:12.5px;"></span>
+          <button type="button" class="btn btn-accent btn-sm" id="btnImprimirEtiquetasLote">${cadIco('etiqueta')} Imprimir etiquetas selecionadas</button>
+        </span>
+      </div>
+      <table class="cad-tab cartoes"><thead><tr><th style="width:30px;"><input type="checkbox" id="peEtqSelAll" title="Selecionar todos"></th><th>Produto</th><th>Categoria</th><th class="r">Estoque</th><th class="r">Preço de venda</th><th>Situação</th><th class="acoes"></th></tr></thead><tbody>
       ${lista.map(p=>{ const est = estoqueTotalDe(p); const cs = [catNome(p.categoriaId), subNome(p.subcategoriaId)].filter(Boolean).join(' · '); return `
       <tr>
+        <td><input type="checkbox" class="pe-etq-sel" data-pesel="${escapeHtml(p.id)}"></td>
         <td class="cel-principal"><div class="cad-nome">${escapeHtml(p.nome)}</div>${p.codigoInterno?`<div class="cad-cod">${escapeHtml(p.codigoInterno)}</div>`:''}</td>
         <td data-r="Categoria" class="${cs?'':'vazio-cel'}">${cs?escapeHtml(cs):'<span class="cad-apagado">—</span>'}</td>
         <td data-r="Estoque" class="r"><span style="${est>0?'':'color:var(--muted);'}">${cadNum(est)}</span> <span class="cad-apagado" style="font-size:12px;">${escapeHtml(p.unidade||'un')}</span></td>
         <td data-r="Preço de venda" class="r" style="font-weight:600;">${p.precoVenda!=null?cadBrl(p.precoVenda):'<span class="cad-apagado" style="font-weight:400;">Sem preço</span>'}</td>
         <td data-r="Situação"><span class="cad-selos">${p.vendavel===false?'<span class="selo">Só insumo</span>':'<span class="selo ok">Vendável</span>'}${p.composicao&&p.composicao.length>0?`<span class="selo info" title="Feito a partir de ${p.composicao.length} insumo(s)">Composição: ${p.composicao.length}</span>`:''}</span></td>
         <td class="acoes"><span class="cad-acoes">
+          <input type="number" class="pe-etq-qtd" data-peqtd="${escapeHtml(p.id)}" min="1" value="1" title="Quantidade de etiquetas" style="width:44px; padding:4px 5px; border:1px solid var(--line); border-radius:6px; text-align:center;">
           ${cadBtnIcone('etiqueta','Imprimir etiqueta',`data-petiqueta="${escapeHtml(p.id)}"`)}
           ${cadBtnIcone('copiar','Clonar produto (cria uma cópia com código novo, sem abrir o produto)',`data-pclone="${escapeHtml(p.id)}"`)}
           ${cadBtnIcone('lapis','Editar produto',`data-pedit="${escapeHtml(p.id)}"`)}
@@ -5543,6 +5551,39 @@ async function renderProdutoUnificadoTab(main, opts){
         </span></td>
       </tr>`; }).join('')}</tbody></table>`;
     wrap.querySelectorAll('[data-petiqueta]').forEach(b=>b.addEventListener('click',()=>imprimirEtiquetaProduto(produtosEstoque.find(p=>p.id===b.dataset.petiqueta))));
+    // 24/11 (Felipe): seleção em lote pra imprimir várias etiquetas de uma vez (com a quantidade de cada).
+    function atualizarBarraEtq(){
+      const marcados = Array.from(wrap.querySelectorAll('.pe-etq-sel:checked'));
+      const barra = document.getElementById('peEtqBarra');
+      const contagem = document.getElementById('peEtqContagem');
+      if(!barra) return;
+      if(marcados.length===0){ barra.style.display='none'; return; }
+      barra.style.display='flex';
+      let totalEtq = 0;
+      marcados.forEach(cb=>{
+        const qtdInp = wrap.querySelector(`[data-peqtd="${cb.dataset.pesel}"]`);
+        totalEtq += Math.max(1, Number(qtdInp&&qtdInp.value)||1);
+      });
+      contagem.textContent = `${marcados.length} produto${marcados.length===1?'':'s'} selecionado${marcados.length===1?'':'s'} · ${totalEtq} etiqueta${totalEtq===1?'':'s'}`;
+    }
+    wrap.querySelectorAll('.pe-etq-sel').forEach(cb=> cb.addEventListener('change', atualizarBarraEtq));
+    wrap.querySelectorAll('.pe-etq-qtd').forEach(inp=> inp.addEventListener('input', atualizarBarraEtq));
+    const selAllEtq = document.getElementById('peEtqSelAll');
+    if(selAllEtq) selAllEtq.addEventListener('change', ()=>{
+      wrap.querySelectorAll('.pe-etq-sel').forEach(cb=> cb.checked = selAllEtq.checked);
+      atualizarBarraEtq();
+    });
+    const btnLoteEtq = document.getElementById('btnImprimirEtiquetasLote');
+    if(btnLoteEtq) btnLoteEtq.addEventListener('click', ()=>{
+      const marcados = Array.from(wrap.querySelectorAll('.pe-etq-sel:checked'));
+      if(marcados.length===0) return;
+      const itens = marcados.map(cb=>{
+        const produto = produtosEstoque.find(x=>x.id===cb.dataset.pesel);
+        const qtdInp = wrap.querySelector(`[data-peqtd="${cb.dataset.pesel}"]`);
+        return { produto, quantidade: Math.max(1, Number(qtdInp&&qtdInp.value)||1) };
+      }).filter(it=>it.produto);
+      imprimirEtiquetasEmLote(itens);
+    });
     wrap.querySelectorAll('[data-pedit]').forEach(b=>b.addEventListener('click',()=>abrirProdutoEstoqueModal(produtosEstoque.find(p=>p.id===b.dataset.pedit))));
     wrap.querySelectorAll('[data-pclone]').forEach(b=>b.addEventListener('click',()=>{
       const p = produtosEstoque.find(x=>x.id===b.dataset.pclone); if(!p) return;
@@ -7801,94 +7842,25 @@ async function renderFornecedorTab(main){
   renderRows();
 }
 
-/** Gera e imprime a etiqueta de um produto no tamanho e com os campos configurados em Impressão & Etiquetas. */
+/** Gera e imprime a etiqueta de um produto, no tamanho/campos/posições configurados em Impressão & Etiquetas. */
 function imprimirEtiquetaProduto(produto){
   garantirConfigImpressao();
   const cfg = config.etiquetaJoia;
-  const campos = cfg.campos || {};
-  const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===produto.categoriaId);
-  const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
-
-  const dobravel = cfg.modelo === 'dobravel';
-  const codigoBarras = String(produto.codigoInterno || produto.gtin || '').trim();
-  const linhas = [];
-  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nome)}</div>`);
-  if(!dobravel && campos.codigoInterno && produto.codigoInterno) linhas.push(`<div>Cód: ${escapeHtml(produto.codigoInterno)}</div>`);
-  if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
-  if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
-  if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${estoqueTotalDe(produto)} ${unidadeLabel(produto.unidade)}</div>`);
-  if(!dobravel && campos.gtin && produto.gtin) linhas.push(`<div>${escapeHtml(produto.gtin)}</div>`);
-  if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
-  if(campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
-    linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
-  }
-
-  const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
-  const pesoTexto = cfg.negrito!==false ? 700 : 500;
-  const reforcoCss = cfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
-  // Etiqueta dobrável (rabo de rato): metade esquerda = código de barras + código; metade direita = demais dados
-  let corpoHtml = linhas.join('');
-  let cssDobravel = '';
-  if(dobravel){
-    let svgBarras = '';
-    if(codigoBarras && window.JsBarcode){
-      try{
-        const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
-        window.JsBarcode(svgEl, codigoBarras, { format:'CODE128', width:2, height:60, displayValue:false, margin:0 });
-        const w = parseFloat(svgEl.getAttribute('width'))||100, h = parseFloat(svgEl.getAttribute('height'))||60;
-        svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`);
-        svgEl.setAttribute('preserveAspectRatio', 'none');
-        svgEl.removeAttribute('width'); svgEl.removeAttribute('height'); svgEl.removeAttribute('style');
-        svgBarras = svgEl.outerHTML;
-      }catch(e){ svgBarras = ''; }
-    }
-    const meia = cfg.larguraMm / 2;
-    cssDobravel = `
-  body{ flex-direction:row !important; padding:0 !important; justify-content:flex-start !important; }
-  .etq-metade{ width:${meia}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:center; }
-  .etq-barras{ padding:1mm 1.5mm 0.6mm; align-items:stretch; }
-  .etq-barras svg{ display:block; width:100%; flex:1 1 auto; min-height:0; }
-  .etq-cod{ text-align:center; font-weight:700; font-size:${px.base}px; line-height:1.1; margin-top:0.4mm; letter-spacing:.03em; white-space:nowrap; }
-  .etq-dados{ padding:0.8mm 1.5mm; line-height:1.15; }
-  .etq-dados .etq-nome{ font-size:${px.base}px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .etq-dados .etq-preco{ margin-top:0.5mm; }`;
-    corpoHtml = `<div class="etq-metade etq-barras">${svgBarras || '<div style="flex:1"></div>'}<div class="etq-cod">${escapeHtml(codigoBarras || 'SEM CÓDIGO')}</div></div><div class="etq-metade etq-dados">${linhas.join('')}</div>`;
-  }
-  const html = `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>Etiqueta - ${escapeHtml(produto.nome)}</title>
-<style>
-  @page{ size:${cfg.larguraMm}mm ${cfg.alturaMm}mm; margin:0; }
-  *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  body{ font-family:Arial,Helvetica,sans-serif; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; margin:0; padding:1.5mm; box-sizing:border-box; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; display:flex; flex-direction:column; justify-content:center; -webkit-font-smoothing:none; ${reforcoCss} }
-  .etq-nome{ font-weight:700; font-size:${px.nome}px; }
-  .etq-preco{ font-weight:700; font-size:${px.preco}px; margin-top:2px; }${cssDobravel}
-</style>
-  <!-- PWA e ícones Vilaça Joias -->
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=6">
-  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=6">
-  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=6">
-  <link rel="manifest" href="/manifest.json?v=6">
-  <meta name="theme-color" content="#550127">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="VILAÇA APP">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="application-name" content="VILAÇA APP">
-</head>
-<body>
-  ${corpoHtml}
-</body>
-</html>`;
-  const printWin = window.open('', '_blank', 'width=300,height=300');
-  if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
-  printWin.document.open();
-  printWin.document.write(html);
-  printWin.document.close();
-  printWin.focus();
-  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+  abrirImpressaoEtiquetas([etiquetaLabelHtml(produto, cfg)], cfg, `Etiqueta - ${produto.nome||''}`);
+}
+/** 24/11 (Felipe): imprime várias etiquetas de uma vez, cada produto repetido pela quantidade
+ * escolhida, uma atrás da outra na mesma bobina (com a margem fora e o espaço entre etiquetas
+ * configurados em Impressão & Etiquetas). itens = [{ produto, quantidade }]. */
+function imprimirEtiquetasEmLote(itens){
+  garantirConfigImpressao();
+  const cfg = config.etiquetaJoia;
+  const labelsHtml = [];
+  (itens||[]).forEach(({produto, quantidade})=>{
+    if(!produto) return;
+    const qtd = Math.max(1, Number(quantidade)||1);
+    for(let i=0;i<qtd;i++) labelsHtml.push(etiquetaLabelHtml(produto, cfg));
+  });
+  abrirImpressaoEtiquetas(labelsHtml, cfg, `Etiquetas (${labelsHtml.length})`);
 }
 
 /* ---------- TIPOS DE SERVIÇO: ver abrirGerenciarTiposServicoModal(), agora dentro da aba Produtos ---------- */
@@ -8175,6 +8147,11 @@ function garantirConfigImpressao(){
   if(!config.etiquetaJoia.escalaTexto) config.etiquetaJoia.escalaTexto = 'media';
   if(config.etiquetaJoia.negrito===undefined) config.etiquetaJoia.negrito = true;
   if(config.etiquetaJoia.reforcoTraco===undefined) config.etiquetaJoia.reforcoTraco = false;
+  // 24/11 (Felipe): margem fora da etiqueta (borda da bobina até a 1ª etiqueta) e espaço vazio entre
+  // etiquetas quando imprime várias de uma vez; posicoes = posição (x,y em mm) de cada campo, arrastável.
+  if(!config.etiquetaJoia.margemFora) config.etiquetaJoia.margemFora = { sup:2, inf:2, esq:2, dir:2 };
+  if(!config.etiquetaJoia.espacamento) config.etiquetaJoia.espacamento = { v:3 };
+  if(!config.etiquetaJoia.posicoes || typeof config.etiquetaJoia.posicoes!=='object') config.etiquetaJoia.posicoes = {};
 }
 /** Tamanhos de fonte (em px, pra impressora térmica de bobina 58/80mm — bem maiores
  * que o padrão de tela, senão sai ilegível) por escala escolhida. */
@@ -8197,9 +8174,168 @@ const PRESETS_ETIQUETA = [
   { id:'80x40', label:'80 × 40 mm (caixa/estojo)', larguraMm:80, alturaMm:40 },
   { id:'60x15d', label:'60 × 15 mm dobrável (rabo de rato)', larguraMm:60, alturaMm:15, modelo:'dobravel' },
 ];
+/** Altura de linha padrão (mm) por escala de texto — usada só para calcular a posição inicial
+ * (empilhada) de cada campo antes de o usuário arrastar algo no quadro de posicionamento. */
+const ALTURA_LINHA_ETQ_MM = { pequena:3.4, media:4.0, grande:4.8 };
+
+/** Um campo conta como "ativo" na etiqueta: nome e preço vêm ligados por padrão (só saem se
+ * desmarcados); os demais só aparecem se marcados. cfg pode ser a config salva ou um objeto
+ * temporário lido direto do formulário (ainda não salvo), contanto que tenha .campos. */
+function etiquetaCampoAtivo(cfg, id){
+  const campos = (cfg && cfg.campos) || {};
+  if(id==='nome' || id==='precoVenda') return campos[id] !== false;
+  return !!campos[id];
+}
+/** Posição padrão (empilhada, uma embaixo da outra) de um campo que ainda não foi arrastado —
+ * ordem = índice do campo entre os campos ativos, na ordem de CAMPOS_ETIQUETA. */
+function etiquetaPosicaoPadrao(cfg, ordem){
+  const linha = ALTURA_LINHA_ETQ_MM[cfg.escalaTexto] || ALTURA_LINHA_ETQ_MM.media;
+  return { xMm:1.5, yMm: Math.round((1.3 + ordem*linha)*10)/10 };
+}
+/** Posição de um campo: a salva/arrastada (cfg.posicoes[id]), ou a padrão se ele nunca foi movido. */
+function etiquetaPosicaoCampo(cfg, id, ordem){
+  const salva = cfg.posicoes && cfg.posicoes[id];
+  if(salva && typeof salva.xMm==='number' && typeof salva.yMm==='number') return salva;
+  return etiquetaPosicaoPadrao(cfg, ordem);
+}
+/** Texto de um campo pro produto — compartilhado entre a impressão (uma ou em lote) e a prévia. */
+function conteudoCampoEtiqueta(produto, id){
+  const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===produto.categoriaId);
+  const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
+  switch(id){
+    case 'nome': return escapeHtml(produto.nome||'');
+    case 'codigoInterno': return produto.codigoInterno ? `Cód: ${escapeHtml(produto.codigoInterno)}` : '';
+    case 'precoVenda': return (produto.precoVenda!=null && produto.precoVenda!=='') ? `R$ ${Number(produto.precoVenda).toFixed(2)}` : '';
+    case 'peso': return (produto.unidade==='g'||produto.unidade==='kg') ? `${estoqueTotalDe(produto)} ${unidadeLabel(produto.unidade)}` : '';
+    case 'categoria': return cat ? escapeHtml(cat.nome) : '';
+    case 'subcategoria': return sub ? escapeHtml(sub.nome) : '';
+    case 'gtin': return produto.gtin ? escapeHtml(produto.gtin) : '';
+    case 'loja': return (config.lojas||[])[0] ? escapeHtml(config.lojas[0].nome) : '';
+    default: return '';
+  }
+}
+/** CSS compartilhado por todas as etiquetas de um documento (não muda por produto, só por cfg). */
+function etiquetaCssComum(cfg){
+  const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
+  const pesoTexto = cfg.negrito!==false ? 700 : 500;
+  const reforcoCss = cfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
+  if(cfg.modelo === 'dobravel'){
+    const meia = cfg.larguraMm/2;
+    return `
+  .etq-label{ width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:row; font-family:Arial,Helvetica,sans-serif; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; -webkit-font-smoothing:none; ${reforcoCss} }
+  .etq-metade{ width:${meia}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:center; }
+  .etq-barras{ padding:1mm 1.5mm 0.6mm; align-items:stretch; }
+  .etq-barras svg{ display:block; width:100%; flex:1 1 auto; min-height:0; }
+  .etq-cod{ text-align:center; font-weight:700; font-size:${px.base}px; line-height:1.1; margin-top:0.4mm; letter-spacing:.03em; white-space:nowrap; }
+  .etq-dados{ padding:0.8mm 1.5mm; line-height:1.15; }
+  .etq-dados .etq-nome{ font-size:${px.base}px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .etq-dados .etq-preco{ margin-top:0.5mm; }`;
+  }
+  return `
+  .etq-label{ position:relative; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; overflow:hidden; box-sizing:border-box; font-family:Arial,Helvetica,sans-serif; color:#000; -webkit-font-smoothing:none; ${reforcoCss} }
+  .etq-campo{ position:absolute; white-space:nowrap; }`;
+}
+/** HTML de UMA etiqueta (um bloco .etq-label) pro produto, no modelo "dobrável" (código de barras
+ * de um lado, dados do outro — layout fixo, sem posicionamento livre). */
+function etiquetaLabelDobravelHtml(produto, cfg){
+  const campos = cfg.campos || {};
+  const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===produto.categoriaId);
+  const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
+  const codigoBarras = String(produto.codigoInterno || produto.gtin || '').trim();
+  const linhas = [];
+  if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nome)}</div>`);
+  if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
+  if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
+  if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${estoqueTotalDe(produto)} ${unidadeLabel(produto.unidade)}</div>`);
+  if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
+  if(campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
+    linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
+  }
+  let svgBarras = '';
+  if(codigoBarras && window.JsBarcode){
+    try{
+      const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
+      window.JsBarcode(svgEl, codigoBarras, { format:'CODE128', width:2, height:60, displayValue:false, margin:0 });
+      const w = parseFloat(svgEl.getAttribute('width'))||100, h = parseFloat(svgEl.getAttribute('height'))||60;
+      svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      svgEl.setAttribute('preserveAspectRatio', 'none');
+      svgEl.removeAttribute('width'); svgEl.removeAttribute('height'); svgEl.removeAttribute('style');
+      svgBarras = svgEl.outerHTML;
+    }catch(e){ svgBarras = ''; }
+  }
+  const corpoHtml = `<div class="etq-metade etq-barras">${svgBarras || '<div style="flex:1"></div>'}<div class="etq-cod">${escapeHtml(codigoBarras || 'SEM CÓDIGO')}</div></div><div class="etq-metade etq-dados">${linhas.join('')}</div>`;
+  return `<div class="etq-label">${corpoHtml}</div>`;
+}
+/** HTML de UMA etiqueta (um bloco .etq-label) pro produto — modelo simples, com cada campo na
+ * posição configurada (arrastada no quadro, ou a posição padrão empilhada se nunca foi movido). */
+function etiquetaLabelHtml(produto, cfg){
+  if(cfg.modelo === 'dobravel') return etiquetaLabelDobravelHtml(produto, cfg);
+  const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
+  const pesoTexto = cfg.negrito!==false ? 700 : 500;
+  const ativos = CAMPOS_ETIQUETA.filter(c=>etiquetaCampoAtivo(cfg, c.id));
+  const divs = ativos.map((c,i)=>{
+    const texto = conteudoCampoEtiqueta(produto, c.id);
+    if(!texto) return '';
+    const pos = etiquetaPosicaoCampo(cfg, c.id, i);
+    const tamanho = c.id==='nome' ? px.nome : c.id==='precoVenda' ? px.preco : px.base;
+    const peso = (c.id==='nome'||c.id==='precoVenda') ? 700 : pesoTexto;
+    return `<div class="etq-campo" style="left:${pos.xMm}mm;top:${pos.yMm}mm;font-size:${tamanho}px;font-weight:${peso};">${texto}</div>`;
+  }).join('');
+  return `<div class="etq-label">${divs}</div>`;
+}
+/** Documento HTML completo (uma ou várias etiquetas, uma atrás da outra) pronto pra abrir numa
+ * janela e imprimir — aplica a margem fora (borda da bobina) e o espaço vazio entre etiquetas. */
+function etiquetaDocumentoHtml(labelsHtml, cfg, titulo){
+  const mf = cfg.margemFora || { sup:2, inf:2, esq:2, dir:2 };
+  const espV = (cfg.espacamento && cfg.espacamento.v!=null) ? cfg.espacamento.v : 3;
+  const larguraPagina = cfg.larguraMm + mf.esq + mf.dir;
+  const corpo = labelsHtml.map((h,i)=> i>0 ? `<div style="margin-top:${espV}mm;">${h}</div>` : h).join('');
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(titulo)}</title>
+<style>
+  @page{ size:${larguraPagina}mm auto; margin:0; }
+  *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body{ margin:0; padding:${mf.sup}mm ${mf.dir}mm ${mf.inf}mm ${mf.esq}mm; box-sizing:border-box; }
+  ${etiquetaCssComum(cfg)}
+</style>
+  <!-- PWA e ícones Vilaça Joias -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=6">
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=6">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=6">
+  <link rel="manifest" href="/manifest.json?v=6">
+  <meta name="theme-color" content="#550127">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="VILAÇA APP">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="application-name" content="VILAÇA APP">
+</head>
+<body>
+  ${corpo}
+</body>
+</html>`;
+}
+/** Abre a janela de impressão com um documento já pronto (uma ou várias etiquetas). */
+function abrirImpressaoEtiquetas(labelsHtml, cfg, titulo){
+  if(!labelsHtml || labelsHtml.length===0){ showToast('Nenhuma etiqueta para imprimir.'); return; }
+  const html = etiquetaDocumentoHtml(labelsHtml, cfg, titulo);
+  const alturaJanela = Math.min(700, 300 + labelsHtml.length*20);
+  const printWin = window.open('', '_blank', `width=340,height=${alturaJanela}`);
+  if(!printWin){ showToast('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
+  printWin.document.open();
+  printWin.document.write(html);
+  printWin.document.close();
+  printWin.focus();
+  setTimeout(()=>{ try{ printWin.print(); }catch(e){} }, 300);
+}
 
 function renderImpressaoTab(main){
   garantirConfigImpressao();
+  const mf = config.etiquetaJoia.margemFora;
+  const espV = (config.etiquetaJoia.espacamento||{}).v;
   main.innerHTML = `
     <div class="card" id="cupomCard"></div>
     <div class="card">
@@ -8242,7 +8378,34 @@ function renderImpressaoTab(main){
       </label>
       <div class="section-label">Campos na etiqueta</div>
       <div id="etqCamposWrap"></div>
-      <div class="cad-rodape-bloco"><button class="btn btn-accent" id="btnSalvarEtiqueta">Salvar etiqueta</button></div>
+
+      <div class="section-label" style="margin-top:14px;">Margem fora da etiqueta e espaçamento</div>
+      <p class="muted" style="margin:0 0 10px; font-size:12.5px;">Margem fora = espaço vazio da borda da bobina até a etiqueta. Espaçamento = vão vazio entre uma etiqueta e a próxima, ao imprimir várias de uma vez.</p>
+      <div class="grid-2" style="max-width:360px;">
+        <div class="field"><label>Margem superior (mm)</label><input type="number" min="0" step="0.5" id="etqMargSup" value="${mf.sup}"></div>
+        <div class="field"><label>Margem inferior (mm)</label><input type="number" min="0" step="0.5" id="etqMargInf" value="${mf.inf}"></div>
+      </div>
+      <div class="grid-2" style="max-width:360px;">
+        <div class="field"><label>Margem esquerda (mm)</label><input type="number" min="0" step="0.5" id="etqMargEsq" value="${mf.esq}"></div>
+        <div class="field"><label>Margem direita (mm)</label><input type="number" min="0" step="0.5" id="etqMargDir" value="${mf.dir}"></div>
+      </div>
+      <div class="field" style="max-width:220px;"><label>Espaço entre etiquetas (mm)</label><input type="number" min="0" step="0.5" id="etqEspV" value="${espV}"></div>
+
+      <div class="section-label" style="margin-top:14px;">Posição dos campos na etiqueta</div>
+      <p class="muted" style="margin:0 0 10px; font-size:12.5px;">Arraste cada campo dentro do quadro abaixo para escolher onde ele fica impresso. Não disponível no modelo dobrável (layout fixo, com código de barras).</p>
+      <div id="etqCanvasWrap">
+        <div id="etqCanvas" style="position:relative; border:1px dashed #999; background:#fff; margin-bottom:4px;"></div>
+        <button type="button" class="btn btn-ghost btn-sm" id="etqResetPos">Restaurar posição padrão</button>
+      </div>
+
+      <div class="cad-rodape-bloco" style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn btn-ghost" id="btnVerEtiqueta">${cadIco('olho')} Visualizar</button>
+        <button class="btn btn-accent" id="btnSalvarEtiqueta">Salvar etiqueta</button>
+      </div>
+      <div id="etqPreviaWrap" style="display:none; margin-top:10px; background:var(--surface-2); border:1px solid var(--line); border-radius:12px; padding:12px;">
+        <div class="muted" style="font-size:12px; margin-bottom:6px;">Prévia (não salva) — duas etiquetas, pra conferir o espaçamento</div>
+        <iframe id="etqPrevia" title="Prévia da etiqueta" style="border:1px dashed #999; background:#fff; display:block;"></iframe>
+      </div>
     </div>
   `;
 
@@ -8257,27 +8420,139 @@ function renderImpressaoTab(main){
     `).join('')}
   </div>`;
 
+  // ---- posicionamento livre dos campos (quadro de arrastar) ----
+  let posEdit = JSON.parse(JSON.stringify(config.etiquetaJoia.posicoes||{}));
+  function lerCamposForm(){ const o = {}; etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{ o[chk.dataset.etqcampo] = chk.checked; }); return o; }
+  function atualizarVisibilidadeCanvas(){
+    const dobravel = document.getElementById('etqModelo').value === 'dobravel';
+    document.getElementById('etqCanvasWrap').style.display = dobravel ? 'none' : '';
+  }
+  function renderEtqCanvas(){
+    const canvas = document.getElementById('etqCanvas');
+    if(!canvas) return;
+    const largura = Number(document.getElementById('etqLargura').value) || config.etiquetaJoia.larguraMm;
+    const altura = Number(document.getElementById('etqAltura').value) || config.etiquetaJoia.alturaMm;
+    const escala = Math.min(6, 280/largura);
+    canvas.style.width = (largura*escala)+'px';
+    canvas.style.height = (altura*escala)+'px';
+    canvas.dataset.escala = escala;
+    const cfgTemp = { escalaTexto: document.getElementById('etqEscala').value, campos: lerCamposForm(), posicoes: posEdit };
+    const ativos = CAMPOS_ETIQUETA.filter(c=>etiquetaCampoAtivo(cfgTemp, c.id));
+    canvas.innerHTML = ativos.map((c,i)=>{
+      const pos = etiquetaPosicaoCampo(cfgTemp, c.id, i);
+      return `<div class="etq-arrasto" data-campo="${c.id}" style="position:absolute; left:${pos.xMm*escala}px; top:${pos.yMm*escala}px; font-size:11px; background:#e8f0ff; border:1px solid #6b9bd1; border-radius:4px; padding:2px 5px; cursor:move; white-space:nowrap; user-select:none;">${escapeHtml(c.label)}</div>`;
+    }).join('');
+  }
+  let arrastoAtual = null;
+  function iniciarArrasto(ev){
+    const el = ev.target.closest('.etq-arrasto'); if(!el) return;
+    const p = ev.touches ? ev.touches[0] : ev;
+    const rect = el.getBoundingClientRect();
+    arrastoAtual = { el, offX: p.clientX-rect.left, offY: p.clientY-rect.top };
+    ev.preventDefault();
+  }
+  function moverArrasto(ev){
+    if(!arrastoAtual) return;
+    const canvas = document.getElementById('etqCanvas'); if(!canvas) return;
+    const p = ev.touches ? ev.touches[0] : ev;
+    const crect = canvas.getBoundingClientRect();
+    let x = p.clientX - crect.left - arrastoAtual.offX;
+    let y = p.clientY - crect.top - arrastoAtual.offY;
+    x = Math.max(0, Math.min(x, canvas.clientWidth - arrastoAtual.el.offsetWidth));
+    y = Math.max(0, Math.min(y, canvas.clientHeight - arrastoAtual.el.offsetHeight));
+    arrastoAtual.el.style.left = x+'px'; arrastoAtual.el.style.top = y+'px';
+    ev.preventDefault();
+  }
+  function soltarArrasto(){
+    if(!arrastoAtual) return;
+    const canvas = document.getElementById('etqCanvas');
+    const escala = (canvas && Number(canvas.dataset.escala)) || 4;
+    const xMm = Math.round((parseFloat(arrastoAtual.el.style.left)/escala)*10)/10;
+    const yMm = Math.round((parseFloat(arrastoAtual.el.style.top)/escala)*10)/10;
+    posEdit[arrastoAtual.el.dataset.campo] = { xMm, yMm };
+    arrastoAtual = null;
+  }
+  document.getElementById('etqCanvas').addEventListener('mousedown', iniciarArrasto);
+  document.getElementById('etqCanvas').addEventListener('touchstart', iniciarArrasto, {passive:false});
+  document.addEventListener('mousemove', moverArrasto);
+  document.addEventListener('touchmove', moverArrasto, {passive:false});
+  document.addEventListener('mouseup', soltarArrasto);
+  document.addEventListener('touchend', soltarArrasto);
+  document.getElementById('etqResetPos').addEventListener('click', ()=>{
+    posEdit = {};
+    renderEtqCanvas();
+    showToast('Posições padrão no quadro — clique em "Salvar etiqueta" para gravar.');
+  });
+  ['etqLargura','etqAltura','etqEscala'].forEach(id=>{
+    const el = document.getElementById(id);
+    el.addEventListener('input', renderEtqCanvas);
+    el.addEventListener('change', renderEtqCanvas);
+  });
+  etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=> chk.addEventListener('change', renderEtqCanvas));
+  document.getElementById('etqModelo').addEventListener('change', ()=>{ atualizarVisibilidadeCanvas(); renderEtqCanvas(); });
+
+  function lerCfgFormEtiqueta(){
+    return {
+      larguraMm: Number(document.getElementById('etqLargura').value) || 40,
+      alturaMm: Number(document.getElementById('etqAltura').value) || 25,
+      escalaTexto: document.getElementById('etqEscala').value,
+      negrito: document.getElementById('etqNegrito').value === '1',
+      reforcoTraco: document.getElementById('etqReforco').checked,
+      modelo: document.getElementById('etqModelo').value,
+      campos: lerCamposForm(),
+      margemFora: {
+        sup: Math.max(0, Number(document.getElementById('etqMargSup').value)||0),
+        inf: Math.max(0, Number(document.getElementById('etqMargInf').value)||0),
+        esq: Math.max(0, Number(document.getElementById('etqMargEsq').value)||0),
+        dir: Math.max(0, Number(document.getElementById('etqMargDir').value)||0),
+      },
+      espacamento: { v: Math.max(0, Number(document.getElementById('etqEspV').value)||0) },
+      posicoes: posEdit,
+    };
+  }
+
   document.getElementById('etqPreset').addEventListener('change', e=>{
     const preset = PRESETS_ETIQUETA.find(p=>p.id===e.target.value);
     if(!preset) return;
     document.getElementById('etqLargura').value = preset.larguraMm;
     document.getElementById('etqAltura').value = preset.alturaMm;
     document.getElementById('etqModelo').value = preset.modelo || 'simples';
+    atualizarVisibilidadeCanvas();
+    renderEtqCanvas();
+  });
+
+  document.getElementById('btnVerEtiqueta').addEventListener('click', ()=>{
+    const cfgPrev = lerCfgFormEtiqueta();
+    const produtoExemplo = { nome:'Anel Solitário Ouro 18k', codigoInterno:'AN-00123', precoVenda:1299.9, unidade:'un', gtin:'7891234567890', categoriaId:null, subcategoriaId:null };
+    const labelsHtml = [etiquetaLabelHtml(produtoExemplo, cfgPrev), etiquetaLabelHtml(produtoExemplo, cfgPrev)];
+    const html = etiquetaDocumentoHtml(labelsHtml, cfgPrev, 'Prévia');
+    const ifr = document.getElementById('etqPrevia');
+    document.getElementById('etqPreviaWrap').style.display = 'block';
+    const larguraPagina = cfgPrev.larguraMm + cfgPrev.margemFora.esq + cfgPrev.margemFora.dir;
+    const alturaPagina = cfgPrev.alturaMm*2 + cfgPrev.espacamento.v + cfgPrev.margemFora.sup + cfgPrev.margemFora.inf;
+    ifr.style.width = (larguraPagina * 96/25.4 + 4) + 'px';
+    ifr.style.height = (alturaPagina * 96/25.4 + 20) + 'px';
+    ifr.srcdoc = html;
   });
 
   document.getElementById('btnSalvarEtiqueta').addEventListener('click', async ()=>{
-    config.etiquetaJoia.larguraMm = Number(document.getElementById('etqLargura').value) || 40;
-    config.etiquetaJoia.alturaMm = Number(document.getElementById('etqAltura').value) || 25;
-    config.etiquetaJoia.escalaTexto = document.getElementById('etqEscala').value;
-    config.etiquetaJoia.negrito = document.getElementById('etqNegrito').value === '1';
-    config.etiquetaJoia.reforcoTraco = document.getElementById('etqReforco').checked;
-    config.etiquetaJoia.modelo = document.getElementById('etqModelo').value;
-    etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{
-      config.etiquetaJoia.campos[chk.dataset.etqcampo] = chk.checked;
-    });
+    const f = lerCfgFormEtiqueta();
+    config.etiquetaJoia.larguraMm = f.larguraMm;
+    config.etiquetaJoia.alturaMm = f.alturaMm;
+    config.etiquetaJoia.escalaTexto = f.escalaTexto;
+    config.etiquetaJoia.negrito = f.negrito;
+    config.etiquetaJoia.reforcoTraco = f.reforcoTraco;
+    config.etiquetaJoia.modelo = f.modelo;
+    config.etiquetaJoia.margemFora = f.margemFora;
+    config.etiquetaJoia.espacamento = f.espacamento;
+    config.etiquetaJoia.campos = f.campos;
+    config.etiquetaJoia.posicoes = JSON.parse(JSON.stringify(posEdit));
     const ok = await configSave();
     if(ok) showToast('Configuração de etiqueta salva.');
   });
+
+  atualizarVisibilidadeCanvas();
+  renderEtqCanvas();
 }
 
 /* ---------- CUPOM DAS VIAS: configuração individual + prévia (Ver cupom) ---------- */
