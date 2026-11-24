@@ -720,6 +720,14 @@ async function orcamentosGet(){
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar orçamentos', e); window.__orcErroCarregar = true; return []; }
 }
+/** Histórico da via (24/11): registra ações com data/hora e quem fez, mostrado no
+ * "Ver orçamento". Mesmo padrão usado hoje só na Reserva (Vendas). */
+function addHistorico(o, acao){
+  if(!o) return;
+  o.historico = o.historico || [];
+  o.historico.push({ em: new Date().toISOString(), por: (currentUser && currentUser.nome) || '', acao });
+}
+function fmtDataHora(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?'—':d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
 async function orcamentoSalvar(o){
   try{
     const { error } = await supabaseClient.from('orcamentos').upsert({ id: o.id, payload: o });
@@ -920,7 +928,9 @@ async function mudarStatusManual(o, novoId){
       } else aviso = 'cliente marcado como MARKETING OFF';
     }
     if(enviado) marcarMsgEnviada(o, novoId);
+    const statusAntesOrc = o.status;
     o.status = novoId; o.rascunho = false; o.statusAtualizadoEm = new Date().toISOString();
+    addHistorico(o, 'Status: ' + (statusInfoDe(statusAntesOrc)?.nome||statusAntesOrc||'—') + ' → ' + (inf?.nome||novoId));
     reiniciarAutoAposMudancaManual(o);
     const ok = await orcamentoSalvar(o);
     if(ok) showToast(enviado ? 'Status atualizado e mensagem enviada.' : 'Status atualizado.'+(aviso?' ('+aviso+')':''));
@@ -1007,8 +1017,10 @@ function aplicarPrazoFinalAutoSeNecessario(o){
   if(o.editadoManualmente) return false;
   const fin = finalOrc();
   if(fin.ativo && diasDesdeCriacao(o) >= Number(fin.dias)){
+    const _stAntFin = o.status;
     o.status = fin.statusId || 'recusado';
     o.statusAtualizadoEm = new Date().toISOString();
+    addHistorico(o, 'Status: ' + (statusInfoDe(_stAntFin)?.nome||_stAntFin) + ' → ' + (statusInfoDe(o.status)?.nome||o.status) + ' (prazo final automático)');
     orcamentoSalvar(o).catch(()=>{});
     return true;
   }
@@ -1770,6 +1782,7 @@ function renderNovo(main){
       codigoVia: await bumpCodigoVia('orcamento', lojaId||''),
       rascunho: false,
     };
+    addHistorico(orcamento, editando ? 'Orçamento editado' : 'Orçamento criado' + (orcamento.codigoVia?(' — via '+orcamento.codigoVia):''));
     const ok = await orcamentoSalvar(orcamento);
     if(ok){
       if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'orc', id:orcamento.id, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'' }); if(_rt && _rt.error) showToast('Orçamento salvo, mas a retirada por terceiros não foi liberada: '+_rt.error); }
@@ -2594,7 +2607,7 @@ async function executarAcaoOrc(orcId, idx){
   if(ok!==true) return false;
   const agora = new Date().toISOString();
   o.autoMensagensEnviadas = idx+1;
-  if(p.statusId && statusList().some(x=>x.id===p.statusId)){ o.status = p.statusId; o.statusAtualizadoEm = agora; }
+  if(p.statusId && statusList().some(x=>x.id===p.statusId)){ const _stAntAc = o.status; o.status = p.statusId; o.statusAtualizadoEm = agora; addHistorico(o, 'Status: ' + (statusInfoDe(_stAntAc)?.nome||_stAntAc) + ' → ' + (statusInfoDe(o.status)?.nome||o.status) + ' (ação "'+p.nome+'")'); }
   marcarMsgEnviada(o, o.status);
   (o.acoesLog = o.acoesLog || []).push({ em:agora, passo:p.id, nome:p.nome, por:(currentUser&&currentUser.nome)||'', via:'whatsapp', auto:false });
   await orcamentoSalvar(o);
@@ -2940,6 +2953,7 @@ function abrirDetalheOrcamento(o){
       <div class="field"><select id="orcStatusSel" aria-label="Status do orçamento">${statusList().map(s=>`<option value="${s.id}" ${o.status===s.id?'selected':''}>${escapeHtml(s.nome)}</option>`).join('')}</select></div>
       <button type="button" class="btn btn-accent" id="btnSalvarStatusOrc">${ic('check')} Salvar status</button>
     </div>
+    ${(o.historico||[]).length?`<div class="section-label" style="font-size:14px;margin:18px 0 8px;">Histórico</div><div class="muted" style="font-size:12.5px;">${o.historico.slice().reverse().map(h=>`${escapeHtml(fmtDataHora(h.em))} — ${escapeHtml(h.acao)}${h.por?' · '+escapeHtml(h.por):''}`).join('<br>')}</div>`:''}
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost esquerda" style="color:var(--danger);" id="btnExcluirOrc">${ic('lixeira')} Excluir</button>
       <button type="button" class="btn btn-ghost" id="btnImprimirOrc">${ic('impressora')} Imprimir</button>

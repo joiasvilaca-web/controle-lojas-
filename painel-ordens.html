@@ -1465,7 +1465,9 @@ function mostrarOrcamentosAbertosModal(cliente){
     wrap.querySelectorAll('[data-statusorc]').forEach(sel=>{
       sel.addEventListener('change', async ()=>{
         const o = abertos.find(x=>x.id===sel.dataset.statusorc);
+        const statusAnt = o.status;
         o.status = sel.value;
+        addHistorico(o, 'Status: ' + (statusInfoDe(statusAnt)?.nome||statusAnt) + ' → ' + (statusInfoDe(o.status)?.nome||o.status));
         await orcamentoSalvar(o);
         showToast('Status atualizado.');
         const infoNovo = statusInfoDe(o.status);
@@ -1486,6 +1488,7 @@ function mostrarOrcamentosAbertosModal(cliente){
         }
         const statusAprovado = statusOrcamentoConvertido();
         o.status = statusAprovado.id;
+        addHistorico(o, 'Orçamento confirmado como esta O.S.');
         await orcamentoSalvar(o);
         showToast('Orçamento confirmado como esta O.S.');
         abertos.splice(abertos.indexOf(o),1);
@@ -1552,6 +1555,14 @@ function travarCliqueDuplo(fn){
     finally{ if(btn){ delete btn.dataset.salvando; btn.disabled = false; } }
   };
 }
+/** Histórico da via (24/11): registra ações com data/hora e quem fez, mostrado no
+ * "Ver pedido". Mesmo padrão usado hoje só na Reserva (Vendas). */
+function addHistorico(o, acao){
+  if(!o) return;
+  o.historico = o.historico || [];
+  o.historico.push({ em: new Date().toISOString(), por: (currentUser && currentUser.nome) || '', acao });
+}
+function fmtDataHora(iso){ if(!iso) return '—'; const d=new Date(iso); return isNaN(d)?'—':d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
 /* Só grava as O.S. que MUDARAM desde o último carregamento/gravação (antes gravava todas, uma por uma — travava ao salvar).
    Grava em paralelo (lotes de 6). */
 const __ordemSnap = new Map();
@@ -1731,6 +1742,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
   order.canceladoPor = currentUser.nome;
   order.canceladoEm = Date.now();
   order.caixaSaidaCancelamento = recebido;
+  addHistorico(order, 'Pedido cancelado' + (motivo?(': '+motivo):''));
   if(dest){
     order.cancelamentoDestino = { tipo: dest.tipo, valor: recebido };
     if(dest.tipo === 'credito'){
@@ -1838,6 +1850,7 @@ async function aplicarAbandonoOrdem(order){
   order.abandono = Object.assign({}, order.abandono||{}, { em: agora, por: currentUser.nome, pago: c.pago, direto: c.direto, taxa: c.taxa, credito: c.credito, creditoOuro: c.creditoOuro, obs: ok.obs||'' });
   order.status = 'abandonada'; order.statusEm = agora;
   order.motivoCancelamento = 'VIA ABANDONADA' + (ok.obs ? ' — ' + ok.obs : '');
+  addHistorico(order, 'Via lançada como abandonada' + (ok.obs ? ': '+ok.obs : ''));
   order.canceladoPor = currentUser.nome; order.canceladoEm = agora;   // a venda sai da meta/comissão no mês da baixa
   order.caixaSaidaCancelamento = 0;                                  // não passa pelo caixa
   order.cancelamentoDestino = { tipo:'abandono', valor: c.credito };
@@ -3331,6 +3344,7 @@ function aplicarEntregaNaOrdem(ord, ret){
   ord.recebidoPor = ret.recebidoPor || ord.recebidoPor || '';
   ord.recebidoEm = Date.now();
   ord.retirada = { metodo: ret.metodo || '', recebidoPor: ret.recebidoPor || '', portadorAutorizado: ret.portador || '', conferidoPor: ret.usadoPor || '', em: ret.usadoEm || new Date().toISOString(), loja: ret.loja || '', motivoSemCodigo: ret.metodo==='sem_codigo' ? (ret.motivo||'') : '' };
+  addHistorico(ord, 'Entregue' + (ret.recebidoPor ? ' — recebido por '+ret.recebidoPor : ''));
 }
 function promptRecebidoPor(onConfirm, onCancel){
   modalOnClose = onCancel || null;
@@ -4520,6 +4534,7 @@ async function abrirDevolverItemOrdem(order){
       item.devolvido = true; item.trocado = true; item.trocaId = reg.id;
       if(!order.trocas) order.trocas = [];
       order.trocas.push(reg);
+      addHistorico(order, 'Devolução registrada: ' + reg.itemAntigoDescricao);
       // Reserva: o item devolvido saiu de itensCatalogoDaOrdem, então re-sincronizar libera a parte dele.
       if(!order.estoqueBaixadoEm){ try{ await sincronizarReservasOrdem(order); }catch(e){ console.error('reserva após devolução', e); } }
       const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
@@ -4549,6 +4564,7 @@ function abrirLancarNotaDevolucaoOrdem(order, trocaId){
     const n = String(document.getElementById('ndo_num').value||'').trim();
     if(!n){ showToast('Digite o número da nota de devolução.'); return; }
     reg.fiscal.notaDevolucao = n; reg.fiscal.emitidaEm = Date.now();
+    addHistorico(order, 'Nota de devolução lançada — nº ' + n);
     const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
     if(rr && rr.error){ showToast('Não consegui salvar: '+rr.error); return; }
     showToast('Nota de devolução lançada.'); closeModal(); renderView();
@@ -4602,6 +4618,7 @@ async function marcarOrcamentoConvertido(orc, ordem){
     const st = statusOrcamentoConvertido();
     if(st) atual.status = st.id;
     atual.convertidoEm = { tipo:'pedido', id: ordem.id, codigo: ordem.codigoVia || viaTxt(ordem) || '', data: new Date().toISOString() };
+    addHistorico(atual, 'Convertido em Pedido' + (ordem.codigoVia?(' — via '+ordem.codigoVia):''));
     const ok = await orcamentoSalvar(atual);
     if(ok) showToast('Orçamento marcado como convertido em pedido.');
   }catch(e){ console.error('marcarOrcamentoConvertido', e); }
@@ -5710,6 +5727,7 @@ function renderNovaOrdem(main){
       infoInterna: (document.getElementById('f_infoInterna')?.value||'').trim(),
       criadoEm: Date.now()
     };
+    addHistorico(rascunho, 'Rascunho criado');
     orders.unshift(rascunho);
     await saveOrders();
     if(cli.cliente){ await upsertClienteFromOrder(cli); }
@@ -5878,6 +5896,7 @@ function renderNovaOrdem(main){
     // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
     // (rascunho não gera código — só quando vira uma O.S. de verdade).
     novaOrdem.codigoVia = await bumpCodigoVia('pedido', novaOrdem.lojaId||'');
+    addHistorico(novaOrdem, 'Pedido criado' + (novaOrdem.codigoVia?(' — via '+novaOrdem.codigoVia):''));
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de lançar
     const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', (novaOrdem.valorAVista ?? novaOrdem.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
     if(!cbValO.ok){ showToast(cbValO.erro); return; }
@@ -6088,6 +6107,7 @@ function openEditModalCompleto(order, opts){
     </div>
     <div class="modal-secao" id="fotoContainerEdit"></div>
     <div class="modal-secao" id="obsContainerEdit"></div>
+    ${(order.historico||[]).length?`<div class="modal-secao"><div class="section-label" style="font-size:14px;margin-bottom:8px;">Histórico</div><div class="muted" style="font-size:12.5px;">${order.historico.slice().reverse().map(h=>`${escapeHtml(fmtDataHora(h.em))} — ${escapeHtml(h.acao)}${h.por?' · '+escapeHtml(h.por):''}`).join('<br>')}</div></div>`:''}
     <div class="modal-actions">
       <button class="btn btn-ghost" id="printBtnCompleto">${ico('impressora')} Imprimir via</button>
       <span class="espaco"></span>
@@ -6411,6 +6431,7 @@ function openEditModalCompleto(order, opts){
     const st = config.serviceTypes.find(s=>s.id===sid);
     if(status !== 'rascunho' && status !== 'cancelado') await garantirCodigoVia(order, loja);   // rascunho que virou pedido de verdade: gera o código da via
     const _snapCb = JSON.parse(JSON.stringify(order));
+    const statusAntesEd = order.status;
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
       via, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja, status,
@@ -6434,6 +6455,9 @@ function openEditModalCompleto(order, opts){
       descTotalPerc: editPagHolder ? editPagHolder.descTotalPerc : order.descTotalPerc,
       descTotalR: editPagHolder ? editPagHolder.descTotalR : order.descTotalR,
     });
+    addHistorico(order, statusAntesEd !== status
+      ? 'Status: ' + statusLabel(statusAntesEd) + ' → ' + statusLabel(status) + (status==='entregue' && recebidoPor ? ' — recebido por '+recebidoPor : '')
+      : 'Pedido editado');
     if(_credNovoEd > 0.009) OuroPag.liquidar(order.pagamentos, _credNovoEd, config);
     delete order.valorAVista; delete order.acrescimoCartao;
     if(status !== 'rascunho' && status !== 'cancelado') CondPag.fecharTotal(order, config);   // 06/11: total = o que o cliente pagou (cartão/débito com os 20%)
@@ -6612,6 +6636,7 @@ function renderPainel(main){
     }
     ord.status = novo; ord.statusEm = Date.now();
     sincronizarLocalPorStatus(ord);
+    addHistorico(ord, 'Status: ' + statusLabel(previous) + ' → ' + statusLabel(novo));
     await saveOrders();
     // Pedido reativado (saiu de cancelado/rascunho): volta a reservar as peças
     if((previous === 'cancelado' || previous === 'rascunho') && !ord.estoqueBaixadoEm){

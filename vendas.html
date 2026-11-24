@@ -917,6 +917,13 @@ async function bumpCodigoVia(tipo, lojaId){
     return null;
   }catch(e){ console.error('erro ao gerar código de via', e); return null; }
 }
+/** Histórico da via (24/11): registra ações com data/hora e quem fez, mostrado no
+ * "Ver venda". Mesmo padrão usado hoje só na Reserva. */
+function addHistorico(obj, acao){
+  if(!obj) return;
+  obj.historico = obj.historico || [];
+  obj.historico.push({ em: new Date().toISOString(), por: (currentUser && currentUser.nome) || '', acao });
+}
 async function vendaSalvar(venda){
   try{
     const { error } = await supabaseClient.from('vendas_pdv').upsert({ id: venda.id, payload: venda, updated_at: new Date().toISOString() });
@@ -3303,6 +3310,7 @@ function marcarNotaEmitida(v){
     v.lojaNotaId = document.getElementById('mn_loja').value;
     v.notaRegularizadaEm = new Date().toISOString();
     v.notaRegularizadaPor = currentUser ? currentUser.nome : '';
+    addHistorico(v, 'Nota fiscal registrada — nº ' + numero);
     const ok = await vendaSalvar(v);
     if(ok){ closeModal(); showToast('Nota registrada.'); renderView(); }
     else showToast('Não foi possível salvar. Confira a internet e tente de novo.');
@@ -3397,6 +3405,7 @@ function renderInterloja(main){
     v.baixaEstoqueConfirmada = true;
     v.baixaConfirmadaEm = new Date().toISOString();
     v.baixaConfirmadaPor = currentUser ? currentUser.nome : '';
+    addHistorico(v, 'Baixa de estoque confirmada manualmente');
     const ok = await vendaSalvar(v);
     if(ok){ showToast('Baixa confirmada.'); renderView(); } else showToast('Não foi possível salvar. Confira a internet e tente de novo.');
   }));
@@ -3565,6 +3574,7 @@ async function marcarOrcamentoConvertidoEmVenda(orcamentoId, venda){
   if(!o){ console.error('orçamento de origem não encontrado', orcamentoId); return; }
   o.status = statusAprovadoOrcamento().id;
   o.convertidoEm = { tipo:'venda', id: venda.id, codigo: venda.codigoVia || String(venda.id).slice(-8), data: new Date().toISOString() };
+  addHistorico(o, 'Convertido em Venda' + (venda.codigoVia?(' — via '+venda.codigoVia):''));
   const ok = await orcamentoSalvar(o);
   if(!ok) showToast('Venda lançada, mas não foi possível marcar o orçamento como convertido.');
 }
@@ -4146,6 +4156,7 @@ function renderNovaVenda(main){
     // Código de barras da via, gerado só agora que a venda realmente vai ser salva
     // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
     venda.codigoVia = await bumpCodigoVia('venda', venda.lojaId||'');
+    addHistorico(venda, 'Venda criada' + (venda.codigoVia?(' — via '+venda.codigoVia):''));
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de gravar a venda
     const cbVal = await cashbackProcessar(venda, 'Venda', (venda.valorAVista ?? venda.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
     if(!cbVal.ok){ showToast(cbVal.erro); return; }
@@ -4394,6 +4405,7 @@ async function executarCancelamentoVenda(venda, motivo, dest){
   venda.canceladoPor = currentUser.nome;
   venda.canceladoEm = Date.now();
   venda.caixaSaidaCancelamento = recebido;
+  addHistorico(venda, 'Venda cancelada' + (motivo?(': '+motivo):''));
   if(dest && recebido > 0.004){
     venda.cancelamentoDestino = { tipo: dest.tipo, valor: recebido };
     if(dest.tipo === 'credito'){
@@ -4545,6 +4557,7 @@ function abrirLancarNotaDevolucao(venda, trocaId){
     const n = String(document.getElementById('nd_num').value||'').trim();
     if(!n){ showToast('Digite o número da nota de devolução.'); return; }
     reg.fiscal.notaDevolucao = n; reg.fiscal.emitidaEm = Date.now();
+    addHistorico(venda, 'Nota de devolução lançada — nº ' + n);
     const ok = await vendaSalvar(venda);
     if(ok){ showToast('Nota de devolução lançada.'); closeModal(); renderTabs(); renderView(); }
   });
@@ -4647,6 +4660,7 @@ function abrirDevolucaoItem(venda){
         const _r = await Cashback.aplicar(gatewayCall, _ant.clienteId, { registroId:venda.id, tipo:'Venda', via:venda.codigoVia||'', loja:venda.lojaId||'', dinheiroTotal:_nb, usadoTotal:_ant.usado, total:venda.valorTotal, anterior:_ant });
         if(_r.resumo) venda.cashback = _r.resumo; else if(_r.erro) showToast('Atenção: cashback não estornado — '+_r.erro);
       }
+      addHistorico(venda, 'Devolução registrada: ' + reg.itemAntigoDescricao);
       const ok = await vendaSalvar(venda);
       if(ok){ showToast('Devolução registrada.'); closeModal(); renderTabs(); renderView(); }
     } finally { btn.disabled = false; }
@@ -4862,6 +4876,7 @@ function abrirTrocaVenda(venda){
     antigo.trocaId = troca.id;
     if(!venda.trocas) venda.trocas = [];
     venda.trocas.push(troca);
+    addHistorico(venda, 'Troca registrada: ' + troca.itemAntigoDescricao + ' → ' + (troca.itemNovo && troca.itemNovo.produto));
     await vendaSalvar(venda);
     showToast('Troca registrada.');
     closeModal();
@@ -5326,6 +5341,7 @@ function abrirFormularioEdicaoRestrita(v, avisoExtra){
     if(Array.isArray(v.pagamentos) && v.pagamentos.length) v.pagamentos = carimbarPagamentos(v.pagamentos, data, dataAntigaV);
     v.telefone = telefone;
     v.cliente = cliente;
+    addHistorico(v, 'Venda editada (dados gerais)');
     const ok = await vendaSalvar(v);
     if(ok){
       showToast('Venda atualizada.');
@@ -5549,6 +5565,7 @@ function abrirFormularioEdicaoCompleta(v){
     if(!_cbE.ok){ showToast(_cbE.erro); return; }
     if(_cbE.resumo) v.cashback = _cbE.resumo;
 
+    addHistorico(v, 'Venda editada');
     const ok = await vendaSalvar(v);
     if(ok){
       if(_cbE.resumo){ const _r = await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'gravar', _cbAntV, v.cashback.clienteId); if(!_r.ok) showToast('Venda salva, mas o cashback não foi gravado: '+_r.erro); }
@@ -5607,6 +5624,7 @@ function abrirDetalheVenda(v){
       ` : '')}
     </table>
     ${!podeEditarRegistro(v) ? `<p class="muted" style="margin-top:12px;font-size:12.5px;display:flex;gap:6px;align-items:center;">${ic('cadeado',14)} ${escapeHtml(motivoSemEdicao(v))}</p>` : ''}
+    ${(v.historico||[]).length?`<div class="section-label" style="font-size:14px;margin:18px 0 8px;">Histórico</div><div class="muted" style="font-size:12.5px;">${v.historico.slice().reverse().map(h=>`${escapeHtml(fmtDataHora(h.em))} — ${escapeHtml(h.acao)}${h.por?' · '+escapeHtml(h.por):''}`).join('<br>')}</div>`:''}
     <div class="modal-actions">
       <button class="btn btn-ghost" id="fecharDetalheVenda">Fechar</button>
       ${v.status!=='cancelada' ? `<button class="btn btn-ghost" id="btnEditarDetVenda">${ic('lapis')} Editar</button>` : ''}
