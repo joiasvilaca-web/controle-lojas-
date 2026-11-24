@@ -4266,7 +4266,7 @@ async function abrirCancelarVenda(venda){
   if(!venda || venda.status==='cancelada') return;
   if(!podeCancelarVenda(venda) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('cancelar_venda', 'Cancelar a venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id, venda.lojaId); if(!a) return; __vendasLiberadas.add(venda.id); }
   if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
-  if(venda.trocas && venda.trocas.length>0){ showToast('Esta venda já teve item devolvido ou trocado. Para encerrar o resto, devolva os itens que sobraram um a um em vez de cancelar a venda inteira (cancelar devolveria ao estoque também a peça que já voltou).'); return; }
+  if(venda.trocas && venda.trocas.some(t=>!t.desfeita && t.tipoMov!=='estornoTroca')){ showToast('Esta venda já teve item devolvido ou trocado. Desfaça a troca/devolução (em "Ver venda completa") ou devolva os itens que sobraram um a um em vez de cancelar a venda inteira (cancelar devolveria ao estoque também a peça que já voltou).'); return; }
   const recebido = valorRecebidoDe(venda);
   openModal(`
     <h3>Cancelar venda</h3>
@@ -4506,6 +4506,143 @@ function avisoFiscalDevolucaoHtml(origem){
     return `<div class="aviso aviso-info">${ic('info')}<div>Esta venda saiu <b>sem nota</b> — não precisa emitir nota de devolução.</div></div>`;
   }
   return `<div class="aviso aviso-wait">${ic('alerta')}<div><b>Esta venda saiu com nota${origem.numeroNota?' nº '+escapeHtml(origem.numeroNota):''}.</b><small>Troca não existe no fiscal. O contador precisa emitir uma <b>NF-e de entrada</b> (modelo 55, finalidade 4 — devolução, CFOP 1.202) referenciando essa nota, só com o item devolvido. Se a cliente levar outra peça, essa peça sai em <b>nota nova</b>. Depois de emitida, lance o número aqui na venda.</small></div></div>`;
+}
+/** 24/11 (Felipe): "quero poder cancelar o item apenas ou a venda toda... ao cancelar ele
+ * pergunta se vai cancelar o item ou a venda toda". O bloqueio real era este: depois que o
+ * único item de uma venda já tinha sido trocado/devolvido, não dava pra cancelar a venda
+ * inteira (ela "já tinha troca") nem pra devolver o item de novo (ele já não contava mais como
+ * disponível). "Desfazer troca/devolução" destrava os dois: devolve o item novo ao estoque,
+ * tira de novo o item antigo (ele tinha voltado quando a troca foi feita), desfaz o efeito da
+ * diferença no crédito/fiado do cliente, e — importantíssimo — NÃO mexe no registro antigo da
+ * troca (ele fica, só marcado "desfeita"): caixa.html e dp.html somam venda.trocas pela DATA
+ * ORIGINAL da troca pra fechar o dia em que ela aconteceu, então mudar valor/data de um
+ * registro já fechado corromperia o fechamento daquele dia. Em vez disso lança uma NOVA entrada
+ * de estorno datada de HOJE (mesma ideia já usada pro cancelamento de venda de outro dia: "a via
+ * cancelada fica no dia em que foi feita e entra como devolução no dia do cancelamento").
+ * Depois de desfeita, o item volta a ficar disponível (pode trocar/devolver de novo, ou — se essa
+ * era a única troca da venda — cancelar a venda toda normalmente, que já pergunta crédito x devolver
+ * o valor via perguntarDestinoEstorno). */
+async function desfazerTroca(venda, trocaId){
+  if(!venda || venda.status==='cancelada') return;
+  const troca = (venda.trocas||[]).find(t=>t.id===trocaId);
+  if(!troca){ showToast('Troca/devolução não encontrada.'); return; }
+  if(troca.desfeita){ showToast('Isto já foi desfeito.'); return; }
+  const item = (venda.itens||[]).find(it=>it.trocaId===trocaId);
+  if(!item){ showToast('Não encontrei o item original desta troca/devolução nesta venda.'); return; }
+  if(!podeCancelarVenda(venda) && !__vendasLiberadas.has(venda.id)){ const a = await autorizarGerencia('desfazer_troca', 'Desfazer troca/devolução da venda '+(venda.codigoVia||'')+' de '+(venda.cliente||''), venda.id, venda.lojaId); if(!a) return; __vendasLiberadas.add(venda.id); }
+  if(await bloqueadoPorCaixaFechado(venda.lojaId)) return;
+
+  const ehDevolucao = troca.tipoMov==='devolucao';
+  const diferenca = Number(troca.diferenca)||0;
+  let avisoDif = '';
+  if(Math.abs(diferenca) >= 0.005){
+    if(diferenca > 0 && troca.formaDiferenca!=='__credito' && troca.formaDiferenca!=='__fiado'){
+      avisoDif = `\n\nEssa diferença de ${fmtMoeda(diferenca)} tinha sido recebida em dinheiro/PIX/cartão — devolva esse valor ao cliente por fora.`;
+    } else if(diferenca < 0 && troca.formaDiferenca!=='__credito'){
+      avisoDif = `\n\nEssa diferença de ${fmtMoeda(Math.abs(diferenca))} tinha sido devolvida ao cliente em dinheiro/PIX — você precisa cobrar esse valor de volta por fora.`;
+    }
+  }
+  if(!confirm(`Desfazer ${ehDevolucao?'esta devolução':'esta troca'}?\n\n"${troca.itemAntigoDescricao}" volta a ficar disponível${ehDevolucao?'':' e "'+(troca.itemNovo&&troca.itemNovo.produto||'')+'" volta pro estoque'}.${avisoDif}`)) return;
+
+  const lojaEstoque = venda.estoqueLojaId || venda.lojaId;
+
+  // 1) Devolve ao estoque o item NOVO que tinha saído (numa devolução pura, itemNovo é só um
+  //    rótulo sem estoque associado — produtoEstoqueId vazio — então isto não faz nada).
+  if(troca.itemNovo) await devolverEstoqueDoItem(venda, troca.itemNovo, lojaEstoque);
+
+  // 2) Tira do estoque de novo o item ANTIGO (ele tinha voltado quando a troca/devolução foi feita).
+  if(item.estoqueConsumidoItem && Object.keys(item.estoqueConsumidoItem).length>0){
+    await aplicarConsumosEstoque(item.estoqueConsumidoItem, lojaEstoque, venda.id);
+  } else if(item.produtoEstoqueId){
+    const p = produtosEstoque.find(x=>x.id===item.produtoEstoqueId);
+    if(p){
+      if(!p.estoquePorLoja) p.estoquePorLoja = {};
+      const qtd = Number(item.quantidade||0);
+      const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
+        produtoId:item.produtoEstoqueId, lojaId:lojaEstoque, tipoMovimento:'VENDA', quantidade:-qtd, referenciaId:venda.id,
+        observacao:'Reconsumo simples (venda anterior ao controle por item) ao desfazer troca/devolução.'
+      }});
+      if(r && !r.error && typeof r.saldoNovo==='number'){ p.estoquePorLoja[lojaEstoque] = r.saldoNovo; }
+      else{ console.error('erro ao retirar item antigo do estoque ao desfazer troca', r && r.error); p.estoquePorLoja[lojaEstoque] = Math.max(0, (Number(p.estoquePorLoja[lojaEstoque])||0) - qtd); }
+    }
+  }
+
+  // 3) Desfaz o efeito financeiro da diferença no crédito/fiado do cliente (se foi por aí).
+  if(Math.abs(diferenca) >= 0.005){
+    if(diferenca > 0 && troca.formaDiferenca==='__credito'){
+      const cliente = await acharClienteDaVenda(venda);
+      if(cliente){
+        cliente.credito = (Number(cliente.credito)||0) + diferenca;
+        if(!cliente.creditoMovimentos) cliente.creditoMovimentos = [];
+        cliente.creditoMovimentos.push({ data: hoje(), valor: diferenca, tipo:'estorno', obs:`Troca desfeita — venda ${String(venda.id).slice(-8)}` });
+        await salvarUmCliente(cliente);
+      }
+    } else if(diferenca > 0 && troca.formaDiferenca==='__fiado' && troca.fiadoDebitoId){
+      const cliente = await acharClienteDaVenda(venda);
+      if(cliente && Array.isArray(cliente.fiadoDebitos)){
+        const idx = cliente.fiadoDebitos.findIndex(d=>d.id===troca.fiadoDebitoId);
+        if(idx > -1){
+          const debito = cliente.fiadoDebitos[idx];
+          const jaPago = Number(debito.valorPago)||0;
+          if(jaPago > 0){
+            if(!cliente.creditoMovimentos) cliente.creditoMovimentos = [];
+            cliente.credito = (Number(cliente.credito)||0) + jaPago;
+            cliente.creditoMovimentos.push({ data: hoje(), valor: jaPago, tipo:'estorno', obs:`Troca desfeita (parcela de fiado já paga) — venda ${String(venda.id).slice(-8)}` });
+          }
+          cliente.fiadoDebitos.splice(idx,1);
+          await salvarUmCliente(cliente);
+        }
+      }
+    } else if(diferenca < 0 && troca.formaDiferenca==='__credito'){
+      const cliente = await acharClienteDaVenda(venda);
+      if(cliente){
+        const tirar = Math.min(Math.abs(diferenca), Math.max(0, Number(cliente.credito)||0));
+        if(tirar > 0){
+          cliente.credito = (Number(cliente.credito)||0) - tirar;
+          if(!cliente.creditoMovimentos) cliente.creditoMovimentos = [];
+          cliente.creditoMovimentos.push({ data: hoje(), valor: -tirar, tipo:'estorno', obs:`Troca desfeita — venda ${String(venda.id).slice(-8)}` });
+          await salvarUmCliente(cliente);
+        }
+      }
+    }
+  }
+
+  // 4) Lança o estorno de HOJE pro caixa e pra comissão enxergarem certo (mesma lógica do
+  //    cancelamento de venda de outro dia) — sem mexer no registro original (ele fica pra
+  //    histórico, só marcado "desfeita" abaixo).
+  if(Math.abs(diferenca) >= 0.005){
+    if(!venda.trocas) venda.trocas = [];
+    venda.trocas.push({
+      id: uid('troca'), tipoMov:'estornoTroca',
+      itemAntigoDescricao: `Estorno: ${troca.itemAntigoDescricao}`,
+      itemAntigoValor: 0,
+      itemNovo: { produto:'(estorno — sem item novo)', metal:'', quantidade:0, valorUnitario:0, produtoEstoqueId:'', estoqueConsumidoItem:{} },
+      itemNovoValor: 0,
+      diferenca: -diferenca,
+      formaDiferenca: troca.formaDiferenca,
+      fiadoDebitoId: null,
+      data: hoje(),
+      feitoPor: currentUser.nome,
+      criadoEm: Date.now(),
+      fiscal: { precisa:false },
+      estornoDeId: troca.id,
+    });
+  }
+
+  troca.desfeita = true;
+  troca.desfeitoPor = currentUser.nome;
+  troca.desfeitoEm = Date.now();
+  item.trocado = false;
+  item.devolvido = false;
+  delete item.trocaId;
+
+  addHistorico(venda, `${ehDevolucao?'Devolução':'Troca'} desfeita: ${troca.itemAntigoDescricao}`);
+  const ok = await vendaSalvar(venda);
+  if(ok){
+    showToast(`${ehDevolucao?'Devolução':'Troca'} desfeita. O item voltou a ficar disponível.`);
+    closeModal();
+    renderTabs(); renderView();
+  }
 }
 /** Devolução/troca com a nota de entrada ainda não lançada. */
 function temPendenciaFiscal(reg){ return !!(reg && reg.fiscal && reg.fiscal.precisa && !String(reg.fiscal.notaDevolucao||'').trim()); }
@@ -5595,13 +5732,17 @@ function abrirDetalheVenda(v){
     ${(v.trocas&&v.trocas.length>0) ? `
     <div class="section-label">Trocas e devoluções</div>
     <div style="overflow-x:auto;"><table>
-      <thead><tr><th>Data</th><th>O que aconteceu</th><th class="num">Diferença</th><th>Feito por</th><th>Nota de devolução</th></tr></thead>
+      <thead><tr><th>Data</th><th>O que aconteceu</th><th class="num">Diferença</th><th>Feito por</th><th>Nota de devolução</th><th></th></tr></thead>
       <tbody>
-        ${v.trocas.map(t=>`<tr><td>${fmtDate(t.data)}</td><td>${t.tipoMov==='devolucao' ? 'Devolução: ' + escapeHtml(t.itemAntigoDescricao||'') : 'Troca por '+escapeHtml(t.itemNovo.quantidade)+'× '+escapeHtml(t.itemNovo.produto)}</td><td class="num" style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">${fmtMoeda(t.diferenca)}</td><td>${escapeHtml(t.feitoPor||'—')}</td><td>${
+        ${v.trocas.map(t=>`<tr${t.desfeita?' style="opacity:.55;"':''}><td>${fmtDate(t.data)}</td><td>${
+          t.tipoMov==='devolucao' ? 'Devolução: ' + escapeHtml(t.itemAntigoDescricao||'')
+          : t.tipoMov==='estornoTroca' ? escapeHtml(t.itemAntigoDescricao||'')
+          : 'Troca por '+escapeHtml(String(t.itemNovo.quantidade))+'× '+escapeHtml(t.itemNovo.produto)
+        }${t.desfeita?' <span class="badge selo-neutro">Desfeita</span>':''}</td><td class="num" style="${t.diferenca>0?'color:var(--ok);':t.diferenca<0?'color:var(--danger);':''}">${fmtMoeda(t.diferenca)}</td><td>${escapeHtml(t.feitoPor||'—')}</td><td>${
           !(t.fiscal && t.fiscal.precisa) ? '<span class="muted">não precisa</span>'
           : (String((t.fiscal||{}).notaDevolucao||'').trim() ? `<span class="badge selo-ok">nº ${escapeHtml(t.fiscal.notaDevolucao)}</span>`
           : `<button type="button" class="btn btn-ghost btn-sm" data-notadev="${escapeHtml(t.id)}">${ic('alerta',14)} Lançar nota</button>`)
-        }</td></tr>`).join('')}
+        }</td><td>${(!t.desfeita && t.tipoMov!=='estornoTroca') ? `<button type="button" class="btn btn-ghost btn-sm" data-desfazertroca="${escapeHtml(t.id)}">${ic('cancelar',14)} Desfazer</button>` : ''}</td></tr>`).join('')}
       </tbody>
     </table></div>
     ` : ''}
@@ -5635,6 +5776,7 @@ function abrirDetalheVenda(v){
   document.getElementById('fecharDetalheVenda').addEventListener('click', closeModal);
   document.getElementById('btnImprimirVenda').addEventListener('click', ()=> printVenda(v));
   document.querySelectorAll('[data-notadev]').forEach(b=> b.addEventListener('click', ()=>{ closeModal(); abrirLancarNotaDevolucao(v, b.dataset.notadev); }));
+  document.querySelectorAll('[data-desfazertroca]').forEach(b=> b.addEventListener('click', async ()=>{ await desfazerTroca(v, b.dataset.desfazertroca); }));
 }
 
 /** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
