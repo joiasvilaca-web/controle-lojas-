@@ -3648,6 +3648,7 @@ const CFG_TABS = [
   { id:'statusOrcamento', label:'Status e mensagens' },
   { id:'reserva', label:'Reserva' },
   { id:'resumoCaixa', label:'Resumo do caixa' },
+  { id:'mensagensWa', label:'Mensagens WhatsApp' },
   { id:'backup', label:'Backup' },
   { id:'termos', label:'Termo de uso' },
   { id:'avisosPopup', label:'Avisos aos usuários' },
@@ -3668,9 +3669,9 @@ function abrirSubtelaProduto(main, id){
 function abasConfigPermitidas(){
   const permMod = currentPermissoes && currentPermissoes.config;
   const diretoria = currentUser && currentUser.nivel==='diretoria';
-  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa' && t.id!=='termos' && t.id!=='avisosPopup') || diretoria);
+  if(!permMod || !permMod.abas) return CFG_TABS.filter(t => (t.id!=='backup' && t.id!=='resumoCaixa' && t.id!=='mensagensWa' && t.id!=='termos' && t.id!=='avisosPopup') || diretoria);
   // "Status e Mensagens" reúne as antigas abas statusOrcamento e mensagens: aparece se qualquer uma estiver liberada
-  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa' || t.id==='termos' || t.id==='avisosPopup') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
+  return CFG_TABS.filter(t => (t.id==='backup' || t.id==='resumoCaixa' || t.id==='mensagensWa' || t.id==='termos' || t.id==='avisosPopup') ? diretoria : t.id==='statusOrcamento' ? (permMod.abas.statusOrcamento !== false || permMod.abas.mensagens !== false) : permMod.abas[t.id] !== false);
 }
 let statusMsgSub = 'status';
 function renderStatusMensagensTab(body){
@@ -3707,10 +3708,12 @@ function renderCfgTab(tab){
   if(tab==='termos') return renderTermosCfgTab(body);
   if(tab==='avisosPopup') return renderAvisosPopupCfgTab(body);
   if(tab==='resumoCaixa') return renderResumoCaixaCfgTab(body);
+  if(tab==='mensagensWa') return renderMensagensWaCfgTab(body);
 }
 /* ---------- RESUMO DO CAIXA (WhatsApp para a diretoria ao fechar o caixa) ---------- */
 function renderResumoCaixaCfgTab(main){
   const rc = config.resumoCaixa || {};
+  const auto = rc.auto || {};
   const insts = Object.keys(config.atendimentoInstancias || {});
   main.innerHTML = `
     <div class="cad-head"><div><h2>Resumo do caixa</h2><p>Quando uma loja fecha o caixa do dia, o sistema manda pelo WhatsApp um resumo para a diretoria: vendas, pedidos, recebido por forma de pagamento, a receber, contas pagas e cancelamentos.</p></div></div>
@@ -3722,8 +3725,19 @@ function renderResumoCaixaCfgTab(main){
         <button class="btn btn-accent" id="rcSalvar">${cadIco('check')} Salvar</button>
         <button class="btn btn-ghost" id="rcTeste">Enviar teste</button>
       </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div style="font-weight:700;margin-bottom:4px;">Resumo automático (todas as lojas)</div>
+      <p class="muted" style="margin-top:0;">Manda um resumo com o valor total vendido (vendas + pedidos) somando todas as lojas, automaticamente às <b>12h</b>, <b>19h</b> e <b>22h</b>, para um número só (o seu). É separado do envio de fechamento acima.</p>
+      <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:12px;"><input type="checkbox" id="rcAutoAtivo" ${auto.ativo?'checked':''}> Ativar resumo automático às 12h, 19h e 22h</label>
+      <div class="field" style="max-width:320px;"><label for="rcAutoNumero">Seu número de WhatsApp</label><input type="text" id="rcAutoNumero" class="inp" placeholder="32 99999-0000" value="${escapeHtml(auto.numero||'')}"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-accent" id="rcAutoSalvar">${cadIco('check')} Salvar</button>
+        <button class="btn btn-ghost" id="rcAutoTeste">Enviar agora (teste)</button>
+      </div>
     </div>`;
-  const ler = ()=>({ ativo: document.getElementById('rcAtivo').checked, numeros: document.getElementById('rcNumeros').value.split(/\n|,|;/).map(x=>x.replace(/\D/g,'')).filter(x=>x.length>=10), instancia: document.getElementById('rcInst').value });
+  const ler = ()=>({ ativo: document.getElementById('rcAtivo').checked, numeros: document.getElementById('rcNumeros').value.split(/\n|,|;/).map(x=>x.replace(/\D/g,'')).filter(x=>x.length>=10), instancia: document.getElementById('rcInst').value, auto: config.resumoCaixa && config.resumoCaixa.auto });
+  const lerAuto = ()=>({ ativo: document.getElementById('rcAutoAtivo').checked, numero: document.getElementById('rcAutoNumero').value.replace(/\D/g,''), horarios: ['12:00','19:00','22:00'] });
   document.getElementById('rcSalvar').addEventListener('click', async ()=>{
     config.resumoCaixa = ler();
     if(config.resumoCaixa.ativo && !config.resumoCaixa.numeros.length){ showToast('Informe pelo menos um número com DDD.'); return; }
@@ -3738,6 +3752,136 @@ function renderResumoCaixaCfgTab(main){
       showToast(j && j.enviados ? 'Teste enviado para ' + j.enviados + ' número(s).' : 'Não enviou: ' + ((j && j.error) || 'erro'));
     }catch(e){ showToast('Sem conexão.'); }
     b.disabled = false; b.textContent = 'Enviar teste';
+  });
+  document.getElementById('rcAutoSalvar').addEventListener('click', async ()=>{
+    if(!config.resumoCaixa) config.resumoCaixa = ler();
+    config.resumoCaixa.auto = lerAuto();
+    if(config.resumoCaixa.auto.ativo && config.resumoCaixa.auto.numero.length<10){ showToast('Informe seu número com DDD.'); return; }
+    const ok = await configSave(); if(ok) showToast('Resumo automático salvo.');
+  });
+  document.getElementById('rcAutoTeste').addEventListener('click', async (ev)=>{
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Enviando…';
+    if(!config.resumoCaixa) config.resumoCaixa = ler();
+    config.resumoCaixa.auto = lerAuto();
+    await configSave();
+    try{
+      const r = await fetch(SUPABASE_URL + '/functions/v1/caixa-resumo', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op:'testeAuto', senha: __gatewaySenha }) });
+      const j = await r.json();
+      showToast(j && j.enviados ? 'Enviado para o seu número.' : 'Não enviou: ' + ((j && j.error) || 'erro'));
+    }catch(e){ showToast('Sem conexão.'); }
+    b.disabled = false; b.textContent = 'Enviar agora (teste)';
+  });
+}
+/* ---------- MENSAGENS WHATSAPP (24/11): lembretes/avisos configuráveis, recorrentes ou pontuais, para número ou grupo ----------
+ * config.mensagensWa = [{ id, texto, destino, tipo:'recorrente'|'pontual', dias:[0..6] (recorrente; vazio = todo dia, 0=domingo),
+ *   data:'AAAA-MM-DD' (pontual), horario:'HH:MM', ativo, instancia, ultimoEnvio:'AAAA-MM-DD' }]
+ * Processado pelo pg_cron a cada 5 min via a Edge Function "avisos-wa" (op:'cron'). Pontual desativa sozinho depois de enviar. */
+const DIAS_SEMANA_WA = [['0','Dom'],['1','Seg'],['2','Ter'],['3','Qua'],['4','Qui'],['5','Sex'],['6','Sáb']];
+function novaMsgWaVazia(){ return { id:'mwa_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6), texto:'', destino:'', tipo:'recorrente', dias:[], data:'', horario:'09:00', ativo:true }; }
+function renderMensagensWaCfgTab(main){
+  if(!Array.isArray(config.mensagensWa)) config.mensagensWa = [];
+  const lista = config.mensagensWa;
+  const insts = Object.keys(config.atendimentoInstancias || {});
+  const fmtDestino = d => /@g\.us$/.test(d||'') ? 'Grupo' : (d||'—');
+  const resumoAgenda = m => m.tipo==='pontual'
+    ? ('Uma vez em ' + (m.data ? m.data.split('-').reverse().join('/') : '—') + ' às ' + (m.horario||'—'))
+    : ('Todo ' + (Array.isArray(m.dias)&&m.dias.length ? m.dias.map(d=>DIAS_SEMANA_WA.find(x=>x[0]===String(d))?.[1]||d).join(', ') : 'dia') + ' às ' + (m.horario||'—'));
+  main.innerHTML = `
+    <div class="cad-head"><div><h2>Mensagens WhatsApp</h2><p>Crie mensagens ou lembretes para o sistema mandar sozinho pelo WhatsApp — para um número ou um grupo. Pode ser <b>recorrente</b> (todo dia ou em dias específicos da semana, sempre no mesmo horário) ou <b>pontual</b> (uma vez só, numa data e hora marcadas — depois de enviar, ela se desativa sozinha).</p></div></div>
+    <div class="card" style="margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div class="muted">Pra mandar pra um <b>grupo</b>, peça o ID do grupo (termina em <code>@g.us</code>) — quem cuida do WhatsApp conectado consegue pegar isso; é só colar no campo "Destino".</div>
+        <button class="btn btn-accent" id="mwaNovo" type="button">+ Nova mensagem</button>
+      </div>
+    </div>
+    <div id="mwaLista">${lista.length ? '' : '<div class="muted" style="padding:10px 0;">Nenhuma mensagem configurada ainda.</div>'}</div>`;
+  const box = document.getElementById('mwaLista');
+  lista.slice().sort((a,b)=> (a.texto||'').localeCompare(b.texto||'')).forEach(m=>{
+    const el = document.createElement('div');
+    el.className = 'card'; el.style.marginBottom = '10px';
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="flex:1;min-width:220px;">
+        <div style="font-weight:700;white-space:pre-wrap;">${escapeHtml((m.texto||'').slice(0,160)) || '<span class="muted">(sem texto)</span>'}</div>
+        <div class="muted" style="margin-top:4px;font-size:13px;">${fmtDestino(m.destino)} · ${escapeHtml(resumoAgenda(m))} ${m.ativo===false?'· <span style="color:var(--danger,#B3261E);">desativada</span>':''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" data-ed="${m.id}" type="button">Editar</button>
+        <button class="btn btn-ghost btn-sm" data-tt="${m.id}" type="button">Testar</button>
+        <button class="btn btn-ghost btn-sm" data-rm="${m.id}" type="button">Excluir</button>
+      </div>
+    </div>`;
+    box.appendChild(el);
+  });
+  document.getElementById('mwaNovo').addEventListener('click', ()=> abrirModalMensagemWa(novaMsgWaVazia(), insts, main));
+  box.querySelectorAll('[data-ed]').forEach(b=> b.addEventListener('click', ()=>{
+    const m = config.mensagensWa.find(x=>x.id===b.dataset.ed); if(m) abrirModalMensagemWa(m, insts, main);
+  }));
+  box.querySelectorAll('[data-rm]').forEach(b=> b.addEventListener('click', async ()=>{
+    if(!confirm('Excluir esta mensagem?')) return;
+    config.mensagensWa = config.mensagensWa.filter(x=>x.id!==b.dataset.rm);
+    const ok = await configSave(); if(ok){ showToast('Excluída.'); renderMensagensWaCfgTab(main); }
+  }));
+  box.querySelectorAll('[data-tt]').forEach(b=> b.addEventListener('click', async (ev)=>{
+    const btn = ev.currentTarget; btn.disabled = true; btn.textContent = 'Enviando…';
+    try{
+      const r = await fetch(SUPABASE_URL + '/functions/v1/avisos-wa', { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ op:'testar', id: b.dataset.tt, senha: __gatewaySenha }) });
+      const j = await r.json();
+      showToast(j && j.ok ? 'Enviado.' : 'Não enviou: ' + ((j && j.error) || 'erro'));
+    }catch(e){ showToast('Sem conexão.'); }
+    btn.disabled = false; btn.textContent = 'Testar';
+  }));
+}
+function abrirModalMensagemWa(m, insts, mainCfg){
+  const ehNovo = !m.texto && !m.destino;
+  openModal(`
+    <h3 style="margin-top:0;">${ehNovo ? 'Nova mensagem' : 'Editar mensagem'}</h3>
+    <div class="field"><label>Mensagem</label><textarea id="mwaTexto" class="inp" rows="4" placeholder="Texto que vai ser enviado…">${escapeHtml(m.texto||'')}</textarea></div>
+    <div class="field"><label>Destino <span class="muted">(número com DDD, ou ID do grupo terminando em @g.us)</span></label><input type="text" id="mwaDestino" class="inp" placeholder="32 99999-0000 ou 12036...@g.us" value="${escapeHtml(m.destino||'')}"></div>
+    <div class="field" style="max-width:280px;"><label>Enviar pelo WhatsApp</label><select id="mwaInst">${insts.map(i=>`<option value="${escapeHtml(i)}" ${(m.instancia||insts[0])===i?'selected':''}>${escapeHtml(i)}</option>`).join('') || '<option value="">Nenhuma conexão no Atendimento</option>'}</select></div>
+    <div style="display:flex;gap:16px;margin:10px 0;">
+      <label style="display:flex;align-items:center;gap:6px;"><input type="radio" name="mwaTipo" value="recorrente" ${m.tipo!=='pontual'?'checked':''}> Recorrente</label>
+      <label style="display:flex;align-items:center;gap:6px;"><input type="radio" name="mwaTipo" value="pontual" ${m.tipo==='pontual'?'checked':''}> Pontual (uma vez)</label>
+    </div>
+    <div id="mwaBlocoRecorrente" style="${m.tipo==='pontual'?'display:none;':''}">
+      <div style="margin-bottom:6px;font-weight:600;">Dias da semana <span class="muted" style="font-weight:400;">(nenhum marcado = todo dia)</span></div>
+      <div id="mwaDias">${DIAS_SEMANA_WA.map(([v,l])=>`<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;cursor:pointer;"><input type="checkbox" value="${v}" ${(m.dias||[]).map(String).includes(v)?'checked':''}> ${l}</label>`).join('')}</div>
+    </div>
+    <div id="mwaBlocoPontual" style="${m.tipo!=='pontual'?'display:none;':''}margin-top:10px;">
+      <div class="field" style="max-width:220px;"><label>Data</label><input type="date" id="mwaData" class="inp" value="${escapeHtml(m.data||'')}"></div>
+    </div>
+    <div class="field" style="max-width:160px;margin-top:10px;"><label>Horário</label><input type="time" id="mwaHorario" class="inp" value="${escapeHtml(m.horario||'09:00')}"></div>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:600;margin-top:10px;"><input type="checkbox" id="mwaAtivo" ${m.ativo!==false?'checked':''}> Ativa</label>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+      <button class="btn btn-ghost" id="mwaCancelar" type="button">Cancelar</button>
+      <button class="btn btn-accent" id="mwaSalvar" type="button">${cadIco('check')} Salvar</button>
+    </div>
+  `);
+  const modalBox = document.getElementById('modalBox');
+  modalBox.querySelector('#mwaCancelar').addEventListener('click', closeModal);
+  modalBox.querySelectorAll('input[name="mwaTipo"]').forEach(r=> r.addEventListener('change', ()=>{
+    const pont = modalBox.querySelector('input[name="mwaTipo"]:checked').value === 'pontual';
+    modalBox.querySelector('#mwaBlocoRecorrente').style.display = pont ? 'none' : '';
+    modalBox.querySelector('#mwaBlocoPontual').style.display = pont ? '' : 'none';
+  }));
+  modalBox.querySelector('#mwaSalvar').addEventListener('click', async ()=>{
+    const texto = modalBox.querySelector('#mwaTexto').value.trim();
+    let destino = modalBox.querySelector('#mwaDestino').value.trim();
+    if(!/@g\.us$/.test(destino)) destino = destino.replace(/\D/g,'');
+    const tipo = modalBox.querySelector('input[name="mwaTipo"]:checked').value;
+    const horario = modalBox.querySelector('#mwaHorario').value || '09:00';
+    const data = modalBox.querySelector('#mwaData').value || '';
+    const dias = [...modalBox.querySelectorAll('#mwaDias input:checked')].map(x=>x.value);
+    const instancia = modalBox.querySelector('#mwaInst').value;
+    const ativo = modalBox.querySelector('#mwaAtivo').checked;
+    if(!texto){ showToast('Escreva o texto da mensagem.'); return; }
+    if(!destino){ showToast('Informe o destino (número ou grupo).'); return; }
+    if(tipo==='pontual' && !data){ showToast('Escolha a data do envio.'); return; }
+    const atualizado = { ...m, texto, destino, tipo, horario, data, dias, instancia, ativo };
+    if(!Array.isArray(config.mensagensWa)) config.mensagensWa = [];
+    const idx = config.mensagensWa.findIndex(x=>x.id===m.id);
+    if(idx>=0) config.mensagensWa[idx] = atualizado; else config.mensagensWa.push(atualizado);
+    const ok = await configSave();
+    if(ok){ showToast('Mensagem salva.'); closeModal(); renderMensagensWaCfgTab(mainCfg); }
   });
 }
 /* ---------- TERMO DE USO (editor da diretoria) ---------- */
