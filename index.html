@@ -5310,13 +5310,10 @@ function renderLojasTab(main){
    Substitui as 3 abas separadas (Categoria, Joias & Metais, Produtos & Estoque).
    ============================================================ */
 
-async function renderProdutoUnificadoTab(main){
+async function renderProdutoUnificadoTab(main, opts){
   garantirConfigProduto();
-  // Carrega produtos do estoque se necessário
-  if(!produtosEstoqueCarregado){
-    produtosEstoque = aplicarPrecoPedras(await produtosEstoqueGet());
-    produtosEstoqueCarregado = true;
-  }
+  const carregarDeImediato = !!(opts && opts.carregarAgora);
+  // 24/11: não carrega mais TODOS os produtos ao abrir a tela — só quando a pessoa busca ou escolhe um filtro (renderRows cuida disso).
   const cats = config.produtosOtica.categorias||[];
   const subs = config.produtosOtica.subcategorias||[];
   const catNome = (id)=> (cats.find(c=>c.id===id)||{}).nome||'';
@@ -5352,10 +5349,25 @@ async function renderProdutoUnificadoTab(main){
     <div class="cad-card"><div id="peUnifRows"></div></div>
   `;
 
-  function renderRows(){
+  let carregandoProdutos = false;
+  async function renderRows(){
     const q = (document.getElementById('peUnifBusca')||{}).value||'';
     const catSel = (document.getElementById('peUnifFiltroCat')||{}).value||'';
     const subSel = (document.getElementById('peUnifFiltroSub')||{}).value||'';
+    const wrap0 = document.getElementById('peUnifRows');
+    if(!produtosEstoqueCarregado){
+      // 24/11: só carrega a lista inteira quando a pessoa busca ou filtra (evita puxar tudo só de abrir a tela)
+      if(!q && !catSel && !subSel && !carregarDeImediato){
+        if(wrap0) wrap0.innerHTML = cadVazio('Busque pelo nome/código ou escolha uma categoria', 'A lista de produtos só carrega quando você procura algo.');
+        return;
+      }
+      if(carregandoProdutos) return;
+      carregandoProdutos = true;
+      if(wrap0) wrap0.innerHTML = '<div class="cad-pager"><span>Carregando produtos…</span></div>';
+      produtosEstoque = aplicarPrecoPedras(await produtosEstoqueGet());
+      produtosEstoqueCarregado = true;
+      carregandoProdutos = false;
+    }
     let lista = [...produtosEstoque];
     if(catSel) lista = lista.filter(p=>p.categoriaId===catSel);
     if(subSel) lista = lista.filter(p=>p.subcategoriaId===subSel);
@@ -6987,10 +6999,16 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         if(r && !r.error && typeof r.saldoNovo === 'number'){ dados.estoquePorLoja[lojaId] = r.saldoNovo; }
         else{ console.error('erro ao registrar ajuste de estoque', lojaId, r && r.error); dados.estoquePorLoja[lojaId] = depois; }
       }
-      const idx = produtosEstoque.findIndex(p=>p.id===dados.id);
-      if(idx>=0) produtosEstoque[idx] = dados; else produtosEstoque.push(dados);
+      // 24/11: se a lista completa ainda não tinha sido carregada (ninguém buscou/filtrou antes de cadastrar),
+      // não mexe no array local — deixa a tela recarregar do servidor pra já vir com tudo certo.
+      if(produtosEstoqueCarregado){
+        const idx = produtosEstoque.findIndex(p=>p.id===dados.id);
+        if(idx>=0) produtosEstoque[idx] = dados; else produtosEstoque.push(dados);
+      } else {
+        produtosEstoqueCarregado = false;
+      }
       closeModal();
-      renderProdutoUnificadoTab(document.getElementById('cfgBody'));
+      renderProdutoUnificadoTab(document.getElementById('cfgBody'), { carregarAgora:true });
       showToast(editando ? 'Produto atualizado.' : 'Produto cadastrado.');
     }
   }
