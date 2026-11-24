@@ -146,3 +146,20 @@
     }, 30);
   }, true);
 })();
+
+/* 24/11: aviso do SISTEMA (toast de cada tela, dentro do iframe) avisa o shell (Vilacinha) pra não aparecer
+ * encavalado por cima — o aviso do sistema tem prioridade. Cada tela toca seu toast do jeito dela (classe
+ * "show" ou style.display); aqui só repassamos pro shell QUE algo apareceu, sem mexer em nada da tela em si. */
+(function(){
+  if(window.top === window) return;   // só dentro de iframe de módulo — o shell já cuida do próprio toast direto
+  function pareceToast(el){ var id = (el.id||''), cl = (el.className && el.className.toString()) || ''; return /toast/i.test(id) || /toast/i.test(cl); }
+  function ativo(el){ try{ if(el.classList && el.classList.contains('show')) return true; return (el.style && el.style.display) === 'block'; }catch(e){ return false; } }
+  function avisarShell(){ try{ window.top.postMessage({ type:'vilacaToastSistema' }, '*'); }catch(e){} }
+  function ligarObservador(){
+    if(!document.body || typeof MutationObserver === 'undefined') return;
+    new MutationObserver(function(muts){
+      muts.forEach(function(m){ if(pareceToast(m.target) && ativo(m.target)) avisarShell(); });
+    }).observe(document.body, { attributes:true, attributeFilter:['class','style'], subtree:true });
+  }
+  if(document.body) ligarObservador(); else document.addEventListener('DOMContentLoaded', ligarObservador);
+})();

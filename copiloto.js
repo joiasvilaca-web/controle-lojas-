@@ -267,8 +267,27 @@
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
+  /* 24/11: o aviso do SISTEMA (toast "#toast" lá do shell) tem prioridade sobre o balão do Vilacinha — não pode ficar
+   * um encavalado no outro. Se o toast está na tela, o balão espera a vez; se o toast aparecer com o balão já aberto,
+   * o balão fecha na hora pro aviso do sistema aparecer sozinho. */
+  var _toastExternoAteMs = 0;   // 24/11: toast de dentro de um módulo (iframe) avisou pelo postMessage (ver tema.js)
+  try{ window.addEventListener('message', function(e){ if(e.data && e.data.type==='vilacaToastSistema'){ _toastExternoAteMs = Date.now() + 3600; fecharBalao(); } }); }catch(e){}
+  function toastSistemaAtivo(){ try{ var t = document.getElementById('toast'); return !!(t && t.classList.contains('show')) || Date.now() < _toastExternoAteMs; }catch(e){ return false; } }
+  var _obsToastSistema = null;
+  function vigiarToastSistema(){
+    if(_obsToastSistema || typeof MutationObserver === 'undefined') return;
+    var t = document.getElementById('toast'); if(!t) return;
+    _obsToastSistema = new MutationObserver(function(){ if(toastSistemaAtivo()) fecharBalao(); });
+    _obsToastSistema.observe(t, { attributes:true, attributeFilter:['class'] });
+  }
   function balao(html, acoes, semPadrao, fechaEm){
     if(S.aberto){ fecharBalao(); return null; }
+    // 24/11: aviso do sistema tem prioridade — se um toast está na tela agora, o balão espera ele sumir pra aparecer.
+    if(toastSistemaAtivo()){
+      clearTimeout(S._balaoAdiado);
+      S._balaoAdiado = setTimeout(function(){ balao(html, acoes, semPadrao, fechaEm); }, 350);
+      return null;
+    }
     /* se o balão já está na tela (pergunta → resposta), troca o conteúdo NO PRÓPRIO balão */
     var d = document.getElementById('cpBalao'), novo = !d;
     if(novo){ d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status'); }
@@ -916,7 +935,7 @@
     parar();
     if(!o || !o.senha || !o.user) return;
     S.senha = o.senha; S.user = o.user; S.lojaNome = o.lojaNome || ''; S.hist = []; S.recados = [];
-    css();
+    css(); vigiarToastSistema();
     var r = ehOficina() ? await apiX({ op:'dia' }) : await api({ op:'dia', lojaId: lojaShell() });
     if(!r || !r.ok || r.desligado || r.sem) return;   // fora da produção (sem a função) ou sem permissão: não aparece
     if(S.senha !== o.senha) return;
@@ -931,7 +950,7 @@
     clearInterval(vigia); vigia = setInterval(function(){ if(!document.hidden && !S.aberto){ carregarRecados().catch(function(){}); if(ehAdm()) carregarControles().catch(function(){}); else if(!ehOficina()) carregarLicoes().catch(function(){}); } }, 10*60000);
   }
   function parar(){
-    clearInterval(vigia); vigia = null; fecharBalao(); fecharPainel();
+    clearInterval(vigia); vigia = null; clearTimeout(S._balaoAdiado); fecharBalao(); fecharPainel();
     var b = document.getElementById('cpFab'); if(b) b.remove();
     S.senha = null; S.user = null; S.dia = null; S.hist = []; S.recados = []; S.ctrl = null;
   }
