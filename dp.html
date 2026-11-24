@@ -680,6 +680,19 @@ function gruposDeModulos(){
 }
 function copiarJson(o){ return o==null ? null : JSON.parse(JSON.stringify(o)); }
 function funcaoSistema(nivel, nome){ return { id:'fn_'+nivel, nome, nivelBase:nivel, sistema:true, descricao:'', permissoes:permissoesPadrao(nivel) }; }
+/** 23/11: função ADMINISTRATIVO — quem trabalha na administração ao lado da diretoria. Nível base Gerente (edita vias, vendas e
+ *  pedidos, muda status), em TODAS as lojas, sem métricas (Dashboard, Lançamentos, Marketing, Site). A marca fica em
+ *  permissoes._perfil: é o que o shell, os Avisos e o Vilacinha leem para tratar a pessoa como administrativo. */
+const PERFIL_ADM = 'administrativo';
+const MODULOS_FORA_DO_ADM = ['dashboard','lancamentos','marketing','site'];
+function funcaoAdministrativo(){
+  const perm = permissoesPadrao('gerente');
+  MODULOS_FORA_DO_ADM.forEach(m=>{ if(perm[m]) perm[m] = perm[m].abas ? { ativo:false, abas:{} } : { ativo:false }; });
+  return { id:'fn_administrativo', nome:'Administrativo', nivelBase:'gerente', perfil:PERFIL_ADM, sistema:true,
+    descricao:'Administração: edita vias, vendas e pedidos de todas as lojas e recebe os avisos de controle (caixa, fiscal, vias, DP). Sem metas, comissão ou métricas.', permissoes:perm };
+}
+function ehFuncaoAdm(f){ return !!(f && f.perfil===PERFIL_ADM); }
+function todasAsLojasIds(){ return (config.lojas||[]).map(l=>l.id); }
 /** Funções cadastradas; antes de a diretoria abrir a tela pela primeira vez, mostra as 4 padrões (sem gravar). */
 function funcoesAcesso(){
   return (Array.isArray(config && config.funcoesAcesso) && config.funcoesAcesso.length) ? config.funcoesAcesso : NIVEIS_BASE.map(([n,l])=>funcaoSistema(n,l));
@@ -730,6 +743,7 @@ function aplicarFuncaoAoUsuario(u, fn){
   u.funcaoId = fn.id; u.nivel = fn.nivelBase;
   if(u.ajustes && !Object.keys(u.ajustes).length) delete u.ajustes;
   const efetivas = permissoesEfetivas(fn, u.ajustes);
+  if(ehFuncaoAdm(fn)){ efetivas._perfil = PERFIL_ADM; u.permissoes = efetivas; u.lojas = todasAsLojasIds(); return; }   // 23/11
   const igualAoPadrao = Object.keys(calcularAjustes(efetivas, { permissoes: permissoesPadrao(fn.nivelBase) })).length === 0;
   if(u.permissoes == null && igualAoPadrao) return;   // sempre seguiu o padrão do nível: continua null
   u.permissoes = efetivas;
@@ -742,6 +756,7 @@ function garantirFuncoes(){
   if(!Array.isArray(config.funcoesAcesso) || !config.funcoesAcesso.length){
     config.funcoesAcesso = NIVEIS_BASE.map(([n,l])=>funcaoSistema(n,l)); mudou = true;
   }
+  if(!config.funcoesAcesso.some(f=>f.id==='fn_administrativo')){ config.funcoesAcesso.push(funcaoAdministrativo()); mudou = true; }   // 23/11
   (config.users||[]).forEach(u=>{
     if(!u || u.funcaoId) return;
     const fn = config.funcoesAcesso.find(f=>f.id==='fn_'+u.nivel);
@@ -769,6 +784,7 @@ async function alterarFuncoesEGravar(mutar){
 /** Dá uma função a um funcionário (cria o acesso se ainda não existir) e grava as permissões resultantes. */
 async function atribuirFuncaoAoFuncionario(funcionarioId, funcaoId, lojas){
   const fn = funcaoPorId(funcaoId); if(!fn) return false;
+  if(ehFuncaoAdm(fn)) lojas = todasAsLojasIds();   // 23/11: administrativo atua em todas as lojas
   const r = await chamarFuncionarioAcesso({ op:'salvarAcesso', senha: __gatewaySenha, funcionarioId, nivel: fn.nivelBase, lojas: lojas||[] });
   if(!r || !r.ok){ showToast((r && r.error) || 'Não foi possível salvar o acesso.'); return false; }
   return await alterarFuncoesEGravar(()=>{
@@ -2816,13 +2832,13 @@ async function abrirFuncionarioCompletoModal(funcionario, abaInicial){
       })();
       const selFn = document.getElementById('fc_nivelAcesso');
       const selLojaTrab = document.getElementById('fc_lojaTrabalho');
-      const ehDiretoriaFn = ()=>{ const f = funcaoPorId(selFn.value); return !!(f && f.nivelBase==='diretoria'); };
+      const ehDiretoriaFn = ()=>{ const f = funcaoPorId(selFn.value); return !!(f && (f.nivelBase==='diretoria' || ehFuncaoAdm(f))); };   // 23/11: administrativo também = todas as lojas
       const ajustarLojaDiretoria = ()=>{
         if(!selLojaTrab) return;
         const dir = ehDiretoriaFn();
         if(dir){ selLojaTrab.value = ''; d.lojasAcesso = []; }
         selLojaTrab.disabled = dir || !souDiretoria;
-        const opt0 = selLojaTrab.options[0]; if(opt0) opt0.textContent = dir ? 'Todas as lojas (diretoria)' : (d.lojasAcesso.length>1?'Escolha a loja…':'Nenhuma (sem loja definida)');
+        const opt0 = selLojaTrab.options[0]; if(opt0) opt0.textContent = dir ? 'Todas as lojas' : (d.lojasAcesso.length>1?'Escolha a loja…':'Nenhuma (sem loja definida)');
       };
       selFn.addEventListener('change', ()=>{ d.funcaoId = selFn.value; const f = funcaoPorId(selFn.value); if(f) d.nivelAcesso = f.nivelBase; ajustarLojaDiretoria(); });
       ajustarLojaDiretoria();
@@ -2833,10 +2849,10 @@ async function abrirFuncionarioCompletoModal(funcionario, abaInicial){
         // pelos listeners de 'change', que pode ficar dessincronizado em alguns casos.
         const funcaoEscolhida = funcaoPorId(document.getElementById('fc_nivelAcesso').value);
         if(!funcaoEscolhida){ showToast('Escolha a função de acesso desta pessoa.'); return; }
-        const lojaTrab = funcaoEscolhida.nivelBase==='diretoria' ? '' : document.getElementById('fc_lojaTrabalho').value;   // diretoria: sem loja fixa = todas
-        const gerenteVariasLojas = funcaoEscolhida.nivelBase==='gerente' && d.lojasAcesso.length>1 && !lojaTrab;   // gerente pode cuidar de mais de uma loja (ex.: JN + Reforma)
+        const lojaTrab = (funcaoEscolhida.nivelBase==='diretoria' || ehFuncaoAdm(funcaoEscolhida)) ? '' : document.getElementById('fc_lojaTrabalho').value;   // diretoria: sem loja fixa = todas
+        const gerenteVariasLojas = funcaoEscolhida.nivelBase==='gerente' && !ehFuncaoAdm(funcaoEscolhida) && d.lojasAcesso.length>1 && !lojaTrab;   // gerente pode cuidar de mais de uma loja (ex.: JN + Reforma)
         const lojasParaSalvar = gerenteVariasLojas ? d.lojasAcesso.slice() : (lojaTrab ? [lojaTrab] : []);
-        if(!gerenteVariasLojas && funcaoEscolhida.nivelBase!=='diretoria' && d.lojasAcesso.length>1 && !lojaTrab){ showToast('Escolha a loja de trabalho desta pessoa.'); return; }
+        if(!gerenteVariasLojas && funcaoEscolhida.nivelBase!=='diretoria' && !ehFuncaoAdm(funcaoEscolhida) && d.lojasAcesso.length>1 && !lojaTrab){ showToast('Escolha a loja de trabalho desta pessoa.'); return; }
         const atual = (config.users||[]).find(u=>u.funcionarioId===funcionario.id);
         if(atual && atual.funcaoId && atual.funcaoId!==funcaoEscolhida.id && qtdAjustes(atual.ajustes) && !confirm('Esta pessoa tem acessos personalizados. Ao trocar a função, a personalização é descartada. Continuar?')) return;
         btnSalvarAcesso.disabled = true; btnSalvarAcesso.textContent = 'Salvando…';

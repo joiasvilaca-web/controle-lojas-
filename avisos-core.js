@@ -21,9 +21,63 @@
   function via(o){ return (o.codigoVia ? o.codigoVia+' — ' : '') + (o.cliente || 'Sem cliente'); }
   var CLASSE = { danger:'urgente', wait:'importante', info:'normal' };
 
+  /* 23/11: função ADMINISTRATIVO (marca em user.permissoes._perfil, gravada pelo DP › Funções). */
+  function ehAdm(user){ return !!(user && user.permissoes && user.permissoes._perfil==='administrativo'); }
+  /* CONTROLES DO ADMINISTRATIVO — o que a administração confere todo dia (não é métrica de venda):
+   * Fiscal (nota marcada sem número, nota de devolução pendente), Caixa (dia sem fechar, recebimento com falha na conciliação)
+   * e Vias (sem pagamento lançado, abandonadas da semana). Devolve a mesma forma de aviso do calcular(). Só lê. */
+  var DIAS_FISCAL = 30, DIAS_CAIXA = 3, DIAS_ABANDONO = 7;
+  async function controlesAdm(ctx, ordensLidas){
+    var gw = ctx.gatewayCall, config = ctx.config || {}, hj = hoje(), out = [];
+    async function ler(table){ try{ var r = await gw({ op:'selectAll', table:table }); if(!r || r.error) return null; return (r.data||[]).map(function(x){ return x.payload; }).filter(Boolean); }catch(e){ return null; } }
+    function add(a){ a.classe = CLASSE[a.nivel] || 'normal'; out.push(a); }
+    function dia(v){ return String(v||'').slice(0,10); }
+    function nomeLoja(id){ var l = (config.lojas||[]).find(function(x){ return x.id===id; }); return l ? (l.nomeFantasia || l.nome || '') : ''; }
+    var rr = await Promise.all([ ordensLidas ? Promise.resolve(ordensLidas) : ler('ordens_servico'), ler('vendas_pdv') ]);
+    var ordens = rr[0] || [], vendas = (rr[1] || []).filter(function(v){ return v && v.tipo!=='recargaCredito' && v.tipo!=='recebimentoFiado'; });
+    var vivaV = function(v){ return v.status!=='cancelada'; }, vivaO = function(o){ return ['cancelado','rascunho'].indexOf(String(o.status||''))<0; };
+    var recente = function(d, n){ var x = diasDesde(dia(d)); return x !== null && x >= 0 && x <= n; };
+    function registros(){ return vendas.filter(vivaV).map(function(v){ return { r:v, alvo:'vendas', tipo:'Venda' }; }).concat(ordens.filter(vivaO).map(function(o){ return { r:o, alvo:'os', tipo:'Pedido' }; })); }
+    // ---------- FISCAL ----------
+    registros().forEach(function(x){
+      var r = x.r, base = { modulo:'CONTROLES', area:'Fiscal', icone:'documento', abrir:{ alvo:x.alvo, registroId:r.id } };
+      var sub = x.tipo + (nomeLoja(r.lojaId)?' · '+nomeLoja(r.lojaId):(r.loja?' · '+r.loja:'')) + (r.vendedora?' · '+r.vendedora:'');
+      (r.trocas||[]).forEach(function(t){
+        if(t && t.fiscal && t.fiscal.precisa && !String(t.fiscal.notaDevolucao||'').trim())
+          add(Object.assign({}, base, { id:'adm-notadev-'+r.id+'-'+t.id, grupo:'Nota de devolução pendente', nivel:'danger', titulo:via(r), sub:sub+' · '+(t.tipoMov==='devolucao'?'devolução':'troca')+' em '+fmt(dia(t.data))+(t.fiscal.notaOriginal?' · nota original '+t.fiscal.notaOriginal:''), tag:'emitir nota', data:dia(t.data)||null, rotuloData:'Nota de devolução' }));
+      });
+      if(r.emissaoNota==='sim' && !String(r.numeroNota||'').trim() && recente(r.data, DIAS_FISCAL) && dia(r.data) < hj)
+        add(Object.assign({}, base, { id:'adm-semnum-'+r.id, grupo:'Nota fiscal marcada, sem número', nivel:'wait', titulo:via(r), sub:sub+' · '+fmt(dia(r.data)), tag:'sem número', data:dia(r.data), rotuloData:'Nota sem número' }));
+    });
+    // ---------- CAIXA ----------
+    var dias = []; for(var i=1;i<=DIAS_CAIXA;i++) dias.push(somaDias(hj, -i));
+    var pares = [];
+    (config.lojas||[]).forEach(function(l){ dias.forEach(function(d){ if(vendas.some(function(v){ return vivaV(v) && v.lojaId===l.id && dia(v.data)===d; })) pares.push({ l:l, d:d }); }); });
+    var fechs = await Promise.all(pares.map(function(p){ return gw({ op:'kvGet', table:'painel_ordens_kv', params:{ key:'caixa_fech:'+p.l.id+':'+p.d } }).then(function(r){ return r && !r.error ? { ok:true, v:r.value } : { ok:false }; }).catch(function(){ return { ok:false }; }); }));
+    pares.forEach(function(p, k){
+      var f = fechs[k]; if(!f.ok || (f.v && f.v.fechado)) return;   // sem permissão de leitura = não acusa
+      add({ modulo:'CONTROLES', area:'Caixa', icone:'dinheiro', abrir:{ alvo:'caixa' }, id:'adm-caixa-'+p.l.id+'-'+p.d, grupo:'Caixa do dia sem fechar', nivel:'danger', titulo:(p.l.nomeFantasia||p.l.nome||'Loja')+' — '+fmt(p.d), sub:'Houve venda neste dia e o caixa não foi fechado', tag:plural(diasDesde(p.d),'dia','dias'), data:p.d, rotuloData:'Caixa aberto' });
+    });
+    vendas.filter(function(v){ return vivaV(v) && v.conciliacao && v.conciliacao.status==='falha'; }).forEach(function(v){
+      add({ modulo:'CONTROLES', area:'Caixa', icone:'dinheiro', abrir:{ alvo:'conciliacao' }, id:'adm-conc-'+v.id, grupo:'Conciliação: recebimento com falha', nivel:'danger', titulo:via(v), sub:'Venda de '+fmt(dia(v.data))+(nomeLoja(v.lojaId)?' · '+nomeLoja(v.lojaId):'')+' · o valor esperado não entrou', tag:'conferir', data:dia(v.data)||null, rotuloData:'Conciliação' });
+    });
+    // ---------- VIAS ----------
+    ordens.forEach(function(o){
+      var base = { modulo:'CONTROLES', area:'Vias', icone:'recibo', abrir:{ alvo:'os', registroId:o.id } };
+      var sub = (o.serviceTypeName||o.descricao||'Serviço') + (o.loja?' · '+o.loja:'') + (o.vendedora?' · '+o.vendedora:'');
+      var semCobranca = (o.itens||[]).length && o.itens.every(function(it){ return it.semCobranca; });
+      if(['cancelado','rascunho','abandonada'].indexOf(String(o.status||''))<0 && !semCobranca && !o.valorTotal && (!o.pagamentos || !o.pagamentos.length))
+        add(Object.assign({}, base, { id:'adm-sempag-'+o.id, grupo:'Pedido sem pagamento lançado', nivel:'wait', titulo:via(o), sub:sub, tag:'sem pagamento', data:o.data||null, rotuloData:'Sem pagamento' }));
+      var em = Number((o.abandono && o.abandono.em) || o.statusEm) || 0;
+      if(o.status==='abandonada' && em && (Date.now()-em) <= DIAS_ABANDONO*86400000)
+        add(Object.assign({}, base, { id:'adm-aband-'+o.id, grupo:'Vias que entraram como abandonada', nivel:'danger', titulo:via(o), sub:sub+(o.abandono&&o.abandono.por?' · por '+o.abandono.por:''), tag:'abandonada', data:dia(new Date(em).toISOString()), rotuloData:'Abandonada' }));
+    });
+    return out;
+  }
+
   async function calcular(ctx){
     var gw = ctx.gatewayCall, config = ctx.config || {}, user = ctx.user || {};
-    var gestao = user.nivel==='diretoria' || user.nivel==='gerente', oficina = user.nivel==='oficina';
+    var gestao = user.nivel==='diretoria' || user.nivel==='gerente', oficina = user.nivel==='oficina', adm = ehAdm(user);
     var fu = (config.funcionarios||[]).find(function(x){ return x.id===user.funcionarioId; }) || {};
     var meus = [user.nome, user.apelido, fu.nome, fu.apelido].map(function(n){ return String(n||'').trim().toLowerCase(); }).filter(Boolean);
     function participo(o){ return ['vendedora','funcionario','criadoPor','recebidoPor'].some(function(k){ var v = String(o[k]||'').trim().toLowerCase(); return v && meus.indexOf(v) >= 0; }); }
@@ -54,7 +108,7 @@
     });
 
     // ---------- CAIXA › Orçamento ----------
-    (orcs||[]).filter(function(o){ return !STATUS_ORC_FECHADOS.includes(o.status) && !o.rascunho && !o.convertidoEm && vejoVia(o, false); }).forEach(function(o){
+    (adm ? [] : (orcs||[])).filter(function(o){ return !STATUS_ORC_FECHADOS.includes(o.status) && !o.rascunho && !o.convertidoEm && vejoVia(o, false); }).forEach(function(o){
       var base = { modulo:'CAIXA', area:'Orçamento', icone:'documento', abrir:{ alvo:'orcamentos', registroId:o.id } };
       var sub = 'Status: '+nomeSt(o.status)+(o.vendedora?' · '+o.vendedora:'');
       if(o.validade && o.validade < hj){
@@ -84,9 +138,10 @@
         add(Object.assign({}, base, { id:'dp-semficha-'+fc.id, grupo:'Sem ficha de RH', nivel:'danger', titulo:nomeFunc(fc)||fc.nome, sub:'Cadastrado no sistema, mas sem a ficha de RH preenchida', tag:'sem ficha', data:null }));
       });
     }
+    if(adm){ try{ (await controlesAdm(ctx, ordens)).forEach(function(a){ out.push(a); }); }catch(e){ console.error('controles adm', e); } }   // 23/11
     var ordem = { danger:0, wait:1, info:2 };
     out.sort(function(a,b){ return (ordem[a.nivel]-ordem[b.nivel]) || String(a.data||'9').localeCompare(String(b.data||'9')); });
     return out;
   }
-  window.AvisosCore = { calcular: calcular };
+  window.AvisosCore = { calcular: calcular, controlesAdm: controlesAdm, ehAdm: ehAdm };
 })();

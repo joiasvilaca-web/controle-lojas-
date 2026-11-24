@@ -39,6 +39,42 @@
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
   }
   function ehOficina(){ return !!(S.user && S.user.nivel === 'oficina'); }
+  /* 23/11: função ADMINISTRATIVO (marca em permissoes._perfil). Para ela o Vilacinha NÃO fala de venda, meta, ranking nem quiz:
+   * vira o auxiliar de CONTROLES — fiscal, caixa, vias e DP — com a mesma lista dos Avisos (avisos-core.js). */
+  function ehAdm(){ return !!(S.user && S.user.permissoes && S.user.permissoes._perfil === 'administrativo'); }
+  async function carregarControles(){
+    if(!ehAdm() || !window.AvisosCore || typeof window.gatewayCall !== 'function') return;
+    try{ var cfg = {}; try{ cfg = config || {}; }catch(e){}
+      S.ctrl = await AvisosCore.calcular({ gatewayCall: window.gatewayCall, config: cfg, user: S.user }); }catch(e){ console.error(e); }
+    pintarFab(); if(S.aberto) desenhar();
+  }
+  function ctrlUrgentes(){ return (S.ctrl||[]).filter(function(a){ return a.nivel==='danger'; }).length; }
+  function cartaoControles(){
+    var L = S.ctrl;
+    if(!L) return '<div class="cp-card"><h4>'+ic('cadeado',14)+'Controles de hoje</h4><div class="cp-meta-s">Conferindo fiscal, caixa, vias e DP…</div></div>';
+    if(!L.length) return '<div class="cp-card"><h4>'+ic('cadeado',14)+'Controles de hoje</h4><div class="cp-meta-s">Tudo em dia: nenhum controle pendente agora.</div></div>';
+    var grupos = [];
+    L.forEach(function(a){ var k = (a.area||a.modulo||'')+' · '+a.grupo; var g = grupos.filter(function(x){ return x.k===k; })[0]; if(!g){ g = { k:k, nivel:a.nivel, itens:[] }; grupos.push(g); } g.itens.push(a); });
+    var h = '<div class="cp-card"><h4>'+ic('cadeado',14)+'Controles de hoje ('+L.length+')</h4><div class="cp-meta-s" style="margin-bottom:6px;">'+(ctrlUrgentes() ? '<b>'+ctrlUrgentes()+' urgente(s)</b> — comece por eles.' : 'Nada urgente. Confira com calma.')+'</div>';
+    grupos.forEach(function(g, gi){
+      h += '<details'+(gi===0?' open':'')+' style="margin-top:6px;"><summary style="cursor:pointer;font-weight:700;font-size:12.5px;color:'+(g.nivel==='danger'?'#b3261e':'#8a3560')+';">'+esc(g.k)+' ('+g.itens.length+')</summary>'
+        + g.itens.slice(0,6).map(function(a){ return '<div class="cp-dica"><span class="n">•</span><span><b>'+esc(a.titulo)+'</b><br><small>'+esc(a.sub||'')+'</small> <button type="button" class="cp-b" data-cp-ctrl="'+esc((a.abrir&&a.abrir.alvo)||'avisos')+'" style="margin-left:4px;">Abrir</button></span></div>'; }).join('')
+        + (g.itens.length>6 ? '<div class="cp-meta-s">e mais '+(g.itens.length-6)+' — veja todos em Avisos.</div>' : '') + '</details>';
+    });
+    return h + '<div style="margin-top:8px;"><button type="button" class="cp-b pri" data-cp-ctrl="avisos">Ver todos nos Avisos</button></div></div>';
+  }
+  function desenharAdm(c){
+    var h = cartaoRecados() + cartaoControles();
+    h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte sobre rotina da administração: nota de devolução, fechamento de caixa, conciliação, vias, DP.</div>') + '</div></div>';
+    c.innerHTML = h;
+    ligarRecados(c);
+    c.querySelectorAll('[data-cp-ctrl]').forEach(function(b){ b.onclick = function(){ try{ if(typeof selecionarModulo === 'function'){ selecionarModulo(b.dataset.cpCtrl); fecharPainel(); } }catch(e){ console.error(e); } }; });
+  }
+  /** Contexto curto mandado junto da pergunta (o servidor corta em 600 caracteres): responde como auxiliar administrativo, não como coach de vendas. */
+  function comContextoAdm(texto){
+    var ctx = '\n[Contexto: sou do ADMINISTRATIVO da Vilaça Joias (não vendo, sem meta). Responda sobre rotina administrativa: fiscal, caixa, conciliação, vias, DP. Sem dicas de venda.]';
+    return (texto + ctx).slice(0, 600).length > texto.length ? (texto + ctx).slice(0, 600) : texto;
+  }
   function dataBR(iso){ var p = String(iso||'').slice(0,10).split('-'); return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : String(iso||''); }
 
   async function apiD(body){
@@ -225,9 +261,9 @@
     document.querySelectorAll('.cp-ouvir,.cp-ler').forEach(function(x){ x.classList.toggle('tocando', !!S.falando); var sp=x.querySelector('span'); if(sp) sp.textContent = S.falando ? 'Parar' : 'Ouvir'; });
     var b = document.getElementById('cpFab'); if(!b) return;
     var nRec = (S.recados || []).length;
-    var n = nRec || (S.dia && S.dia.vendaAtiva ? S.dia.vendaAtiva.length : 0);
+    var n = nRec || (ehAdm() ? (S.ctrl||[]).length : (S.dia && S.dia.vendaAtiva ? S.dia.vendaAtiva.length : 0));
     b.innerHTML = rosto(b.offsetWidth || 62, S.falando) + (n ? '<span class="cp-n" aria-hidden="true">'+n+'</span>' : '');
-    b.title = 'Vilacinha, seu gerente-auxiliar' + (nRec ? ' — ' + nRec + ' recado(s) para você' : n ? ' — ' + n + ' clientes para chamar hoje' : '');
+    b.title = 'Vilacinha, seu gerente-auxiliar' + (nRec ? ' — ' + nRec + ' recado(s) para você' : n ? (ehAdm() ? ' — ' + n + ' controle(s) para conferir' : ' — ' + n + ' clientes para chamar hoje') : '');
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
@@ -253,6 +289,11 @@
   /** Saudação do dia (1x por dia, ao entrar). As outras dicas vêm por módulo (moduloAberto). */
   function talvezDica(){
     if(!S.dia || S.aberto || document.hidden) return;
+    if(ehAdm()){   // 23/11: saudação do administrativo = controles do dia (1x por dia)
+      if(!S.ctrl || ls(chave('n'))) return; ls(chave('n'), '1');
+      balao('<div class="cp-txt">' + esc(S.dia.saudacao||'Bom dia!') + ' ' + (S.ctrl.length ? 'Hoje há <b>' + S.ctrl.length + ' controle(s)</b> para conferir' + (ctrlUrgentes() ? ', <b>' + ctrlUrgentes() + ' urgente(s)</b>.' : '.') : 'Controles em dia: nada pendente agora.') + '</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000);
+      return;
+    }
     var n = Number(ls(chave('n'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
     if(n >= 1 || Date.now() - ult < 75*60000 || Date.now() - pausa < 120*60000) return;
     var itens = [];
@@ -282,6 +323,7 @@
   function marcarVista(t){ var v = vistas(); v.push(hashTxt(t)); ls('copiloto_vistas_'+(S.user&&S.user.id), JSON.stringify(v.slice(-200))); }
   function moduloAberto(mod, sub){
     if(!S.dia || S.aberto || document.hidden) return;
+    if(ehAdm()) return;   // 23/11: administrativo não recebe dica de venda por tela
     var k = chaveModulo(mod, sub);
     var n = Number(ls(chave('nm'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
     if(n >= 6 || Date.now() - ult < 12*60000 || Date.now() - pausa < 120*60000) return;
@@ -356,15 +398,15 @@
     if(document.getElementById('cpPainel')) return;
     S.aberto = true; fecharBalao();
     var p = document.createElement('aside'); p.id = 'cpPainel'; p.className = 'cp-painel'; p.setAttribute('aria-label','Vilacinha, gerente-auxiliar');
-    p.innerHTML = '<div class="cp-topo">' + rosto(44) + '<div class="cp-nm"><b>Vilacinha</b><small>seu gerente-auxiliar de vendas e aulas</small></div>'
+    p.innerHTML = '<div class="cp-topo">' + rosto(44) + '<div class="cp-nm"><b>Vilacinha</b><small>'+(ehAdm()?'seu auxiliar de controles da administração':'seu gerente-auxiliar de vendas e aulas')+'</small></div>'
       + '<button type="button" class="cp-ler" data-cp="ler" title="Ouvir o resumo do dia" aria-label="Ouvir o resumo do dia">'+icOuvir(22)+'</button>'
       + '<button type="button" data-cp="atualizar" title="Atualizar os números" aria-label="Atualizar">'+ic('atualizar',18)+'</button>'
       + '<button type="button" data-cp="fechar" title="Fechar" aria-label="Fechar">'+ic('x',18)+'</button></div>'
       + '<div class="cp-corpo" id="cpCorpo"></div>'
-      + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+icMic(22)+'</button><textarea id="cpTexto" maxlength="600" placeholder="Pergunte ao Vilacinha: como vender mais aliança?" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
+      + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+icMic(22)+'</button><textarea id="cpTexto" maxlength="600" placeholder="'+(ehAdm()?'Pergunte ao Vilacinha: como lanço a nota de devolução?':'Pergunte ao Vilacinha: como vender mais aliança?')+'" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
     document.body.appendChild(p);
     p.querySelector('[data-cp="fechar"]').onclick = fecharPainel;
-    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = ehOficina() ? await apiX({ op:'dia', forcar:true }) : await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; S.recados = r.recados || S.recados; pintarFab(); } desenhar(); };
+    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = ehOficina() ? await apiX({ op:'dia', forcar:true }) : await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; S.recados = r.recados || S.recados; pintarFab(); } if(ehAdm()) await carregarControles(); desenhar(); };
     p.querySelector('[data-cp="ler"]').onclick = function(){ falar(resumoFalado()); };
     var ta = p.querySelector('#cpTexto');
     p.querySelector('#cpForm').onsubmit = function(e){ e.preventDefault(); perguntar(ta.value); };
@@ -385,6 +427,10 @@
   function fecharPainel(){ var p = document.getElementById('cpPainel'); if(p) p.remove(); S.aberto = false; document.removeEventListener('keydown', escFecha); try{ speechSynthesis.cancel(); }catch(e){} }
   function resumoFalado(){
     var d = S.dia||{}, t = (d.saudacao||'') + ' ';
+    if(ehAdm()){
+      var L = S.ctrl || [], pg = {}; L.forEach(function(a){ pg[a.grupo] = (pg[a.grupo]||0)+1; });
+      return t + (L.length ? 'Hoje há ' + L.length + ' controles para conferir. ' + Object.keys(pg).map(function(k){ return k + ': ' + pg[k] + '.'; }).join(' ') : 'Os controles estão em dia.');
+    }
     if(d.oficina){
       var pr = d.producao || {};
       t += 'Hoje vencem ' + (pr.paraHoje||0) + ' vias' + ((pr.atrasadas||0) ? ', e ' + pr.atrasadas + ' estão atrasadas' : '') + '. ';
@@ -402,6 +448,7 @@
     var d = S.dia;
     if(!d){ c.innerHTML = '<div class="cp-card">Preparando o seu dia…</div>'; return; }
     if(d.oficina){ desenharOficina(c, d); return; }
+    if(ehAdm()){ desenharAdm(c); return; }   // 23/11
     var m = d.meta || {}, pct = m.metaMes ? Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100)) : 0, eu = d.eu || {}, mel = d.melhor;
     var num = function(rot, v, ref){ return '<div class="cp-num"><b>'+v+'</b><small>'+rot+'</small>'+(ref!=null?'<em>melhor da loja: '+ref+'</em>':'')+'</div>'; };
     var semMeta = !(m.metaMes > 0);
@@ -799,6 +846,7 @@
       return;
     }
     if(ehOficina()){ await carregarDia(); return; }
+    if(ehAdm()) return;   // 23/11: administrativo não recebe aula nem pergunta de venda
     var r = await carregarLicoes();
     var L = r && r.ok ? r.pendentes : [];
     await carregarDia(); await carregarProgresso();
@@ -853,10 +901,11 @@
     var ta = document.getElementById('cpTexto'); if(ta) ta.value = '';
     S.hist.push({ de:'eu', texto:texto }); desenhar();
     var chat = document.getElementById('cpChat'); if(chat){ chat.insertAdjacentHTML('beforeend','<div class="cp-msg ia" id="cpPensa">Pensando…</div>'); chat.scrollIntoView({ block:'end' }); }
+    var perg = ehAdm() ? comContextoAdm(texto) : texto;   // 23/11
     var r = ehOficina()
-      ? await apiX({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) })
-      : await apiS({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) });
-    if(r && r.sem && !ehOficina()) r = await api({ op:'perguntar', pergunta:texto, historico:S.hist.slice(-7,-1) });
+      ? await apiX({ op:'perguntar', pergunta:perg, historico:S.hist.slice(-7,-1) })
+      : await apiS({ op:'perguntar', pergunta:perg, historico:S.hist.slice(-7,-1) });
+    if(r && r.sem && !ehOficina()) r = await api({ op:'perguntar', pergunta:perg, historico:S.hist.slice(-7,-1) });
     var resp = r && r.ok ? r.resposta : ((r && r.error) || 'Não consegui responder agora.');
     S.hist.push({ de:'ia', texto:resp }); desenhar();
     var c2 = document.getElementById('cpChat'); if(c2) c2.scrollIntoView({ block:'end' });
@@ -876,14 +925,15 @@
     b.onclick = function(){ if(S.aberto) fecharPainel(); else abrirPainel(); };
     document.body.appendChild(b); pintarFab();
     if(!ehOficina()) carregarRecados().catch(function(){});   // recado/pendência já aparece no contador do botão
-    setTimeout(talvezDica, 5000);   // saudação do dia; as outras dicas vêm ao abrir os módulos
+    if(ehAdm()){ carregarControles().then(function(){ talvezDica(); }).catch(function(){}); }   // 23/11
+    else setTimeout(talvezDica, 5000);   // saudação do dia; as outras dicas vêm ao abrir os módulos
     setTimeout(function(){ avisosIniciais().catch(function(){}); }, 12000);   // v6: aula nova / avisos da diretoria
-    clearInterval(vigia); vigia = setInterval(function(){ if(!document.hidden && !S.aberto){ carregarRecados().catch(function(){}); if(!ehOficina()) carregarLicoes().catch(function(){}); } }, 10*60000);
+    clearInterval(vigia); vigia = setInterval(function(){ if(!document.hidden && !S.aberto){ carregarRecados().catch(function(){}); if(ehAdm()) carregarControles().catch(function(){}); else if(!ehOficina()) carregarLicoes().catch(function(){}); } }, 10*60000);
   }
   function parar(){
     clearInterval(vigia); vigia = null; fecharBalao(); fecharPainel();
     var b = document.getElementById('cpFab'); if(b) b.remove();
-    S.senha = null; S.user = null; S.dia = null; S.hist = []; S.recados = [];
+    S.senha = null; S.user = null; S.dia = null; S.hist = []; S.recados = []; S.ctrl = null;
   }
   /** O app trocou de loja: refaz o dia para a loja nova (fica guardado por loja). */
   async function trocouLoja(){

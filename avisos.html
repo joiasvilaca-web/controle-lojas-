@@ -13,6 +13,7 @@
 <script src="avaliacoes-ui.js"></script>
 <script src="marketing-off.js"></script>
 <script src="recado-cliente.js"></script>
+<script src="avisos-core.js"></script>
 <style>
 :root{ --radius:12px; --font:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
 *{box-sizing:border-box;}
@@ -412,7 +413,8 @@ async function calcularAvisos(){
   }
 
   // ---------- CAIXA › Orçamento ----------
-  let orcs = ehDiretoria() ? null : await lerTabela('orcamentos');   // 23/11: diretoria não recebe aviso de orçamento
+  const souAdm = !!(window.AvisosCore && AvisosCore.ehAdm(currentUser));   // 23/11: função ADMINISTRATIVO
+  let orcs = (ehDiretoria() || souAdm) ? null : await lerTabela('orcamentos');   // 23/11: diretoria não recebe aviso de orçamento
   if(orcs){
     // 04/11: vendedora = gerente — vê os orçamentos de todas as vendedoras das lojas dela
     const abertos = orcs.filter(o=> !STATUS_ORC_FECHADOS.includes(o.status));
@@ -432,6 +434,24 @@ async function calcularAvisos(){
       abrir:{ alvo:'orcamentos', tab:'followup' },
     }))});
     if(grupos.length) modulos.push({ nome:'CAIXA', icone:'dinheiro', abas:[{ nome:'Orçamento', icone:'documento', alvo:'orcamentos', grupos }] });
+  }
+
+  // ---------- CONTROLES do administrativo (23/11): fiscal, caixa e vias — regras em avisos-core.js › controlesAdm ----------
+  if(souAdm){
+    try{
+      const lista = await AvisosCore.controlesAdm({ gatewayCall, config }, ordens || null);
+      const abas = [];
+      [['Fiscal','documento','vendas'],['Caixa','dinheiro','caixa'],['Vias','recibo','os']].forEach(([area, icone, alvo])=>{
+        const daArea = lista.filter(a=>a.area===area); if(!daArea.length) return;
+        const grupos = [];
+        daArea.forEach(a=>{
+          let g = grupos.find(x=>x.titulo===a.grupo); if(!g){ g = { titulo:a.grupo, tipo:a.nivel==='danger'?'danger':'wait', itens:[] }; grupos.push(g); }
+          g.itens.push({ titulo:a.titulo, sub:a.sub, tag:a.tag, tagTipo:a.nivel==='danger'?'danger':'wait', abrir:a.abrir });
+        });
+        abas.push({ nome:area, icone, alvo, grupos });
+      });
+      if(abas.length) modulos.push({ nome:'CONTROLES', icone:'cadeado', abas });
+    }catch(e){ console.error(e); }
   }
 
   // ---------- ADMINISTRAÇÃO › Departamento Pessoal ----------
