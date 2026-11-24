@@ -518,7 +518,7 @@
     var pct = Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100));
     h += '<div class="cp-meta-v">' + brl0(m.hoje) + '</div>'
       + '<div class="cp-meta-s">é o ritmo de hoje para fechar o mês na meta'
-      + (m.tipo === 'lancamentos' ? ' (sua parte é ' + m.participacao + '% da loja)' : ' (meta sugerida pela sua média)') + '.</div>';
+      + (m.tipo === 'lancamentos' ? ' (sua meta pessoal, da faixa do Lançamentos)' : ' (meta sugerida pela sua média)') + '.</div>';
     if(mm.atingida) h += '<div class="cp-meta-s" style="margin-top:5px;color:#1f9a55;font-weight:700;">Meta do mês batida! Tudo o que vier agora é a mais. 🎉</div>';
     else h += '<div class="cp-meta-s" style="margin-top:5px;">Faltam <b>' + brl0(mm.falta) + '</b> em <b>' + dias + ' dia' + (dias > 1 ? 's' : '') + '</b>'
       + (mm.vendasPorDia ? ' — dá cerca de <b>' + vendasTxt(mm.vendasPorDia) + ' por dia</b> no seu ticket médio.' : '.') + '</div>';
@@ -540,16 +540,20 @@
       var prox = -1;
       for(var i = 0; i < esc2.length; i++){ if(!esc2[i].atingida){ prox = i; break; } }
       h += '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--t-line,#dde);">'
-        + '<b style="font-size:12px;color:#8a3560;text-transform:uppercase;letter-spacing:.04em;">Escada da loja (Lançamentos)</b>'
+        + '<b style="font-size:12px;color:#8a3560;text-transform:uppercase;letter-spacing:.04em;">Sua escada de metas (Lançamentos)</b>'
         + esc2.map(function(f, i){
-            var alvo = i === prox, mp = f.minhaParte || {};
+            var alvo = i === prox;
             return '<div class="cp-deg ' + (f.atingida ? 'ok' : '') + (alvo ? ' alvo' : '') + '"><span class="mk">' + (f.atingida ? '✔' : (alvo ? '→' : '·')) + '</span><span><b>' + pc(f.percentual) + '%</b> · ' + brl0(f.valor)
               + (f.atingida ? ' — <b>batida</b>' : ' — faltam <b>' + brl0(f.falta) + '</b>' + (f.porDia ? ' (' + brl0(f.porDia) + ' por dia)' : ''))
-              + (alvo && mp.falta > 0 ? '<br><small>Sua parte: faltam ' + brl0(mp.falta) + (mp.vendasPorDia ? ' · ' + vendasTxt(mp.vendasPorDia) + ' por dia' : '') + '</small>' : '')
               + '</span></div>';
           }).join('')
-        + (m.loja ? '<div class="cp-meta-s" style="margin-top:6px;">' + ic('loja',13) + ' Loja no mês: <b>' + brl0(m.loja.vendido) + '</b>' + (m.projecaoLoja ? ' · no ritmo atual fecha em <b>' + brl0(m.projecaoLoja) + '</b>' : '') + '</div>' : '')
         + '</div>';
+    }
+    if(m.loja){
+      var pctLoja = m.loja.meta > 0 ? Math.min(100, Math.round((m.loja.vendido||0) / m.loja.meta * 100)) : null;
+      h += '<div class="cp-meta-s" style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--t-line,#dde);">' + ic('loja',13) + ' Meta da loja no mês: <b>' + brl0(m.loja.vendido) + '</b>'
+        + (m.loja.meta > 0 ? ' de ' + brl0(m.loja.meta) + (pctLoja != null ? ' (' + pctLoja + '%)' : '') : '')
+        + (m.projecaoLoja ? ' · no ritmo atual fecha em <b>' + brl0(m.projecaoLoja) + '</b>' : '') + '</div>';
     }
     return h + '</div>';
   }
