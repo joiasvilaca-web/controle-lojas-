@@ -14,7 +14,8 @@ module.exports = { casos: [
     /* 23/11 (v6, ordem do Felipe): o Vilacinha deixou de mandar mensagem — só mostra telefone, números e roteiro para LIGAR. O teste antigo exigia o botão "Enviar" (tipo chamar_cliente); a regra agora é mais dura: nenhum envio sai daqui. */
     const semComentario = j.replace(/\/\*[^]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     t.ok(!/WhatsAuto\.enviar|functions\/v1\/enviar-via|chamar_cliente|marketing_fila/.test(semComentario), 'v6: o copiloto não envia mensagem ao cliente (só telefone e roteiro para ligar)');
-    t.ok(/n >= 6 \|\| Date\.now\(\) - ult < 12\*60000/.test(j) && /Math\.random\(\) > 0\.45/.test(j), 'balão por módulo: às vezes, no máximo 6 por dia, 12 min entre eles');
+    /* 25/11 (v7, ordem do Felipe): o limite ficou MAIS apertado — 3 por dia, 50 min entre eles (antes 6 e 12 min), e o intervalo cresce quando a pessoa ignora. */
+    t.ok(/var LIM = \{ porDia:3, gapMin:50, pausaMin:180/.test(j) && /n >= porDia \|\| Date\.now\(\) - ult < gap\*60000/.test(j) && /Math\.random\(\) > 0\.5/.test(j), 'balão por módulo: às vezes, no máximo 3 por dia, 50 min entre eles');
     t.ok(/r\.sem\) return/.test(j), 'sem a função (treino): não aparece');
   } },
 ] };
