@@ -14,7 +14,7 @@
 (function(){
   'use strict';
   if(window.Copiloto) return;
-  var S = { senha:null, user:null, lojaNome:'', dia:null, hist:[], aberto:false, balaoTimer:null, rodizio:0, falando:false, licoes:null, pd:null, prog:null, recados:[] };
+  var S = { senha:null, user:null, lojaNome:'', dia:null, hist:[], aberto:false, balaoTimer:null, rodizio:0, falando:false, licoes:null, pd:null, prog:null, recados:[], cientes:{} };
   var URL_FN = function(n){ return (window.SUPABASE_URL||'') + '/functions/v1/' + n; };
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function ic(n,t){ try{ return window.Icone ? window.Icone(n,{tam:t||16}) : ''; }catch(e){ return ''; } }
@@ -301,8 +301,24 @@
    * e vale para sempre: item (recado, aula, aviso) ou assunto (clientes do dia, meta, dicas, bem-estar…). A pessoa pode
    * desfazer no painel ("Avisos que você silenciou"). */
   function silenciados(){ try{ var v = JSON.parse(ls('copiloto_sil_' + (S.user && S.user.id)) || '[]'); return Array.isArray(v) ? v : []; }catch(e){ return []; } }
-  function silenciado(k){ return silenciados().indexOf(k) >= 0; }
-  function silenciar(k){ var l = silenciados(); if(l.indexOf(k) < 0) l.push(k); ls('copiloto_sil_' + (S.user && S.user.id), JSON.stringify(l.slice(-200))); }
+  function silenciado(k){ return !!(S.cientes && S.cientes[k]) || silenciados().indexOf(k) >= 0; }
+  /* srv = true: o ciente vai também para o servidor (vale em qualquer aparelho e a diretoria pode ver quem deu). Usado nos avisos do diretor e do sistema. */
+  function silenciar(k, srv){
+    var l = silenciados(); if(l.indexOf(k) < 0) l.push(k); ls('copiloto_sil_' + (S.user && S.user.id), JSON.stringify(l.slice(-200)));
+    if(srv){ S.cientes[k] = 1; apiC({ op:'dar', chave:k }); }
+  }
+  async function apiC(body){
+    try{ var r = await fetch(URL_FN('copiloto-ciente'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
+      if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
+    catch(e){ return { ok:false, error:'Sem conexão.' }; }
+  }
+  async function carregarCientes(){
+    var r = await apiC({ op:'lista' });
+    if(r && r.ok && Array.isArray(r.chaves)){ S.cientes = {}; r.chaves.forEach(function(k){ S.cientes[k] = 1; }); }
+    return S.cientes;
+  }
+  /* FILA DE PRIORIDADE (25/11): 1 = recado do diretor · 2 = sistema/pendência · 3 = dica/aula · 4 = perguntas. Só um balão por vez;
+   * um balão de prioridade menor (número maior) nunca entra por cima de um de prioridade maior. */
   /* 24/11: o aviso do SISTEMA (toast "#toast" lá do shell) tem prioridade sobre o balão do Vilacinha — não pode ficar
    * um encavalado no outro. Se o toast está na tela, o balão espera a vez; se o toast aparecer com o balão já aberto,
    * o balão fecha na hora pro aviso do sistema aparecer sozinho. */
@@ -324,16 +340,19 @@
       S._balaoAdiado = setTimeout(function(){ balao(html, acoes, semPadrao, fechaEm, ch); }, 350);
       return null;
     }
+    var d0 = document.getElementById('cpBalao');
+    if(d0 && ch && ch.prio && Number(d0.dataset.prio || 99) <= ch.prio) return null;   // já tem um balão igual ou mais importante na tela
     /* se o balão já está na tela (pergunta → resposta), troca o conteúdo NO PRÓPRIO balão */
     var d = document.getElementById('cpBalao'), novo = !d;
     if(novo){ d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status'); }
+    if(ch && ch.prio) d.dataset.prio = String(ch.prio);
     try{ speechSynthesis.cancel(); S.falando = false; }catch(e){}
-    d.innerHTML = '<button type="button" class="cp-x" data-cp="x" title="Fechar" aria-label="Fechar">'+ic('x',14)+'</button><b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (ch && ch.key ? '<button type="button" class="cp-b" data-cp="lido" title="Não mostrar este aviso de novo">Já li, não mostrar mais</button>' : '') + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
+    d.innerHTML = '<button type="button" class="cp-x" data-cp="x" title="Fechar" aria-label="Fechar">'+ic('x',14)+'</button><b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (ch && ch.key ? '<button type="button" class="cp-b" data-cp="lido" title="Marcar como ciente: este aviso para de aparecer">' + (ch.rotulo || 'Já li, não mostrar mais') + '</button>' : '') + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
     if(novo) document.body.appendChild(d);
     d.querySelector('[data-cp="x"]').onclick = fecharBalao;
     d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); if(!semPadrao) ls(chave('pausa'), String(Date.now())); };
     var ab = d.querySelector('[data-cp="abrir"]'); if(ab) ab.onclick = function(){ fecharBalao(); abrirPainel(); };
-    var bl0 = d.querySelector('[data-cp="lido"]'); if(bl0) bl0.onclick = function(){ silenciar(ch.key); try{ if(ch.aoLer) ch.aoLer(); }catch(e){} fecharBalao(); };
+    var bl0 = d.querySelector('[data-cp="lido"]'); if(bl0) bl0.onclick = function(){ silenciar(ch.key, ch.servidor); try{ if(ch.aoLer) ch.aoLer(); }catch(e){} fecharBalao(); };
     d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Vilacinha/,'')); };
     clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, fechaEm || (semPadrao ? 60000 : 25000));
     return d;
@@ -347,7 +366,7 @@
     if(!S.dia || S.aberto || document.hidden) return;
     if(ehAdm()){   // 23/11: saudação do administrativo = controles do dia (1x por dia)
       if(!S.ctrl || ls(chave('n')) || silenciado('assunto:controles')) return; ls(chave('n'), '1');
-      balao('<div class="cp-txt">' + esc(S.dia.saudacao||'Bom dia!') + ' ' + (S.ctrl.length ? 'Hoje há <b>' + S.ctrl.length + ' controle(s)</b> para conferir' + (ctrlUrgentes() ? ', <b>' + ctrlUrgentes() + ' urgente(s)</b>.' : '.') : 'Controles em dia: nada pendente agora.') + '</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000, { key:'assunto:controles' });
+      balao('<div class="cp-txt">' + esc(S.dia.saudacao||'Bom dia!') + ' ' + (S.ctrl.length ? 'Hoje há <b>' + S.ctrl.length + ' controle(s)</b> para conferir' + (ctrlUrgentes() ? ', <b>' + ctrlUrgentes() + ' urgente(s)</b>.' : '.') : 'Controles em dia: nada pendente agora.') + '</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000, { key:'assunto:controles', prio:2 });
       return;
     }
     /* v7 (25/11, pedido da diretoria): ao iniciar o app o Vilacinha só aparece se tiver algo que VALE a pena
@@ -374,7 +393,7 @@
     var e = op[dia % op.length];
     ls(chave('n'), '1'); ls(chave('ult'), String(Date.now()));
     if(e.dica) marcarVista(e.dica);
-    balaoDica(tagHtml(e.tag) + '<div class="cp-txt">' + esc(d.saudacao || 'Olá!') + ' ' + e.html + '</div>', '', { key:e.k });
+    balaoDica(tagHtml(e.tag) + '<div class="cp-txt">' + esc(d.saudacao || 'Olá!') + ' ' + e.html + '</div>', '', { key:e.k, prio:3 });
   }
 
   /* ---------- v4: balão por MÓDULO ---------- */
@@ -510,7 +529,7 @@
     var dica = lista[Math.floor(Math.random() * lista.length)];
     ls(chave('ult'), String(Date.now())); ls(chave('nm'), String(n+1));
     marcarVista(dica);
-    balaoDica(tagHtml(ICONE[k]) + '<div class="cp-txt">' + esc(dica) + '</div>', '', { key:'assunto:dicas' });
+    balaoDica(tagHtml(ICONE[k]) + '<div class="cp-txt">' + esc(dica) + '</div>', '', { key:'assunto:dicas', prio:3 });
   }
 
   /* ---------- v4: BEM-ESTAR (consentimento, perguntas clicáveis, cuidado) ---------- */
@@ -579,7 +598,7 @@
     var H0 = beHist(), vezes = H0.filter(function(x){ return x.id === q.id; }).length;
     var txt = q.alt ? variar([q.txt].concat(q.alt), vezes) : q.txt;   // muda o jeito de perguntar a cada vez
     H0.push({ id:q.id, t:Date.now(), r:'ign' }); gravarJ(uidK('behist'), H0.slice(-60)); ls(uidK('beUlt'), String(Date.now()));   // vira 'resp' quando a pessoa toca numa resposta
-    var d = balao('<div class="cp-tag"><span aria-hidden="true">💛</span> Como você está</div><div class="cp-txt">' + esc(intro||'') + esc(txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true, 0, { key:'assunto:bemestar' });
+    var d = balao('<div class="cp-tag"><span aria-hidden="true">💛</span> Como você está</div><div class="cp-txt">' + esc(intro||'') + esc(txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true, 0, { key:'assunto:bemestar', prio:4 });
     if(!d) return;
     d.querySelectorAll('[data-be]').forEach(function(b){ b.onclick = function(){
       var r = b.dataset.be;
@@ -834,7 +853,7 @@
             + '<b style="color:'+corDe(a.tipo)+';">'+esc(a.titulo||'Recado')+'</b>'
             + '<div class="m" style="white-space:pre-wrap;">'+esc(a.texto||'')+'</div>'
             + '<div class="m" style="opacity:.75;">'+(a.origem==='sistema'?'Aviso automático do sistema':'De '+esc(a.de||'Diretoria'))+'</div>'
-            + (a.podeMarcarLido ? '<button type="button" class="cp-b" style="margin-top:6px;" data-cp-rec="'+esc(a.id)+'">Entendi</button>' : '')
+            + (a.podeMarcarLido ? '<button type="button" class="cp-b" style="margin-top:6px;" data-cp-rec="'+esc(a.id)+'">Ciente</button>' : (silenciado(a.id) ? '<div class="m" style="opacity:.75;margin-top:4px;">Ciente. Continua aqui até ser resolvido, sem interromper.</div>' : '<button type="button" class="cp-b" style="margin-top:6px;" data-cp-cient="'+esc(a.id)+'">Ciente, parar de avisar</button>'))
             + '</div>';
         }).join('') + '</div>';
   }
@@ -845,6 +864,7 @@
     return S.recados;
   }
   function ligarRecados(c){
+    c.querySelectorAll('[data-cp-cient]').forEach(function(b){ b.onclick = function(){ silenciar(b.dataset.cpCient, true); fecharBalao(); desenhar(); }; });
     c.querySelectorAll('[data-cp-rec]').forEach(function(b){ b.onclick = async function(){
       b.disabled = true; await apiX({ op:'recadoLido', id:b.dataset.cpRec });
       S.recados = (S.recados||[]).filter(function(x){ return String(x.id) !== String(b.dataset.cpRec); });
@@ -1056,12 +1076,23 @@
   }
   /* ao entrar: aula nova aparece no balão (1x por aula) e a diretoria recebe aviso de destaque/baixa */
   async function avisosIniciais(){
-    await carregarRecados();
-    /* recado novo (da diretoria ou do sistema) fala mais alto que qualquer dica */
-    var R = S.recados || [];
-    if(R.length && !S.aberto && ls(chave('recBalao')) !== String(R[0].id) && !silenciado('recado:'+R[0].id)){
-      ls(chave('recBalao'), String(R[0].id));
-      balao('<div class="cp-txt"><b>'+esc(R[0].titulo||'Recado')+':</b> '+esc(String(R[0].texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000, { key:'recado:'+R[0].id });
+    await Promise.all([ carregarRecados(), carregarCientes() ]);
+    /* 1º o recado do DIRETOR, 2º o aviso do SISTEMA. Urgente insiste a cada entrada até dar ciente; os demais aparecem 1x por dia. */
+    var R = (S.recados || []).filter(function(x){ return !S.aberto; });
+    var doDir = R.filter(function(x){ return x.origem !== 'sistema'; }), doSis = R.filter(function(x){ return x.origem === 'sistema'; });
+    var elegivel = function(x, k){ return !silenciado(k) && (x.tipo === 'urgente' || ls(chave('recBalao') + '_' + x.id) !== '1'); };
+    var rD = doDir.filter(function(x){ return elegivel(x, 'recado:'+x.id); })[0];
+    if(rD){
+      ls(chave('recBalao') + '_' + rD.id, '1');
+      balao('<div class="cp-txt"><b>'+esc(rD.titulo||'Recado')+':</b> '+esc(String(rD.texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000,
+        { key:'recado:'+rD.id, prio:1, rotulo:'Ciente', aoLer:function(){ apiX({ op:'recadoLido', id:rD.id }); S.recados = (S.recados||[]).filter(function(x){ return String(x.id) !== String(rD.id); }); pintarFab(); } });
+      return;
+    }
+    var rS = doSis.filter(function(x){ return elegivel(x, x.id); })[0];
+    if(rS){
+      ls(chave('recBalao') + '_' + rS.id, '1');
+      balao('<div class="cp-txt"><b>'+esc(rS.titulo||'Aviso do sistema')+':</b> '+esc(String(rS.texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000,
+        { key:rS.id, prio:2, rotulo:'Ciente', servidor:true });
       return;
     }
     if(ehOficina()){ await carregarDia(); return; }
@@ -1076,20 +1107,20 @@
       if(av && av.ok && av.avisos.length && !S.aberto){
         S.avisosN = av.avisos.length;
         var a0 = av.avisos[0];
-        balao('<div class="cp-txt"><b>'+(a0.tipo==='destaque'?'Destaque no quiz':'Atenção no quiz')+':</b> '+esc(a0.texto)+(av.avisos.length>1?' (e mais '+(av.avisos.length-1)+')':'')+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver no painel</button>', true, 20000, { key:chAv, aoLer:function(){ apiS({ op:'avisoLido', ids:av.avisos.map(function(a){ return a.id; }) }); S.avisosN = 0; pintarFab(); } });
+        balao('<div class="cp-txt"><b>'+(a0.tipo==='destaque'?'Destaque no quiz':'Atenção no quiz')+':</b> '+esc(a0.texto)+(av.avisos.length>1?' (e mais '+(av.avisos.length-1)+')':'')+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver no painel</button>', true, 20000, { key:chAv, prio:2, rotulo:'Ciente', aoLer:function(){ apiS({ op:'avisoLido', ids:av.avisos.map(function(a){ return a.id; }) }); S.avisosN = 0; pintarFab(); } });
         return;
       }
     }
     if(L.length && !S.aberto && ls(chave('licBalao')) !== L[0].id && !silenciado('aula:'+L[0].id)){
       ls(chave('licBalao'), L[0].id);
-      var balAula = balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrelic="'+esc(L[0].id)+'">Ler a aula</button>', true, 20000, { key:'aula:'+L[0].id });
+      var balAula = balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrelic="'+esc(L[0].id)+'">Ler a aula</button>', true, 20000, { key:'aula:'+L[0].id, prio:3 });
       if(balAula){ var bA = balAula.querySelector('[data-cp-abrelic]'); if(bA) bA.onclick = function(){ var id = bA.dataset.cpAbrelic; fecharBalao(); lerLicao(id); }; }
       return;
     }
     var pd = S.pd, hj = new Date().toISOString().slice(0,10);
     if(pd && pd.ok && !pd.indisponivel && !pd.respondida && !S.aberto && ls(chave('pdBalao')) !== hj && !silenciado('assunto:pd')){
       ls(chave('pdBalao'), hj);
-      var balPd = balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrepd="1">Responder agora</button>', true, 20000, { key:'assunto:pd' });
+      var balPd = balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrepd="1">Responder agora</button>', true, 20000, { key:'assunto:pd', prio:4 });
       if(balPd){ var bP = balPd.querySelector('[data-cp-abrepd]'); if(bP) bP.onclick = function(){ fecharBalao(); perguntaDoDia(); }; }
     }
   }
@@ -1147,8 +1178,8 @@
     document.body.appendChild(b); pintarFab();
     if(!ehOficina()) carregarRecados().catch(function(){});   // recado/pendência já aparece no contador do botão
     if(ehAdm()){ carregarControles().then(function(){ talvezDica(); }).catch(function(){}); }   // 23/11
-    else setTimeout(talvezDica, 5000);   // saudação do dia; as outras dicas vêm ao abrir os módulos
-    setTimeout(function(){ avisosIniciais().catch(function(){}); }, 12000);   // v6: aula nova / avisos da diretoria
+    else setTimeout(talvezDica, 9000);   // saudação do dia; as outras dicas vêm ao abrir os módulos
+    setTimeout(function(){ avisosIniciais().catch(function(){}); }, 3500);   // v6: aula nova / avisos da diretoria
     clearInterval(vigia); vigia = setInterval(function(){ if(!document.hidden && !S.aberto){ carregarRecados().catch(function(){}); if(ehAdm()) carregarControles().catch(function(){}); else if(!ehOficina()) carregarLicoes().catch(function(){}); } }, 10*60000);
   }
   function parar(){
