@@ -498,3 +498,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Lista (computador)**: a tabela era mais larga que a tela e cortava os ícones de ação. Agora a coluna de ações fica sempre visível (fixa à direita), o nome do cliente não quebra mais em 4 linhas, o seletor de status tem largura fixa e, a partir de 1500px, a área útil sobe para 1440px.
 - **Celular**: tudo com toque de 44px (voltar, ícones do topo, Lista/Quadro, botões, cabeçalho de coluna do quadro, seletor de status); o ícone de WhatsApp do cartão do quadro mantém o visual e ganhou área de toque de 44px.
 - Detector: 1 achado (`<img src="">` do visualizador de fotos) → 0. Nenhuma função mudou; 188/188 testes.
+
+## 25/11 — Orçamentos: repaginação visual (impeccable, rodada 3) + selos retangulares no app todo
+- **`tema.css`**: o selo de estado (`.badge`) passou de pílula para retângulo de 6px em todas as telas (a regra do tema, mais forte que a de cada tela, é que o mantinha redondo — por isso o ajuste feito na Venda antes não aparecia). `.pill` e `.chip` continuam redondos; a sigla da loja (`.badge-loja`) também.
+- **Orçamentos**: as 5 caixas iguais da estatística de conversão viraram uma faixa só, com a taxa de conversão em destaque (32px) e as outras quatro medidas ao lado; cabeçalho com linha de separação; filtros como faixa secundária e o campo agora diz "Filtrar por cliente ou via"; Lista/Quadro, selo de nível e cabeçalho das colunas do quadro saíram da pílula.
+- **Celular**: toque de 44px em voltar, ícones do topo, Lista/Quadro, botões, campos e datas dos filtros, "Mostrar convertidos" e cabeçalho das colunas do quadro; o WhatsApp do quadro mantém o visual com área de toque de 44px. Antes 18 controles ficavam abaixo disso, agora só a caixinha de marcar (20px, com o rótulo de 44px ao lado).
+- Detector: 0 achados (Venda, Pedidos e Orçamentos). Nenhuma função mudou; 188/188 testes; nome de cliente enorme testado sem rolagem horizontal.
