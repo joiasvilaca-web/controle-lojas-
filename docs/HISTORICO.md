@@ -569,3 +569,7 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Todo balão tem botão: **Ciente** (diretor e sistema) ou **Já li, não mostrar mais** (dicas, aulas, perguntas). Urgente insiste a cada entrada até o ciente; os demais aparecem 1x por dia.
 - Ciente do sistema fica no servidor (tabela `copiloto_ciente`, função `copiloto-ciente` v1; ops lista, dar, quem): vale em qualquer aparelho e a diretoria pode consultar quem deu ciente. Recado do diretor usa o "lido" que já existia.
 - Ciente só para de interromper: a pendência continua no painel e no contador do botão até ser resolvida ("Ciente, parar de avisar" também no painel).
+
+## 25/11/2026 — Alertas só no Vilacinha; botão único "Ciente"
+- Dashboard: o popup "Meta do mês fora do ritmo" foi removido. O mesmo aviso (loja mais de 15 pontos abaixo do esperado) agora vem só pelo Vilacinha da diretoria, prioridade 2, com Ciente salvo no servidor (chave por mês e conjunto de lojas). No painel, a loja atrasada fica marcada "Abaixo do ritmo do mês".
+- Todo botão de dispensar balão do Vilacinha passou a se chamar **Ciente**.
