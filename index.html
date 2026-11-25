@@ -7801,11 +7801,36 @@ async function renderFornecedorTab(main){
   renderRows();
 }
 
+/** 25/11 (Felipe): no modelo dobrável (rabo de rato), pergunta na hora de imprimir se inclui o preço de venda
+ * (À vista com desconto previsto + 12x). Lembra a última escolha. Outros modelos imprimem direto (cb(undefined)). */
+function perguntarPrecoEtiqueta(cfg, cb){
+  if(!cfg || cfg.modelo !== 'dobravel'){ cb(undefined); return; }
+  let ultimo = '1'; try{ ultimo = localStorage.getItem('vilaca_etq_preco') === '0' ? '0' : '1'; }catch(e){}
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(20,16,18,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  ov.innerHTML = `<div role="dialog" aria-modal="true" aria-label="Incluir preço na etiqueta" style="background:var(--surface,#fff);color:var(--ink,#222);border-radius:12px;padding:20px;max-width:380px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.3);">
+    <h3 style="margin:0 0 6px;font-size:17px;">Incluir preço de venda?</h3>
+    <p class="muted" style="margin:0 0 14px;font-size:13.5px;line-height:1.45;">Se sim, entra abaixo do fator: o valor <b>à vista</b> (já com o desconto previsto) e o valor <b>parcelado em 12x</b>.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button type="button" class="btn ${ultimo==='1'?'btn-accent':'btn-ghost'}" data-etqp="1" style="flex:1;min-height:44px;">Sim, incluir preço</button>
+      <button type="button" class="btn ${ultimo==='0'?'btn-accent':'btn-ghost'}" data-etqp="0" style="flex:1;min-height:44px;">Não</button>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" data-etqp="x" style="margin-top:10px;min-height:44px;width:100%;">Cancelar</button>
+  </div>`;
+  const fechar = (v)=>{ ov.remove(); document.removeEventListener('keydown', esc); if(v==='x') return; try{ localStorage.setItem('vilaca_etq_preco', v); }catch(e){} cb(v==='1'); };
+  const esc = (e)=>{ if(e.key==='Escape') fechar('x'); };
+  ov.addEventListener('click', e=>{ const b = e.target.closest('[data-etqp]'); if(b) fechar(b.dataset.etqp); else if(e.target===ov) fechar('x'); });
+  document.addEventListener('keydown', esc);
+  document.body.appendChild(ov);
+  const primeiro = ov.querySelector('.btn-accent'); if(primeiro) primeiro.focus();
+}
 /** Gera e imprime a etiqueta de um produto, no tamanho/campos/posições configurados em Impressão & Etiquetas. */
 function imprimirEtiquetaProduto(produto){
   garantirConfigImpressao();
   const cfg = config.etiquetaJoia;
-  abrirImpressaoEtiquetas([etiquetaLabelHtml(produto, cfg)], cfg, `Etiqueta - ${produto.nome||''}`);
+  perguntarPrecoEtiqueta(cfg, (preco)=>{
+    abrirImpressaoEtiquetas([etiquetaLabelHtml(produto, cfg, preco===undefined?undefined:{ preco })], cfg, `Etiqueta - ${produto.nome||''}`);
+  });
 }
 /** 24/11 (Felipe): imprime várias etiquetas de uma vez, cada produto repetido pela quantidade
  * escolhida, uma atrás da outra na mesma bobina (com a margem fora e o espaço entre etiquetas
@@ -7813,13 +7838,16 @@ function imprimirEtiquetaProduto(produto){
 function imprimirEtiquetasEmLote(itens){
   garantirConfigImpressao();
   const cfg = config.etiquetaJoia;
-  const labelsHtml = [];
-  (itens||[]).forEach(({produto, quantidade})=>{
-    if(!produto) return;
-    const qtd = Math.max(1, Number(quantidade)||1);
-    for(let i=0;i<qtd;i++) labelsHtml.push(etiquetaLabelHtml(produto, cfg));
+  perguntarPrecoEtiqueta(cfg, (preco)=>{
+    const opts = preco===undefined ? undefined : { preco };
+    const labelsHtml = [];
+    (itens||[]).forEach(({produto, quantidade})=>{
+      if(!produto) return;
+      const qtd = Math.max(1, Number(quantidade)||1);
+      for(let i=0;i<qtd;i++) labelsHtml.push(etiquetaLabelHtml(produto, cfg, opts));
+    });
+    abrirImpressaoEtiquetas(labelsHtml, cfg, `Etiquetas (${labelsHtml.length})`);
   });
-  abrirImpressaoEtiquetas(labelsHtml, cfg, `Etiquetas (${labelsHtml.length})`);
 }
 
 /* ---------- TIPOS DE SERVIÇO: ver abrirGerenciarTiposServicoModal(), agora dentro da aba Produtos ---------- */
@@ -8058,6 +8086,7 @@ const CAMPOS_ETIQUETA = [
   { id:'subcategoria', label:'Subcategoria' },
   { id:'gtin', label:'Código de barras (GTIN)' },
   { id:'loja', label:'Nome da loja' },
+  { id:'fator', label:'Fator' },
 ];
 const CAMPOS_IMPRESSAO = {
   os: [
@@ -8132,6 +8161,9 @@ const PRESETS_ETIQUETA = [
   { id:'60x40', label:'60 × 40 mm (grande)', larguraMm:60, alturaMm:40 },
   { id:'80x40', label:'80 × 40 mm (caixa/estojo)', larguraMm:80, alturaMm:40 },
   { id:'60x15d', label:'60 × 15 mm dobrável (rabo de rato)', larguraMm:60, alturaMm:15, modelo:'dobravel' },
+  /* 25/11 (Felipe): etiqueta de joia com rabo — corpo 60 × 12 mm dobrado em 30 + 30 (nome e fator de um lado,
+     código de barras e código do outro), rabo de ~38 mm para prender na joia, 2,6 mm entre uma etiqueta e a próxima. */
+  { id:'60x12r', label:'60 × 12 mm com rabo (30 + 30, rabo 38 mm)', larguraMm:60, alturaMm:12, modelo:'dobravel', rabinhoMm:38, ladoBarras:'dir', espV:2.6, margens:0, fator:true },
 ];
 /** Altura de linha padrão (mm) por escala de texto — usada só para calcular a posição inicial
  * (empilhada) de cada campo antes de o usuário arrastar algo no quadro de posicionamento. */
@@ -8170,6 +8202,7 @@ function conteudoCampoEtiqueta(produto, id){
     case 'subcategoria': return sub ? escapeHtml(sub.nome) : '';
     case 'gtin': return produto.gtin ? escapeHtml(produto.gtin) : '';
     case 'loja': return (config.lojas||[])[0] ? escapeHtml(config.lojas[0].nome) : '';
+    case 'fator': return (produto.fator!=null && produto.fator!=='') ? `Fator ${escapeHtml(String(produto.fator).replace('.',','))}` : '';
     default: return '';
   }
 }
@@ -8183,33 +8216,57 @@ function etiquetaCssComum(cfg){
     return `
   .etq-label{ width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:row; font-family:Arial,Helvetica,sans-serif; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; -webkit-font-smoothing:none; ${reforcoCss} }
   .etq-metade{ width:${meia}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:center; }
-  .etq-barras{ padding:1mm 1.5mm 0.6mm; align-items:stretch; }
+  .etq-barras{ padding:${cfg.alturaMm<=14?'0.8mm 1.2mm 0.4mm':'1mm 1.5mm 0.6mm'}; align-items:stretch; }
   .etq-barras svg{ display:block; width:100%; flex:1 1 auto; min-height:0; }
   .etq-cod{ text-align:center; font-weight:700; font-size:${px.base}px; line-height:1.1; margin-top:0.4mm; letter-spacing:.03em; white-space:nowrap; }
-  .etq-dados{ padding:0.8mm 1.5mm; line-height:1.15; }
-  .etq-dados .etq-nome{ font-size:${px.base}px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .etq-dados .etq-preco{ margin-top:0.5mm; }`;
+  .etq-dados{ padding:${cfg.alturaMm<=14?'0.5mm 1.2mm':'0.8mm 1.5mm'}; line-height:1.15; }
+  .etq-dados > div{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .etq-dados .etq-nome{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .etq-dados .etq-preco{ margin-top:${cfg.alturaMm<=14?'0':'0.5mm'}; }`;
   }
   return `
   .etq-label{ position:relative; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; overflow:hidden; box-sizing:border-box; font-family:Arial,Helvetica,sans-serif; color:#000; -webkit-font-smoothing:none; ${reforcoCss} }
   .etq-campo{ position:absolute; white-space:nowrap; }`;
 }
-/** HTML de UMA etiqueta (um bloco .etq-label) pro produto, no modelo "dobrável" (código de barras
- * de um lado, dados do outro — layout fixo, sem posicionamento livre). */
-function etiquetaLabelDobravelHtml(produto, cfg){
+/** Preços da etiqueta (25/11, Felipe): À VISTA = valor de tabela do produto já com o desconto previsto do tipo
+ * (Cadastro › Fator › Venda, arredondado ao real, igual ao "Valor de venda" do produto); PARCELADO = à vista + 20% do cartão,
+ * em 12x sem acréscimo (regra de condicoes-pagamento.js). null = produto sem preço. */
+function precosEtiqueta(produto){
+  const tabela = Number(produto && produto.precoVenda);
+  if(!(tabela > 0)) return null;
+  let desc = 0;
+  try{ if(produto.tipoVenda){ const v = valorVendaFator(produto.tipoVenda); desc = Number(v.desconto)||0; } }catch(e){}
+  const avista = Math.round(tabela * (1 - desc/100));
+  const parcelado = Math.round(avista * 1.2 * 100) / 100;
+  const parcela = Math.round((parcelado / 12) * 100) / 100;
+  return { avista, parcelado, parcela, desconto: desc };
+}
+/** HTML de UMA etiqueta (um bloco .etq-label) pro produto, no modelo "dobrável": metade do código de barras + código,
+ * metade dos dados (nome, fator, demais campos e — se opts.preco — à vista e 12x). Layout fixo; lado do código em cfg.ladoBarras. */
+function etiquetaLabelDobravelHtml(produto, cfg, opts){
+  opts = opts || {};
   const campos = cfg.campos || {};
   const cat = (config.produtosOtica.categorias||[]).find(c=>c.id===produto.categoriaId);
   const sub = (config.produtosOtica.subcategorias||[]).find(s=>s.id===produto.subcategoriaId);
   const codigoBarras = String(produto.codigoInterno || produto.gtin || '').trim();
   const linhas = [];
   if(campos.nome !== false) linhas.push(`<div class="etq-nome">${escapeHtml(produto.nome)}</div>`);
+  if(campos.fator && produto.fator!=null && produto.fator!=='') linhas.push(`<div class="etq-fator">${conteudoCampoEtiqueta(produto,'fator')}</div>`);
   if(campos.categoria && cat) linhas.push(`<div>${escapeHtml(cat.nome)}</div>`);
   if(campos.subcategoria && sub) linhas.push(`<div>${escapeHtml(sub.nome)}</div>`);
   if(campos.peso && (produto.unidade==='g'||produto.unidade==='kg')) linhas.push(`<div>${estoqueTotalDe(produto)} ${unidadeLabel(produto.unidade)}</div>`);
   if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
-  if(campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
-    linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);
+  const pr = opts.preco ? precosEtiqueta(produto) : null;
+  if(pr){
+    linhas.push(`<div class="etq-preco">À vista ${cadBrl(pr.avista)}</div>`);
+    linhas.push(`<div class="etq-preco">12x ${cadBrl(pr.parcela)}</div>`);
+  } else if(opts.preco === undefined && campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
+    linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);   // prévia/uso antigo sem a pergunta
   }
+  // etiqueta baixa (ex.: 12 mm): encolhe o texto para todas as linhas caberem sem cortar
+  const pxBase = (ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media).base;
+  const maxPx = Math.floor(((cfg.alturaMm * 96/25.4) - 5) / (Math.max(1, linhas.length) * 1.2) * 10) / 10;
+  const fonte = Math.max(6, Math.min(pxBase, maxPx));
   let svgBarras = '';
   if(codigoBarras && window.JsBarcode){
     try{
@@ -8222,13 +8279,14 @@ function etiquetaLabelDobravelHtml(produto, cfg){
       svgBarras = svgEl.outerHTML;
     }catch(e){ svgBarras = ''; }
   }
-  const corpoHtml = `<div class="etq-metade etq-barras">${svgBarras || '<div style="flex:1"></div>'}<div class="etq-cod">${escapeHtml(codigoBarras || 'SEM CÓDIGO')}</div></div><div class="etq-metade etq-dados">${linhas.join('')}</div>`;
-  return `<div class="etq-label">${corpoHtml}</div>`;
+  const barrasHtml = `<div class="etq-metade etq-barras">${svgBarras || '<div style="flex:1"></div>'}<div class="etq-cod" style="font-size:${Math.min(fonte, 10)}px;">${escapeHtml(codigoBarras || 'SEM CÓDIGO')}</div></div>`;
+  const dadosHtml = `<div class="etq-metade etq-dados" style="font-size:${fonte}px;">${linhas.join('')}</div>`;
+  return `<div class="etq-label">${cfg.ladoBarras === 'dir' ? dadosHtml + barrasHtml : barrasHtml + dadosHtml}</div>`;
 }
 /** HTML de UMA etiqueta (um bloco .etq-label) pro produto — modelo simples, com cada campo na
  * posição configurada (arrastada no quadro, ou a posição padrão empilhada se nunca foi movido). */
-function etiquetaLabelHtml(produto, cfg){
-  if(cfg.modelo === 'dobravel') return etiquetaLabelDobravelHtml(produto, cfg);
+function etiquetaLabelHtml(produto, cfg, opts){
+  if(cfg.modelo === 'dobravel') return etiquetaLabelDobravelHtml(produto, cfg, opts);
   const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
   const pesoTexto = cfg.negrito!==false ? 700 : 500;
   const ativos = CAMPOS_ETIQUETA.filter(c=>etiquetaCampoAtivo(cfg, c.id));
@@ -8247,7 +8305,7 @@ function etiquetaLabelHtml(produto, cfg){
 function etiquetaDocumentoHtml(labelsHtml, cfg, titulo){
   const mf = cfg.margemFora || { sup:2, inf:2, esq:2, dir:2 };
   const espV = (cfg.espacamento && cfg.espacamento.v!=null) ? cfg.espacamento.v : 3;
-  const larguraPagina = cfg.larguraMm + mf.esq + mf.dir;
+  const larguraPagina = cfg.larguraMm + (Number(cfg.rabinhoMm)||0) + mf.esq + mf.dir;
   const corpo = labelsHtml.map((h,i)=> i>0 ? `<div style="margin-top:${espV}mm;">${h}</div>` : h).join('');
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -8312,7 +8370,16 @@ function renderImpressaoTab(main){
           <option value="dobravel" ${config.etiquetaJoia.modelo==='dobravel'?'selected':''}>Dobrável ao meio — código de barras de um lado, dados do outro</option>
         </select>
       </div>
-      <p class="muted" style="margin:-4px 0 10px; font-size:12px;">No dobrável, a largura é a parte impressa inteira (sem o rabicho). A metade esquerda leva o código de barras do código interno (ou GTIN) com o código embaixo; a direita leva os demais campos marcados.</p>
+      <p class="muted" style="margin:-4px 0 10px; font-size:12px;">No dobrável, a largura é a parte impressa inteira (sem o rabo). Uma metade leva o código de barras do código interno (ou GTIN) com o código embaixo; a outra leva nome, fator e os demais campos marcados. Ao imprimir, o sistema pergunta se inclui o preço (à vista com desconto e 12x).</p>
+      <div class="grid-2" style="max-width:360px;">
+        <div class="field"><label>Rabo (mm)</label><input type="number" min="0" step="0.5" id="etqRabo" value="${config.etiquetaJoia.rabinhoMm||0}" title="Comprimento do rabo que prende na joia (só aumenta a largura da página; não imprime nada nele)"></div>
+        <div class="field"><label>Código de barras fica</label>
+          <select id="etqLado">
+            <option value="esq" ${config.etiquetaJoia.ladoBarras!=='dir'?'selected':''}>Na metade esquerda</option>
+            <option value="dir" ${config.etiquetaJoia.ladoBarras==='dir'?'selected':''}>Na metade direita</option>
+          </select>
+        </div>
+      </div>
       <div class="grid-2" style="max-width:360px;">
         <div class="field"><label>Largura (mm)</label><input type="number" min="10" id="etqLargura" value="${config.etiquetaJoia.larguraMm}"></div>
         <div class="field"><label>Altura (mm)</label><input type="number" min="10" id="etqAltura" value="${config.etiquetaJoia.alturaMm}"></div>
@@ -8362,7 +8429,7 @@ function renderImpressaoTab(main){
         <button class="btn btn-accent" id="btnSalvarEtiqueta">Salvar etiqueta</button>
       </div>
       <div id="etqPreviaWrap" style="display:none; margin-top:10px; background:var(--surface-2); border:1px solid var(--line); border-radius:12px; padding:12px;">
-        <div class="muted" style="font-size:12px; margin-bottom:6px;">Prévia (não salva) — duas etiquetas, pra conferir o espaçamento</div>
+        <div class="muted" style="font-size:12px; margin-bottom:6px;">Prévia (não salva) — duas etiquetas (a 1ª com preço, a 2ª sem), pra conferir o espaçamento</div>
         <iframe id="etqPrevia" title="Prévia da etiqueta" style="border:1px dashed #999; background:#fff; display:block;"></iframe>
       </div>
     </div>
@@ -8458,6 +8525,8 @@ function renderImpressaoTab(main){
       negrito: document.getElementById('etqNegrito').value === '1',
       reforcoTraco: document.getElementById('etqReforco').checked,
       modelo: document.getElementById('etqModelo').value,
+      rabinhoMm: Math.max(0, Number(document.getElementById('etqRabo').value)||0),
+      ladoBarras: document.getElementById('etqLado').value === 'dir' ? 'dir' : 'esq',
       campos: lerCamposForm(),
       margemFora: {
         sup: Math.max(0, Number(document.getElementById('etqMargSup').value)||0),
@@ -8476,18 +8545,23 @@ function renderImpressaoTab(main){
     document.getElementById('etqLargura').value = preset.larguraMm;
     document.getElementById('etqAltura').value = preset.alturaMm;
     document.getElementById('etqModelo').value = preset.modelo || 'simples';
+    document.getElementById('etqRabo').value = preset.rabinhoMm || 0;
+    document.getElementById('etqLado').value = preset.ladoBarras || 'esq';
+    if(preset.espV!=null) document.getElementById('etqEspV').value = preset.espV;
+    if(preset.margens!=null) ['etqMargSup','etqMargInf','etqMargEsq','etqMargDir'].forEach(id=>{ document.getElementById(id).value = preset.margens; });
+    if(preset.fator){ const cf = document.querySelector('[data-etqcampo="fator"]'); if(cf) cf.checked = true; }
     atualizarVisibilidadeCanvas();
     renderEtqCanvas();
   });
 
   document.getElementById('btnVerEtiqueta').addEventListener('click', ()=>{
     const cfgPrev = lerCfgFormEtiqueta();
-    const produtoExemplo = { nome:'Anel Solitário Ouro 18k', codigoInterno:'AN-00123', precoVenda:1299.9, unidade:'un', gtin:'7891234567890', categoriaId:null, subcategoriaId:null };
-    const labelsHtml = [etiquetaLabelHtml(produtoExemplo, cfgPrev), etiquetaLabelHtml(produtoExemplo, cfgPrev)];
+    const produtoExemplo = { nome:'Anel Solitário Ouro 18k', codigoInterno:'AN-00123', precoVenda:1299.9, fator:2.3, unidade:'un', gtin:'7891234567890', categoriaId:null, subcategoriaId:null };
+    const labelsHtml = [etiquetaLabelHtml(produtoExemplo, cfgPrev, { preco:true }), etiquetaLabelHtml(produtoExemplo, cfgPrev, { preco:false })];
     const html = etiquetaDocumentoHtml(labelsHtml, cfgPrev, 'Prévia');
     const ifr = document.getElementById('etqPrevia');
     document.getElementById('etqPreviaWrap').style.display = 'block';
-    const larguraPagina = cfgPrev.larguraMm + cfgPrev.margemFora.esq + cfgPrev.margemFora.dir;
+    const larguraPagina = cfgPrev.larguraMm + (cfgPrev.rabinhoMm||0) + cfgPrev.margemFora.esq + cfgPrev.margemFora.dir;
     const alturaPagina = cfgPrev.alturaMm*2 + cfgPrev.espacamento.v + cfgPrev.margemFora.sup + cfgPrev.margemFora.inf;
     ifr.style.width = (larguraPagina * 96/25.4 + 4) + 'px';
     ifr.style.height = (alturaPagina * 96/25.4 + 20) + 'px';
@@ -8502,6 +8576,8 @@ function renderImpressaoTab(main){
     config.etiquetaJoia.negrito = f.negrito;
     config.etiquetaJoia.reforcoTraco = f.reforcoTraco;
     config.etiquetaJoia.modelo = f.modelo;
+    config.etiquetaJoia.rabinhoMm = f.rabinhoMm;
+    config.etiquetaJoia.ladoBarras = f.ladoBarras;
     config.etiquetaJoia.margemFora = f.margemFora;
     config.etiquetaJoia.espacamento = f.espacamento;
     config.etiquetaJoia.campos = f.campos;
