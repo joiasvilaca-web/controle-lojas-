@@ -611,3 +611,6 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 25/11/2026 — Cadastro de produto mais rápido
 - Ao salvar, a tela não recarrega mais todos os produtos do banco (era o maior atraso): só redesenha a lista se ela já estava aberta.
 - O contador do código automático é gravado junto com o produto (em paralelo), e o estoque inicial de todas as lojas é lançado ao mesmo tempo, em vez de uma loja por vez. Cálculos, kardex e preços não mudaram.
+
+## 25/11/2026 — Cadastro de produto: preço de venda automático na tela
+- O campo "Preço de venda" agora se preenche sozinho (Fator × valor do tipo) assim que o fator e o tipo são informados, e fica travado enquanto houver regra. Antes só era calculado ao salvar. Relógio e pedras seguem suas regras próprias.
