@@ -504,3 +504,11 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Orçamentos**: as 5 caixas iguais da estatística de conversão viraram uma faixa só, com a taxa de conversão em destaque (32px) e as outras quatro medidas ao lado; cabeçalho com linha de separação; filtros como faixa secundária e o campo agora diz "Filtrar por cliente ou via"; Lista/Quadro, selo de nível e cabeçalho das colunas do quadro saíram da pílula.
 - **Celular**: toque de 44px em voltar, ícones do topo, Lista/Quadro, botões, campos e datas dos filtros, "Mostrar convertidos" e cabeçalho das colunas do quadro; o WhatsApp do quadro mantém o visual com área de toque de 44px. Antes 18 controles ficavam abaixo disso, agora só a caixinha de marcar (20px, com o rótulo de 44px ao lado).
 - Detector: 0 achados (Venda, Pedidos e Orçamentos). Nenhuma função mudou; 188/188 testes; nome de cliente enorme testado sem rolagem horizontal.
+
+## 25/11 — Caixa: repaginação visual (impeccable, rodada 4)
+- **Sem cartão dentro de cartão**: no "Resumo do caixa" e no painel do Fechar caixa, as tabelas e gráficos que ficavam em caixinhas dentro do cartão da seção viraram blocos separados por linha fina, com o título em letras pequenas de caixa alta.
+- **Os 6 números** (Entradas, Saídas, Saldo do caixa, Vendas, Pedidos, A receber) deixaram de ser seis cartões iguais: viraram uma faixa só e o **Saldo do caixa** ganhou destaque (24px, nunca quebra de linha).
+- Cabeçalho com linha de separação e descrição com largura de leitura; filtros "Mostrar" e "Mostrar detalhes" (chips) e selos/contadores saíram da pílula (raio 6–8px).
+- **Celular**: toque de 44px em voltar, botões (Hoje, Atualizar, Pesquisar, Fechar caixa), datas, loja e chips; as caixas de marcar passaram de 15 para 20px.
+- Gráficos de barras continuam com a paleta categórica validada (claro/escuro) — não mexi.
+- Detector 0 achados; nenhuma função mudou; 188/188 testes.
