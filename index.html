@@ -4169,7 +4169,50 @@ function abrirResumoCashback(){
     </div>
     <input type="text" id="cbBusca" placeholder="Buscar cliente" aria-label="Buscar cliente com cashback" style="width:100%;margin-bottom:8px;">
     <div style="max-height:46vh;overflow:auto;"><table class="cad-tabela" style="width:100%;"><thead><tr><th>Cliente</th><th>Celular</th><th style="text-align:right">Disponível</th><th style="text-align:right">A liberar</th><th>Vence</th></tr></thead><tbody id="cbTbody"></tbody></table></div>
+    ${(currentUser && currentUser.nivel==='diretoria') ? `<div class="cad-card" style="padding:10px 14px;margin-top:12px;">
+      <b>Lançar cashback que não foi gerado (só diretoria)</b>
+      <p class="muted" style="margin:4px 0 8px;font-size:12.5px;">Use quando uma compra em dinheiro não gerou o cashback. Libera no dia seguinte à compra e vale 60 dias a partir dela. Fica registrado quem lançou e o motivo.</p>
+      <input type="text" id="cbManBusca" placeholder="Nome ou celular do cliente" autocomplete="off" style="width:100%;margin-bottom:6px;">
+      <select id="cbManCli" style="width:100%;margin-bottom:6px;"><option value="">Digite acima para buscar</option></select>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <input type="text" inputmode="decimal" id="cbManValor" placeholder="Valor do cashback (R$)" style="flex:1;min-width:140px;">
+        <input type="date" id="cbManData" title="Data da compra" style="flex:1;min-width:140px;">
+      </div>
+      <input type="text" id="cbManMotivo" placeholder="Motivo / código da via (ex.: venda MC127V não gerou)" style="width:100%;margin-top:6px;">
+      <button class="btn btn-accent btn-sm" id="cbManSalvar" style="margin-top:8px;">Lançar cashback</button>
+    </div>` : ''}
     <div class="modal-actions"><button class="btn btn-ghost" id="cbFechar">Fechar</button></div>`);
+  if(currentUser && currentUser.nivel==='diretoria'){
+    document.getElementById('cbManData').value = Cashback.hoje();
+    document.getElementById('cbManBusca').addEventListener('input', e=>{
+      const q = e.target.value.trim(); const sel = document.getElementById('cbManCli');
+      const l = q.length>=3 ? Busca.filtrar(clientesCacheIdx, q, c=>[c.nome, c.telefone, c.cpf]).slice(0,10) : [];
+      sel.innerHTML = l.length ? l.map(c=>`<option value="${escapeHtml(c.id)}">${escapeHtml(c.nome||'')} · ${escapeHtml(c.telefone||'')}</option>`).join('') : '<option value="">Nenhum cliente encontrado</option>';
+    });
+    document.getElementById('cbManSalvar').addEventListener('click', async ()=>{
+      const id = document.getElementById('cbManCli').value;
+      const valor = Math.round((parseFloat(String(document.getElementById('cbManValor').value).replace(/\./g,'').replace(',','.'))||0)*100)/100;
+      const data = document.getElementById('cbManData').value;
+      const motivo = document.getElementById('cbManMotivo').value.trim();
+      if(!id){ showToast('Escolha o cliente.'); return; }
+      if(!(valor>0)){ showToast('Informe o valor do cashback.'); return; }
+      if(!data){ showToast('Informe a data da compra.'); return; }
+      if(!motivo){ showToast('Informe o motivo (ex.: código da via da venda).'); return; }
+      const btn = document.getElementById('cbManSalvar'); btn.disabled = true;
+      try{
+        const cli = await Cashback.buscarCliente(gatewayCall, id);
+        if(!cli){ showToast('Cliente não encontrado.'); btn.disabled = false; return; }
+        if(!cli.cashback || !Array.isArray(cli.cashback.lotes)) cli.cashback = { lotes: [] };
+        cli.cashback.lotes.push({ id:'cb_man_'+Math.random().toString(36).slice(2,9)+Date.now().toString(36), origemId:'manual', tipo:'Ajuste manual', via:motivo, loja:'', valor, saldo:valor,
+          geradoEm:data, ativaEm:Cashback.somaDias(data,1), expiraEm:Cashback.somaDias(data,Cashback.DIAS), usos:[], manual:true, motivo, lancadoPor:(currentUser&&currentUser.nome)||'', lancadoEm:new Date().toISOString() });
+        const ok = await Cashback.gravar(gatewayCall, cli);
+        if(!ok){ showToast('Não foi possível gravar o cashback.'); btn.disabled = false; return; }
+        const idx = (clientesCacheIdx||[]).findIndex(c=>c.id===id); if(idx>=0) clientesCacheIdx[idx] = cli;
+        showToast('Cashback de '+brl(valor)+' lançado para '+(cli.nome||'o cliente')+'.');
+        abrirResumoCashback();
+      }catch(e){ console.error(e); showToast('Erro ao lançar o cashback.'); btn.disabled = false; }
+    });
+  }
   function pintar(){
     const q = document.getElementById('cbBusca').value.trim();
     const l = q ? Busca.filtrar(linhas, q, x=>[x.nome, x.telefone]) : linhas;
