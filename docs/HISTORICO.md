@@ -548,3 +548,13 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Pendentes: Inventário (3 avisos de espaçamento interno em cartões de tabela) e cartao-aniversario.html (página própria, mantida de propósito). Ficha da loja ainda marca 1 aviso de entrelinha.
 - Nenhuma função mudou; 188/188 testes.
 
+
+## 25/11/2026 — Agenda: baixar tarefa finalizada
+- Tarefa em **Feito** ganhou o botão **Baixar**. Quem criou baixa para todos; colaborador baixa só para ele.
+- Baixada some do quadro e do calendário e fica em **Ver baixadas** (mais recente primeiro), com **A fazer / Fazendo / Voltar ao Feito**. Colaborador não reativa o que o criador baixou.
+- Banco: `agenda_tarefas.baixada_em` e `baixada_por`. Função `agenda-tarefas` v14 (ops `baixar` e `reativar`; sair de Feito limpa as baixas).
+
+## 25/11/2026 — Vilacinha: "Já li, não mostrar mais"
+- Todo balão do Vilacinha (recado, aviso de destaque/atenção do quiz, aula nova, clientes do dia, meta, dicas, pergunta do dia, bem-estar, controles do administrativo) ganhou o botão **Já li, não mostrar mais**.
+- Aviso de destaque: o botão também marca o aviso como lido no servidor (acabou de repetir a cada entrada). Recado/aula/aviso = só aquele item; os demais = o assunto inteiro.
+- Fica gravado no aparelho, por pessoa. No painel do Vilacinha, **Avisos que você silenciou › Voltar a mostrar tudo** desfaz.
