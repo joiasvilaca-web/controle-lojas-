@@ -583,3 +583,13 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Cache caiu de 1 dia para 3 horas (queda/alta forte de tarde agora aparece; botão Atualizar força).
 - A IA agora recebe os números reais do dia (antes só no modo sem busca) e responde: decisão de compra, passado, presente, futuro (semanas e meses), "pode cair mais?", "pode subir mais?", cenário, riscos e ação.
 - Dashboard › Farol do ouro: "Devo comprar ouro agora?" + três quadros Passado / Presente / Futuro. Sem IA, o futuro vem da leitura técnica.
+
+## 25/11/2026 — Farol do Ouro: dólar (DXY) e juros dos EUA
+- `mercado-ouro` v3 busca o índice do dólar (DXY) e o juro do T-Note 10 anos (Yahoo), manda para a IA e devolve uma leitura ("pressiona/ajuda o ouro").
+- Dashboard › Farol do ouro: dois novos números (DXY e juros 10 anos) e o quadro "Dólar e juros dos EUA".
+
+## 25/11/2026 — Etiqueta de joia com rabo (60 × 12 mm) e preço na hora de imprimir
+- Impressão e etiquetas › Tamanho pronto: novo **60 × 12 mm com rabo (30 + 30, rabo 38 mm)**. Uma metade leva nome e fator; a outra, código de barras e código. Espaço entre etiquetas 2,6 mm, margens 0.
+- Novos ajustes no modelo dobrável: **Rabo (mm)** (só aumenta a largura da página) e **lado do código de barras** (esquerda/direita). Novo campo **Fator** nas etiquetas.
+- Ao imprimir (uma ou em lote) no modelo dobrável, o sistema pergunta **Incluir preço de venda?** Sim: entra abaixo do fator "À vista" (valor de tabela já com o desconto previsto do tipo, em reais inteiros) e "12x" (à vista + 20% do cartão, dividido em 12). Lembra a última escolha.
+- O texto encolhe sozinho para as linhas caberem nos 12 mm de altura.
