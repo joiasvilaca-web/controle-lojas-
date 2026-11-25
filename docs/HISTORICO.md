@@ -466,3 +466,11 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Código morto removido**: 54 funções sem nenhuma chamada (531 linhas) em 12 arquivos + trechos depois de `return`. Lista no relatório da varredura.
 - Banco: `revoke execute` da função de gatilho `bi4cia_aniv_alerta_falha` (aviso de segurança do Supabase).
 - **Pendente (Felipe):** apagar do GitHub `SOLICITACAO_assinado.pdf` (documento pessoal num repositório PÚBLICO e servido em vilaca.app), `dashboard (6).html`, `backup.html`, `antes_vend.png`, `depois_vend.png`, `previa-etiqueta.png`, `logo-print.png`; conferir fisicamente a PULSEIRA `prodest_tray_461` (sistema mostra 1 na EC e 1 na MC depois do cancelamento da MC201V).
+
+### 25/11 — Vilacinha v7: menos balão, mais variedade (`copiloto.js`, só front; `tests/regressao/59`)
+- Pedido do Felipe: dicas repetitivas, aparecendo demais, perguntas de bem-estar sempre iguais.
+- Limites (`LIM`): no máximo **3 dicas por dia**, **50 min** entre elas, "Agora não" = 3 h de pausa. Balão fechado/ignorado aumenta o intervalo (50 → 100 → 150 → 200 min) e baixa o limite do dia (`copiloto_ign_<user>`); tocar em Ouvir/Ver zera.
+- Dica **só da tela aberta** (`dicasNovas(k)`): tela sem dica própria não mostra dica genérica. Sem repetição: a mesma dica só volta depois de 21 dias e dica parecida (≥ 50% das palavras) com outra dos últimos 10 dias é pulada (`copiloto_hist_<user>`, 250 últimas). Banco próprio `BANCO` (venda, pedido, orçamento, chat, agenda, painel) somado às dicas da IA; a Oficina continua só com as dicas do servidor. Etiqueta com ícone no balão (`.cp-tag`).
+- Ao iniciar o app: só aparece se houver algo bom (clientes para ligar, meta do dia ou dica geral ainda não vista); o assunto e o texto mudam por dia. Sem nada bom, não aparece.
+- Bem-estar: 16 perguntas (antes 6) com variações de texto (`alt`); rodízio **entre os dias** (`copiloto_behist_<user>`): sai a que está há mais tempo sem aparecer, nunca a mesma da vez anterior; 1 por dia; 2 seguidas sem resposta = 3 dias sem perguntar, 3 = 7 dias. Servidor não mudou (a op `bemestar` aceita qualquer id de pergunta).
+- Não feito: a IA do servidor (`copiloto`) ainda gera as dicas do dia sem saber as dos dias anteriores; o arquivo `copiloto.ts` do repositório está na v5 e a publicada é mais nova (não mexi).
