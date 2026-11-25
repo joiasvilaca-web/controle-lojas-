@@ -806,13 +806,6 @@ function prazosAutoMsg(){
   if(!p || p.t1==null || p.t2==null || p.t3==null || p.tFinal==null) return PRAZOS_AUTO_MSG_PADRAO;
   return { diasValidade: PRAZOS_AUTO_MSG_PADRAO.diasValidade, ...p };
 }
-async function salvarPrazosAutoMsg(prazos){
-  if(!config) config = {};
-  config.orcamentoAutoMsgConfig = prazos;
-  const r = await gatewayCall({ op:'saveConfig', params:{ payload: config } });
-  if(r && r.error){ showToast('Não foi possível salvar os prazos: '+r.error); return false; }
-  return true;
-}
 function diasDesdeCriacao(o){
   const base = o.autoBaseData || o.data || (o.criadoEm ? new Date(o.criadoEm).toISOString().slice(0,10) : null);
   if(!base) return 0;
@@ -1041,30 +1034,6 @@ function orcamentosParaAvisar(){
     return dias !== null && dias <= 3;
   });
 }
-/** Há quantos dias o orçamento foi criado (baseado na data de criação, não na validade). */
-function diasAberto(o){
-  const hoje = new Date(todayStr()+'T00:00:00');
-  const criado = new Date((o.data||todayStr())+'T00:00:00');
-  return Math.round((hoje-criado)/86400000);
-}
-/** Orçamentos em aberto (status não-encerrado) criados há mais de 5 dias, sem resposta. */
-function orcamentosAbertosMaisDe5Dias(){
-  return orcamentos.filter(o=>{
-    const info = statusInfoDe(o.status);
-    if(info && info.encerra) return false;
-    return diasAberto(o) > 5;
-  });
-}
-/** Agrupa uma lista de orçamentos por nome de vendedora. */
-function agruparPorVendedora(lista){
-  const map = {};
-  lista.forEach(o=>{
-    const v = o.vendedora || 'Sem vendedora';
-    if(!map[v]) map[v] = [];
-    map[v].push(o);
-  });
-  return map;
-}
 /** Troca {cliente}, {loja}, {valor} e {validade} pelos dados reais do orçamento. */
 function montarMensagemStatus(o, mensagem){
   return (mensagem||'')
@@ -1194,32 +1163,12 @@ function combinarTelefoneValidado(prefix){
   }
   return `(${ddd}) ${numero.slice(0,5)}-${numero.slice(5)}`;
 }
-function findClienteIndex(telefone, cpf){
-  const tel = onlyDigits(telefone);
-  const doc = onlyDigitsCpf(cpf);
-  return clientes.findIndex(c=>
-    (tel && onlyDigits(c.telefone) === tel) ||
-    (doc && onlyDigitsCpf(c.cpf) === doc)
-  );
-}
 async function clientesGet(){
   try{
     const { data, error } = await supabaseClient.from('clientes_cadastro').select('id,payload').order('created_at', { ascending:true });
     if(error) throw error;
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar clientes', e); return []; }
-}
-/** Busca sob demanda no banco (não pré-carrega os 20 mil+ clientes de uma vez).
- * Aceita nome (parcial) ou telefone/CPF (dígitos, casamento parcial). */
-async function buscarClientesRemoto(termo){
-  try{
-    const r = await gatewayCall({ op:'searchClients', params:{ termo } });
-    if(r && r.error) throw new Error(r.error);
-    const achados = (r && r.data) || [];
-    // Guarda no cache local (pra o clique no resultado e o botão "editar cadastro" acharem na hora).
-    achados.forEach(c=>{ if(!clientes.some(x=>x.id===c.id)) clientes.push(c); });
-    return achados;
-  }catch(e){ console.error('erro ao buscar clientes', e); return []; }
 }
 /** Localiza no banco um cliente por telefone ou CPF (usado pra evitar duplicar cadastro
  * e pra achar o cliente de um orçamento já salvo, sem precisar de tudo em memória). */
@@ -2261,13 +2210,6 @@ function nomeLojaOrc(o){
 let filtrosOrc = { busca:'', loja:null, status:'', vendedora:'', hoje:true, de:'', ate:'', conv:false };   // lembra os filtros ao mudar status/voltar à lista
 function modoOrc(){ try{ return localStorage.getItem('vilaca_modo_orc_v2')==='lista' ? 'lista' : 'quadro'; }catch(e){ return 'quadro'; } }   // 10/11: padrão = Quadro por status para todos
 function quadroOrcAbertas(){ try{ return new Set(JSON.parse(localStorage.getItem('vilaca_quadro_orc_abertas')||'[]')); }catch(e){ return new Set(); } }
-function classeBadgeOrc(o){
-  const info = statusInfoDe(o.status);
-  if(o.rascunho) return 'badge-rascunho';
-  if(o.convertidoEm) return 'badge-aprovado';
-  if(info && info.encerra) return (o.status==='recusado') ? 'badge-vencido' : 'badge-aprovado';
-  return 'badge-pendente';
-}
 /** QUADRO: uma coluna por status (e uma de rascunhos, se houver). Fechada: status + via + 1º nome. Aberta: cartão completo. */
 function renderQuadroOrc(base){
   const wrap = document.getElementById('quadroOrc'); if(!wrap) return;

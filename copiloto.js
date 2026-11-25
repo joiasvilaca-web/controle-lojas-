@@ -2,7 +2,7 @@
  *  - mostra a meta do dia, os números da pessoa e a comparação com "a melhor da loja" (sem nome);
  *  - lista QUEM CHAMAR HOJE (orçamentos vencendo/parados, aniversariantes, clientes sumidos, pedidos prontos) com a mensagem pronta;
  *  - dá dicas (IA, com o que aprendeu nas conversas do CHAT) e conversa por texto ou voz; lê em voz alta.
- * Dados: Edge Function `copiloto` (op dia / perguntar). Mensagem ao cliente SÓ sai pelo botão "Enviar pelo WhatsApp" (ação humana, enviar-via tipo chamar_cliente).
+ * Dados: Edge Function `copiloto` (op dia / perguntar). Desde a v6 (23/11) o Vilacinha NÃO envia mensagem ao cliente: mostra o telefone, os números e o roteiro para a pessoa LIGAR (ou abrir o WhatsApp dela pelo link).
  * 22/11 (v4): BALÃO POR MÓDULO — ao abrir uma tela (Copiloto.moduloAberto, chamado pelo shell) às vezes aparece uma dica DAQUELA tela, de preferência
  *   uma que a pessoa ainda não viu (máx. 6 balões/dia, 12 min entre eles). BEM-ESTAR — em telas fora de venda/atendimento, em dia com poucas dicas ou
  *   em dia cheio de atendimentos, o Vilacinha pergunta como a pessoa está (resposta clicável, sempre com "prefiro não dizer") e responde com um cuidado
@@ -120,7 +120,6 @@
       +'<path class="o1" d="M15.2 9.2a4 4 0 0 1 0 5.6"/><path class="o2" d="M18 6.6a8 8 0 0 1 0 10.8"/></svg>';
   }
   function icMic(t){ return '<svg width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'; }
-  function icParar(t){ return '<svg width="'+t+'" height="'+t+'" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>'; }
 
   /* ---------- rosto da Vilacinha (SVG próprio: vinho e dourado) ---------- */
   function rosto(tam, falando){

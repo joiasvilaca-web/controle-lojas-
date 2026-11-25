@@ -11,7 +11,9 @@ module.exports = { casos: [
   { nome: 'copiloto.js no shell: aparece ao entrar, some ao sair; envio pelo botão', bug: 'copiloto ausente', rodar: async ({ t, ler }) => {
     const ix = ler('index.html'), j = ler('copiloto.js');
     t.ok(/<script src="copiloto\.js"><\/script>/.test(ix) && /Copiloto\.iniciar\(/.test(ix) && /Copiloto\.parar\(\)/.test(ix), 'ligado no shell');
-    t.ok(/tipo:'chamar_cliente'/.test(j) && /data-x="enviar"/.test(j) && /MarketingOff\.permitir/.test(j), 'envio só pelo botão, respeitando MARKETING OFF');
+    /* 23/11 (v6, ordem do Felipe): o Vilacinha deixou de mandar mensagem — só mostra telefone, números e roteiro para LIGAR. O teste antigo exigia o botão "Enviar" (tipo chamar_cliente); a regra agora é mais dura: nenhum envio sai daqui. */
+    const semComentario = j.replace(/\/\*[^]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    t.ok(!/WhatsAuto\.enviar|functions\/v1\/enviar-via|chamar_cliente|marketing_fila/.test(semComentario), 'v6: o copiloto não envia mensagem ao cliente (só telefone e roteiro para ligar)');
     t.ok(/n >= 6 \|\| Date\.now\(\) - ult < 12\*60000/.test(j) && /Math\.random\(\) > 0\.45/.test(j), 'balão por módulo: às vezes, no máximo 6 por dia, 12 min entre eles');
     t.ok(/r\.sem\) return/.test(j), 'sem a função (treino): não aparece');
   } },

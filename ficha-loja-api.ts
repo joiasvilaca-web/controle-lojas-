@@ -1,4 +1,4 @@
-// ficha-loja-api v1 (16/11/2026) — FICHA DA LOJA (memorial descritivo): fotos, equipamentos, iluminação, internet, contatos, documentos etc. de cada loja.
+// ficha-loja-api v2 (17/11/2026: ficha GERAL "_grupo" = identidade visual e embalagens de todas as lojas; init devolve os fornecedores do Cadastro) · v1 (16/11/2026) — FICHA DA LOJA (memorial descritivo): fotos, equipamentos, iluminação, internet, contatos, documentos etc. de cada loja.
 // verify_jwt: true. Sessão igual às outras funções (body.senha = token "sess_…").
 // Quem acessa: DIRETORIA (todas as lojas) e GERENTE (só as lojas dela, incluindo a loja extra da sessão). Vendedora e Oficina: 403.
 // Ops: init | abrir {lojaId} | salvar {lojaId, payload, versao} | historico {lojaId} | versao {lojaId, id}
@@ -10,6 +10,7 @@ const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
 const TAMANHO_MAX = 600_000;   // ficha em JSON (as fotos ficam no Drive; aqui só o endereço)
 const HIST_MAX = 40;
+const GERAL = "_grupo";   // ficha comum a todas as lojas (identidade visual, embalagens). Só aparece para a tela v2 em diante (body.tela >= 2).
 
 function sessaoValida(u: any, senha: string): boolean {
   if (!u || !senha || !senha.startsWith("sess_") || u.bloqueado) return false;
@@ -59,18 +60,25 @@ Deno.serve(async (req: Request) => {
     const permitidas = lojasPermitidas(config, user, senha);
     if (!permitidas.length) return json({ error: "A ficha da loja é só para a diretoria e a gerência." }, 403);
     const quem = String(user.apelido || user.nome || "").trim();
+    const telaNova = Number(body.tela) >= 2;
+    const acessiveis = telaNova ? [...permitidas, GERAL] : permitidas;
 
     if (op === "init") {
-      const { data: linhas, error } = await admin.from("loja_fichas").select("loja_id, versao, atualizado_por, updated_at").in("loja_id", permitidas);
+      const { data: linhas, error } = await admin.from("loja_fichas").select("loja_id, versao, atualizado_por, updated_at").in("loja_id", acessiveis);
       if (error) throw error;
       const resumo: Record<string, any> = {}; for (const r of linhas || []) resumo[r.loja_id] = { versao: r.versao, por: r.atualizado_por, em: r.updated_at };
       const lojas = (Array.isArray(config.lojas) ? config.lojas : []).filter((l: any) => permitidas.includes(String(l.id))).map(cadastroDaLoja);
       const equipe: Record<string, any[]> = {}; for (const id of permitidas) equipe[id] = equipeDaLoja(config, id);
-      return json({ ok: true, nivel: user.nivel, lojas, equipe, resumo });
+      if (!telaNova) return json({ ok: true, nivel: user.nivel, lojas, equipe, resumo });
+      const fornecedores = (Array.isArray(config.fornecedores) ? config.fornecedores : []).map((f: any) => typeof f === "string" ? { empresa: f } : f)
+        .filter((f: any) => f && String(f.empresa || "").trim())
+        .map((f: any) => ({ id: String(f.id || ""), codigo: String(f.codigo || ""), empresa: String(f.empresa || ""), telefone: String(f.telefone || ""), email: String(f.email || ""), site: String(f.site || "") }))
+        .sort((a: any, b: any) => a.empresa.localeCompare(b.empresa, "pt-BR"));
+      return json({ ok: true, nivel: user.nivel, lojas: [{ id: GERAL, nome: "GRUPO VILAÇA — GERAL", abreviacao: "GERAL", geral: true }, ...lojas], equipe, resumo, fornecedores });
     }
 
     const lojaId = String(body.lojaId || "");
-    if (!lojaId || !permitidas.includes(lojaId)) return json({ error: "sem acesso a esta loja" }, 403);
+    if (!lojaId || !acessiveis.includes(lojaId)) return json({ error: "sem acesso a esta loja" }, 403);
 
     if (op === "abrir") {
       const { data: row, error } = await admin.from("loja_fichas").select("payload, versao, atualizado_por, updated_at").eq("loja_id", lojaId).maybeSingle();

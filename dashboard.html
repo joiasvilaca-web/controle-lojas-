@@ -1287,10 +1287,6 @@
     const nome = dif===0 ? "Hoje" : dif===1 ? "Ontem" : dif===-1 ? "Amanhã" : ["domingo","segunda","terça","quarta","quinta","sexta","sábado"][ref.getDay()];
     return nome+" · "+fmtDate(vgDataStr(ref));
   }
-  function vgSetasHtml(modo, ref, pref){
-    const atual = vgEhAtual(modo, ref), rotAtual = modo==="dia" ? "Hoje" : modo==="mes" ? "Este mês" : "Este ano";
-    return `<div class="vg-periodo" role="group" aria-label="Navegar no período" style="align-items:center;"><button type="button" data-${pref}-nav="-1" aria-label="Anterior" title="Anterior">◀</button><span style="min-width:150px;text-align:center;font-size:13px;font-weight:700;text-transform:capitalize;padding:0 6px;">${escapeHtml(vgRotulo(modo, ref))}</span><button type="button" data-${pref}-nav="1" aria-label="Próximo" title="Próximo">▶</button><button type="button" data-${pref}-nav="0" ${atual?"disabled":""}>${rotAtual}</button></div>`;
-  }
   function vgDataStr(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
   /** Valor curto para eixo de gráfico: R$ 2,5 mil · R$ 12 mil · R$ 1,2 mi. */
   function vgMoedaCurta(v){
@@ -2086,24 +2082,8 @@
      fiado, cashback) aparecem à parte. */
   let fpPeriodo = "dia", fpRef = "", fpLoja = "";
   const FP_PERIODOS = [["dia","Dia"],["semana","Semana"],["mes","Mês"],["ano","Ano"]];
-  function fpNomeForma(p){
-    if(!p || !p.formaId || String(p.formaId).startsWith("__")) return "";
-    const f = ((configCompleto && configCompleto.formasPagamento) || []).find(x=> x.id === p.formaId);
-    return String((f && f.nome) || p.tipoNome || p.tipo || "").toUpperCase();
-  }
   function fpIntervalo(){
     return periodoG();
-    const [a,m,d] = (fpRef || vgDataStr(new Date())).split("-").map(Number);
-    const ref = new Date(a, m-1, d);
-    if(fpPeriodo === "semana"){ const dow = (ref.getDay()+6)%7; const ini = new Date(a, m-1, d-dow); const fim = new Date(a, m-1, d-dow+6); return [vgDataStr(ini), vgDataStr(fim)]; }
-    if(fpPeriodo === "mes") return [vgDataStr(new Date(a, m-1, 1)), vgDataStr(new Date(a, m, 0))];
-    if(fpPeriodo === "ano") return [a+"-01-01", a+"-12-31"];
-    return [vgDataStr(ref), vgDataStr(ref)];
-  }
-  function fpDaLoja(r){
-    if(!fpLoja) return true;
-    const l = vgLojaDe(r);
-    return !!l && l.id === fpLoja;
   }
   function renderSecaoFormasPag(){
     const el = document.getElementById("secFormasPag");
@@ -2380,7 +2360,6 @@
      Item sem custo cadastrado fica de fora da margem e aparece na lista "sem custo" para completar o cadastro. */
   let produtosMargem = null, carregandoProdMargem = null;
   const filtrosMargem = { loja:"", dataIni:"", dataFim:"" };
-  function mesAtualIntervalo(){ const d = new Date(); const ini = new Date(d.getFullYear(), d.getMonth(), 1); const p = x=> x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0"); return [p(ini), p(d)]; }
   async function carregarProdutosMargem(){
     if(produtosMargem) return produtosMargem;
     if(!carregandoProdMargem) carregandoProdMargem = (async()=>{
@@ -2412,6 +2391,7 @@
         <label class="f"><span>Até</span><input type="date" id="mgFim"></label>
       </div>
       <div class="kpis" id="kpisMargem"></div>
+      <div class="card" id="resultadoMargem" style="margin-bottom:14px;"></div>
       <div class="card"><div id="tabelaMargem">${vazioHtml("Calculando…", "")}</div></div>
     `;
     document.getElementById("mgLoja").value = filtrosMargem.loja;
@@ -2456,6 +2436,7 @@
         ${kpiHtml("Custo dos itens", fmtMoeda(custoTotal), "", fmtNum(nComCusto) + " de " + fmtNum(nItens) + " peça(s) com custo")}
         ${kpiHtml("Vendas com custo conhecido", pctTxt(cobertura), cobertura < 60 ? "danger" : "", "do valor vendido")}
       `;
+      renderResultadoLiquido(margem, receita - receitaComCusto);
       if(!lista.length){ wrap.innerHTML = vazioHtml("Nenhuma venda nesse período.", "Troque as datas ou a loja."); return; }
       const top = [...porItem.values()].map(x=>({ ...x, lucro: x.receita - x.custo })).sort((a,b)=> b.lucro - a.lucro).slice(0, 15);
       const sem = [...semCusto.values()].sort((a,b)=> b.receita - a.receita).slice(0, 15);
@@ -2469,6 +2450,57 @@
           ${sem.map(x=>`<tr><td>${escapeHtml(x.nome)}</td><td class="r">${fmtNum(x.qtd)}</td><td class="r">${fmtMoeda(x.receita)}</td></tr>`).join("")}
         </tbody></table></div>` : `<p class="muted" style="margin:0 0 8px;">Todas as peças vendidas no período têm custo. ✔</p>`}
       `;
+    }
+    /* 24/11 (Felipe): resultado líquido = lucro das peças (acima) − Gastos do mesmo período.
+       A margem só olha o custo cadastrado no produto; os Gastos nunca entravam na conta. As
+       categorias marcadas como "compra de mercadoria" (recompra — padrão: Fornecedores) ficam
+       FORA da subtração, porque esse custo já está no custo do produto (senão contaria 2x).
+       A escolha fica salva neste navegador. */
+    function catsMercadoria(){
+      try{ const v = JSON.parse(localStorage.getItem("mgCatsMercadoria")||"null"); if(Array.isArray(v)) return v; }catch(e){}
+      return ["Fornecedores"];
+    }
+    function renderResultadoLiquido(lucroBruto, vendidoSemCusto){
+      const box = document.getElementById("resultadoMargem"); if(!box) return;
+      const todasLojas = (configCompleto && configCompleto.lojas) || lojas;
+      const lj = filtrosMargem.loja ? todasLojas.find(l=> l.nome === filtrosMargem.loja) : null;
+      const noPeriodo = gastosDash.filter(g=>{
+        if(!g || g.status === "cancelado") return false;
+        const d = g.vencimento || g.criadoEm || "";
+        if(filtrosMargem.dataIni && d < filtrosMargem.dataIni) return false;
+        if(filtrosMargem.dataFim && d.slice(0,10) > filtrosMargem.dataFim) return false;
+        if(filtrosMargem.loja) return !!(lj && g.lojaId === lj.id);
+        return true;
+      });
+      const fora = new Set(catsMercadoria());
+      const porCat = new Map();
+      noPeriodo.forEach(g=>{ const c = g.categoria || "Sem categoria"; porCat.set(c, (porCat.get(c)||0) + (Number(g.valor)||0)); });
+      const cats = [...porCat.entries()].sort((a,b)=> b[1]-a[1]);
+      const despesas = cats.filter(([c])=> !fora.has(c)).reduce((a,[,v])=> a+v, 0);
+      const mercadoria = cats.filter(([c])=> fora.has(c)).reduce((a,[,v])=> a+v, 0);
+      const liquido = lucroBruto - despesas;
+      const linha = (rot, val, forte, cor)=> `<tr><td>${rot}</td><td class="r" style="${forte?"font-weight:700;":""}${cor?"color:"+cor+";":""}">${val}</td></tr>`;
+      box.innerHTML = `
+        <h3 style="margin:4px 0 4px;font-size:15px;">Resultado líquido do período</h3>
+        <p class="muted" style="margin:0 0 10px;font-size:13px;">Lucro das peças − Gastos com vencimento no período (pagos e a pagar, sem os cancelados).${filtrosMargem.loja ? " Com loja escolhida, os gastos lançados como “Geral” não entram." : ""}</p>
+        <div class="tabela-wrap"><table class="tbl"><tbody>
+          ${linha("Lucro das peças (itens com custo)", fmtMoeda(lucroBruto))}
+          ${linha("(−) Gastos do período", fmtMoeda(despesas))}
+          ${linha("<b>= Resultado líquido</b>", fmtMoeda(liquido), true, liquido >= 0 ? "var(--ok, #1a7f37)" : "var(--danger, #c62828)")}
+        </tbody></table></div>
+        ${vendidoSemCusto > 0.005 ? `<p class="muted" style="margin:8px 0 0;font-size:13px;">Atenção: ${fmtMoeda(vendidoSemCusto)} vendidos em peças sem custo cadastrado ficaram fora do lucro — o resultado real muda quando o custo delas for preenchido.</p>` : ""}
+        <h4 style="margin:14px 0 6px;font-size:14px;">Gastos por categoria <span class="muted" style="font-weight:400;font-size:13px;">— marque as que são compra de mercadoria (recompra): o custo já está no produto, então não descontam de novo</span></h4>
+        ${cats.length ? `<div class="tabela-wrap"><table class="tbl"><thead><tr><th>Compra de mercadoria?</th><th>Categoria</th><th class="r">Valor</th><th class="r">Entra na conta</th></tr></thead><tbody>
+          ${cats.map(([c,v])=>`<tr><td><input type="checkbox" data-mgcat="${escapeHtml(c)}" ${fora.has(c)?"checked":""} aria-label="Compra de mercadoria: ${escapeHtml(c)}"></td><td>${escapeHtml(c)}</td><td class="r">${fmtMoeda(v)}</td><td class="r">${fora.has(c)?"não":"sim"}</td></tr>`).join("")}
+        </tbody></table></div>
+        ${mercadoria > 0 ? `<p class="muted" style="margin:8px 0 0;font-size:13px;">Compra de mercadoria no período: ${fmtMoeda(mercadoria)} (fora da conta — é estoque, vira custo quando a peça vende).</p>` : ""}` : `<p class="muted" style="margin:0;">Nenhum gasto com vencimento nesse período.</p>`}
+      `;
+      box.querySelectorAll("[data-mgcat]").forEach(cb=> cb.addEventListener("change", ()=>{
+        const sel = new Set(catsMercadoria());
+        if(cb.checked) sel.add(cb.dataset.mgcat); else sel.delete(cb.dataset.mgcat);
+        try{ localStorage.setItem("mgCatsMercadoria", JSON.stringify([...sel])); }catch(e){}
+        renderResultadoLiquido(lucroBruto, vendidoSemCusto);
+      }));
     }
     calcular();
   }

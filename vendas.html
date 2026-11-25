@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
 <script src="vilaca-extras.js"></script>
+<script src="marketing-off.js"></script><!-- 24/11 (varredura): a Venda chamava window.MarketingOff sem nunca carregar o arquivo; o aviso de MARKETING OFF não aparecia aqui -->
 <script src="acompanhamento-ui.js"></script>
 <script>
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
@@ -931,13 +932,6 @@ async function vendaSalvar(venda){
     return true;
   }catch(e){ console.error('erro ao salvar venda', e); showToast('Não foi possível salvar. Tente novamente.'); return false; }
 }
-async function vendaExcluir(id){
-  try{
-    const { error } = await supabaseClient.from('vendas_pdv').delete().eq('id', id);
-    if(error) throw error;
-    return true;
-  }catch(e){ console.error('erro ao excluir venda', e); return false; }
-}
 
 let produtosEstoque = [];
 /* ---------- PEDRAS: preço acompanha o dólar do dia ----------
@@ -970,13 +964,6 @@ async function produtosEstoqueGet(){
     if(error) throw error;
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar produtos/estoque', e); return []; }
-}
-async function produtoEstoqueAtualizar(produto){
-  try{
-    const { error } = await supabaseClient.from('produtos_estoque').upsert({ id: produto.id, payload: produto });
-    if(error) throw error;
-    return true;
-  }catch(e){ console.error('erro ao atualizar estoque', e); return false; }
 }
 function unidadeEstoqueLabel(u){ return u==='g' ? 'g' : u==='kg' ? 'kg' : 'un'; }
 
@@ -1833,9 +1820,6 @@ function vendedoraOptionsHtml(selected){
     return `<option value="${escapeHtml(n)}" ${valorSel===n?'selected':''}>${escapeHtml(n)}</option>`;
   }).join('');
 }
-function produtoJoiaOptionsHtml(selected){
-  return `<option value="">Selecione</option>` + (config.joiasProdutos||[]).map(p=>`<option value="${escapeHtml(p)}" ${selected===p?'selected':''}>${escapeHtml(p)}</option>`).join('');
-}
 function metalOptionsHtml(selected){
   return `<option value="">—</option>` + (config.metais||[]).map(m=>`<option value="${escapeHtml(m)}" ${selected===m?'selected':''}>${escapeHtml(m)}</option>`).join('');
 }
@@ -1922,16 +1906,6 @@ function notaEmpresasErro(holder, lojaVendaId){
     }
   }
   return null;
-}
-function todasEmpresasIguais(holder){
-  return holder.emissaoNota==='sim' && holder.lojaSaidaId && holder.lojaPagamentoId && holder.lojaNotaId &&
-    holder.lojaSaidaId===holder.lojaPagamentoId && holder.lojaPagamentoId===holder.lojaNotaId;
-}
-/** Opções de loja pro seletor de "Nota fiscal": mostra a ABREVIAÇÃO (o que foi pedido),
- * com o nome completo só como dica ao passar o mouse. Sempre começa vazio — nunca
- * pré-seleciona a primeira loja da lista sozinho. */
-function lojaAbrevOptionsHtml(selected){
-  return `<option value="">Selecione</option>` + (config.lojas||[]).filter(l=>!l.interna).map(l=>`<option value="${l.id}" title="${escapeHtml(l.nome)}" ${selected===l.id?'selected':''}>${escapeHtml(l.abreviacao)}</option>`).join('');
 }
 
 /** Pix: o campo PF/PJ ao lado da forma de pagamento. PF não entra nos casos que exigem número de nota fiscal. */
@@ -4384,19 +4358,6 @@ async function reverterEfeitosVenda(venda, acao){
   if(venda.cashback && venda.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, venda.cashback.clienteId, venda.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback desta venda.'); }
   return clienteCadastro;
 }
-/* Desfazer tudo: guarda cópia de segurança (painel_ordens_kv › venda_excluida_<id>), desfaz estoque/crédito/fiado/cashback
-   e apaga a venda — ela some das listas, do caixa e dos relatórios (tudo é calculado das vendas existentes).
-   O valor recebido é devolvido ao cliente fora do sistema (dinheiro/pix/estorno no cartão). */
-async function excluirVendaDefinitivo(venda, motivo){
-  const copia = { ...venda, excluidoPor: currentUser.nome, excluidoEm: Date.now(), motivoExclusao: motivo, valorDevolvido: valorRecebidoDe(venda) };
-  const { error: eBk } = await supabaseClient.from('painel_ordens_kv').upsert({ key:'venda_excluida_'+venda.id, value: copia, updated_at: new Date().toISOString() });
-  if(eBk) throw new Error('Não foi possível guardar a cópia de segurança. Nada foi alterado.');
-  if(venda.status !== 'cancelada') await reverterEfeitosVenda(venda, 'Exclusão');
-  if(!(await vendaExcluir(venda.id))) throw new Error('Estoque e cliente já foram desfeitos, mas a venda não foi apagada no servidor. Tente de novo.');
-  vendas = vendas.filter(x=>x.id!==venda.id);
-  showToast('Venda desfeita e excluída.' + (copia.valorDevolvido>0 ? ' Devolva '+fmtMoeda(copia.valorDevolvido)+' ao cliente.' : ''));
-  renderTabs(); renderView();
-}
 async function executarCancelamentoVenda(venda, motivo, dest){
   const recebido = valorRecebidoDe(venda);
   const clienteCadastro = await reverterEfeitosVenda(venda, 'Cancelamento');
@@ -4938,6 +4899,16 @@ function abrirTrocaVenda(venda){
         const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nRegistrar a troca mesmo assim? O estoque vai ficar negativo.`);
         if(!prosseguir) return;
       }
+    }
+
+    /* 24/11 (varredura): o cadastro e o crédito do cliente são conferidos AQUI, antes de mexer no estoque.
+       Antes essas conferências vinham depois: se parassem a troca ("cliente precisa estar no cadastro",
+       "crédito insuficiente"), a peça antiga já tinha voltado ao estoque e a nova já tinha saído, sem a
+       troca ficar registrada — e cada nova tentativa movia o estoque de novo. */
+    if(formaDiferenca==='__credito' || formaDiferenca==='__fiado'){
+      const cliPre = await acharClienteDaVenda(venda);
+      if(!cliPre){ showToast(diferenca < 0 ? 'Pra devolver como crédito, o cliente precisa estar no cadastro.' : 'Pra usar Crédito ou Fiado na diferença, o cliente precisa estar no cadastro.'); return; }
+      if(diferenca > 0 && formaDiferenca==='__credito' && (Number(cliPre.credito)||0) < diferenca - 0.001){ showToast(`Crédito insuficiente: o cliente tem ${fmtMoeda(cliPre.credito)}.`); return; }
     }
 
     // Devolve estoque do item antigo (mesma loja)
@@ -5545,7 +5516,8 @@ function abrirFormularioEdicaoCompleta(v){
 
   wireTelefoneMask('ed');
   document.getElementById('ed_fechar').addEventListener('click', closeModal);
-  document.getElementById('ed_salvar').addEventListener('click', async ()=>{
+  document.getElementById('ed_salvar').addEventListener('click', async (ev)=>{
+    { const __b = ev.currentTarget; if(__b.dataset.salvando) return; __b.dataset.salvando = '1'; setTimeout(()=>{ delete __b.dataset.salvando; }, 2500); }   // 24/11: clique duplo desfazia o estoque/crédito duas vezes
     const lojaId = document.getElementById('ed_loja').value;
     const vendedora = document.getElementById('ed_vendedora').value.trim();
     const data = document.getElementById('ed_data').value;
@@ -5558,6 +5530,60 @@ function abrirFormularioEdicaoCompleta(v){
     const erroNota = notaEmpresasErro(pagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
     { const eNe = OuroPag.erroNota(pagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
+
+    /* ===== 0) CONFERE ANTES DE DESFAZER (24/11, varredura) =====
+       Antes, o passo 1 (devolver o estoque e o crédito/fiado da venda original) rodava ANTES das
+       conferências que podem parar o salvamento ("estoque insuficiente — salvar mesmo assim?",
+       "cliente precisa estar cadastrado", "crédito insuficiente"). Se a pessoa parava ali, o passo 1
+       já estava gravado e a venda continuava igual: cada novo clique em Salvar devolvia TUDO de novo
+       (peça voltando ao estoque várias vezes e crédito do cliente crescendo sozinho — foi o que
+       aconteceu na JN38V em 04/11). Agora as três conferências são feitas aqui, simulando o estoque
+       e o crédito como ficarão depois de desfazer, e só então o passo 1 mexe em alguma coisa. */
+    let __estoqueConfirmadoEd = false;
+    {
+      const lojaSim = lojaEstoqueDaVenda(lojaId, pagHolder);
+      const somados = [];
+      if(v.estoqueConsumido && v.estoqueLojaId){
+        Object.entries(v.estoqueConsumido).forEach(([pid, qtd])=>{
+          const p = produtosEstoque.find(x=>x.id===pid); if(!p || !qtd) return;
+          if(!p.estoquePorLoja) p.estoquePorLoja = {};
+          const tinha = Object.prototype.hasOwnProperty.call(p.estoquePorLoja, v.estoqueLojaId);
+          const antes = p.estoquePorLoja[v.estoqueLojaId];
+          p.estoquePorLoja[v.estoqueLojaId] = (Number(antes)||0) + (Number(qtd)||0);
+          somados.push({ p, tinha, antes });
+        });
+      }
+      let faltaSim = [];
+      try{
+        const resSim = {};
+        itensValidos.forEach(it=>{ if(!it.produtoEstoqueId) return; const r = planejarConsumoEstoque(it.produtoEstoqueId, Number(it.quantidade)||0, resSim, lojaSim); if(!r.ok) faltaSim.push(...r.faltando); });
+      } finally {
+        somados.forEach(x=>{ if(x.tinha) x.p.estoquePorLoja[v.estoqueLojaId] = x.antes; else delete x.p.estoquePorLoja[v.estoqueLojaId]; });
+      }
+      if(faltaSim.length > 0){
+        const lista = faltaSim.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
+        if(!confirm(`Estoque insuficiente pra: ${lista}.\n\nSalvar mesmo assim? O estoque desses itens vai ficar negativo.`)) return;
+        __estoqueConfirmadoEd = true;
+      }
+      const pagsSim = pagHolder.pagamentos||[];
+      const credSim = pagsSim.filter(p=>p.formaId==='__credito').reduce((a,p)=>a+(Number(p.valor)||0),0);
+      const fiadoSim = pagsSim.filter(p=>p.formaId==='__fiado').reduce((a,p)=>a+(Number(p.valor)||0),0);
+      const exSim = OuroPag.excesso(pagsSim, Number(pagHolder.valorTotal)||0, config);
+      if(credSim>0 || fiadoSim>0 || (exSim.ex > 0.009 && exSim.ok)){
+        const cliNovoSim = await acharClienteDaVenda({ telefone, cliente });
+        if(!cliNovoSim){ showToast('Para usar Crédito ou Fiado, o cliente precisa estar cadastrado.'); return; }
+        if(credSim>0){
+          const cliAntSim = await acharClienteDaVenda(v);
+          let disp = Number(cliNovoSim.credito)||0;
+          if(cliAntSim && cliAntSim.id && cliAntSim.id === cliNovoSim.id){   // mesmo cliente: o que esta venda usou/gerou volta antes de usar de novo
+            if(v.creditoUsado > 0) disp += Number(v.creditoUsado)||0;
+            if(v.creditoGerado > 0) disp -= Math.min(Number(v.creditoGerado)||0, Math.max(0, disp));
+            if(v.fiadoDebitoId && Array.isArray(cliAntSim.fiadoDebitos)){ const d = cliAntSim.fiadoDebitos.find(x=>x.id===v.fiadoDebitoId); if(d) disp += Number(d.valorPago)||0; }
+          }
+          if(disp < credSim - 0.001){ showToast(`Crédito insuficiente: o cliente tem ${fmtMoeda(disp)}.`); return; }
+        }
+      }
+    }
 
     // ===== 1) Desfaz o que a venda original lançou (estoque + crédito/fiado do cliente antigo) =====
     // Devolve na mesma loja de onde saiu (vendas antigas sem esse registro não são revertidas
@@ -5623,10 +5649,8 @@ function abrirFormularioEdicaoCompleta(v){
       Object.keys(reservas).forEach(pid=>{ const d=(reservas[pid]||0)-(antes[pid]||0); if(d>0) delta[pid]=d; });
       it.estoqueConsumidoItem = delta;
     });
-    if(faltandoGeral.length > 0){
-      const lista = faltandoGeral.map(f=> `${f.nome} (faltam ${f.quantidade.toFixed(2)})`).join(', ');
-      const prosseguir = confirm(`Estoque insuficiente pra: ${lista}.\n\nSalvar mesmo assim? O estoque desses itens vai ficar negativo.`);
-      if(!prosseguir) return;
+    if(faltandoGeral.length > 0 && !__estoqueConfirmadoEd){   // já perguntado no passo 0 (aqui o passo 1 já rodou: não pode mais parar)
+      console.warn('edição de venda: falta de estoque não prevista no passo 0', faltandoGeral);
     }
 
     // ===== 3) Novo crédito/fiado (igual a uma venda nova), pro cliente (novo) da edição =====

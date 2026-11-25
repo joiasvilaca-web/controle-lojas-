@@ -795,7 +795,6 @@ function statusPermitidos(){
   return STATUS_POR_NIVEL[n] || [];
 }
 function podeColocarStatus(st){ return statusPermitidos().includes(st); }
-function viaTravadaParaLoja(o){ const n = currentUser && currentUser.nivel; return !!o && (n==='gerente' || n==='vendedora') && STATUS_TRAVADOS_LOJA.includes(o.status); }
 /** De um status para outro: respeita o que o perfil pode colocar e os status que travam a troca. */
 function podeMudarStatus(de, para){
   if(de===para) return true;
@@ -858,8 +857,6 @@ function sincronizarLocalPorStatus(o){
   o.localAtual = alvo; o.historicoLocal = o.historicoLocal || [];
   o.historicoLocal.push({ local:alvo, em: Date.now(), por: (currentUser&&currentUser.nome)||'' });
 }
-// pendencia = a Oficina parou por algum problema (explicado na observação que vai pra loja).
-function lojaNomes(){ return (config.lojas||[]).map(l=>l.nome); }
 function lojaAbreviacao(lojaId){
   const l = (config.lojas||[]).find(x=>x.id===lojaId);
   return l ? l.abreviacao : (lojaId||'').slice(0,2).toUpperCase();
@@ -1574,7 +1571,13 @@ const __ordemSnap = new Map();
 function snapOrdem(o){ if(o && o.id) try{ __ordemSnap.set(o.id, JSON.stringify(o)); }catch(e){} }
 async function saveOrders(){
   orders.forEach(o=>{ if(o && !o.pesoSinc && ordemTemPeso(o)) o.pesoSinc = true; });   // 18/11: via que já teve peso continua sendo acertada (inclusive quando o peso é apagado)
-  const mudadas = orders.filter(o=> o && o.id && __ordemSnap.get(o.id) !== JSON.stringify(o));
+  let mudadas = orders.filter(o=> o && o.id && __ordemSnap.get(o.id) !== JSON.stringify(o));
+  /* 24/11 (varredura): o local gravado (localAtual) só era acertado em 3 dos caminhos que mudam o
+     status (lista, enviar p/ fábrica, receber da fábrica). Arrastar no quadro, entregar, editar a
+     ficha etc. deixavam o local antigo — por isso havia via PRONTA marcada "na fábrica" e via
+     ENTREGUE marcada "na loja" (a tela da Oficina lê esse campo). Agora toda via que vai ser
+     gravada tem o local conferido aqui, num lugar só. Só toca nas vias que já iam ser salvas. */
+  mudadas.forEach(o=>{ try{ if(o.status && LOCAL_POR_STATUS[o.status]) sincronizarLocalPorStatus(o); }catch(e){} });
   const comPeso = [];
   for(let i=0; i<mudadas.length; i+=6){
     await Promise.all(mudadas.slice(i, i+6).map(async order=>{
@@ -2065,13 +2068,6 @@ async function upsertClienteFromOrder(cli){
     };
     await salvarUmCliente(novo);
   }
-}
-async function excluirCliente(id){
-  try{
-    const { error } = await supabaseClient.from('clientes_cadastro').delete().eq('id', id);
-    if(error) throw error;
-    return true;
-  }catch(e){ console.error('erro ao excluir cliente', e); return false; }
 }
 
 /**
@@ -3351,26 +3347,6 @@ function aplicarEntregaNaOrdem(ord, ret){
   ord.retirada = { metodo: ret.metodo || '', recebidoPor: ret.recebidoPor || '', portadorAutorizado: ret.portador || '', conferidoPor: ret.usadoPor || '', em: ret.usadoEm || new Date().toISOString(), loja: ret.loja || '', motivoSemCodigo: ret.metodo==='sem_codigo' ? (ret.motivo||'') : '' };
   addHistorico(ord, 'Entregue' + (ret.recebidoPor ? ' — recebido por '+ret.recebidoPor : ''));
 }
-function promptRecebidoPor(onConfirm, onCancel){
-  modalOnClose = onCancel || null;
-  openModal(`
-    <h3>Marcar como entregue</h3>
-    <p>Quem retirou a peça? O nome fica registrado no pedido.</p>
-    <div class="field"><label for="recebidoNomeInp">Recebido por</label><input id="recebidoNomeInp" placeholder="Nome de quem recebeu"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="recebidoCancel">Cancelar</button>
-      <button class="btn btn-accent" id="recebidoConfirm">Marcar entregue</button>
-    </div>
-  `);
-  document.getElementById('recebidoCancel').addEventListener('click', closeModal);
-  document.getElementById('recebidoConfirm').addEventListener('click', ()=>{
-    const nome = maiusc(document.getElementById('recebidoNomeInp').value);
-    if(!nome){ showToast('Informe o nome de quem recebeu.'); return; }
-    modalOnClose = null;
-    closeModal();
-    onConfirm(nome);
-  });
-}
 
 /* 18/11: recado para o cliente nas observações que pedem ciência (recado-cliente.js). Sai só com o clique no WhatsApp; vai ao cliente a situação da via + o recado, nunca a observação da Oficina. */
 function recadoCtx(){
@@ -4410,7 +4386,8 @@ async function estoqueAoCancelarOuExcluir(order, motivo){
     let falhas = 0;
     for(const row of baixadas){
       const qtd = Math.abs(Number(row.quantidade)||0);
-      const g = await gatewayCall({ op:'registrarMovimentoEstoque', params:{ produtoId: row.produto_id, lojaId: row.loja_id, tipoMovimento:'CANCELAMENTO_PEDIDO', quantidade: qtd, referenciaId: order.id } });
+      // 24/11 (varredura): a devolução vai pela estoque-api (o db-gateway recusava CANCELAMENTO_PEDIDO).
+      const g = await estoqueApi('devolver', { origemTipo:'os', origemId: order.id, produtoId: row.produto_id, lojaId: row.loja_id, quantidade: qtd, reservaId: row.id });
       if(g && !g.error){
         const p = produtosEstoque.find(x=>x.id===row.produto_id);
         if(p){ if(!p.estoquePorLoja) p.estoquePorLoja = {}; p.estoquePorLoja[row.loja_id] = typeof g.saldoNovo==='number' ? g.saldoNovo : (Number(p.estoquePorLoja[row.loja_id])||0) + qtd; }
@@ -4448,8 +4425,6 @@ function fiscalDevolucaoDeOrdem(order){
   const comNota = !!(order && order.emissaoNota === 'sim');
   return { precisa: comNota, notaOriginal: comNota ? String(order.numeroNota||'') : '', notaDevolucao: '', emitidaEm: null };
 }
-function temPendenciaFiscalOrdem(reg){ return !!(reg && reg.fiscal && reg.fiscal.precisa && !String(reg.fiscal.notaDevolucao||'').trim()); }
-function pendenciasFiscaisOrdem(order){ return ((order && order.trocas) || []).filter(temPendenciaFiscalOrdem); }
 /** O que esse item consome de estoque (com composição), pra devolver a mesma coisa. */
 function consumoDoItemOrdem(it, lojaId){
   const reservas = {};
@@ -4514,7 +4489,7 @@ async function abrirDevolverItemOrdem(order){
         const consumo = consumoDoItemOrdem(item, lojaEstoque);
         for(const [pid, q] of Object.entries(consumo)){
           if(!q) continue;
-          const g = await gatewayCall({ op:'registrarMovimentoEstoque', params:{ produtoId:pid, lojaId:lojaEstoque, tipoMovimento:'CANCELAMENTO_PEDIDO', quantidade:q, referenciaId:order.id } });
+          const g = await estoqueApi('devolver', { origemTipo:'os', origemId: order.id, produtoId:pid, lojaId:lojaEstoque, quantidade:q });   // 24/11: pela estoque-api (o db-gateway recusava CANCELAMENTO_PEDIDO)
           const p = produtosEstoque.find(x=>x.id===pid);
           if(p){
             if(!p.estoquePorLoja) p.estoquePorLoja = {};
@@ -4548,32 +4523,6 @@ async function abrirDevolverItemOrdem(order){
       showToast('Devolução registrada.' + (comNota ? ' Falta emitir a nota de devolução.' : ''));
       closeModal(); renderView();
     } finally { btn.disabled = false; }
-  });
-}
-/** Lança o número da NF-e de entrada do pedido depois que o contador emitiu. */
-function abrirLancarNotaDevolucaoOrdem(order, trocaId){
-  const reg = ((order&&order.trocas)||[]).find(t=>t.id===trocaId);
-  if(!reg) return;
-  if(!reg.fiscal) reg.fiscal = fiscalDevolucaoDeOrdem(order);
-  openModal(`
-    <h3>Nota de devolução</h3>
-    <p class="muted">${escapeHtml(reg.itemAntigoDescricao||'')} · Via ${escapeHtml(viaTxt(order)||'—')}</p>
-    <div class="aviso-linha" style="margin-bottom:10px;">${ico('info')}<span>NF-e de entrada (modelo 55, finalidade 4 — devolução, CFOP 1.202)${reg.fiscal.notaOriginal?`, referenciando a nota nº <b>${escapeHtml(reg.fiscal.notaOriginal)}</b>`:''}.</span></div>
-    <div class="campo"><label for="ndo_num">Número da nota de devolução</label><input id="ndo_num" style="width:100%" autocomplete="off" placeholder="Ex.: 12345" value="${escapeHtml(reg.fiscal.notaDevolucao||'')}"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="ndo_fechar" type="button">Voltar</button>
-      <button class="btn btn-accent" id="ndo_salvar" type="button">Salvar</button>
-    </div>
-  `);
-  document.getElementById('ndo_fechar').addEventListener('click', closeModal);
-  document.getElementById('ndo_salvar').addEventListener('click', async ()=>{
-    const n = String(document.getElementById('ndo_num').value||'').trim();
-    if(!n){ showToast('Digite o número da nota de devolução.'); return; }
-    reg.fiscal.notaDevolucao = n; reg.fiscal.emitidaEm = Date.now();
-    addHistorico(order, 'Nota de devolução lançada — nº ' + n);
-    const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } });
-    if(rr && rr.error){ showToast('Não consegui salvar: '+rr.error); return; }
-    showToast('Nota de devolução lançada.'); closeModal(); renderView();
   });
 }
 
@@ -5571,23 +5520,6 @@ function renderNovaOrdem(main){
     const bc = document.getElementById('btnCancelarSol');
     if(bc) bc.onclick = async ()=>{ await autorizacoesMut(l=>{ const r=l.find(x=>x.id===solicitacaoAtual.id); if(r && r.status==='pendente') r.status='cancelado'; }); solicitacaoAtual=null; if(pollSol){clearInterval(pollSol);pollSol=null;} atualizarBotoesPermissao(); showToast('Solicitação cancelada.'); };
   }
-  function iniciarPollSolicitacao(){
-    if(pollSol) clearInterval(pollSol);
-    pollSol = setInterval(async ()=>{
-      if(!document.getElementById('btnSolicitarPerm')){ clearInterval(pollSol); pollSol=null; return; }   // saiu da tela
-      if(!solicitacaoAtual) return;
-      const l = await autorizacoesGet(); const r = l.find(x=>x.id===solicitacaoAtual.id);
-      if(!r) return;
-      if(r.status!==solicitacaoAtual.status){
-        solicitacaoAtual = r;
-        if(r.status==='liberado'){
-          codes = await storageGet('codes', true) || codes;
-          document.getElementById('f_codigo').value = r.codigo||''; clearInterval(pollSol); pollSol=null; showToast('A Oficina liberou o pedido.');
-        } else if(r.status==='recusado'){ showToast('A Oficina recusou a solicitação' + (r.motivoRecusa?': '+r.motivoRecusa:'.')); solicitacaoAtual=null; clearInterval(pollSol); pollSol=null; }
-        atualizarBotoesPermissao();
-      }
-    }, 6000);
-  }
   btnTenho.addEventListener('click', ()=>{ tenhoCodigo = true; atualizarBotoesPermissao(); const f=document.getElementById('f_codigo'); if(f) f.focus(); });
   btnSolic.addEventListener('click', async ()=>{
     const cli = collectClienteFields(); const sid = servicoSel.value, dt = dataInp.value;
@@ -6433,6 +6365,7 @@ function openEditModalCompleto(order, opts){
     }
     const _credNovoEd = (_exOuroEd.ex > 0.009 && _exOuroEd.ok) ? _exOuroEd.ex : 0;
     const _credAntEd = Number(order.creditoGerado)||0;
+    let _credOuroPendente = null;
     if(Math.abs(_credNovoEd - _credAntEd) > 0.009){
       const _telE = onlyDigits(telefone||'');
       let _cli = clientes.find(c=> _telE && onlyDigits(c.telefone||'')===_telE);
@@ -6441,12 +6374,10 @@ function openEditModalCompleto(order, opts){
       if(!_cli){ Destaque.marcar('#e_cliente', 'Pra deixar o crédito do ouro, o cliente precisa estar no cadastro.'); return; }
       const _dl = _credNovoEd - _credAntEd;
       const _mov = _dl > 0 ? _dl : -Math.min(-_dl, Math.max(0, Number(_cli.credito)||0));
-      if(Math.abs(_mov) > 0.009){
-        _cli.credito = (Number(_cli.credito)||0) + _mov;
-        if(!_cli.creditoMovimentos) _cli.creditoMovimentos = [];
-        _cli.creditoMovimentos.push({ data: hojeStr(), valor: _mov, tipo:'ouro', obs:`Sobra do ouro (edição) — O.S. ${viaTxt(order)||''}` });
-        await salvarUmCliente(_cli);
-      }
+      // 24/11 (varredura): só ANOTA aqui; o crédito é gravado depois da conferência do cashback (mais abaixo).
+      // Antes gravava já: se o cashback barrasse o salvamento, o crédito ficava no cliente e o pedido voltava
+      // ao que era — e o próximo Salvar somava o crédito de novo.
+      if(Math.abs(_mov) > 0.009) _credOuroPendente = { cli: _cli, mov: _mov };
     }
     const st = config.serviceTypes.find(s=>s.id===sid);
     if(status !== 'rascunho' && status !== 'cancelado') await garantirCodigoVia(order, loja);   // rascunho que virou pedido de verdade: gera o código da via
@@ -6484,6 +6415,13 @@ function openEditModalCompleto(order, opts){
     const _cbAntO = order.cashback || null;
     const _cbEO = (status!=='cancelado' && status!=='rascunho') ? await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'validar', _cbAntO, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
     if(!_cbEO.ok){ Object.keys(order).forEach(k=>delete order[k]); Object.assign(order, _snapCb); showToast(_cbEO.erro); return; }
+    if(_credOuroPendente){   // 24/11: agora sim grava a sobra do ouro no cadastro (nada mais interrompe o salvamento daqui em diante)
+      const _c = _credOuroPendente.cli;
+      _c.credito = (Number(_c.credito)||0) + _credOuroPendente.mov;
+      if(!_c.creditoMovimentos) _c.creditoMovimentos = [];
+      _c.creditoMovimentos.push({ data: hojeStr(), valor: _credOuroPendente.mov, tipo:'ouro', obs:`Sobra do ouro (edição) — O.S. ${viaTxt(order)||''}` });
+      await salvarUmCliente(_c);
+    }
     if(_cbEO.resumo) order.cashback = _cbEO.resumo;
     // Estoque: entregue → baixa; demais → (re)reserva os itens atuais. Nunca bloqueia.
     let sincronizarDepois = false;
@@ -7115,8 +7053,6 @@ function abrirReceberDaFabrica(aoConcluir){
 function applyStatusClass(sel){
   sel.className = 'status-select status-' + sel.value;
 }
-function statusBg(s){ return s==='aguardando' ? 'var(--wait-soft)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo-soft)' : s==='pendencia' ? 'var(--st-laranja-soft)' : s==='oficina_pronto' ? 'var(--info-soft)' : s==='pronto' ? 'var(--ok-soft)' : s==='entregue' ? 'var(--st-neutro-soft)' : s==='abandonada' ? '#3a2a1f' : 'var(--danger-soft)'; }
-function statusFg(s){ return s==='aguardando' ? 'var(--wait)' : (s==='enviado_fabrica'||s==='em_producao') ? 'var(--st-roxo)' : s==='pendencia' ? 'var(--st-laranja)' : s==='oficina_pronto' ? 'var(--info)' : s==='pronto' ? 'var(--ok)' : s==='entregue' ? 'var(--st-neutro)' : s==='abandonada' ? '#ffd9b8' : 'var(--danger)'; }
 
 /* ============================================================
    AGENDA

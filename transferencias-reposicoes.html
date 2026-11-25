@@ -1606,10 +1606,6 @@ function ajudaPonto(texto){
     if(tab === "envio") return "TDI";
     return "TRE";
   }
-  function prefixoTransacao(tab, r){
-    const loja = tab === "transferencias" ? (r.lojaOrigemId||r.loja||'') : (r.lojaId||r.loja||'');
-    return getLojaAbrevTR(loja) + sufixoTipoTransf(tab, r);
-  }
   // Extrai só o número de um "número da via" tipo "T-15" -> 15 (usado pra ordenar as
   // listas por ordem de lançamento, do mais recente pro mais antigo). Registros sem
   // número ainda (bem raros — só entre o instante da criação e o 1º salvamento) vão
@@ -1814,51 +1810,12 @@ function ajudaPonto(texto){
     document.body.classList.add(tema);
   }
 
-  function buildChips(){
-    storeChipsEl.innerHTML = "";
-    ["Todas", ...STORES].forEach(s=>{
-      const b = document.createElement("button");
-      b.className = "chip" + (state.storeFilter === s ? " active" : "");
-      b.textContent = s;
-      b.addEventListener("click", ()=>{ state.storeFilter = s; render(); });
-      storeChipsEl.appendChild(b);
-    });
-    statusChipsEl.innerHTML = "";
-    [["Todas","Todas"],["OK","OK"],["ERRO","Pendências"],["JUST","Justificado"]].forEach(([val,label])=>{
-      const b = document.createElement("button");
-      b.className = "chip" + (state.statusFilter === val ? " active" : "");
-      b.textContent = label;
-      b.addEventListener("click", ()=>{ state.statusFilter = val; render(); });
-      statusChipsEl.appendChild(b);
-    });
-  }
 
-  function getRecords(){ return state.tab === "transferencias" ? state.transferencias : state.tab === "envio" ? state.envio : state.reposicao; }
   function getStatus(r){ return state.tab === "transferencias" ? computeStatusTransfer(r) : state.tab === "envio" ? computeStatusEnvioDiretoria(r) : computeStatusReposicao(r); }
   // Igual a getStatus(), mas recebe a aba explicitamente em vez de usar state.tab —
   // necessário na busca da Home, que junta registros de abas diferentes de uma vez.
   function computeStatusPorTab(r, tab){ return tab === "transferencias" ? computeStatusTransfer(r) : tab === "envio" ? computeStatusEnvioDiretoria(r) : computeStatusReposicao(r); }
 
-  // Monta o conteúdo (innerHTML) da faixa de pendências do card fechado.
-  // Para a aba Transferências: barra de progresso + checklist das etapas que faltam.
-  // Para a aba Reposição (não alterada): mantém o texto simples de sempre.
-  function pendLineHtml(statusData){
-    const { label, pendItems, doneSteps, totalSteps } = statusData;
-    if(!Array.isArray(pendItems)){
-      return escapeHtml(label);
-    }
-    if(pendItems.length === 0){
-      return `<div class="pend-ok-line">${ico("check",14)} ${escapeHtml(label)}</div>`;
-    }
-    const pct = totalSteps ? Math.round((doneSteps/totalSteps)*100) : 0;
-    return `
-      <div class="pend-progress-row">
-        <div class="pend-progress-track"><div class="pend-progress-fill" style="width:${pct}%;"></div></div>
-        <span class="pend-progress-text">${doneSteps}/${totalSteps} etapas</span>
-      </div>
-      <ul class="pend-checklist">${pendItems.map(i=>`<li>${escapeHtml(i)}</li>`).join("")}</ul>
-    `;
-  }
   function getLoja(r){ return state.tab === "transferencias" ? (r.lojaOrigem || "") : (r.loja || ""); }
   function statusClass(status){ if(status==="OK") return "st-ok"; if(status==="ERRO") return "st-erro"; if(status==="JUST") return "st-just"; return "st-pend"; }
   function bgClassParaTipo(r){
@@ -1871,19 +1828,6 @@ function ajudaPonto(texto){
   }
   function statusLabel(status){ if(status==="OK") return "OK"; if(status==="ERRO") return "Pendência"; if(status==="JUST") return "Justificado"; return "Em aberto"; }
 
-  function matchesFilters(r){
-    const {status} = getStatus(r);
-    if(state.storeFilter !== "Todas"){
-      const lojas = state.tab === "transferencias" ? [r.lojaOrigem, r.lojaDestino] : [r.loja];
-      if(!lojas.includes(state.storeFilter)) return false;
-    }
-    if(state.statusFilter !== "Todas" && status !== state.statusFilter) return false;
-    if(state.search){
-      const q = state.search.toLowerCase();
-      if(!Busca.testa(JSON.stringify(r).replace(/[{}\[\]":]/g,' '), q)) return false;
-    }
-    return true;
-  }
 
   /* Abreviação da loja ativa no shell (ex.: 'MC'), usada para travar o campo de
      loja solicitante nos formulários — quem opera só solicita para a própria loja. */
@@ -1916,13 +1860,6 @@ function ajudaPonto(texto){
       if(error) throw error;
       produtosEstoqueCache = (data||[]).map(r=>r.payload);
     }catch(e){ console.error("Erro ao carregar produtos do catálogo:", e); produtosEstoqueCache = []; }
-  }
-  async function salvarProdutoEstoque(produto){
-    try{
-      const { error } = await supabaseClient.from("produtos_estoque").upsert({ id: produto.id, payload: produto });
-      if(error) throw error;
-      return true;
-    }catch(e){ console.error("Erro ao salvar estoque do produto:", e); return false; }
   }
   function produtoEstoqueOptionsHtml(selected){
     const lista = produtosEstoqueCache || [];
@@ -2228,17 +2165,6 @@ function ajudaPonto(texto){
     window.__toastTimerTransf = setTimeout(()=>{ el.style.display="none"; }, 3600);
   }
 
-  function renderSummary(){
-    const records = getRecords();
-    let ok=0, erro=0, just=0;
-    records.forEach(r=>{ const s=getStatus(r).status; if(s==="OK")ok++; else if(s==="ERRO")erro++; else if(s==="JUST")just++; });
-    summaryBar.innerHTML = `
-      <span><b>${records.length}</b> registro(s)</span>
-      <span><span class="dot ok"></span><b>${ok}</b> OK</span>
-      <span><span class="dot erro"></span><b>${erro}</b> com pendência</span>
-      <span><span class="dot just"></span><b>${just}</b> justificado</span>
-    `;
-  }
 
   function render(){
     applyTheme();
@@ -2251,8 +2177,6 @@ function ajudaPonto(texto){
     renderHomeScreen();
   }
 
-  /* ================= NAVEGAÇÃO ENTRE TELAS ================= */
-  function temTelaAberta(){ return state.openIds.size > 0; }
 
   function renderBackBar(){
     const el = document.getElementById("backBarWrap");
@@ -2263,14 +2187,6 @@ function ajudaPonto(texto){
     el.innerHTML = "";
   }
 
-  function irParaTelaAnterior(){
-    if(temTelaAberta()){
-      fecharRegistroAberto();
-      return;
-    }
-    state.screen = state.screenStack.pop() || "home";
-    render();
-  }
 
   // Fecha o registro em tela cheia. Se for um lançamento novo nunca salvo, ou um
   // rascunho já existente sendo continuado, salva automaticamente como rascunho
@@ -2607,14 +2523,6 @@ function ajudaPonto(texto){
     return {doneSteps, totalSteps, faltaLabel: faltam.join(", ")};
   }
 
-  // ================= Barra de busca/filtro da Home =================
-  // Rótulo de exibição de cada "aba" pra usar no filtro (mistura tipoTransf de
-  // transferências com o nome das outras abas).
-  function labelAbaFiltro(tab, tipoTransf){
-    if(tab === "transferencias") return labelTipoTransf(tipoTransf);
-    if(tab === "reposicao") return "REPOSIÇÃO";
-    return "DIRETORIA";
-  }
   // Junta os 3 arrays (transferências, reposição, envio) num só, cada item com sua
   // aba de origem — usado pela busca, que precisa olhar em TUDO (pendente ou
   // concluído), não só nas pendências que a Home mostra por padrão.
@@ -3307,162 +3215,7 @@ function ajudaPonto(texto){
     }).join("");
   }
 
-  /** Uma lista simples de chips com botão de remover, usada nas listas editáveis de Configurações. */
-  function chipListHtml(items, deleteAttr){
-    if(!items || items.length===0) return `<div class="group-hint">Nenhum item cadastrado.</div>`;
-    return `<div class="chips">${items.map((it,i)=>`
-      <span class="chip" style="display:inline-flex; align-items:center; gap:6px;">
-        ${escapeHtml(it)}
-        <button type="button" data-${deleteAttr}="${i}" style="border:none;background:none;color:inherit;cursor:pointer;font-weight:800;font-size:13px;line-height:1;padding:0;">×</button>
-      </span>
-    `).join("")}</div>`;
-  }
 
-  function renderConfigTab(){
-    listWrap.innerHTML = `
-      <div class="card" style="padding:18px 16px;">
-        <div class="group">
-          <div class="group-title">Lojas</div>
-          <div class="group-hint">Códigos curtos usados nos registros (ex: JN, JV, MC). Pelo menos uma loja precisa existir.</div>
-          <div id="cfgStoresRows"></div>
-          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-            <input type="text" id="cfgStoreNovo" placeholder="Código (ex: SH)" maxlength="4" style="text-transform:uppercase; max-width:160px; padding:8px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink);">
-            <button class="btn-add-item" type="button" id="btnAddStore">+ Adicionar loja</button>
-          </div>
-        </div>
-
-        <div class="divider divider-thick"></div>
-
-        <div class="group">
-          <div class="group-title">Produtos</div>
-          <div id="cfgProductsRows"></div>
-          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-            <input type="text" id="cfgProductNovo" placeholder="Nome do produto" style="max-width:220px; padding:8px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink);">
-            <button class="btn-add-item" type="button" id="btnAddProduct">+ Adicionar produto</button>
-          </div>
-        </div>
-
-        <div class="divider divider-thick"></div>
-
-        <div class="group">
-          <div class="group-title">Metais</div>
-          <div id="cfgMetalsRows"></div>
-          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
-            <input type="text" id="cfgMetalNovo" placeholder="Nome do metal" style="max-width:220px; padding:8px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink);">
-            <button class="btn-add-item" type="button" id="btnAddMetal">+ Adicionar metal</button>
-          </div>
-        </div>
-
-        <div class="divider divider-thick"></div>
-
-        <div class="group">
-          <div class="group-title">Funcionários (vendedoras e diretores)</div>
-          <div class="group-hint">Usados para selecionar em vez de digitar o nome nos campos de solicitante e vistos.</div>
-          <div id="cfgFuncionariosRows"></div>
-          <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
-            <input type="text" id="cfgFuncionarioNovo" placeholder="Nome do funcionário" style="flex:1; min-width:160px; padding:8px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink);">
-            <select id="cfgFuncionarioCargo" style="padding:8px 9px; border:1px solid var(--line); border-radius:8px; background:var(--surface-2); color:var(--ink);">
-              <option value="vendedora">Vendedora</option>
-              <option value="diretor">Diretor(a)</option>
-            </select>
-            <button class="btn-add-item" type="button" id="btnAddFuncionario">+ Adicionar</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    function renderCfgLists(){
-      document.getElementById("cfgStoresRows").innerHTML = chipListHtml(STORES, "delstore");
-      document.getElementById("cfgProductsRows").innerHTML = chipListHtml(PRODUCTS, "delproduct");
-      document.getElementById("cfgMetalsRows").innerHTML = chipListHtml(METALS, "delmetal");
-
-      const funcWrap = document.getElementById("cfgFuncionariosRows");
-      funcWrap.innerHTML = (state.funcionarios||[]).length===0
-        ? `<div class="group-hint">Nenhum funcionário cadastrado.</div>`
-        : state.funcionarios.map((f,i)=>`
-          <div class="item-row-multi">
-            <span style="flex:1;">${escapeHtml(nomeExibicaoFuncionario(f))}</span>
-            <span class="chip" style="flex:0 0 auto;">${cargoLabelFuncionario(f)}</span>
-            <button class="btn-x" type="button" data-delfuncionario="${i}">×</button>
-          </div>
-        `).join("");
-
-      listWrap.querySelectorAll("[data-delstore]").forEach(b=>{
-        b.addEventListener("click", async ()=>{
-          if(STORES.length<=1){ alert("É necessário manter ao menos uma loja cadastrada."); return; }
-          STORES.splice(Number(b.dataset.delstore),1);
-          await saveConfigData();
-          renderCfgLists();
-        });
-      });
-      listWrap.querySelectorAll("[data-delproduct]").forEach(b=>{
-        b.addEventListener("click", async ()=>{
-          if(PRODUCTS.length<=1){ alert("É necessário manter ao menos um produto cadastrado."); return; }
-          PRODUCTS.splice(Number(b.dataset.delproduct),1);
-          await saveConfigData();
-          renderCfgLists();
-        });
-      });
-      listWrap.querySelectorAll("[data-delmetal]").forEach(b=>{
-        b.addEventListener("click", async ()=>{
-          if(METALS.length<=1){ alert("É necessário manter ao menos um metal cadastrado."); return; }
-          METALS.splice(Number(b.dataset.delmetal),1);
-          await saveConfigData();
-          renderCfgLists();
-        });
-      });
-      listWrap.querySelectorAll("[data-delfuncionario]").forEach(b=>{
-        b.addEventListener("click", async ()=>{
-          state.funcionarios.splice(Number(b.dataset.delfuncionario),1);
-          await saveConfigData();
-          renderCfgLists();
-        });
-      });
-    }
-    renderCfgLists();
-
-    document.getElementById("btnAddStore").addEventListener("click", async ()=>{
-      const inp = document.getElementById("cfgStoreNovo");
-      const val = inp.value.trim().toUpperCase();
-      if(!val){ return; }
-      if(STORES.includes(val)){ alert("Essa loja já está cadastrada."); return; }
-      STORES.push(val);
-      await saveConfigData();
-      inp.value = "";
-      renderCfgLists();
-    });
-    document.getElementById("btnAddProduct").addEventListener("click", async ()=>{
-      const inp = document.getElementById("cfgProductNovo");
-      const val = inp.value.trim();
-      if(!val){ return; }
-      if(PRODUCTS.includes(val)){ alert("Esse produto já está cadastrado."); return; }
-      PRODUCTS.push(val);
-      await saveConfigData();
-      inp.value = "";
-      renderCfgLists();
-    });
-    document.getElementById("btnAddMetal").addEventListener("click", async ()=>{
-      const inp = document.getElementById("cfgMetalNovo");
-      const val = inp.value.trim();
-      if(!val){ return; }
-      if(METALS.includes(val)){ alert("Esse metal já está cadastrado."); return; }
-      METALS.push(val);
-      await saveConfigData();
-      inp.value = "";
-      renderCfgLists();
-    });
-    document.getElementById("btnAddFuncionario").addEventListener("click", async ()=>{
-      const inp = document.getElementById("cfgFuncionarioNovo");
-      const cargoSel = document.getElementById("cfgFuncionarioCargo");
-      const nome = inp.value.trim();
-      if(!nome){ return; }
-      if(!state.funcionarios) state.funcionarios = [];
-      state.funcionarios.push({ id: uid(), nome, cargo: cargoSel.value });
-      await saveConfigData();
-      inp.value = "";
-      renderCfgLists();
-    });
-  }
 
   function vistoRowHtml(r, vistoField, nomeField, dataField, label, idBase, cargo){
     const nomeInputHtml = cargo

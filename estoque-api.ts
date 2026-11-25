@@ -1,3 +1,12 @@
+// estoque-api v7 (24/11/2026 — varredura): op NOVA 'devolver'. A baixa do Pedido ENTREGUE nunca tinha
+// funcionado: a trava do banco (estoque_movimentos_tipo_movimento_check) não aceitava VENDA_PEDIDO nem
+// CANCELAMENTO_PEDIDO, então toda baixa caía em "falhas" e a reserva voltava para ativa. A trava foi
+// ampliada (migration estoque_mov_tipos_pedido) e a devolução ao estoque de pedido já baixado passou a
+// ser feita AQUI (antes ia pelo db-gateway, que também recusa CANCELAMENTO_PEDIDO).
+//   op:'devolver'    { origemTipo:'os', origemId, produtoId, lojaId, quantidade, reservaId? }
+//                    → devolve a peça de um pedido JÁ BAIXADO (cancelou o pedido ou devolveu um item).
+//                    Com reservaId, a reserva baixada vira 'liberada' antes (não devolve duas vezes).
+//                    → { ok, saldoNovo }
 // estoque-api v1 — reservas de estoque do CUPOM (Pedido/O.S. e Transferências).
 // Reserva = a peça continua no saldo da loja, mas não aparece como disponível.
 // POST { senha, op, ... }  (senha = token de sessão sess_…)
@@ -130,6 +139,34 @@ Deno.serve(async (req: Request) => {
         (saldos[r.produto_id] ||= {})[r.loja_id] = Number(saldo);
       }
       return json({ ok: falhas.length === 0, saldos, falhas });
+    }
+
+    if (b.op === "devolver") {
+      if (tipo !== "os") return json({ error: "devolver só vale para pedido" }, 400);
+      const produtoId = String(b.produtoId || ""), lojaId = String(b.lojaId || "");
+      const qtd = Number(b.quantidade);
+      if (!produtoId || !lojaId || !isFinite(qtd) || qtd <= 0 || qtd > 100000) return json({ error: "produto, loja e quantidade são obrigatórios" }, 400);
+      // só devolve o que foi baixado por ESTE pedido
+      const { data: baixadas, error: eb } = await admin.from("estoque_reservas").select("id, produto_id, loja_id, quantidade")
+        .eq("origem_tipo", tipo).eq("origem_id", origemId).eq("status", "baixada");
+      if (eb) throw eb;
+      if (!baixadas || !baixadas.length) return json({ ok: false, error: "este pedido não tem peça baixada do estoque" }, 409);
+      if (b.reservaId !== undefined && b.reservaId !== null) {
+        const { data: trava, error: et } = await admin.from("estoque_reservas")
+          .update({ status: "liberada", updated_at: agoraIso(), observacao: "estornada (pedido cancelado)", usuario: nome })
+          .eq("id", Number(b.reservaId)).eq("origem_tipo", tipo).eq("origem_id", origemId).eq("status", "baixada").select("id");
+        if (et) throw et;
+        if (!trava || !trava.length) return json({ ok: false, error: "esta peça já foi devolvida" }, 409);
+      }
+      const { data: saldo, error: em } = await admin.rpc("registrar_movimento_estoque", {
+        p_produto_id: produtoId, p_loja_id: lojaId, p_tipo_movimento: "CANCELAMENTO_PEDIDO",
+        p_quantidade: qtd, p_usuario: nome, p_referencia_id: origemId, p_observacao: "devolução de pedido baixado",
+      });
+      if (em) {
+        if (b.reservaId !== undefined && b.reservaId !== null) await admin.from("estoque_reservas").update({ status: "baixada", updated_at: agoraIso() }).eq("id", Number(b.reservaId));
+        return json({ ok: false, error: em.message }, 500);
+      }
+      return json({ ok: true, saldoNovo: Number(saldo) });
     }
 
     return json({ error: "op inválida" }, 400);
