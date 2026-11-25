@@ -593,3 +593,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Novos ajustes no modelo dobrável: **Rabo (mm)** (só aumenta a largura da página) e **lado do código de barras** (esquerda/direita). Novo campo **Fator** nas etiquetas.
 - Ao imprimir (uma ou em lote) no modelo dobrável, o sistema pergunta **Incluir preço de venda?** Sim: entra abaixo do fator "À vista" (valor de tabela já com o desconto previsto do tipo, em reais inteiros) e "12x" (à vista + 20% do cartão, dividido em 12). Lembra a última escolha.
 - O texto encolhe sozinho para as linhas caberem nos 12 mm de altura.
+
+## 25/11/2026 — Etiqueta com rabo: sem nome, barras menores, preço mais legível
+- Etiqueta 60 × 12 mm sem o nome (só fator, À vista, 12x e código de barras). Sem o nome o texto cresce e o preço fica legível.
+- Código de barras com largura fixa e centralizada (novo campo "Largura do código de barras", padrão 22 mm), com folga da dobra e das bordas; antes esticava na metade inteira.
+- Preço sem ",00" (À vista R$ 4.550 · 12x R$ 455). À vista = valor de tabela com o desconto do tipo (ex.: joia Vilaça ouro 50%); 12x = à vista + 20% ÷ 12.
+- A prévia agora usa um produto com desconto de verdade, para o valor aparecer certo. A configuração salva da etiqueta já foi ajustada para esse modelo.
