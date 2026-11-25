@@ -577,3 +577,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 25/11/2026 — Farol do Ouro no Dashboard + aviso COMPRAR no Vilacinha
 - Dashboard (só diretoria): nova aba **Farol do ouro** (selo COMPRAR/ESPERAR/NEUTRO, ouro, dólar, tendência, faixa de 12 meses, cenário, previsões, riscos e ação sugerida; botão Atualizar). Usa a mesma função `mercado-ouro` de Lançamentos › Estatísticas.
 - Vilacinha da diretoria: quando o farol está em COMPRAR, balão de **prioridade máxima** (acima de recado da diretoria), destacado em verde, com "Ver no Dashboard" e Ciente salvo no servidor (uma vez por dia enquanto estiver em COMPRAR).
+
+## 25/11/2026 — Farol do Ouro: passado, presente e futuro (corrigido)
+- Causa de "sem tendência": o Stooq (histórico) parou de entregar o CSV e o farol ficava sem histórico. `mercado-ouro` v2 usa Yahoo Finance (reserva: Stooq e histórico próprio gravado em `mercado_ouro_hist`).
+- Cache caiu de 1 dia para 3 horas (queda/alta forte de tarde agora aparece; botão Atualizar força).
+- A IA agora recebe os números reais do dia (antes só no modo sem busca) e responde: decisão de compra, passado, presente, futuro (semanas e meses), "pode cair mais?", "pode subir mais?", cenário, riscos e ação.
+- Dashboard › Farol do ouro: "Devo comprar ouro agora?" + três quadros Passado / Presente / Futuro. Sem IA, o futuro vem da leitura técnica.
