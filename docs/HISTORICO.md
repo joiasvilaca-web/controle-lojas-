@@ -519,3 +519,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Selos/contadores/chips saíram da pílula (raio 6–8px); alertas com raio 10px.
 - Celular: toque de 44px em abas, botões, ícones de ação da linha ("Marcar como pago", etiqueta, lápis, lixeira) e navegação da agenda; "Ordenar por" com respiro lateral.
 - Detector 0 achados (antes 0); nenhuma função mudou; 188/188 testes.
+
+## 25/11 — Dashboard repaginado + regras gerais de título e toque (rodada 6, impeccable)
+- **Dashboard**: título serifado (30px), cabeçalho com linha, barra de período em faixa secundária; os 4 números de destaque viraram uma faixa única com divisores e "Movimento no período" em destaque; "Total com nota × sem nota" deixou de ter cartões dentro do cartão; selos de 6px; no celular, toque de 44px em período, setas, lojas, abas e filtros.
+- **tema.css (todos os módulos)**: todo `h1` de página passa a usar a serifada (exceto telas de login); no celular, botões, abas, chips, ícones de ação, links de voltar, campos e selects têm no mínimo 44px (caixas de marcar ficam de fora). Cobre Atendimento, Transferências, Lançamentos, Agenda, Inventário, Avisos, Conciliação, Marketing, Site, Reforma-admin e Ajuda.
+- Detector 0 achados no Dashboard; nenhuma função mudou; 188/188 testes; sem rolagem horizontal em 390px nos 12 módulos conferidos.
+
