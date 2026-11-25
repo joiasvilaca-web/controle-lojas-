@@ -563,3 +563,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Perfil diretoria não vê mais meta de vendedora nem "Seus números no mês". O painel mostra, por loja, **quanto falta para a meta geral do mês** (meta de Dashboard › Editar metas), por dia restante, % e ritmo de fechamento.
 - Balão da meta, fala e elogio de meta pessoal não aparecem para a diretoria. Vendedoras e gerentes ficam como antes.
 - Servidor: nova função `copiloto-metas` v1 (só diretoria, só leitura). Cliente: copiloto.js.
+
+## 25/11/2026 — Vilacinha: fila de prioridade e "Ciente"
+- Um balão por vez, por prioridade: 1) recado do diretor, 2) aviso do sistema (vias esperando liberação, avisos do quiz, controles do administrativo), 3) dica/aula, 4) perguntas (pergunta do dia, bem-estar). Balão de prioridade menor nunca entra por cima de um maior. Avisos iniciais saem antes da saudação.
+- Todo balão tem botão: **Ciente** (diretor e sistema) ou **Já li, não mostrar mais** (dicas, aulas, perguntas). Urgente insiste a cada entrada até o ciente; os demais aparecem 1x por dia.
+- Ciente do sistema fica no servidor (tabela `copiloto_ciente`, função `copiloto-ciente` v1; ops lista, dar, quem): vale em qualquer aparelho e a diretoria pode consultar quem deu ciente. Recado do diretor usa o "lido" que já existia.
+- Ciente só para de interromper: a pendência continua no painel e no contador do botão até ser resolvida ("Ciente, parar de avisar" também no painel).
