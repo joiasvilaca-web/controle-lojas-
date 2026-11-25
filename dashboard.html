@@ -343,6 +343,14 @@
     .abas-std button{ min-height:44px; }
     .filters select, .filters input[type=date], .filters input[type=text], .filters input[type=month]{ min-height:44px; }
   }
+  .farol-head{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; justify-content:space-between; }
+  .farol-badge{ display:inline-flex; align-items:center; gap:8px; font-size:15px; font-weight:800; padding:8px 14px; border-radius:8px; letter-spacing:.04em; }
+  .farol-COMPRAR{ background:var(--ok-soft); color:var(--ok); } .farol-ESPERAR{ background:var(--wait-soft); color:var(--wait); } .farol-NEUTRO{ background:var(--surface-2); color:var(--ink-soft); }
+  .farol-txt{ font-size:14.5px; font-weight:600; line-height:1.45; margin:12px 0 4px; }
+  .farol-li{ display:flex; gap:8px; font-size:13.5px; line-height:1.5; color:var(--ink-soft); margin:4px 0; }
+  .farol-box{ border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top:8px; font-size:13.5px; line-height:1.5; }
+  .farol-box b{ display:block; font-size:12px; color:var(--ink-faint); margin-bottom:2px; }
+  .farol-acao{ border-left:3px solid var(--accent); padding:8px 12px; margin-top:12px; font-size:14px; background:var(--surface-2); border-radius:0 8px 8px 0; }
 </style>
 </head>
 <body>
@@ -1050,7 +1058,7 @@
     if(mostraFinanceiro) abas.push(["geral","Visão geral"], ["analises","Análises"], ["recebimentos","Recebimentos"], ["formas","Formas de pagamento"]);
     abas.push(["ordens","Ordens de serviço"]);
     if(mostraTransf) abas.push(["vendas","Vendas"], ["transf","Transferências"]);
-    if(ehDiretoriaDash) abas.push(["margem","Custo e margem"]);
+    if(ehDiretoriaDash) abas.push(["farol","Farol do ouro"], ["margem","Custo e margem"]);
 
     main.innerHTML = `
       <div class="dash-head">
@@ -1080,6 +1088,7 @@
       <div class="dash-painel" data-painel="ordens" id="painel-ordens" role="tabpanel"><div class="section" id="secOrdens"></div></div>
       ${mostraTransf ? `<div class="dash-painel" data-painel="vendas" id="painel-vendas" role="tabpanel"><div class="section" id="secVendas"></div></div>` : ""}
       ${mostraTransf ? `<div class="dash-painel" data-painel="transf" id="painel-transf" role="tabpanel"><div class="section" id="secTransf"></div></div>` : ""}
+      ${ehDiretoriaDash ? `<div class="dash-painel" data-painel="farol" id="painel-farol" role="tabpanel"><div class="section" id="secFarol"></div></div>` : ""}
       ${ehDiretoriaDash ? `<div class="dash-painel" data-painel="margem" id="painel-margem" role="tabpanel"><div class="section" id="secMargem"></div></div>` : ""}
     `;
 
@@ -1106,7 +1115,7 @@
     renderSecaoOrdens(mostraFinanceiro);
     if(mostraTransf) renderSecaoVendas(mostraFinanceiro);
     if(mostraTransf) renderSecaoTransf();
-    if(ehDiretoriaDash) renderSecaoMargem();
+    if(ehDiretoriaDash){ renderSecaoMargem(); renderSecaoFarol(false); }
     // abre a aba lembrada (ou a primeira); se for Visão geral, ela já desenha o gráfico com a largura certa
     selecionarAbaDash(abaDashAtual || (abas[0] && abas[0][0]));
     if(mostraFinanceiro && abaDashAtual !== "geral") renderVisaoGeral();
@@ -2391,6 +2400,32 @@
     const c = Number(p.custo); if(Number.isFinite(c) && c > 0) return c;
     const cc = Number(p.custoCompra); if(Number.isFinite(cc) && cc > 0) return cc;
     return null;
+  }
+  async function renderSecaoFarol(forcar){
+    const el = document.getElementById("secFarol"); if(!el) return;
+    el.innerHTML = `<div class="empty"><b>Buscando o mercado…</b>Preço do ouro, dólar e cenário.</div>`;
+    let r; try{ r = await fetch(SUPABASE_URL + "/functions/v1/mercado-ouro", { method:"POST", headers:{ "Content-Type":"application/json", "apikey":SUPABASE_ANON_KEY, "Authorization":"Bearer "+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, op:"farol", forcar: !!forcar }) }).then(x=>x.json()); }catch(e){ r = { ok:false, error:"Sem conexão." }; }
+    if(!r || r.ok === false || r.error){ el.innerHTML = `<div class="empty"><b>Não consegui o farol agora</b>${escapeHtml((r && r.error) || "")}<br><button type="button" class="btn btn-ghost btn-sm" id="farolRetry">Tentar de novo</button></div>`; const b = document.getElementById("farolRetry"); if(b) b.onclick = ()=>renderSecaoFarol(true); return; }
+    const pr = r.precos || {}, m = r.metricas || null, ia = r.analise || null, f = r.farol || "NEUTRO";
+    const dt = r.atualizadoEm ? new Date(r.atualizadoEm) : null;
+    const vb = p => p == null ? "" : `${p>0.1?"▲":(p<-0.1?"▼":"■")} ${p>0?"+":""}${Number(p).toFixed(1)}%`;
+    let h = `<div class="farol-head"><span class="farol-badge farol-${escapeHtml(f)}">${escapeHtml(f)}</span><span class="dash-sub">${ia&&ia.confianca?"confiança "+escapeHtml(ia.confianca)+" · ":""}atualizado ${dt?dt.toLocaleString("pt-BR"):"—"}${r.semIA?" · análise técnica":""} <button type="button" class="btn btn-ghost btn-sm" id="farolAtualizar">Atualizar</button></span></div>`;
+    if(ia && ia.resumo) h += `<p class="farol-txt">${escapeHtml(ia.resumo)}</p>`;
+    h += `<div class="kpis" style="margin-top:12px">
+      <div class="kpi"><div class="lbl">Ouro</div><div class="num menor">${pr.ouroBRLg!=null?fmtMoeda(pr.ouroBRLg)+"/g":"—"}</div>${m?`<div class="det">${vb(m.varDia)} dia · ${vb(m.var30)} mês</div>`:""}</div>
+      <div class="kpi"><div class="lbl">Dólar</div><div class="num menor">${pr.dolar!=null?"R$ "+Number(pr.dolar).toFixed(2).replace(".",","):"—"}</div></div>
+      <div class="kpi"><div class="lbl">Tendência</div><div class="num menor">${m?escapeHtml(m.tendencia):"—"}</div>${m?`<div class="det">posição ${escapeHtml(m.posicaoFaixa)}% da faixa do ano</div>`:""}</div>
+      ${m?`<div class="kpi"><div class="lbl">Faixa 12 meses</div><div class="det">máx ${fmtMoeda(m.max52)}<br>mín ${fmtMoeda(m.min52)}</div></div>`:""}</div>`;
+    if(ia){
+      if(Array.isArray(ia.cenario) && ia.cenario.length) h += `<div class="farol-box"><b>O que move o ouro agora</b>${ia.cenario.map(c=>`<div class="farol-li"><span>•</span><span>${escapeHtml(c)}</span></div>`).join("")}</div>`;
+      if(ia.previsaoCurtoPrazo) h += `<div class="farol-box"><b>Curto prazo (semanas)</b>${escapeHtml(ia.previsaoCurtoPrazo)}</div>`;
+      if(ia.previsaoMedioPrazo) h += `<div class="farol-box"><b>Médio prazo (meses)</b>${escapeHtml(ia.previsaoMedioPrazo)}</div>`;
+      if(Array.isArray(ia.riscos) && ia.riscos.length) h += `<div class="farol-box"><b>Riscos a vigiar</b>${ia.riscos.map(x=>escapeHtml(x)).join(" · ")}</div>`;
+      if(ia.acaoRecomendada) h += `<div class="farol-acao"><b>Ação sugerida:</b> ${escapeHtml(ia.acaoRecomendada)}</div>`;
+    }
+    h += `<p class="dash-sub" style="margin-top:12px">Apoio à decisão de compra, não recomendação de investimento.</p>`;
+    el.innerHTML = h;
+    const ba = document.getElementById("farolAtualizar"); if(ba) ba.onclick = ()=>renderSecaoFarol(true);
   }
   function renderSecaoMargem(){
     const el = document.getElementById("secMargem"); if(!el) return;

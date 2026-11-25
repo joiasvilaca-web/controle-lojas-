@@ -42,6 +42,10 @@
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
   }
   /* 25/11: diretoria não tem meta pessoal. Ela vê quanto falta para a META GERAL de cada loja (Dashboard › Editar metas). */
+  async function apiOuro(){
+    try{ return await fetch(URL_FN('mercado-ouro'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body:JSON.stringify({ senha:S.senha, op:'farol' }) }).then(function(x){ return x.json(); }); }
+    catch(e){ return null; }
+  }
   function ehDir(){ return !!(S.user && S.user.nivel === 'diretoria'); }
   async function apiM(body){
     try{ var r = await fetch(URL_FN('copiloto-metas'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
@@ -232,6 +236,7 @@
   +'.cp-balao{left:12px;right:12px;bottom:calc(80px + env(safe-area-inset-bottom));max-width:none;border-radius:18px;padding:14px 14px 12px;font-size:15px;box-shadow:0 18px 40px -12px rgba(0,0,0,.45);}'
   +'.cp-balao .cp-acoes{justify-content:stretch;} .cp-balao .cp-acoes .cp-b{flex:1 1 auto;justify-content:center;min-height:44px;font-size:14px;}'
   +'.cp-b{min-height:40px;}'
+  +'.cp-farol{border-left:4px solid var(--t-success,#1f7a4d);padding-left:10px;} .cp-farol .cp-fb{display:inline-block;font-weight:800;letter-spacing:.04em;background:var(--t-success-soft,#e3f3ea);color:var(--t-success,#1f7a4d);border-radius:6px;padding:2px 8px;margin-right:6px;}'
   /* painel vira tela cheia (folha) com área segura */
   +'.cp-painel{width:100vw;height:100vh;height:100dvh;top:0;box-shadow:none;animation:cpSobe .25s ease-out;}'
   +'@keyframes cpSobe{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}'
@@ -353,6 +358,7 @@
     d.querySelector('[data-cp="x"]').onclick = fecharBalao;
     d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); if(!semPadrao) ls(chave('pausa'), String(Date.now())); };
     var ab = d.querySelector('[data-cp="abrir"]'); if(ab) ab.onclick = function(){ fecharBalao(); abrirPainel(); };
+    var abf = d.querySelector('[data-cp="farol"]'); if(abf) abf.onclick = function(){ fecharBalao(); try{ localStorage.setItem('vilaca_dash_aba','farol'); }catch(e){} try{ if(typeof selecionarModulo === 'function') selecionarModulo('dashboard'); if(typeof selecionarAbaDash === 'function') selecionarAbaDash('farol'); }catch(e){} };
     var bl0 = d.querySelector('[data-cp="lido"]'); if(bl0) bl0.onclick = function(){ silenciar(ch.key, ch.servidor); try{ if(ch.aoLer) ch.aoLer(); }catch(e){} fecharBalao(); };
     d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Vilacinha/,'')); };
     clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, fechaEm || (semPadrao ? 60000 : 25000));
@@ -1095,6 +1101,20 @@
       balao('<div class="cp-txt"><b>'+esc(rS.titulo||'Aviso do sistema')+':</b> '+esc(String(rS.texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000,
         { key:rS.id, prio:2, rotulo:'Ciente', servidor:true });
       return;
+    }
+    /* 25/11: Farol do Ouro em COMPRAR avisa a diretoria com prioridade máxima (uma vez por dia, com Ciente no servidor). */
+    if(ehDir() && !S.aberto){
+      var FO = await apiOuro();
+      if(FO && FO.ok !== false && !FO.error && FO.farol === 'COMPRAR'){
+        var kFo = 'sis:farol:COMPRAR:' + new Date().toISOString().slice(0,10);
+        if(!silenciado(kFo)){
+          var iaF = FO.analise || {};
+          balao('<div class="cp-txt cp-farol"><span class="cp-fb">COMPRAR</span><b>Farol do Ouro virou verde.</b> ' + esc(String(iaF.resumo || 'O mercado indica boa hora para comprar ouro.').slice(0,200)) + (iaF.acaoRecomendada ? ' <b>Ação sugerida:</b> ' + esc(String(iaF.acaoRecomendada).slice(0,160)) : '') + '</div>',
+            '<button type="button" class="cp-b" data-cp="farol">Ver no Dashboard</button>', true, 40000,
+            { key:kFo, prio:1, rotulo:'Ciente', servidor:true });
+          return;
+        }
+      }
     }
     /* 25/11: o alerta "Meta do mês fora do ritmo" saiu do Dashboard e agora vem só pelo Vilacinha (diretoria). Mesma regra: mais de 15 pontos abaixo do esperado. */
     if(ehDir() && !S.aberto){
