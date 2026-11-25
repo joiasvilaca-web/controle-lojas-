@@ -41,6 +41,33 @@
       if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
     catch(e){ return { ok:false, error:'Sem conexão.' }; }
   }
+  /* 25/11: diretoria não tem meta pessoal. Ela vê quanto falta para a META GERAL de cada loja (Dashboard › Editar metas). */
+  function ehDir(){ return !!(S.user && S.user.nivel === 'diretoria'); }
+  async function apiM(body){
+    try{ var r = await fetch(URL_FN('copiloto-metas'), { method:'POST', headers:{ 'Content-Type':'application/json', apikey:window.SUPABASE_ANON_KEY, Authorization:'Bearer '+window.SUPABASE_ANON_KEY }, body: JSON.stringify(Object.assign({ senha:S.senha }, body)) });
+      if(r.status===404) return { ok:false, sem:true }; return await r.json(); }
+    catch(e){ return { ok:false, error:'Sem conexão.' }; }
+  }
+  async function carregarMetasLojas(){
+    var r = await apiM({}); S.metasLojas = r && r.ok ? r : { ok:false };
+    try{ if(S.aberto) desenhar(); }catch(e){}
+    return S.metasLojas;
+  }
+  function cartaoMetaLojas(){
+    var h = '<div class="cp-card"><h4>' + ic('estrela',14) + 'Metas das lojas: quanto falta no mês</h4>', M = S.metasLojas;
+    if(!M){ carregarMetasLojas(); return h + '<div class="cp-meta-s">Conferindo as vendas do mês…</div></div>'; }
+    if(!M.ok) return h + '<div class="cp-meta-s">Não consegui buscar agora. Abra o painel de novo em instantes.</div></div>';
+    if(!M.lojas.length) return h + '<div class="cp-meta-s">Nenhuma loja tem meta cadastrada. Cadastre em Dashboard › Editar metas.</div></div>';
+    var dias = M.diasRestantes || 1;
+    h += M.lojas.map(function(l){
+      return '<div style="margin:0 0 12px;"><div style="display:flex;justify-content:space-between;gap:8px;"><b>' + esc(l.nome) + '</b><span class="cp-meta-s">' + l.pct + '%</span></div>'
+        + (l.atingida ? '<div class="cp-meta-s" style="color:#1f9a55;font-weight:700;">Meta batida! Passou ' + brl0(l.vendido - l.meta) + '.</div>'
+          : '<div class="cp-meta-v" style="font-size:20px;">Faltam ' + brl0(l.falta) + '</div><div class="cp-meta-s">' + brl0(l.porDia) + ' por dia nos ' + dias + ' dia' + (dias > 1 ? 's' : '') + ' que restam</div>')
+        + '<div class="cp-barra" aria-hidden="true"><i style="width:' + l.pct + '%"></i></div>'
+        + '<div class="cp-meta-s">Vendido <b>' + brl0(l.vendido) + '</b> de ' + brl0(l.meta) + (l.projecao && !l.atingida ? ' · no ritmo atual fecha em ' + brl0(l.projecao) : '') + '</div></div>';
+    }).join('');
+    return h + '</div>';
+  }
   function ehOficina(){ return !!(S.user && S.user.nivel === 'oficina'); }
   /* 23/11: função ADMINISTRATIVO (marca em permissoes._perfil). Para ela o Vilacinha NÃO fala de venda, meta, ranking nem quiz:
    * vira o auxiliar de CONTROLES — fiscal, caixa, vias e DP — com a mesma lista dos Avisos (avisos-core.js). */
@@ -107,7 +134,7 @@
       return L[0];
     }
     if(eu.posicao === 1 && (eu.vendas||0) > 0) L.push('E olha só: você está em 1º na loja este mês. Isso não é sorte, é atendimento.');
-    if(m.minha && m.minha.atingida) L.push('Sua meta do mês já está batida. Daqui para frente é lucro e confiança.');
+    if(!ehDir() && m.minha && m.minha.atingida) L.push('Sua meta do mês já está batida. Daqui para frente é lucro e confiança.');
     if((d.hojeAtendimentos||0) >= 3) L.push('Você já atendeu ' + d.hojeAtendimentos + ' pessoas hoje. Que ritmo bom!');
     if((q.sequencia||0) >= 3) L.push('E ainda são ' + q.sequencia + ' dias seguidos respondendo a pergunta do dia. Isso é disciplina.');
     if((eu.vendas||0) >= 1) L.push('No mês já são ' + eu.vendas + ' vendas suas, com ticket médio de ' + brl0(eu.ticketMedio||0) + '. Isso é resultado de verdade.');
@@ -335,7 +362,7 @@
         'Tem <b>' + va.length + ' cliente(s)</b> esperando um contato seu hoje. Uma ligação curta já reabre a conversa.',
         (nome1 ? '<b>' + nome1 + '</b> e mais ' + Math.max(0, va.length - 1) + ' cliente(s) estão na sua lista de hoje.' : 'Sua lista de hoje tem <b>' + va.length + ' cliente(s)</b>.') + ' O melhor horário para ligar costuma ser antes do almoço.' ], dia) });
     }
-    if(m.metaMes > 0 && m.hoje > 0){
+    if(!ehDir() && m.metaMes > 0 && m.hoje > 0){
       if(!silenciado('assunto:meta')) op.push({ tag:['🎯','Sua meta'], k:'assunto:meta', html: variar([
         'Sua meta de hoje é <b>' + brl0(m.hoje) + '</b>. Uma venda de cada vez. 💪',
         'Para o mês fechar no alvo, hoje o número é <b>' + brl0(m.hoje) + '</b>. Bora?',
@@ -591,7 +618,7 @@
       + '<form class="cp-form" id="cpForm"><button type="button" class="mic" id="cpMic" title="Falar" aria-label="Falar a pergunta">'+icMic(22)+'</button><textarea id="cpTexto" maxlength="600" placeholder="'+(ehAdm()?'Pergunte ao Vilacinha: como lanço a nota de devolução?':'Pergunte ao Vilacinha: como vender mais aliança?')+'" aria-label="Pergunta"></textarea><button type="submit" title="Enviar" aria-label="Enviar">'+ic('enviar',18)+'</button></form>';
     document.body.appendChild(p);
     p.querySelector('[data-cp="fechar"]').onclick = fecharPainel;
-    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = ehOficina() ? await apiX({ op:'dia', forcar:true }) : await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; S.recados = r.recados || S.recados; pintarFab(); } if(ehAdm()) await carregarControles(); desenhar(); };
+    p.querySelector('[data-cp="atualizar"]').onclick = async function(){ var c = document.getElementById('cpCorpo'); c.innerHTML = '<p>Refazendo as contas…</p>'; var r = ehOficina() ? await apiX({ op:'dia', forcar:true }) : await api({ op:'dia', forcar:true, lojaId: lojaShell() }); if(r && r.ok){ S.dia = r; S.recados = r.recados || S.recados; pintarFab(); } if(ehAdm()) await carregarControles(); if(ehDir()) S.metasLojas = null; desenhar(); };
     p.querySelector('[data-cp="ler"]').onclick = function(){ falar(resumoFalado()); };
     var ta = p.querySelector('#cpTexto');
     p.querySelector('#cpForm').onsubmit = function(e){ e.preventDefault(); perguntar(ta.value); };
@@ -623,7 +650,7 @@
       (d.dicas||[]).forEach(function(x,i){ t += 'Dica ' + (i+1) + ': ' + x + ' '; });
       return t;
     }
-    if(d.meta && d.meta.metaMes > 0) t += 'Sua meta de hoje é ' + Math.round(d.meta.hoje) + ' reais. ';
+    if(!ehDir() && d.meta && d.meta.metaMes > 0) t += 'Sua meta de hoje é ' + Math.round(d.meta.hoje) + ' reais. ';
     if((d.vendaAtiva||[]).length) t += 'Você tem ' + d.vendaAtiva.length + ' clientes para chamar hoje. ';
     (d.dicas||[]).forEach(function(x,i){ t += 'Dica ' + (i+1) + ': ' + x + ' '; });
     return t;
@@ -637,8 +664,9 @@
     var m = d.meta || {}, pct = m.metaMes ? Math.min(100, Math.round((m.vendidoMes||0) / m.metaMes * 100)) : 0, eu = d.eu || {}, mel = d.melhor;
     var num = function(rot, v, ref){ return '<div class="cp-num"><b>'+v+'</b><small>'+rot+'</small>'+(ref!=null?'<em>melhor da loja: '+ref+'</em>':'')+'</div>'; };
     var semMeta = !(m.metaMes > 0);
-    var h = cartaoRecados() + cartaoMeta(d);
-    h += '<div class="cp-card"><h4>'+ic('grafico',14)+'Seus números no mês</h4><div class="cp-nums">'
+    var dirP = ehDir();
+    var h = cartaoRecados() + (dirP ? cartaoMetaLojas() : cartaoMeta(d));
+    if(!dirP) h += '<div class="cp-card"><h4>'+ic('grafico',14)+'Seus números no mês</h4><div class="cp-nums">'
       + num('vendas', eu.vendas||0, mel?mel.vendas:null) + num('ticket médio', brl0(eu.ticketMedio), mel?brl0(mel.ticketMedio):null) + num('peças por venda', String(eu.pecasPorVenda||0).replace('.',','), mel?String(mel.pecasPorVenda).replace('.',','):null)
       + '</div>' + (mel && (parseInt(mel.vendasComServico)||parseInt(eu.vendasComServico)) ? '<div class="cp-meta-s" style="margin-top:6px;">A melhor da loja junta serviço em <b>'+esc(mel.vendasComServico)+'</b> das vendas. Você: <b>'+esc(eu.vendasComServico||'0%')+'</b>.</div>' : (eu.posicao===1?'<div class="cp-meta-s" style="margin-top:6px;">Você é a melhor da loja este mês. Continue assim!</div>':'')) + '</div>';
     var ROT = { venda:'No balcão', pedido:'No pedido', orcamento:'No orçamento', chat:'No chat' };
