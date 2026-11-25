@@ -22,6 +22,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap" media="print" onload="this.media='all'"><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap"></noscript></noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="cliente-lojas.js"></script>
 <script src="recorte-foto.js"></script>
 <!-- Tema compartilhado com os módulos (seletores :where, especificidade zero). Vem ANTES do
@@ -8163,7 +8164,7 @@ const PRESETS_ETIQUETA = [
   { id:'60x15d', label:'60 × 15 mm dobrável (rabo de rato)', larguraMm:60, alturaMm:15, modelo:'dobravel' },
   /* 25/11 (Felipe): etiqueta de joia com rabo — corpo 60 × 12 mm dobrado em 30 + 30 (nome e fator de um lado,
      código de barras e código do outro), rabo de ~38 mm para prender na joia, 2,6 mm entre uma etiqueta e a próxima. */
-  { id:'60x12r', label:'60 × 12 mm com rabo (30 + 30, rabo 38 mm)', larguraMm:60, alturaMm:12, modelo:'dobravel', rabinhoMm:38, ladoBarras:'dir', espV:2.6, margens:0, fator:true, semNome:true, barrasMm:22 },
+  { id:'60x12r', label:'60 × 12 mm com rabo (30 + 30, rabo 38 mm)', larguraMm:60, alturaMm:12, modelo:'dobravel', rabinhoMm:38, ladoBarras:'dir', espV:2.6, margens:0, fator:true, semNome:true, barrasMm:25, barrasNumerico:true, qr:true },
 ];
 /** Altura de linha padrão (mm) por escala de texto — usada só para calcular a posição inicial
  * (empilhada) de cada campo antes de o usuário arrastar algo no quadro de posicionamento. */
@@ -8221,6 +8222,9 @@ function etiquetaCssComum(cfg){
   .etq-cod{ text-align:center; font-weight:700; font-size:${px.base}px; line-height:1.1; margin-top:0.4mm; letter-spacing:.03em; white-space:nowrap; }
   .etq-dados{ padding:${cfg.alturaMm<=14?'0.5mm 1.2mm':'0.8mm 1.5mm'}; line-height:1.15; }
   .etq-dados > div{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .etq-dados-qr{ flex-direction:row; align-items:center; gap:1mm; }
+  .etq-qr{ flex:0 0 auto; width:${cfg.alturaMm<=14?'10':'12'}mm; height:${cfg.alturaMm<=14?'10':'12'}mm; } .etq-qr svg{ display:block; width:100%; height:100%; }
+  .etq-txt{ flex:1 1 auto; min-width:0; } .etq-txt > div{ white-space:nowrap; overflow:hidden; text-overflow:clip; line-height:1.15; }
   .etq-dados .etq-nome{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .etq-dados .etq-preco{ font-weight:800; margin-top:${cfg.alturaMm<=14?'0':'0.5mm'}; }`;
   }
@@ -8259,20 +8263,41 @@ function etiquetaLabelDobravelHtml(produto, cfg, opts){
   const pr = opts.preco ? precosEtiqueta(produto) : null;
   if(pr){
     const sem00 = v => cadBrl(v).replace(/,00$/, '');   // R$ 4.550 (sem ,00); centavos só se houver
-    linhas.push(`<div class="etq-preco">À vista ${sem00(pr.avista)}</div>`);
+    linhas.push(`<div class="etq-preco">${cfg.qr ? '' : 'À vista '}${sem00(pr.avista)}</div>`);
     linhas.push(`<div class="etq-preco">12x ${sem00(pr.parcela)}</div>`);
   } else if(opts.preco === undefined && campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
     linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);   // prévia/uso antigo sem a pergunta
   }
-  // etiqueta baixa (ex.: 12 mm): encolhe o texto para todas as linhas caberem sem cortar
+  // QR Code (celular) na metade dos dados: guarda o código interno (PRD000000). SVG nítido, sem arredondar.
+  let qrHtml = '';
+  if(cfg.qr && codigoBarras && window.qrcode){
+    try{
+      const q = window.qrcode(0, 'M'); q.addData(codigoBarras); q.make();
+      const n = q.getModuleCount(), m = 1;   // 1 módulo de margem
+      let d = '';
+      for(let r=0;r<n;r++) for(let c=0;c<n;c++) if(q.isDark(r,c)) d += `M${c+m} ${r+m}h1v1h-1z`;
+      qrHtml = `<div class="etq-qr"><svg viewBox="0 0 ${n+2*m} ${n+2*m}" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><path d="${d}" fill="#000"/></svg></div>`;
+    }catch(e){ qrHtml = ''; }
+  }
+  // etiqueta baixa (ex.: 12 mm): encolhe o texto para todas as linhas caberem sem cortar (e, com QR, também na largura)
   const pxBase = (ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media).base;
   const maxPx = Math.floor(((cfg.alturaMm * 96/25.4) - 5) / (Math.max(1, linhas.length) * 1.2) * 10) / 10;
-  const fonte = Math.max(6, Math.min(pxBase, maxPx));
+  const larguraTxtMm = (cfg.larguraMm/2) - 2.4 - (qrHtml ? 10.5 : 0);
+  const maxChars = Math.max(8, ...linhas.map(l => l.replace(/<[^>]+>/g,'').length));
+  const maxPxLarg = Math.floor((larguraTxtMm * 96/25.4) / (maxChars * 0.6) * 10) / 10;
+  const fonte = Math.max(6, Math.min(pxBase, maxPx, qrHtml ? maxPxLarg : 99));
+  // código de barras: só com os números (Code 128 C) fica com metade das barras — barras mais grossas e fáceis p/ leitor a laser.
+  // A Consulta de preço e as buscas aceitam só o número (PRD003029 = 003029).
+  let valorBarras = codigoBarras, formatoBarras = 'CODE128';
+  if(cfg.barrasNumerico){
+    const dig = (codigoBarras.match(/\d+$/) || [''])[0];
+    if(dig){ valorBarras = (dig.length % 2 ? '0' : '') + dig; formatoBarras = 'CODE128C'; }
+  }
   let svgBarras = '';
-  if(codigoBarras && window.JsBarcode){
+  if(valorBarras && window.JsBarcode){
     try{
       const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
-      window.JsBarcode(svgEl, codigoBarras, { format:'CODE128', width:2, height:60, displayValue:false, margin:0 });
+      window.JsBarcode(svgEl, valorBarras, { format:formatoBarras, width:2, height:60, displayValue:false, margin:0 });
       const w = parseFloat(svgEl.getAttribute('width'))||100, h = parseFloat(svgEl.getAttribute('height'))||60;
       svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`);
       svgEl.setAttribute('preserveAspectRatio', 'none');
@@ -8281,8 +8306,12 @@ function etiquetaLabelDobravelHtml(produto, cfg, opts){
     }catch(e){ svgBarras = ''; }
   }
   const barrasHtml = `<div class="etq-metade etq-barras">${svgBarras || '<div style="flex:1"></div>'}<div class="etq-cod" style="font-size:${Math.min(fonte, 10)}px;">${escapeHtml(codigoBarras || 'SEM CÓDIGO')}</div></div>`;
-  const dadosHtml = `<div class="etq-metade etq-dados" style="font-size:${fonte}px;">${linhas.join('')}</div>`;
-  return `<div class="etq-label">${cfg.ladoBarras === 'dir' ? dadosHtml + barrasHtml : barrasHtml + dadosHtml}</div>`;
+  const dadosEsq = cfg.ladoBarras === 'dir';
+  const corpoDados = qrHtml
+    ? (dadosEsq ? qrHtml + `<div class="etq-txt">${linhas.join('')}</div>` : `<div class="etq-txt">${linhas.join('')}</div>` + qrHtml)
+    : linhas.join('');
+  const dadosHtml = `<div class="etq-metade etq-dados${qrHtml?' etq-dados-qr':''}" style="font-size:${fonte}px;">${corpoDados}</div>`;
+  return `<div class="etq-label">${dadosEsq ? dadosHtml + barrasHtml : barrasHtml + dadosHtml}</div>`;
 }
 /** HTML de UMA etiqueta (um bloco .etq-label) pro produto — modelo simples, com cada campo na
  * posição configurada (arrastada no quadro, ou a posição padrão empilhada se nunca foi movido). */
@@ -8375,6 +8404,8 @@ function renderImpressaoTab(main){
       <div class="grid-2" style="max-width:360px;">
         <div class="field"><label>Rabo (mm)</label><input type="number" min="0" step="0.5" id="etqRabo" value="${config.etiquetaJoia.rabinhoMm||0}" title="Comprimento do rabo que prende na joia (só aumenta a largura da página; não imprime nada nele)"></div>
         <div class="field"><label>Largura do código de barras (mm)</label><input type="number" min="0" step="0.5" id="etqBarrasMm" value="${config.etiquetaJoia.barrasLarguraMm||0}" title="Largura impressa das barras, centralizada na metade. 0 = ocupa a metade toda. Para PRD000000, ~22 mm lê bem e deixa folga na dobra."></div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink-soft);grid-column:1/-1;"><input type="checkbox" id="etqBarrasNum" ${config.etiquetaJoia.barrasNumerico?'checked':''}> Código de barras só com os números (menos barras, mais grossas — melhor para leitor a laser)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink-soft);grid-column:1/-1;"><input type="checkbox" id="etqQr" ${config.etiquetaJoia.qr?'checked':''}> QR Code na metade dos dados (leitura pelo celular)</label>
         <div class="field"><label>Código de barras fica</label>
           <select id="etqLado">
             <option value="esq" ${config.etiquetaJoia.ladoBarras!=='dir'?'selected':''}>Na metade esquerda</option>
@@ -8530,6 +8561,8 @@ function renderImpressaoTab(main){
       rabinhoMm: Math.max(0, Number(document.getElementById('etqRabo').value)||0),
       ladoBarras: document.getElementById('etqLado').value === 'dir' ? 'dir' : 'esq',
       barrasLarguraMm: Math.max(0, Number(document.getElementById('etqBarrasMm').value)||0),
+      barrasNumerico: document.getElementById('etqBarrasNum').checked,
+      qr: document.getElementById('etqQr').checked,
       campos: lerCamposForm(),
       margemFora: {
         sup: Math.max(0, Number(document.getElementById('etqMargSup').value)||0),
@@ -8553,6 +8586,8 @@ function renderImpressaoTab(main){
     if(preset.espV!=null) document.getElementById('etqEspV').value = preset.espV;
     if(preset.margens!=null) ['etqMargSup','etqMargInf','etqMargEsq','etqMargDir'].forEach(id=>{ document.getElementById(id).value = preset.margens; });
     if(preset.barrasMm!=null) document.getElementById('etqBarrasMm').value = preset.barrasMm;
+    document.getElementById('etqBarrasNum').checked = !!preset.barrasNumerico;
+    document.getElementById('etqQr').checked = !!preset.qr;
     if(preset.semNome){ const cn = document.querySelector('[data-etqcampo="nome"]'); if(cn) cn.checked = false; }
     if(preset.fator){ const cf = document.querySelector('[data-etqcampo="fator"]'); if(cf) cf.checked = true; }
     atualizarVisibilidadeCanvas();
@@ -8584,6 +8619,8 @@ function renderImpressaoTab(main){
     config.etiquetaJoia.rabinhoMm = f.rabinhoMm;
     config.etiquetaJoia.ladoBarras = f.ladoBarras;
     config.etiquetaJoia.barrasLarguraMm = f.barrasLarguraMm;
+    config.etiquetaJoia.barrasNumerico = f.barrasNumerico;
+    config.etiquetaJoia.qr = f.qr;
     config.etiquetaJoia.margemFora = f.margemFora;
     config.etiquetaJoia.espacamento = f.espacamento;
     config.etiquetaJoia.campos = f.campos;
