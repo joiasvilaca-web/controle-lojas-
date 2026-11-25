@@ -7064,6 +7064,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     // Se já tinha um valor fixado (edição normal, ou refixado pelo ↻), mantém exatamente como está.
     if(d.custoCompra==null) d.custoCompra = valorCompraAoVivo();
     if(!online.lojasAuto && (online.publicado || online.marketplaces.length) && !online.lojaIds.length){ showToast('Escolha pelo menos uma loja que vende (aba Site e marketplaces) ou marque Automático.'); peTabAtiva='online'; renderPeTabBody(); renderPeTabs(); return; }
+    let configSavePendente = null;
     const dados = {
       id: idAtual,
       nome,
@@ -7122,9 +7123,10 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
     // consome o número da sequência (evita "furos" quando alguém gera e desiste).
     if(codigoReservadoTexto && dados.codigoInterno === codigoReservadoTexto && codigoReservadoSeq === (config.produtosOtica.proximoCodigo||1)){
       config.produtosOtica.proximoCodigo = codigoReservadoSeq + 1;
-      await configSave();
+      configSavePendente = configSave();   // 25/11: grava o contador junto com o produto (em paralelo), não antes
     }
     const ok = await produtoEstoqueSalvar(dados);
+    if(configSavePendente){ try{ await configSavePendente; }catch(e){ console.error('erro ao salvar contador de código', e); } }
     if(ok){
       // Estoque por loja: compara o que a pessoa digitou (d.estoquePorLoja, valor
       // absoluto) com o que já estava (dados.estoquePorLoja, que preservamos acima) e
@@ -7133,28 +7135,29 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       const estoqueNovoDigitado = Object.fromEntries(Object.entries(d.estoquePorLoja||{}).map(([lojaId,v])=>[lojaId, parseFloat(v)||0]));
       const estoqueAntigo = dados.estoquePorLoja||{};
       const lojasEnvolvidas = new Set([...Object.keys(estoqueNovoDigitado), ...Object.keys(estoqueAntigo)]);
-      for(const lojaId of lojasEnvolvidas){
+      // 25/11: movimentos de todas as lojas em paralelo (a função do banco trava a linha do produto, então é seguro)
+      await Promise.all([...lojasEnvolvidas].map(async lojaId=>{
         const antes = Number(estoqueAntigo[lojaId])||0;
         const depois = Number(estoqueNovoDigitado[lojaId])||0;
         const delta = depois - antes;
-        if(Math.abs(delta) < 1e-9) continue;
+        if(Math.abs(delta) < 1e-9) return;
         const r = await gatewayCall({ op:'registrarMovimentoEstoque', params:{
           produtoId: dados.id, lojaId, tipoMovimento: editando ? 'AJUSTE_INVENTARIO' : 'CRIACAO_INICIAL',
           quantidade: delta, referenciaId: dados.id, observacao: editando ? 'Ajuste manual no cadastro do produto.' : 'Estoque inicial no cadastro do produto.'
         }});
         if(r && !r.error && typeof r.saldoNovo === 'number'){ dados.estoquePorLoja[lojaId] = r.saldoNovo; }
         else{ console.error('erro ao registrar ajuste de estoque', lojaId, r && r.error); dados.estoquePorLoja[lojaId] = depois; }
-      }
+      }));
       // 24/11: se a lista completa ainda não tinha sido carregada (ninguém buscou/filtrou antes de cadastrar),
       // não mexe no array local — deixa a tela recarregar do servidor pra já vir com tudo certo.
       if(produtosEstoqueCarregado){
         const idx = produtosEstoque.findIndex(p=>p.id===dados.id);
         if(idx>=0) produtosEstoque[idx] = dados; else produtosEstoque.push(dados);
-      } else {
-        produtosEstoqueCarregado = false;
       }
       closeModal();
-      renderProdutoUnificadoTab(document.getElementById('cfgBody'), { carregarAgora:true });
+      // 25/11: não recarrega mais a tabela inteira do banco depois de salvar. Se a lista já estava carregada,
+      // só redesenha com o produto atualizado; se não estava, volta pra tela de busca (rápido).
+      renderProdutoUnificadoTab(document.getElementById('cfgBody'), { carregarAgora: produtosEstoqueCarregado });
       showToast(editando ? 'Produto atualizado.' : 'Produto cadastrado.');
     }
   }
@@ -7805,7 +7808,7 @@ async function renderFornecedorTab(main){
 /** 25/11 (Felipe): no modelo dobrável (rabo de rato), pergunta na hora de imprimir se inclui o preço de venda
  * (À vista com desconto previsto + 12x). Lembra a última escolha. Outros modelos imprimem direto (cb(undefined)). */
 function perguntarPrecoEtiqueta(cfg, cb){
-  if(!cfg || (cfg.modelo !== 'dobravel' && cfg.modelo !== 'face')){ cb(undefined); return; }
+  if(!cfg || cfg.modelo !== 'dobravel'){ cb(undefined); return; }
   let ultimo = '1'; try{ ultimo = localStorage.getItem('vilaca_etq_preco') === '0' ? '0' : '1'; }catch(e){}
   const ov = document.createElement('div');
   ov.style.cssText = 'position:fixed;inset:0;background:rgba(20,16,18,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
@@ -8164,8 +8167,6 @@ const PRESETS_ETIQUETA = [
   { id:'60x15d', label:'60 × 15 mm dobrável (rabo de rato)', larguraMm:60, alturaMm:15, modelo:'dobravel' },
   /* 25/11 (Felipe): etiqueta de joia com rabo — corpo 60 × 12 mm dobrado em 30 + 30 (nome e fator de um lado,
      código de barras e código do outro), rabo de ~38 mm para prender na joia, 2,6 mm entre uma etiqueta e a próxima. */
-  /* 25/11 (Felipe): etiqueta de joia 50 × 15 mm — corpo de 25 × 15 mm impresso (uma face só) + rabo de 25 mm, sem espaço entre etiquetas. */
-  { id:'25x15f', label:'25 × 15 mm com rabo de 25 mm (face única, 50 mm no total)', larguraMm:25, alturaMm:15, modelo:'face', rabinhoMm:25, espV:0, margens:0, fator:true, semNome:true, barrasMm:21, barrasNumerico:true, qr:true },
   { id:'60x12r', label:'60 × 12 mm com rabo (30 + 30, rabo 38 mm)', larguraMm:60, alturaMm:12, modelo:'dobravel', rabinhoMm:38, ladoBarras:'dir', espV:2.6, margens:0, fator:true, semNome:true, barrasMm:25, barrasNumerico:true, qr:true },
 ];
 /** Altura de linha padrão (mm) por escala de texto — usada só para calcular a posição inicial
@@ -8214,16 +8215,6 @@ function etiquetaCssComum(cfg){
   const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
   const pesoTexto = cfg.negrito!==false ? 700 : 500;
   const reforcoCss = cfg.reforcoTraco ? 'text-shadow:0.3px 0 0 currentColor, -0.3px 0 0 currentColor;' : '';
-  if(cfg.modelo === 'face'){
-    return `
-  .etq-label{ width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; padding:0.8mm 1mm 0.6mm; display:flex; flex-direction:column; font-family:Arial,Helvetica,sans-serif; color:#000; font-weight:${pesoTexto}; line-height:1.15; -webkit-font-smoothing:none; ${reforcoCss} }
-  .etq-topo{ display:flex; align-items:center; gap:1mm; flex:0 0 auto; }
-  .etq-qr{ flex:0 0 auto; } .etq-qr svg{ display:block; width:100%; height:100%; }
-  .etq-txt{ flex:1 1 auto; min-width:0; } .etq-txt > div{ white-space:nowrap; overflow:hidden; } .etq-txt .etq-preco{ font-weight:800; }
-  .etq-base{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; align-items:center; margin-top:0.5mm; }
-  .etq-bar{ flex:1 1 auto; min-height:0; display:flex; } .etq-bar svg{ display:block; width:100%; height:100%; }
-  .etq-cod{ text-align:center; font-weight:700; line-height:1; letter-spacing:.02em; white-space:nowrap; margin-top:0.3mm; }`;
-  }
   if(cfg.modelo === 'dobravel'){
     const meia = cfg.larguraMm/2;
     return `
@@ -8325,60 +8316,9 @@ function etiquetaLabelDobravelHtml(produto, cfg, opts){
   const dadosHtml = `<div class="etq-metade etq-dados${qrHtml?' etq-dados-qr':''}" style="font-size:${fonte}px;">${corpoDados}</div>`;
   return `<div class="etq-label">${dadosEsq ? dadosHtml + barrasHtml : barrasHtml + dadosHtml}</div>`;
 }
-/** SVG do código de barras (Code 128; só com os números = Code 128 C, metade das barras) e do QR Code — usados no modelo "face". */
-function etqSvgBarras(codigo, numerico){
-  let valor = codigo, formato = 'CODE128';
-  if(numerico){ const dig = (String(codigo).match(/\d+$/) || [''])[0]; if(dig){ valor = (dig.length % 2 ? '0' : '') + dig; formato = 'CODE128C'; } }
-  if(!valor || !window.JsBarcode) return '';
-  try{
-    const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
-    window.JsBarcode(svgEl, valor, { format:formato, width:2, height:60, displayValue:false, margin:0 });
-    const w = parseFloat(svgEl.getAttribute('width'))||100, h = parseFloat(svgEl.getAttribute('height'))||60;
-    svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`); svgEl.setAttribute('preserveAspectRatio', 'none');
-    svgEl.removeAttribute('width'); svgEl.removeAttribute('height'); svgEl.removeAttribute('style');
-    return svgEl.outerHTML;
-  }catch(e){ return ''; }
-}
-function etqSvgQr(codigo){
-  if(!codigo || !window.qrcode) return '';
-  try{
-    const q = window.qrcode(0, 'M'); q.addData(codigo); q.make();
-    const n = q.getModuleCount(), m = 1; let d = '';
-    for(let r=0;r<n;r++) for(let c=0;c<n;c++) if(q.isDark(r,c)) d += `M${c+m} ${r+m}h1v1h-1z`;
-    return `<svg viewBox="0 0 ${n+2*m} ${n+2*m}" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg"><path d="${d}" fill="#000"/></svg>`;
-  }catch(e){ return ''; }
-}
-/** Modelo "face" (25 × 15 mm + rabo): uma face só. Em cima, QR Code à esquerda e, à direita, fator / à vista / 12x;
- * embaixo, o código de barras com o código. O rabo (cfg.rabinhoMm) só aumenta a largura da página. */
-function etiquetaLabelFaceHtml(produto, cfg, opts){
-  opts = opts || {};
-  const campos = cfg.campos || {};
-  const codigo = String(produto.codigoInterno || produto.gtin || '').trim();
-  const linhas = [];
-  if(campos.nome === true) linhas.push(`<div>${escapeHtml(produto.nome)}</div>`);
-  if(campos.fator && produto.fator!=null && produto.fator!=='') linhas.push(`<div>${conteudoCampoEtiqueta(produto,'fator')}</div>`);
-  const pr = opts.preco ? precosEtiqueta(produto) : null;
-  const sem00 = v => cadBrl(v).replace(/,00$/, '');
-  if(pr){ linhas.push(`<div class="etq-preco">${sem00(pr.avista)}</div>`); linhas.push(`<div class="etq-preco">12x ${sem00(pr.parcela).replace('R$ ','')}</div>`); }
-  const qrSvg = cfg.qr ? etqSvgQr(codigo) : '';
-  const altTopo = qrSvg ? 7 : 0;                                   // mm da faixa de cima
-  const lMm = cfg.larguraMm - 2;                                    // área útil (1 mm de cada lado)
-  const larguraTxt = lMm - (qrSvg ? altTopo + 1 : 0);
-  const maxChars = Math.max(7, ...linhas.map(l => l.replace(/<[^>]+>/g,'').length));
-  const porAltura = ((qrSvg ? altTopo : 8) * 96/25.4) / (Math.max(1, linhas.length) * 1.15);
-  const porLargura = (larguraTxt * 96/25.4) / (maxChars * 0.7);
-  const fonte = Math.max(6, Math.floor(Math.min(porAltura, porLargura, 13) * 10) / 10);
-  const barras = etqSvgBarras(codigo, cfg.barrasNumerico);
-  const bw = cfg.barrasLarguraMm > 0 ? Math.min(cfg.barrasLarguraMm, lMm) + 'mm' : '100%';
-  return `<div class="etq-label etq-face">
-    <div class="etq-topo" style="height:${qrSvg ? altTopo + 'mm' : 'auto'};">${qrSvg ? `<div class="etq-qr" style="width:${altTopo}mm;height:${altTopo}mm;">${qrSvg}</div>` : ''}<div class="etq-txt" style="font-size:${fonte}px;">${linhas.join('')}</div></div>
-    <div class="etq-base">${barras ? `<div class="etq-bar" style="width:${bw};">${barras}</div>` : '<div style="flex:1"></div>'}<div class="etq-cod" style="font-size:6.5px;">${escapeHtml(codigo || 'SEM CÓDIGO')}</div></div>
-  </div>`;
-}
 /** HTML de UMA etiqueta (um bloco .etq-label) pro produto — modelo simples, com cada campo na
  * posição configurada (arrastada no quadro, ou a posição padrão empilhada se nunca foi movido). */
 function etiquetaLabelHtml(produto, cfg, opts){
-  if(cfg.modelo === 'face') return etiquetaLabelFaceHtml(produto, cfg, opts);
   if(cfg.modelo === 'dobravel') return etiquetaLabelDobravelHtml(produto, cfg, opts);
   const px = ESCALA_ETIQUETA_PX[cfg.escalaTexto] || ESCALA_ETIQUETA_PX.media;
   const pesoTexto = cfg.negrito!==false ? 700 : 500;
@@ -8461,7 +8401,6 @@ function renderImpressaoTab(main){
         <select id="etqModelo">
           <option value="simples" ${config.etiquetaJoia.modelo!=='dobravel'?'selected':''}>Simples (um bloco só)</option>
           <option value="dobravel" ${config.etiquetaJoia.modelo==='dobravel'?'selected':''}>Dobrável ao meio — código de barras de um lado, dados do outro</option>
-          <option value="face" ${config.etiquetaJoia.modelo==='face'?'selected':''}>Face única com rabo — QR, fator e preço em cima, código de barras embaixo</option>
         </select>
       </div>
       <p class="muted" style="margin:-4px 0 10px; font-size:12px;">No dobrável, a largura é a parte impressa inteira (sem o rabo). Uma metade leva o código de barras do código interno (ou GTIN) com o código embaixo; a outra leva nome, fator e os demais campos marcados. Ao imprimir, o sistema pergunta se inclui o preço (à vista com desconto e 12x).</p>
@@ -8547,7 +8486,7 @@ function renderImpressaoTab(main){
   let posEdit = JSON.parse(JSON.stringify(config.etiquetaJoia.posicoes||{}));
   function lerCamposForm(){ const o = {}; etqWrap.querySelectorAll('[data-etqcampo]').forEach(chk=>{ o[chk.dataset.etqcampo] = chk.checked; }); return o; }
   function atualizarVisibilidadeCanvas(){
-    const dobravel = ['dobravel','face'].includes(document.getElementById('etqModelo').value);
+    const dobravel = document.getElementById('etqModelo').value === 'dobravel';
     document.getElementById('etqCanvasWrap').style.display = dobravel ? 'none' : '';
   }
   function renderEtqCanvas(){
