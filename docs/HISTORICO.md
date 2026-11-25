@@ -535,3 +535,8 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Detector: 5 achados → 0. Textos de 11,5px passaram a 12px; removido o resquício de faixa colorida no topo do cartão de login; sombras com tom azulado (login, menu lateral, cartões, pop-ups) trocadas por sombras neutras.
 - Só CSS; nenhuma função mudou; 188/188 testes. (Visual do menu logado não pôde ser fotografado no ambiente de teste — sem acesso à biblioteca do Supabase.)
 
+## 25/11 — P3: caixas de marcar e limpeza do repositório
+- tema.css (celular): caixas de marcar/seleção com 20px e rótulo clicável de 44px em todos os módulos.
+- Dashboard: as 8 abas internas conferidas em 1366px e 390px — sem rolagem horizontal e sem erros.
+- Removidos do repositório (sem nenhuma referência): backup.html, antes_vend.png, depois_vend.png, previa-etiqueta.png, logo-print.png.
+
