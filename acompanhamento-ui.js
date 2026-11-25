@@ -46,7 +46,7 @@
     css(); if(!el) return;
     var prog = o.prog || [], env = o.env || [];
     el.classList.add('secao-acomp');
-    el.innerHTML = '<div class="page-head" style="margin-top:14px;"><div><h2 class="page-title" style="font-size:18px;">Ações de acompanhamento</h2><p class="page-sub">' + (o.sub||'') + '</p></div>' + (o.botaoHtml||'') + '</div>'
+    el.innerHTML = '<div class="page-head" style="margin-top:14px;"><div><h2 class="page-title" style="font-size:22px;">Ações de acompanhamento</h2><p class="page-sub">' + (o.sub||'') + '</p></div>' + (o.botaoHtml||'') + '</div>'
       + '<div class="ac2-colunas">'
       + '<section class="card ac2-col"><h3>Programados <span class="badge badge-pendente">' + prog.length + '</span></h3>' + (prog.length ? '<ul class="ac2-lista">' + prog.map(function(x){ return linha(x,false); }).join('') + '</ul>' : '<p class="muted" style="padding:10px 16px;">Nenhum envio programado.</p>') + '</section>'
       + '<section class="card ac2-col"><h3>Já enviados <span class="badge badge-aprovado">' + env.length + '</span></h3>' + (env.length ? '<ul class="ac2-lista">' + env.map(function(x){ return linha(x,true); }).join('') + '</ul>' : '<p class="muted" style="padding:10px 16px;">Nada enviado nos últimos 3 dias.</p>') + '</section></div>';

@@ -64,7 +64,8 @@
       + '.bv-ficha{padding:0 14px 14px;} .bv-ficha table{width:100%;border-collapse:collapse;font-size:13.5px;} .bv-ficha td{padding:5px 0;border-bottom:1px solid var(--line,#e3e8ec);vertical-align:top;} .bv-ficha td:first-child{color:var(--ink-soft,#556);width:34%;}'
       + '.bv-acoes{display:flex;gap:8px;justify-content:flex-end;padding:0 14px 14px;flex-wrap:wrap;}'
       + '.bv-b{min-height:42px;padding:0 16px;border-radius:10px;border:1px solid var(--line-strong,#b8c0c8);background:var(--surface,#fff);color:inherit;font:inherit;font-weight:600;cursor:pointer;}'
-      + '.bv-b.pri{background:var(--t-primary-strong,#1f5f7a);border-color:var(--t-primary-strong,#1f5f7a);color:#fff;}';
+      + '.bv-b.pri{background:var(--t-primary-strong,#1f5f7a);border-color:var(--t-primary-strong,#1f5f7a);color:#fff;}'
+      + '@media(max-width:760px){.bv-campo,.bv-b{min-height:44px;}}';
     document.head.appendChild(s);
   }
   function pareceCodigo(t){ return /^[A-Za-z]{1,3}[-\s]?\d+[A-Za-z]?$/.test(String(t || '').trim()); }
