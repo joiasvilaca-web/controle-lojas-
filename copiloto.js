@@ -61,6 +61,7 @@
     var dias = M.diasRestantes || 1;
     h += M.lojas.map(function(l){
       return '<div style="margin:0 0 12px;"><div style="display:flex;justify-content:space-between;gap:8px;"><b>' + esc(l.nome) + '</b><span class="cp-meta-s">' + l.pct + '%</span></div>'
+        + (!l.atingida && (l.vendido / l.meta) < (M.diaDoMes / M.diasMes) - 0.15 ? '<div class="cp-meta-s" style="color:#c62828;font-weight:700;">Abaixo do ritmo do mês</div>' : '')
         + (l.atingida ? '<div class="cp-meta-s" style="color:#1f9a55;font-weight:700;">Meta batida! Passou ' + brl0(l.vendido - l.meta) + '.</div>'
           : '<div class="cp-meta-v" style="font-size:20px;">Faltam ' + brl0(l.falta) + '</div><div class="cp-meta-s">' + brl0(l.porDia) + ' por dia nos ' + dias + ' dia' + (dias > 1 ? 's' : '') + ' que restam</div>')
         + '<div class="cp-barra" aria-hidden="true"><i style="width:' + l.pct + '%"></i></div>'
@@ -347,7 +348,7 @@
     if(novo){ d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status'); }
     if(ch && ch.prio) d.dataset.prio = String(ch.prio);
     try{ speechSynthesis.cancel(); S.falando = false; }catch(e){}
-    d.innerHTML = '<button type="button" class="cp-x" data-cp="x" title="Fechar" aria-label="Fechar">'+ic('x',14)+'</button><b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (ch && ch.key ? '<button type="button" class="cp-b" data-cp="lido" title="Marcar como ciente: este aviso para de aparecer">' + (ch.rotulo || 'Já li, não mostrar mais') + '</button>' : '') + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
+    d.innerHTML = '<button type="button" class="cp-x" data-cp="x" title="Fechar" aria-label="Fechar">'+ic('x',14)+'</button><b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (ch && ch.key ? '<button type="button" class="cp-b" data-cp="lido" title="Marcar como ciente: este aviso para de aparecer">' + (ch.rotulo || 'Ciente') + '</button>' : '') + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
     if(novo) document.body.appendChild(d);
     d.querySelector('[data-cp="x"]').onclick = fecharBalao;
     d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); if(!semPadrao) ls(chave('pausa'), String(Date.now())); };
@@ -700,7 +701,7 @@
     if(S.user && S.user.nivel === 'diretoria') h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Equipe: bem-estar (só diretoria)</h4><div id="cpEquipe"><button type="button" class="cp-b" data-cp="equipe">Ver como a equipe está</button></div></div>';
     if(d.ranking && d.ranking.length) h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Ranking da loja (gerência)</h4><table class="cp-rank">' + d.ranking.map(function(r,i){ return '<tr><td>'+(i+1)+'º '+esc(r.nome)+'</td><td class="r">'+r.vendas+' vendas</td><td class="r">'+brl0(r.total)+'</td></tr>'; }).join('') + '</table></div>';
     h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
-    if(silenciados().length) h += '<div class="cp-card"><h4>'+ic('info',14)+'Avisos que você silenciou</h4><div class="cp-meta-s">Você marcou '+silenciados().length+' aviso(s) como "já li, não mostrar mais".</div><div style="margin-top:6px;"><button type="button" class="cp-b" data-cp="resil">Voltar a mostrar tudo</button></div></div>';
+    if(silenciados().length) h += '<div class="cp-card"><h4>'+ic('info',14)+'Avisos que você silenciou</h4><div class="cp-meta-s">Você marcou '+silenciados().length+' aviso(s) como ciente.</div><div style="margin-top:6px;"><button type="button" class="cp-b" data-cp="resil">Voltar a mostrar tudo</button></div></div>';
     c.innerHTML = h;
     var brs = c.querySelector('[data-cp="resil"]'); if(brs) brs.onclick = function(){ ls('copiloto_sil_' + (S.user && S.user.id), '[]'); abrirPainel(); };
 
@@ -1094,6 +1095,18 @@
       balao('<div class="cp-txt"><b>'+esc(rS.titulo||'Aviso do sistema')+':</b> '+esc(String(rS.texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000,
         { key:rS.id, prio:2, rotulo:'Ciente', servidor:true });
       return;
+    }
+    /* 25/11: o alerta "Meta do mês fora do ritmo" saiu do Dashboard e agora vem só pelo Vilacinha (diretoria). Mesma regra: mais de 15 pontos abaixo do esperado. */
+    if(ehDir() && !S.aberto){
+      var MT = await carregarMetasLojas();
+      var atr = (MT && MT.ok ? MT.lojas : []).filter(function(l){ return l.meta > 0 && !l.atingida && (l.vendido / l.meta) < (MT.diaDoMes / MT.diasMes) - 0.15; });
+      var kMt = 'sis:metaritmo:' + (MT && MT.hoje ? MT.hoje.slice(0,7) : '') + ':' + atr.map(function(l){ return l.id; }).sort().join(',');
+      if(atr.length && !silenciado(kMt) && ls(chave('recBalao') + '_' + kMt) !== '1'){
+        ls(chave('recBalao') + '_' + kMt, '1');
+        balao('<div class="cp-txt"><b>Meta do mês fora do ritmo:</b> ' + atr.map(function(l){ return esc(l.nome); }).join(', ') + (atr.length === 1 ? ' está' : ' estão') + ' abaixo do ritmo para bater a meta deste mês. Veja quanto falta no painel.</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000,
+          { key:kMt, prio:2, rotulo:'Ciente', servidor:true });
+        return;
+      }
     }
     if(ehOficina()){ await carregarDia(); return; }
     if(ehAdm()) return;   // 23/11: administrativo não recebe aula nem pergunta de venda
