@@ -525,3 +525,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **tema.css (todos os módulos)**: todo `h1` de página passa a usar a serifada (exceto telas de login); no celular, botões, abas, chips, ícones de ação, links de voltar, campos e selects têm no mínimo 44px (caixas de marcar ficam de fora). Cobre Atendimento, Transferências, Lançamentos, Agenda, Inventário, Avisos, Conciliação, Marketing, Site, Reforma-admin e Ajuda.
 - Detector 0 achados no Dashboard; nenhuma função mudou; 188/188 testes; sem rolagem horizontal em 390px nos 12 módulos conferidos.
 
+## 25/11 — P2 da rodada 6: imagens vazias e toque 44px
+- Atendimento e DP: `<img>` da ampliação de foto sem `src` ganhou imagem transparente (o detector apontava imagem quebrada); DP também ao fechar a foto.
+- Celular: Agenda (botões dos avisos), Ajuda (sugestões, abas e chips de categoria), Avisos (Abrir e Atualizar) e link "Voltar" passaram a ter 44px.
+- Detector 0 achados nesses 5 módulos; nenhuma função mudou; 188/188 testes.
+- Ajuda: painel "Como posso ajudar?" sem cartão branco dentro do painel (campo direto sobre o fundo escuro), sem brilho que baixava o contraste, textos de 11,5px para 12px e pontos de "pensando" com animação finita. Detector 0 achados.
+
