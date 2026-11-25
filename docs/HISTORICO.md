@@ -540,3 +540,11 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Dashboard: as 8 abas internas conferidas em 1366px e 390px — sem rolagem horizontal e sem erros.
 - Removidos do repositório (sem nenhuma referência): backup.html, antes_vend.png, depois_vend.png, previa-etiqueta.png, logo-print.png.
 
+## 25/11 — varredura geral do detector (todos os módulos)
+- 11 arquivos tinham achados; 8 ficaram com 0 e 2 com parciais (veja abaixo).
+- tema.css: botões vermelho (Excluir/Cancelar), verde e WhatsApp, e o "Sair" do topo, mantêm fundo escuro e texto branco ao passar o mouse (antes caíam num cinza claro com texto branco ilegível). Afeta Gravações, Lançamentos, Reforma-admin, Site e demais.
+- Conciliação: contraste do "Voltar"/"Configurações" no topo escuro e da etiqueta do login. Lançamentos e Log: respiro nas listas roláveis. Site e Reforma-admin: título do pop-up passou de h3 para h2 (ordem de títulos correta). Ficha da loja: entrelinha mínima 1,3.
+- IA: imagem de pré-visualização sem endereço ganhou imagem transparente; pontinhos de "pensando" com animação finita. Privacidade: título em Cormorant e fundo neutro (saiu o bege e a fonte Fraunces).
+- Pendentes: Inventário (3 avisos de espaçamento interno em cartões de tabela) e cartao-aniversario.html (página própria, mantida de propósito). Ficha da loja ainda marca 1 aviso de entrelinha.
+- Nenhuma função mudou; 188/188 testes.
+
