@@ -608,6 +608,5 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 25/11/2026 — Etiqueta com rabo: preço dentro da etiqueta
 - Com o QR Code, o texto de preço agora é medido com folga para negrito (0,7 em por caractere) e o 12x sai sem "R$" ("12x 455"). Mesmo preço de cinco dígitos (R$ 12.350 · 12x 1.235) cabe na metade.
 
-## 25/11/2026 — Etiqueta 25 × 15 mm com rabo de 25 mm (face única)
-- Novo tamanho pronto **25 × 15 mm com rabo de 25 mm (50 mm no total)**, modelo "Face única com rabo": em cima o QR Code (7 mm) e, ao lado, fator, valor à vista e 12x; embaixo o código de barras (só números, 21 mm) com o código. Sem nome, sem espaço entre etiquetas, margens 0.
-- A pergunta "Incluir preço de venda?" vale também para este modelo. A configuração salva da etiqueta foi trocada para ele (o 60 × 12 mm continua nos tamanhos prontos).
+## 25/11/2026 — Pedido: crédito do cliente visível mesmo sem cliente escolhido
+- Na forma de pagamento do Novo pedido, sem cliente escolhido aparece "CRÉDITO CLIENTE (escolha o cliente primeiro)" travado. Com o cliente escolhido e saldo, a opção "CRÉDITO CLIENTE (disp. R$ …)" libera como antes. Nada mudou no cálculo do crédito.
