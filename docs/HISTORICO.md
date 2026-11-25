@@ -617,3 +617,8 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 
 ## 25/11/2026 — Cashback: lançamento manual (diretoria)
 - Em Cadastro › Clientes › Cashback, a diretoria pode lançar um cashback que não foi gerado (cliente, valor, data da compra e motivo). Libera no dia seguinte e vale 60 dias da compra; fica gravado quem lançou e o motivo. Motivo: 20 vendas em dinheiro desde 01/11 ficaram com cashback R$ 0 (ex.: Danielle Rodrigues da Silva, venda MC127V, R$ 221,00 devidos). Causa da falha ainda em investigação.
+
+## 25/11/2026 — Cashback não ficava salvo (corrigido no banco)
+- Causa: no upsert, o gatilho de INSERT (cashback_insert_limpa) removia o marcador __cashbackWrite antes do gatilho de UPDATE (cashback_preserva) ver; o UPDATE então descartava o cashback gravado. Resultado: nenhum cliente tinha cashback salvo, e ao editar a venda o valor "gerado" era zerado.
+- Correção: migração `cashback_trigger_upsert_corrige` (o INSERT mantém o marcador; o UPDATE remove). Testado com upsert.
+- Reparo de dados: 102 clientes ganharam os lotes (10% do pago em dinheiro; libera no dia seguinte; vale 60 dias da compra), 20 vendas e 11 pedidos com "gerado 0" foram corrigidos (total R$ 7.146,37). Cancelados ficaram de fora; nenhum cashback tinha sido usado. Caso de origem: Danielle Rodrigues da Silva, venda MC127V, R$ 221,00.
