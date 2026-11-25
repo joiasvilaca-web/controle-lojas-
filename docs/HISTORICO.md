@@ -614,3 +614,6 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 
 ## 25/11/2026 — Cadastro de produto: preço de venda automático na tela
 - O campo "Preço de venda" agora se preenche sozinho (Fator × valor do tipo) assim que o fator e o tipo são informados, e fica travado enquanto houver regra. Antes só era calculado ao salvar. Relógio e pedras seguem suas regras próprias.
+
+## 25/11/2026 — Cashback: lançamento manual (diretoria)
+- Em Cadastro › Clientes › Cashback, a diretoria pode lançar um cashback que não foi gerado (cliente, valor, data da compra e motivo). Libera no dia seguinte e vale 60 dias da compra; fica gravado quem lançou e o motivo. Motivo: 20 vendas em dinheiro desde 01/11 ficaram com cashback R$ 0 (ex.: Danielle Rodrigues da Silva, venda MC127V, R$ 221,00 devidos). Causa da falha ainda em investigação.
