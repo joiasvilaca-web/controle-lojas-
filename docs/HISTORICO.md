@@ -531,3 +531,7 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Detector 0 achados nesses 5 módulos; nenhuma função mudou; 188/188 testes.
 - Ajuda: painel "Como posso ajudar?" sem cartão branco dentro do painel (campo direto sobre o fundo escuro), sem brilho que baixava o contraste, textos de 11,5px para 12px e pontos de "pensando" com animação finita. Detector 0 achados.
 
+## 25/11 — index.html (shell e login) repaginado
+- Detector: 5 achados → 0. Textos de 11,5px passaram a 12px; removido o resquício de faixa colorida no topo do cartão de login; sombras com tom azulado (login, menu lateral, cartões, pop-ups) trocadas por sombras neutras.
+- Só CSS; nenhuma função mudou; 188/188 testes. (Visual do menu logado não pôde ser fotografado no ambiente de teste — sem acesso à biblioteca do Supabase.)
+
