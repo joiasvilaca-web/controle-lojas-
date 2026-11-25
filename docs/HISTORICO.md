@@ -573,3 +573,7 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 25/11/2026 — Alertas só no Vilacinha; botão único "Ciente"
 - Dashboard: o popup "Meta do mês fora do ritmo" foi removido. O mesmo aviso (loja mais de 15 pontos abaixo do esperado) agora vem só pelo Vilacinha da diretoria, prioridade 2, com Ciente salvo no servidor (chave por mês e conjunto de lojas). No painel, a loja atrasada fica marcada "Abaixo do ritmo do mês".
 - Todo botão de dispensar balão do Vilacinha passou a se chamar **Ciente**.
+
+## 25/11/2026 — Farol do Ouro no Dashboard + aviso COMPRAR no Vilacinha
+- Dashboard (só diretoria): nova aba **Farol do ouro** (selo COMPRAR/ESPERAR/NEUTRO, ouro, dólar, tendência, faixa de 12 meses, cenário, previsões, riscos e ação sugerida; botão Atualizar). Usa a mesma função `mercado-ouro` de Lançamentos › Estatísticas.
+- Vilacinha da diretoria: quando o farol está em COMPRAR, balão de **prioridade máxima** (acima de recado da diretoria), destacado em verde, com "Ver no Dashboard" e Ciente salvo no servidor (uma vez por dia enquanto estiver em COMPRAR).
