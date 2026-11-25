@@ -8163,7 +8163,7 @@ const PRESETS_ETIQUETA = [
   { id:'60x15d', label:'60 × 15 mm dobrável (rabo de rato)', larguraMm:60, alturaMm:15, modelo:'dobravel' },
   /* 25/11 (Felipe): etiqueta de joia com rabo — corpo 60 × 12 mm dobrado em 30 + 30 (nome e fator de um lado,
      código de barras e código do outro), rabo de ~38 mm para prender na joia, 2,6 mm entre uma etiqueta e a próxima. */
-  { id:'60x12r', label:'60 × 12 mm com rabo (30 + 30, rabo 38 mm)', larguraMm:60, alturaMm:12, modelo:'dobravel', rabinhoMm:38, ladoBarras:'dir', espV:2.6, margens:0, fator:true },
+  { id:'60x12r', label:'60 × 12 mm com rabo (30 + 30, rabo 38 mm)', larguraMm:60, alturaMm:12, modelo:'dobravel', rabinhoMm:38, ladoBarras:'dir', espV:2.6, margens:0, fator:true, semNome:true, barrasMm:22 },
 ];
 /** Altura de linha padrão (mm) por escala de texto — usada só para calcular a posição inicial
  * (empilhada) de cada campo antes de o usuário arrastar algo no quadro de posicionamento. */
@@ -8217,12 +8217,12 @@ function etiquetaCssComum(cfg){
   .etq-label{ width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:row; font-family:Arial,Helvetica,sans-serif; color:#000; font-weight:${pesoTexto}; font-size:${px.base}px; line-height:1.25; -webkit-font-smoothing:none; ${reforcoCss} }
   .etq-metade{ width:${meia}mm; height:${cfg.alturaMm}mm; box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column; justify-content:center; }
   .etq-barras{ padding:${cfg.alturaMm<=14?'0.8mm 1.2mm 0.4mm':'1mm 1.5mm 0.6mm'}; align-items:stretch; }
-  .etq-barras svg{ display:block; width:100%; flex:1 1 auto; min-height:0; }
+  .etq-barras svg{ display:block; width:${cfg.barrasLarguraMm>0?cfg.barrasLarguraMm+'mm':'100%'}; align-self:center; flex:1 1 auto; min-height:0; }
   .etq-cod{ text-align:center; font-weight:700; font-size:${px.base}px; line-height:1.1; margin-top:0.4mm; letter-spacing:.03em; white-space:nowrap; }
   .etq-dados{ padding:${cfg.alturaMm<=14?'0.5mm 1.2mm':'0.8mm 1.5mm'}; line-height:1.15; }
   .etq-dados > div{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .etq-dados .etq-nome{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .etq-dados .etq-preco{ margin-top:${cfg.alturaMm<=14?'0':'0.5mm'}; }`;
+  .etq-dados .etq-preco{ font-weight:800; margin-top:${cfg.alturaMm<=14?'0':'0.5mm'}; }`;
   }
   return `
   .etq-label{ position:relative; width:${cfg.larguraMm}mm; height:${cfg.alturaMm}mm; overflow:hidden; box-sizing:border-box; font-family:Arial,Helvetica,sans-serif; color:#000; -webkit-font-smoothing:none; ${reforcoCss} }
@@ -8258,8 +8258,9 @@ function etiquetaLabelDobravelHtml(produto, cfg, opts){
   if(campos.loja && (config.lojas||[])[0]) linhas.push(`<div>${escapeHtml(config.lojas[0].nome)}</div>`);
   const pr = opts.preco ? precosEtiqueta(produto) : null;
   if(pr){
-    linhas.push(`<div class="etq-preco">À vista ${cadBrl(pr.avista)}</div>`);
-    linhas.push(`<div class="etq-preco">12x ${cadBrl(pr.parcela)}</div>`);
+    const sem00 = v => cadBrl(v).replace(/,00$/, '');   // R$ 4.550 (sem ,00); centavos só se houver
+    linhas.push(`<div class="etq-preco">À vista ${sem00(pr.avista)}</div>`);
+    linhas.push(`<div class="etq-preco">12x ${sem00(pr.parcela)}</div>`);
   } else if(opts.preco === undefined && campos.precoVenda !== false && produto.precoVenda!==null && produto.precoVenda!==undefined){
     linhas.push(`<div class="etq-preco">R$ ${Number(produto.precoVenda).toFixed(2)}</div>`);   // prévia/uso antigo sem a pergunta
   }
@@ -8373,6 +8374,7 @@ function renderImpressaoTab(main){
       <p class="muted" style="margin:-4px 0 10px; font-size:12px;">No dobrável, a largura é a parte impressa inteira (sem o rabo). Uma metade leva o código de barras do código interno (ou GTIN) com o código embaixo; a outra leva nome, fator e os demais campos marcados. Ao imprimir, o sistema pergunta se inclui o preço (à vista com desconto e 12x).</p>
       <div class="grid-2" style="max-width:360px;">
         <div class="field"><label>Rabo (mm)</label><input type="number" min="0" step="0.5" id="etqRabo" value="${config.etiquetaJoia.rabinhoMm||0}" title="Comprimento do rabo que prende na joia (só aumenta a largura da página; não imprime nada nele)"></div>
+        <div class="field"><label>Largura do código de barras (mm)</label><input type="number" min="0" step="0.5" id="etqBarrasMm" value="${config.etiquetaJoia.barrasLarguraMm||0}" title="Largura impressa das barras, centralizada na metade. 0 = ocupa a metade toda. Para PRD000000, ~22 mm lê bem e deixa folga na dobra."></div>
         <div class="field"><label>Código de barras fica</label>
           <select id="etqLado">
             <option value="esq" ${config.etiquetaJoia.ladoBarras!=='dir'?'selected':''}>Na metade esquerda</option>
@@ -8527,6 +8529,7 @@ function renderImpressaoTab(main){
       modelo: document.getElementById('etqModelo').value,
       rabinhoMm: Math.max(0, Number(document.getElementById('etqRabo').value)||0),
       ladoBarras: document.getElementById('etqLado').value === 'dir' ? 'dir' : 'esq',
+      barrasLarguraMm: Math.max(0, Number(document.getElementById('etqBarrasMm').value)||0),
       campos: lerCamposForm(),
       margemFora: {
         sup: Math.max(0, Number(document.getElementById('etqMargSup').value)||0),
@@ -8549,6 +8552,8 @@ function renderImpressaoTab(main){
     document.getElementById('etqLado').value = preset.ladoBarras || 'esq';
     if(preset.espV!=null) document.getElementById('etqEspV').value = preset.espV;
     if(preset.margens!=null) ['etqMargSup','etqMargInf','etqMargEsq','etqMargDir'].forEach(id=>{ document.getElementById(id).value = preset.margens; });
+    if(preset.barrasMm!=null) document.getElementById('etqBarrasMm').value = preset.barrasMm;
+    if(preset.semNome){ const cn = document.querySelector('[data-etqcampo="nome"]'); if(cn) cn.checked = false; }
     if(preset.fator){ const cf = document.querySelector('[data-etqcampo="fator"]'); if(cf) cf.checked = true; }
     atualizarVisibilidadeCanvas();
     renderEtqCanvas();
@@ -8556,7 +8561,7 @@ function renderImpressaoTab(main){
 
   document.getElementById('btnVerEtiqueta').addEventListener('click', ()=>{
     const cfgPrev = lerCfgFormEtiqueta();
-    const produtoExemplo = { nome:'Anel Solitário Ouro 18k', codigoInterno:'AN-00123', precoVenda:1299.9, fator:2.3, unidade:'un', gtin:'7891234567890', categoriaId:null, subcategoriaId:null };
+    const produtoExemplo = { nome:'Anel Solitário Ouro 18k', codigoInterno:'PRD003029', precoVenda:9100, fator:3.5, tipoVenda:'joiaVilacaOuro', unidade:'un', gtin:'', categoriaId:null, subcategoriaId:null };
     const labelsHtml = [etiquetaLabelHtml(produtoExemplo, cfgPrev, { preco:true }), etiquetaLabelHtml(produtoExemplo, cfgPrev, { preco:false })];
     const html = etiquetaDocumentoHtml(labelsHtml, cfgPrev, 'Prévia');
     const ifr = document.getElementById('etqPrevia');
@@ -8578,6 +8583,7 @@ function renderImpressaoTab(main){
     config.etiquetaJoia.modelo = f.modelo;
     config.etiquetaJoia.rabinhoMm = f.rabinhoMm;
     config.etiquetaJoia.ladoBarras = f.ladoBarras;
+    config.etiquetaJoia.barrasLarguraMm = f.barrasLarguraMm;
     config.etiquetaJoia.margemFora = f.margemFora;
     config.etiquetaJoia.espacamento = f.espacamento;
     config.etiquetaJoia.campos = f.campos;
