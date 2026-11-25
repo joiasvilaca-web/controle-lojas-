@@ -473,6 +473,12 @@ html[data-theme=dark] .msgs.inst-reforma, html[data-theme=dark] .msgs.inst-vilac
 .ag-card .ag-mv{display:flex;gap:4px;margin-top:8px;justify-content:flex-end;}
 .ag-card .ag-mv button{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);border-radius:6px;font-size:11.5px;padding:3px 8px;cursor:pointer;}
 .ag-card .ag-mv button:hover{border-color:var(--accent);color:var(--accent);}
+.ag-bx-lista{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto;}
+.ag-bx-item{border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;}
+.ag-bx-t{display:flex;flex-direction:column;gap:2px;overflow-wrap:anywhere;font-size:13px;}
+.ag-bx-a{display:flex;gap:6px;flex-wrap:wrap;}
+.ag-bx-a .btn{min-height:36px;padding:6px 12px;font-size:12.5px;}
+@media (max-width:760px){.ag-bx-a .btn{min-height:44px;flex:1 1 auto;}.ag-card .ag-mv button{min-height:36px;}}
 .ag-vazio{font-size:12px;color:var(--ink-faint);text-align:center;padding:16px 4px;border:1px dashed var(--line-strong);border-radius:10px;}
 .t-privada{--tc:var(--tp-privada);} .t-loja{--tc:var(--tp-loja);} .t-compartilhada{--tc:var(--tp-compartilhada);}
 .c-urgente{color:var(--danger);} .c-importante{color:var(--wait);} .c-normal{color:var(--accent);} .c-baixa{color:var(--ink-faint);}
@@ -875,17 +881,20 @@ function agCardHtml(t){
       ${t.conversa_ativa?`<button type="button" data-agconv="${escapeHtml(t.conversa_id)}" title="A conversa ainda está ativa: abrir no CHAT">${icn('mensagem',{tam:12})}Ir para a conversa</button>`:''}
       ${i>0?`<button type="button" data-agmv="${escapeHtml(t.id)}" data-col="${AG_COLUNAS[i-1][0]}" title="Voltar para ${AG_COLUNAS[i-1][1]}">${icn('esquerda',{tam:12})}${AG_COLUNAS[i-1][1]}</button>`:''}
       ${i<AG_COLUNAS.length-1?`<button type="button" data-agmv="${escapeHtml(t.id)}" data-col="${AG_COLUNAS[i+1][0]}" title="Passar para ${AG_COLUNAS[i+1][1]}">${AG_COLUNAS[i+1][1]}${icn('direita',{tam:12})}</button>`:''}
+      ${t.coluna==='feito'?`<button type="button" data-agbx="${escapeHtml(t.id)}" title="${t.criador_id===meId?'Baixar: some do quadro para todos':'Baixar só para mim'}">Baixar</button>`:''}
     </div>
   </div>`;
 }
 function agRenderQuadro(c){
   const f = estado.ag;
-  const lista = f.tarefas.filter(t=> (!f.filtroTipo || t.tipo===f.filtroTipo) && (!f.filtroCls || t.classificacao===f.filtroCls));
+  const nBaixadas = f.tarefas.filter(agBaixada).length;
+  const lista = f.tarefas.filter(t=> !agBaixada(t) && (!f.filtroTipo || t.tipo===f.filtroTipo) && (!f.filtroCls || t.classificacao===f.filtroCls));
   const ordemCls = { urgente:0, importante:1, normal:2, baixa:3 };
   c.innerHTML = agPainelAvisos() + `
     <div class="ag-filtros" style="margin-bottom:10px;">
       ${[['','Todas'],['privada','Privadas'],['loja','Loja'],['compartilhada','Compartilhadas']].map(([k,n])=>`<button type="button" class="ag-chip ${f.filtroTipo===k?'on':''}" data-agft="${k}">${n}</button>`).join('')}
       <select class="busca" id="agFiltroCls" aria-label="Filtrar por classificação"><option value="">Toda classificação</option>${Object.entries(AG_CLASSES).map(([k,n])=>`<option value="${k}" ${f.filtroCls===k?'selected':''}>${n}</option>`).join('')}</select>
+      <button type="button" class="ag-chip" id="agVerBaixadas">Ver baixadas (${nBaixadas})</button>
       ${agLegenda()}
     </div>
     <div class="ag-quadro">
@@ -899,17 +908,51 @@ function agRenderQuadro(c){
   c.querySelectorAll('[data-agft]').forEach(b=> b.onclick = ()=>{ f.filtroTipo = b.dataset.agft; agRender(); });
   document.getElementById('agFiltroCls').onchange = e=>{ f.filtroCls = e.target.value; agRender(); };
   c.querySelectorAll('.ag-card').forEach(el=>{
-    el.addEventListener('click', e=>{ if(e.target.closest('[data-agmv],[data-agconv]')) return; agEditar(f.tarefas.find(t=>t.id===el.dataset.agid)); });
+    el.addEventListener('click', e=>{ if(e.target.closest('[data-agmv],[data-agconv],[data-agbx]')) return; agEditar(f.tarefas.find(t=>t.id===el.dataset.agid)); });
     el.addEventListener('dragstart', e=>{ el.classList.add('arrastando'); e.dataTransfer.setData('text/plain', el.dataset.agid); e.dataTransfer.effectAllowed='move'; });
     el.addEventListener('dragend', ()=> el.classList.remove('arrastando'));
   });
   c.querySelectorAll('[data-agmv]').forEach(b=> b.onclick = ()=> agMover(b.dataset.agmv, b.dataset.col));
+  c.querySelectorAll('[data-agbx]').forEach(b=> b.onclick = ()=> agBaixar(b.dataset.agbx));
+  document.getElementById('agVerBaixadas').onclick = agVerBaixadas;
   c.querySelectorAll('[data-agconv]').forEach(b=> b.onclick = ()=>{ if(EMBEDDED) parent.postMessage({ type:'irParaModulo', modulo:'agenda', alvo:'atendimento', registroId:b.dataset.agconv }, '*'); });
   c.querySelectorAll('.ag-col').forEach(col=>{
     col.addEventListener('dragover', e=>{ e.preventDefault(); col.classList.add('sobre'); });
     col.addEventListener('dragleave', ()=> col.classList.remove('sobre'));
     col.addEventListener('drop', e=>{ e.preventDefault(); col.classList.remove('sobre'); const id = e.dataTransfer.getData('text/plain'); if(id) agMover(id, col.dataset.agcol); });
   });
+}
+const agBaixada = t => !!(t && t.baixada_para_mim);
+function agMesclar(d){
+  const i = estado.ag.tarefas.findIndex(x=>x.id===d.id);
+  if(i>=0) estado.ag.tarefas[i] = Object.assign({}, estado.ag.tarefas[i], d); else estado.ag.tarefas.push(d);
+}
+async function agBaixar(id){
+  const r = await tarefasApi({ op:'baixar', id });
+  if(!r || !r.ok){ showToast((r && r.error) || 'Não consegui baixar.'); return; }
+  agMesclar(r.data); agRender(); showToast(r.data.baixada_global ? 'Tarefa baixada. Está em Ver baixadas.' : 'Baixada só para você. Está em Ver baixadas.');
+}
+async function agReativar(id, coluna){
+  const r = await tarefasApi({ op:'reativar', id, coluna });
+  if(!r || !r.ok){ showToast((r && r.error) || 'Não consegui reativar.'); return; }
+  agMesclar(r.data); agRender(); agVerBaixadas(true);
+  showToast(coluna==='feito' ? 'Tarefa voltou para Feito.' : 'Tarefa reativada em '+(AG_COLUNAS.find(c=>c[0]===coluna)||[])[1]+'.');
+}
+function agVerBaixadas(reabrir){
+  const lista = estado.ag.tarefas.filter(agBaixada).sort((a,b)=> String(b.baixada_data||'').localeCompare(String(a.baixada_data||'')));
+  const fmt = iso => { if(!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
+  const item = t => `<div class="ag-bx-item">
+      <div class="ag-bx-t"><b>${escapeHtml(t.titulo)}</b><span class="muted">${AG_TIPOS[t.tipo].nome}${t.criador_nome?' · de '+escapeHtml(t.criador_nome):''} · baixada em ${fmt(t.baixada_data)}${t.baixada_global?'':' (só para você)'}</span></div>
+      <div class="ag-bx-a">${t.posso_reativar
+        ? `<button type="button" class="btn" data-agrx="${escapeHtml(t.id)}" data-col="a_fazer">A fazer</button><button type="button" class="btn" data-agrx="${escapeHtml(t.id)}" data-col="fazendo">Fazendo</button><button type="button" class="btn" data-agrx="${escapeHtml(t.id)}" data-col="feito">Voltar ao Feito</button>`
+        : `<span class="muted">Baixada por quem criou. Só essa pessoa reativa.</span>`}</div>
+    </div>`;
+  abrirModal(`<h3 style="margin-top:0;">Tarefas baixadas</h3>
+    <p class="muted" style="margin:0 0 10px;">Da mais recente para a mais antiga.</p>
+    <div class="ag-bx-lista">${lista.map(item).join('') || '<div class="ag-vazio">Nenhuma tarefa baixada.</div>'}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button type="button" class="btn" id="agBxFechar">Fechar</button></div>`);
+  document.getElementById('agBxFechar').onclick = fecharModal;
+  document.querySelectorAll('[data-agrx]').forEach(b=> b.onclick = ()=> agReativar(b.dataset.agrx, b.dataset.col));
 }
 async function agMover(id, coluna){
   const t = estado.ag.tarefas.find(x=>x.id===id); if(!t || t.coluna===coluna) return;
@@ -994,7 +1037,7 @@ function agEventosDoDia(iso, soltos){
   const ev = [];
   const TP = estado.ag.tiposCal || {};   // 22/11: o que aparece no calendário (abre com tudo ligado)
   const FIN = !!estado.ag.finalizadosCal;   // 22/11: finalizados (tarefa feita, pedido entregue, orçamento fechado, cancelados) só se ligar
-  if(TP.tarefa!==false) estado.ag.tarefas.filter(t=>t.data===iso && (FIN || t.coluna!=='feito')).sort((a,b)=>String(a.hora||'').localeCompare(String(b.hora||''))).forEach(t=> ev.push({ cls:`t-${t.tipo} ${t.coluna==='feito'?'feito':''}`, txt:(t.hora?t.hora+' ':'')+t.titulo, tarefa:t.id }));
+  if(TP.tarefa!==false) estado.ag.tarefas.filter(t=>t.data===iso && !t.baixada_para_mim && (FIN || t.coluna!=='feito')).sort((a,b)=>String(a.hora||'').localeCompare(String(b.hora||''))).forEach(t=> ev.push({ cls:`t-${t.tipo} ${t.coluna==='feito'?'feito':''}`, txt:(t.hora?t.hora+' ':'')+t.titulo, tarefa:t.id }));
   if(TP.lembrete!==false) estado.ag.lembretes.forEach(l=>{ const d = new Date(l.disparar_em); if(agDataISO(d)===iso) ev.push({ cls:'lemb', txt:'Lembrete '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+' '+(l.descricao||'') }); });
   if(TP.aviso!==false){   // 22/11: avisos no dia; mais de um vira um só ("3 avisos") — o dia aberto lista todos
     const av = (estado.ag.avisos||[]).filter(a=>a.data===iso);
@@ -1052,7 +1095,7 @@ function agFiltroTiposCal(m){
   const vias = (agViasCal()||[]).filter(v=> FIN || !agViaFinalizada(v));
   const svOk = v => !estado.ag.filtroServico || v.serviceTypeId===estado.ag.filtroServico;
   const n = {
-    tarefa: estado.ag.tarefas.filter(t=>noMes(t.data) && (FIN || t.coluna!=='feito')).length,
+    tarefa: estado.ag.tarefas.filter(t=>noMes(t.data) && !t.baixada_para_mim && (FIN || t.coluna!=='feito')).length,
     lembrete: estado.ag.lembretes.filter(l=>noMes(agDataISO(new Date(l.disparar_em)))).length,
     aviso: (estado.ag.avisos||[]).filter(a=>noMes(a.data)).length,
     pedido: vias.filter(v=>v.tipo==='pedido' && noMes(v.data) && svOk(v)).length,

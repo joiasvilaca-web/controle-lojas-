@@ -270,6 +270,12 @@
     b.setAttribute('aria-label', b.title);
   }
   function fecharBalao(){ var x = document.getElementById('cpBalao'); if(x) x.remove(); }
+  /* 25/11 (pedido da diretoria): botão "Já li, não mostrar mais" em todo balão. Fica gravado neste aparelho, por pessoa,
+   * e vale para sempre: item (recado, aula, aviso) ou assunto (clientes do dia, meta, dicas, bem-estar…). A pessoa pode
+   * desfazer no painel ("Avisos que você silenciou"). */
+  function silenciados(){ try{ var v = JSON.parse(ls('copiloto_sil_' + (S.user && S.user.id)) || '[]'); return Array.isArray(v) ? v : []; }catch(e){ return []; } }
+  function silenciado(k){ return silenciados().indexOf(k) >= 0; }
+  function silenciar(k){ var l = silenciados(); if(l.indexOf(k) < 0) l.push(k); ls('copiloto_sil_' + (S.user && S.user.id), JSON.stringify(l.slice(-200))); }
   /* 24/11: o aviso do SISTEMA (toast "#toast" lá do shell) tem prioridade sobre o balão do Vilacinha — não pode ficar
    * um encavalado no outro. Se o toast está na tela, o balão espera a vez; se o toast aparecer com o balão já aberto,
    * o balão fecha na hora pro aviso do sistema aparecer sozinho. */
@@ -283,23 +289,24 @@
     _obsToastSistema = new MutationObserver(function(){ if(toastSistemaAtivo()) fecharBalao(); });
     _obsToastSistema.observe(t, { attributes:true, attributeFilter:['class'] });
   }
-  function balao(html, acoes, semPadrao, fechaEm){
+  function balao(html, acoes, semPadrao, fechaEm, ch){
     if(S.aberto){ fecharBalao(); return null; }
     // 24/11: aviso do sistema tem prioridade — se um toast está na tela agora, o balão espera ele sumir pra aparecer.
     if(toastSistemaAtivo()){
       clearTimeout(S._balaoAdiado);
-      S._balaoAdiado = setTimeout(function(){ balao(html, acoes, semPadrao, fechaEm); }, 350);
+      S._balaoAdiado = setTimeout(function(){ balao(html, acoes, semPadrao, fechaEm, ch); }, 350);
       return null;
     }
     /* se o balão já está na tela (pergunta → resposta), troca o conteúdo NO PRÓPRIO balão */
     var d = document.getElementById('cpBalao'), novo = !d;
     if(novo){ d = document.createElement('div'); d.id = 'cpBalao'; d.className = 'cp-balao'; d.setAttribute('role','status'); }
     try{ speechSynthesis.cancel(); S.falando = false; }catch(e){}
-    d.innerHTML = '<button type="button" class="cp-x" data-cp="x" title="Fechar" aria-label="Fechar">'+ic('x',14)+'</button><b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
+    d.innerHTML = '<button type="button" class="cp-x" data-cp="x" title="Fechar" aria-label="Fechar">'+ic('x',14)+'</button><b class="cp-quem">Vilacinha</b>' + html + '<div class="cp-acoes">' + (acoes||'') + '<button type="button" class="cp-b cp-ouvir" data-cp="ouvir" title="Ouvir esta dica" aria-label="Ouvir esta dica">'+icOuvir(18)+'<span>Ouvir</span></button>' + (ch && ch.key ? '<button type="button" class="cp-b" data-cp="lido" title="Não mostrar este aviso de novo">Já li, não mostrar mais</button>' : '') + (semPadrao ? '<button type="button" class="cp-b" data-cp="depois">Fechar</button>' : '<button type="button" class="cp-b" data-cp="depois">Agora não</button><button type="button" class="cp-b pri" data-cp="abrir">Ver meu dia</button>') + '</div>';
     if(novo) document.body.appendChild(d);
     d.querySelector('[data-cp="x"]').onclick = fecharBalao;
     d.querySelector('[data-cp="depois"]').onclick = function(){ fecharBalao(); if(!semPadrao) ls(chave('pausa'), String(Date.now())); };
     var ab = d.querySelector('[data-cp="abrir"]'); if(ab) ab.onclick = function(){ fecharBalao(); abrirPainel(); };
+    var bl0 = d.querySelector('[data-cp="lido"]'); if(bl0) bl0.onclick = function(){ silenciar(ch.key); try{ if(ch.aoLer) ch.aoLer(); }catch(e){} fecharBalao(); };
     d.querySelector('[data-cp="ouvir"]').onclick = function(){ falar((d.querySelector('.cp-txt')||d).textContent.replace(/^Vilacinha/,'')); };
     clearTimeout(S.balaoTimer); S.balaoTimer = setTimeout(fecharBalao, fechaEm || (semPadrao ? 60000 : 25000));
     return d;
@@ -312,8 +319,8 @@
   function talvezDica(){
     if(!S.dia || S.aberto || document.hidden) return;
     if(ehAdm()){   // 23/11: saudação do administrativo = controles do dia (1x por dia)
-      if(!S.ctrl || ls(chave('n'))) return; ls(chave('n'), '1');
-      balao('<div class="cp-txt">' + esc(S.dia.saudacao||'Bom dia!') + ' ' + (S.ctrl.length ? 'Hoje há <b>' + S.ctrl.length + ' controle(s)</b> para conferir' + (ctrlUrgentes() ? ', <b>' + ctrlUrgentes() + ' urgente(s)</b>.' : '.') : 'Controles em dia: nada pendente agora.') + '</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000);
+      if(!S.ctrl || ls(chave('n')) || silenciado('assunto:controles')) return; ls(chave('n'), '1');
+      balao('<div class="cp-txt">' + esc(S.dia.saudacao||'Bom dia!') + ' ' + (S.ctrl.length ? 'Hoje há <b>' + S.ctrl.length + ' controle(s)</b> para conferir' + (ctrlUrgentes() ? ', <b>' + ctrlUrgentes() + ' urgente(s)</b>.' : '.') : 'Controles em dia: nada pendente agora.') + '</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000, { key:'assunto:controles' });
       return;
     }
     /* v7 (25/11, pedido da diretoria): ao iniciar o app o Vilacinha só aparece se tiver algo que VALE a pena
@@ -323,24 +330,24 @@
     var d = S.dia, va = d.vendaAtiva || [], m = d.meta || {}, dia = Math.floor(Date.now() / 86400000), op = [];
     if(va.length){
       var nome1 = esc(String((va[0] && va[0].cliente) || '').split(' ')[0]);
-      op.push({ tag:['📞','Clientes para hoje'], html: variar([
+      if(!silenciado('assunto:clientes')) op.push({ tag:['📞','Clientes para hoje'], k:'assunto:clientes', html: variar([
         'Separei <b>' + va.length + ' cliente(s)</b> para você ligar hoje.' + (nome1 ? ' Que tal começar por <b>' + nome1 + '</b>?' : ''),
         'Tem <b>' + va.length + ' cliente(s)</b> esperando um contato seu hoje. Uma ligação curta já reabre a conversa.',
         (nome1 ? '<b>' + nome1 + '</b> e mais ' + Math.max(0, va.length - 1) + ' cliente(s) estão na sua lista de hoje.' : 'Sua lista de hoje tem <b>' + va.length + ' cliente(s)</b>.') + ' O melhor horário para ligar costuma ser antes do almoço.' ], dia) });
     }
     if(m.metaMes > 0 && m.hoje > 0){
-      op.push({ tag:['🎯','Sua meta'], html: variar([
+      if(!silenciado('assunto:meta')) op.push({ tag:['🎯','Sua meta'], k:'assunto:meta', html: variar([
         'Sua meta de hoje é <b>' + brl0(m.hoje) + '</b>. Uma venda de cada vez. 💪',
         'Para o mês fechar no alvo, hoje o número é <b>' + brl0(m.hoje) + '</b>. Bora?',
         'Hoje, <b>' + brl0(m.hoje) + '</b> deixa você no ritmo da meta do mês. ✨' ], dia) });
     }
     var boas = dicasNovas('geral');
-    if(boas.length){ var dg = boas[Math.floor(Math.random() * boas.length)]; op.push({ tag: ICONE.geral, dica: dg, html: esc(dg) }); }
+    if(boas.length && !silenciado('assunto:dicas')){ var dg = boas[Math.floor(Math.random() * boas.length)]; op.push({ tag: ICONE.geral, dica: dg, k:'assunto:dicas', html: esc(dg) }); }
     if(!op.length) return;
     var e = op[dia % op.length];
     ls(chave('n'), '1'); ls(chave('ult'), String(Date.now()));
     if(e.dica) marcarVista(e.dica);
-    balaoDica(tagHtml(e.tag) + '<div class="cp-txt">' + esc(d.saudacao || 'Olá!') + ' ' + e.html + '</div>');
+    balaoDica(tagHtml(e.tag) + '<div class="cp-txt">' + esc(d.saudacao || 'Olá!') + ' ' + e.html + '</div>', '', { key:e.k });
   }
 
   /* ---------- v4: balão por MÓDULO ---------- */
@@ -452,8 +459,8 @@
   }
   function ignoradas(){ return Number(ls(uidK('ign')) || 0); }
   /** Balão de dica: conta como "ignorado" até a pessoa interagir (Ouvir, Ver, Abrir). Fechar ou deixar sumir mantém a contagem. */
-  function balaoDica(html, acoes){
-    var d = balao(html, acoes);
+  function balaoDica(html, acoes, ch){
+    var d = balao(html, acoes, false, 0, ch);
     if(!d) return null;
     ls(uidK('ign'), String(Math.min(6, ignoradas() + 1)));
     d.addEventListener('click', function(ev){ var b = ev.target && ev.target.closest ? ev.target.closest('[data-cp]') : null; if(b && b.dataset.cp !== 'x' && b.dataset.cp !== 'depois') ls(uidK('ign'), '0'); });
@@ -468,14 +475,15 @@
     if(n >= porDia || Date.now() - ult < gap*60000 || Date.now() - pausa < LIM.pausaMin*60000) return;
     if(Math.random() > 0.5) return;   // "algumas vezes", não sempre
     var cheio = Number(S.dia.hojeAtendimentos||0) >= 8;
-    var podeBE = S.dia.consentimento !== false && Number(ls(chave('be'))||0) < 1 && Date.now() - Number(ls(uidK('beUlt'))||0) > 20*3600000 && !beEmPausa();
+    var podeBE = S.dia.consentimento !== false && !silenciado('assunto:bemestar') && Number(ls(chave('be'))||0) < 1 && Date.now() - Number(ls(uidK('beUlt'))||0) > 20*3600000 && !beEmPausa();
     if(podeBE && (VENDA_MODS.indexOf(k) < 0 || cheio) && Math.random() < 0.5){ ls(chave('ult'), String(Date.now())); ls(chave('nm'), String(n+1)); return perguntarBemEstar(cheio); }
+    if(silenciado('assunto:dicas')) return;
     var lista = dicasNovas(k);
     if(!lista.length) return;   // nada novo para ESTA tela: não aparece (e não gasta a vez do dia)
     var dica = lista[Math.floor(Math.random() * lista.length)];
     ls(chave('ult'), String(Date.now())); ls(chave('nm'), String(n+1));
     marcarVista(dica);
-    balaoDica(tagHtml(ICONE[k]) + '<div class="cp-txt">' + esc(dica) + '</div>');
+    balaoDica(tagHtml(ICONE[k]) + '<div class="cp-txt">' + esc(dica) + '</div>', '', { key:'assunto:dicas' });
   }
 
   /* ---------- v4: BEM-ESTAR (consentimento, perguntas clicáveis, cuidado) ---------- */
@@ -544,7 +552,7 @@
     var H0 = beHist(), vezes = H0.filter(function(x){ return x.id === q.id; }).length;
     var txt = q.alt ? variar([q.txt].concat(q.alt), vezes) : q.txt;   // muda o jeito de perguntar a cada vez
     H0.push({ id:q.id, t:Date.now(), r:'ign' }); gravarJ(uidK('behist'), H0.slice(-60)); ls(uidK('beUlt'), String(Date.now()));   // vira 'resp' quando a pessoa toca numa resposta
-    var d = balao('<div class="cp-tag"><span aria-hidden="true">💛</span> Como você está</div><div class="cp-txt">' + esc(intro||'') + esc(txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true);
+    var d = balao('<div class="cp-tag"><span aria-hidden="true">💛</span> Como você está</div><div class="cp-txt">' + esc(intro||'') + esc(txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true, 0, { key:'assunto:bemestar' });
     if(!d) return;
     d.querySelectorAll('[data-be]').forEach(function(b){ b.onclick = function(){
       var r = b.dataset.be;
@@ -645,7 +653,9 @@
     if(S.user && S.user.nivel === 'diretoria') h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Equipe: bem-estar (só diretoria)</h4><div id="cpEquipe"><button type="button" class="cp-b" data-cp="equipe">Ver como a equipe está</button></div></div>';
     if(d.ranking && d.ranking.length) h += '<div class="cp-card"><h4>'+ic('usuarios',14)+'Ranking da loja (gerência)</h4><table class="cp-rank">' + d.ranking.map(function(r,i){ return '<tr><td>'+(i+1)+'º '+esc(r.nome)+'</td><td class="r">'+r.vendas+' vendas</td><td class="r">'+brl0(r.total)+'</td></tr>'; }).join('') + '</table></div>';
     h += '<div class="cp-card"><h4>'+ic('mensagem',14)+'Converse com o Vilacinha</h4><div class="cp-chat" id="cpChat">' + (S.hist.length ? S.hist.map(function(m){ return '<div class="cp-msg '+(m.de==='ia'?'ia':'eu')+'">'+(m.de==='ia' ? esc(m.texto).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/(^|\n)\s*[*-]\s+/g,'$1• ') : esc(m.texto))+'</div>'; }).join('') : '<div class="cp-meta-s">Pergunte por texto ou pelo microfone: argumentos de venda, como bater a meta, o que oferecer junto…</div>') + '</div></div>';
+    if(silenciados().length) h += '<div class="cp-card"><h4>'+ic('info',14)+'Avisos que você silenciou</h4><div class="cp-meta-s">Você marcou '+silenciados().length+' aviso(s) como "já li, não mostrar mais".</div><div style="margin-top:6px;"><button type="button" class="cp-b" data-cp="resil">Voltar a mostrar tudo</button></div></div>';
     c.innerHTML = h;
+    var brs = c.querySelector('[data-cp="resil"]'); if(brs) brs.onclick = function(){ ls('copiloto_sil_' + (S.user && S.user.id), '[]'); abrirPainel(); };
 
     ligarRecados(c);
     var be = c.querySelector('[data-cp="equipe"]'); if(be) be.onclick = verEquipe;
@@ -1021,9 +1031,9 @@
     await carregarRecados();
     /* recado novo (da diretoria ou do sistema) fala mais alto que qualquer dica */
     var R = S.recados || [];
-    if(R.length && !S.aberto && ls(chave('recBalao')) !== String(R[0].id)){
+    if(R.length && !S.aberto && ls(chave('recBalao')) !== String(R[0].id) && !silenciado('recado:'+R[0].id)){
       ls(chave('recBalao'), String(R[0].id));
-      balao('<div class="cp-txt"><b>'+esc(R[0].titulo||'Recado')+':</b> '+esc(String(R[0].texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000);
+      balao('<div class="cp-txt"><b>'+esc(R[0].titulo||'Recado')+':</b> '+esc(String(R[0].texto||'').slice(0,180))+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000, { key:'recado:'+R[0].id });
       return;
     }
     if(ehOficina()){ await carregarDia(); return; }
@@ -1033,23 +1043,25 @@
     await carregarDia(); await carregarProgresso();
     if(S.user && S.user.nivel==='diretoria'){
       var av = await apiS({ op:'avisos' });
+      var chAv = av && av.ok && av.avisos.length ? 'aviso:' + av.avisos.map(function(a){ return a.id; }).join(',') : '';
+      if(chAv && silenciado(chAv)){ apiS({ op:'avisoLido', ids:av.avisos.map(function(a){ return a.id; }) }); av = { ok:true, avisos:[] }; }
       if(av && av.ok && av.avisos.length && !S.aberto){
         S.avisosN = av.avisos.length;
         var a0 = av.avisos[0];
-        balao('<div class="cp-txt"><b>'+(a0.tipo==='destaque'?'Destaque no quiz':'Atenção no quiz')+':</b> '+esc(a0.texto)+(av.avisos.length>1?' (e mais '+(av.avisos.length-1)+')':'')+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver no painel</button>', true, 20000);
+        balao('<div class="cp-txt"><b>'+(a0.tipo==='destaque'?'Destaque no quiz':'Atenção no quiz')+':</b> '+esc(a0.texto)+(av.avisos.length>1?' (e mais '+(av.avisos.length-1)+')':'')+'</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver no painel</button>', true, 20000, { key:chAv, aoLer:function(){ apiS({ op:'avisoLido', ids:av.avisos.map(function(a){ return a.id; }) }); S.avisosN = 0; pintarFab(); } });
         return;
       }
     }
-    if(L.length && !S.aberto && ls(chave('licBalao')) !== L[0].id){
+    if(L.length && !S.aberto && ls(chave('licBalao')) !== L[0].id && !silenciado('aula:'+L[0].id)){
       ls(chave('licBalao'), L[0].id);
-      var balAula = balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrelic="'+esc(L[0].id)+'">Ler a aula</button>', true, 20000);
+      var balAula = balao('<div class="cp-txt"><b>Aula nova:</b> '+esc(L[0].titulo)+(L[0].via_codigo?' (apareceu na via '+esc(L[0].via_codigo)+')':'')+'. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrelic="'+esc(L[0].id)+'">Ler a aula</button>', true, 20000, { key:'aula:'+L[0].id });
       if(balAula){ var bA = balAula.querySelector('[data-cp-abrelic]'); if(bA) bA.onclick = function(){ var id = bA.dataset.cpAbrelic; fecharBalao(); lerLicao(id); }; }
       return;
     }
     var pd = S.pd, hj = new Date().toISOString().slice(0,10);
-    if(pd && pd.ok && !pd.indisponivel && !pd.respondida && !S.aberto && ls(chave('pdBalao')) !== hj){
+    if(pd && pd.ok && !pd.indisponivel && !pd.respondida && !S.aberto && ls(chave('pdBalao')) !== hj && !silenciado('assunto:pd')){
       ls(chave('pdBalao'), hj);
-      var balPd = balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrepd="1">Responder agora</button>', true, 20000);
+      var balPd = balao('<div class="cp-txt"><b>Pergunta do dia:</b> tem uma pergunta nova esperando você. Leva 1 minuto.</div>', '<button type="button" class="cp-b pri" data-cp-abrepd="1">Responder agora</button>', true, 20000, { key:'assunto:pd' });
       if(balPd){ var bP = balPd.querySelector('[data-cp-abrepd]'); if(bP) bP.onclick = function(){ fecharBalao(); perguntaDoDia(); }; }
     }
   }

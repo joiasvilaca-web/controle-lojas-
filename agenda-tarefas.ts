@@ -4,8 +4,12 @@
 //   privada       → só quem criou
 //   loja          → quem criou + gerente (das lojas dele; sem lojas = todas) + diretoria
 //   compartilhada → quem criou + participantes
+// v14 (25/11): BAIXAR tarefa finalizada. op `baixar` (só tarefa em "feito"): quem criou baixa para TODOS (baixada_em); colaborador baixa só para si (baixada_por[id]).
+//   op `reativar` devolve a tarefa ao quadro em outro andamento (criador limpa a baixa de todos; colaborador só a dele). listar devolve baixada_para_mim, baixada_data,
+//   baixada_global, posso_reativar. Sair de "feito" (mover/salvar/sincCrm) limpa as baixas.
+// v13 (23/11): minhasVias devolve serviceTypeId nos pedidos (os três ramos), para o filtro por tipo de serviço no calendário.
 // v12 (18/11): minhasVias aceita `escopo` (minhas | loja | todas) para o calendário.
-// Ops: init, listar, salvar, mover, excluir, lembretes, minhasVias, avisos, agendaCiente
+// Ops: init, listar, salvar, mover, baixar, reativar, excluir, lembretes, minhasVias, avisos, agendaCiente
 // v11 (18/11): AVISOS da agenda (PAINEL › Avisos). op `avisos` devolve o que a pessoa (criadora ou participante, tarefa não feita) precisa ver ao abrir o sistema:
 //   compartilhada = recebeu um compartilhamento há menos de 24 h e ainda não deu ciente (`cientes`; início em `participantes_em`);
 //   amanha = vence amanhã; hoje = vence hoje; atrasada = venceu nos últimos 7 dias. Datas no fuso de São Paulo. op `agendaCiente` dá o ciente (função SQL atômica).
@@ -73,6 +77,16 @@ Deno.serve(async (req: Request) => {
       (t.tipo === "loja" && vejoLoja(t.loja_id));
     // mexer (mover/editar) = quem vê; excluir = quem criou (ou diretoria, nas de loja)
     const podeExcluir = (t: any) => t.criador_id === meuId || (t.tipo === "loja" && ehDiretoria);
+    // baixa (v14): quem criou baixa para todos; qualquer outra pessoa que enxerga a tarefa baixa só para si
+    const baixadaGlobal = (t: any) => !!t.baixada_em;
+    const baixadaPraMim = (t: any) => baixadaGlobal(t) || !!(t.baixada_por && t.baixada_por[meuId]);
+    const dataBaixa = (t: any): string | null => {
+      const a = t.baixada_em ? String(t.baixada_em) : "", c = t.baixada_por && t.baixada_por[meuId] ? String(t.baixada_por[meuId]) : "";
+      if (!a && !c) return null;
+      return !a ? c : !c ? a : (new Date(a).getTime() >= new Date(c).getTime() ? a : c);
+    };
+    const podeReativar = (t: any) => t.criador_id === meuId || (!baixadaGlobal(t) && !!(t.baixada_por && t.baixada_por[meuId]));
+    const extras = (t: any) => ({ posso_excluir: podeExcluir(t), baixada_para_mim: baixadaPraMim(t), baixada_global: baixadaGlobal(t), baixada_data: dataBaixa(t), posso_reativar: baixadaPraMim(t) && podeReativar(t) });
 
     async function visiveis(de?: string | null, ate?: string | null) {
       const ors = [`criador_id.eq.${meuId}`, `and(tipo.eq.compartilhada,participantes.cs.{${meuId}})`];
@@ -98,14 +112,13 @@ Deno.serve(async (req: Request) => {
 
     if (b.op === "listar") {
       const lista = await visiveis(dataOk(b.de), dataOk(b.ate));
-      // tarefas do CHAT: diz se a conversa ainda está ativa (o botão "ir para a conversa" só aparece nesse caso)
       const convIds = [...new Set(lista.map((t: any) => t.conversa_id).filter(Boolean))];
       const ativas = new Set<string>();
       if (convIds.length) {
         const { data: cs } = await admin.from("atendimento_conversas").select("id, status").in("id", convIds.slice(0, 200));
         for (const c of cs || []) if (c.status !== "finalizado") ativas.add(c.id);
       }
-      return json({ ok: true, data: lista.map((t: any) => ({ ...t, posso_excluir: podeExcluir(t), conversa_ativa: !!(t.conversa_id && ativas.has(t.conversa_id)) })) });
+      return json({ ok: true, data: lista.map((t: any) => ({ ...t, ...extras(t), conversa_ativa: !!(t.conversa_id && ativas.has(t.conversa_id)) })) });
     }
 
     if (b.op === "salvar") {
@@ -129,12 +142,11 @@ Deno.serve(async (req: Request) => {
         coluna, data: dataOk(t.data), hora: horaOk(t.hora), updated_at: new Date().toISOString(),
         concluida_em: coluna === "feito" ? (t.concluida_em || new Date().toISOString()) : null,
       };
+      if (coluna !== "feito") { campos.baixada_em = null; campos.baixada_por = {}; }   // v14: saiu de "feito" → volta ao quadro de todos
       if (t.id) {
         const { data: atual } = await admin.from("agenda_tarefas").select("*").eq("id", t.id).maybeSingle();
         if (!atual || !podeVer(atual)) return json({ error: "Tarefa não encontrada." }, 404);
-        // quem não criou pode mexer no andamento e nos detalhes, mas não muda quem enxerga a tarefa
         if (atual.criador_id !== meuId) { campos.tipo = atual.tipo; campos.loja_id = atual.loja_id; campos.participantes = atual.participantes; }
-        // 18/11: quem entrou agora na tarefa ganha o carimbo (começa o aviso de 24 h); quem saiu perde o carimbo e o ciente
         { const parts: string[] = (campos.participantes as string[]) || []; const em: Record<string, string> = { ...(atual.participantes_em || {}) }; const ci: Record<string, string> = { ...(atual.cientes || {}) };
           for (const id of parts) if (!em[id] || !(atual.participantes || []).includes(id)) { em[id] = agoraIso; delete ci[id]; }
           for (const id of Object.keys(em)) if (!parts.includes(id)) { delete em[id]; delete ci[id]; }
@@ -159,20 +171,63 @@ Deno.serve(async (req: Request) => {
       const campos: Record<string, unknown> = { coluna, updated_at: new Date().toISOString() };
       if (typeof b.ordem === "number" && isFinite(b.ordem)) campos.ordem = b.ordem;
       if (coluna !== atual.coluna) campos.concluida_em = coluna === "feito" ? new Date().toISOString() : null;
+      if (coluna !== "feito") { campos.baixada_em = null; campos.baixada_por = {}; }   // v14
       const { data, error } = await admin.from("agenda_tarefas").update(campos).eq("id", atual.id).select().single();
       if (error) throw error;
-      if (atual.crm_tarefa_id && coluna !== atual.coluna) {   // mantém a tarefa do CRM no mesmo andamento
+      if (atual.crm_tarefa_id && coluna !== atual.coluna) {
         const feita = coluna === "feito";
         await admin.from("crm_tarefas").update({ status: feita ? "feita" : "aberta", concluida_em: feita ? new Date().toISOString() : null }).eq("id", atual.crm_tarefa_id);
       }
       return json({ ok: true, data });
     }
 
-    // o CRM (CHAT) concluiu/reabriu a tarefa dele: a tarefa ligada na Agenda acompanha
+    // v14 — BAIXAR: tira do quadro uma tarefa já finalizada. Criador baixa para todos; colaborador só para ele.
+    if (b.op === "baixar") {
+      const { data: atual } = await admin.from("agenda_tarefas").select("*").eq("id", String(b.id || "")).maybeSingle();
+      if (!atual || !podeVer(atual)) return json({ error: "Tarefa não encontrada." }, 404);
+      if (atual.coluna !== "feito") return json({ error: "Só dá para baixar tarefa que já está em Feito." }, 400);
+      const agoraIso = new Date().toISOString();
+      const campos: Record<string, unknown> = { updated_at: agoraIso };
+      if (atual.criador_id === meuId) campos.baixada_em = agoraIso;
+      else campos.baixada_por = { ...(atual.baixada_por || {}), [meuId]: agoraIso };
+      const { data, error } = await admin.from("agenda_tarefas").update(campos).eq("id", atual.id).select().single();
+      if (error) throw error;
+      return json({ ok: true, data: { ...data, ...extras(data) } });
+    }
+
+    // v14 — REATIVAR: volta a tarefa baixada para o quadro em outro andamento (a fazer / fazendo) ou só desfaz a baixa (feito)
+    if (b.op === "reativar") {
+      const { data: atual } = await admin.from("agenda_tarefas").select("*").eq("id", String(b.id || "")).maybeSingle();
+      if (!atual || !podeVer(atual)) return json({ error: "Tarefa não encontrada." }, 404);
+      if (!baixadaPraMim(atual)) return json({ ok: true, data: { ...atual, ...extras(atual) } });
+      if (!podeReativar(atual)) return json({ error: "Esta tarefa foi baixada por quem a criou. Só essa pessoa pode reativar." }, 403);
+      const coluna = COLUNAS.includes(b.coluna) ? b.coluna : "feito";
+      const agoraIso = new Date().toISOString();
+      const campos: Record<string, unknown> = { updated_at: agoraIso };
+      if (atual.criador_id === meuId) { campos.baixada_em = null; campos.baixada_por = {}; }
+      else { const bp = { ...(atual.baixada_por || {}) }; delete bp[meuId]; campos.baixada_por = bp; }
+      if (coluna !== atual.coluna) {
+        campos.coluna = coluna;
+        campos.concluida_em = coluna === "feito" ? agoraIso : null;
+        if (coluna !== "feito") { campos.baixada_em = null; campos.baixada_por = {}; }
+        const { data: ult } = await admin.from("agenda_tarefas").select("ordem").eq("coluna", coluna).order("ordem", { ascending: false }).limit(1);
+        campos.ordem = ((ult && ult[0] && Number(ult[0].ordem)) || 0) + 1;
+      }
+      const { data, error } = await admin.from("agenda_tarefas").update(campos).eq("id", atual.id).select().single();
+      if (error) throw error;
+      if (atual.crm_tarefa_id && coluna !== atual.coluna) {
+        const feita = coluna === "feito";
+        await admin.from("crm_tarefas").update({ status: feita ? "feita" : "aberta", concluida_em: feita ? agoraIso : null }).eq("id", atual.crm_tarefa_id);
+      }
+      return json({ ok: true, data: { ...data, ...extras(data) } });
+    }
+
     if (b.op === "sincCrm") {
       const idc = texto(b.crm_tarefa_id, 80); if (!idc) return json({ ok: true });
       const coluna = b.status === "feita" ? "feito" : "a_fazer";
-      await admin.from("agenda_tarefas").update({ coluna, concluida_em: coluna === "feito" ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq("crm_tarefa_id", idc);
+      const up: Record<string, unknown> = { coluna, concluida_em: coluna === "feito" ? new Date().toISOString() : null, updated_at: new Date().toISOString() };
+      if (coluna !== "feito") { up.baixada_em = null; up.baixada_por = {}; }   // v14
+      await admin.from("agenda_tarefas").update(up).eq("crm_tarefa_id", idc);
       return json({ ok: true });
     }
 
@@ -185,7 +240,6 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
-    // 18/11: AVISOS da agenda para o PAINEL › Avisos (aparecem ao abrir o sistema)
     if (b.op === "avisos") {
       const fmtDia = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
       const hojeSP = fmtDia(new Date());
@@ -196,7 +250,6 @@ Deno.serve(async (req: Request) => {
       const out: any[] = [];
       const base = (t: any, kind: string, extra: any = {}) => ({ id: t.id, kind, titulo: t.titulo, descricao: t.descricao || "", tipo: t.tipo, data: t.data || null, hora: t.hora || null, de: t.criador_nome || "", classificacao: t.classificacao || "normal", minha: t.criador_id === meuId, ...extra });
       for (const t of data || []) {
-        // compartilhamento recebido: 24 h a partir do momento em que a pessoa entrou na tarefa, até dar ciente
         if (t.tipo === "compartilhada" && t.criador_id !== meuId && (t.participantes || []).includes(meuId)) {
           const em = (t.participantes_em && t.participantes_em[meuId]) || t.created_at;
           const ms = Date.now() - new Date(em).getTime();
@@ -219,7 +272,6 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true });
     }
 
-    // Lembretes do assistente (atendimento-agenda-chat), pro calendário
     if (b.op === "lembretes") {
       const { data: pess } = await admin.from("atendimento_pessoal_usuarios").select("id").eq("funcionario_id", meuId).maybeSingle();
       if (!pess) return json({ ok: true, data: [] });
@@ -228,7 +280,6 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, data: data || [] });
     }
 
-    // Vias com o meu nome (vendedora) em Orçamentos, Vendas e Pedidos
     if (b.op === "minhasVias") {
       const ST_OFICINA = ["enviado_fabrica", "em_producao", "pendencia", "oficina_pronto"];
       const lojaNome = (p: any) => { const l = (config.lojas || []).find((x: any) => x.id === p.lojaId); return l ? l.nome : (p.loja || ""); };
@@ -236,11 +287,10 @@ Deno.serve(async (req: Request) => {
       if (nivel === "oficina") {
         const { data: ped0, error: e0 } = await admin.from("ordens_servico").select("id, payload").in("payload->>status", ST_OFICINA).limit(1000);
         if (e0) throw e0;
-        const lista0 = (ped0 || []).map((r: any) => { const p = r.payload || {}; return { tipo: "pedido", id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null, valorTotal: 0, status: p.status || null, loja: lojaNome0(p), data: p.data || null, validade: null, vendedora: p.vendedora || null, naOficina: true }; })
+        const lista0 = (ped0 || []).map((r: any) => { const p = r.payload || {}; return { tipo: "pedido", id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null, valorTotal: 0, status: p.status || null, loja: lojaNome0(p), data: p.data || null, validade: null, vendedora: p.vendedora || null, naOficina: true, serviceTypeId: p.serviceTypeId || null }; })
           .sort((a: any, c: any) => String(a.data || "9999").localeCompare(String(c.data || "9999")));
         return json({ ok: true, data: lista0, oficina: true });
       }
-      // 18/11: escopo do calendário — "minhas" (padrão: vias em nome do usuário), "loja" (todas as vias das lojas dele) ou "todas" (diretoria: todas as lojas)
       const escopo = ["loja", "todas"].includes(String(b.escopo)) ? String(b.escopo) : "minhas";
       if (escopo !== "minhas") {
         const todasIds: string[] = (config.lojas || []).map((l: any) => String(l.id));
@@ -255,7 +305,7 @@ Deno.serve(async (req: Request) => {
         const mapL = (tipo: string, rows: any[]) => (rows || []).map((r) => {
           const p = r.payload || {};
           return { tipo, id: r.id, codigoVia: p.codigoVia || p.via || null, cliente: p.cliente || null, valorTotal: Number(p.valorTotal) || 0, status: p.status || null, loja: lojaNome(p), lojaId: p.lojaId || null,
-            data: p.data || null, validade: p.validade || null, vendedora: p.vendedora || null, naOficina: tipo === "pedido" && ST_OFICINA.includes(String(p.status || "")) };
+            data: p.data || null, validade: p.validade || null, vendedora: p.vendedora || null, naOficina: tipo === "pedido" && ST_OFICINA.includes(String(p.status || "")), serviceTypeId: p.serviceTypeId || null };
         }).filter((x) => x.status !== "rascunho");
         const listaL = [...mapL("orcamento", orcL.data!), ...mapL("venda", venL.data!), ...mapL("pedido", pedL.data!)].sort((a, c) => String(c.data || "").localeCompare(String(a.data || "")));
         return json({ ok: true, data: listaL, escopo });
@@ -277,6 +327,7 @@ Deno.serve(async (req: Request) => {
           valorTotal: Number(p.valorTotal) || 0, status: p.status || null, loja: lojaNome(p),
           data: p.data || null, validade: p.validade || null, vendedora: p.vendedora || null,
           naOficina: tipo === "pedido" && ST_OFICINA.includes(String(p.status || "")),
+          serviceTypeId: p.serviceTypeId || null,
         };
       }).filter((x) => x.status !== "rascunho");
       const lista = [...map("orcamento", orc.data!), ...map("venda", ven.data!), ...map("pedido", ped.data!)]
