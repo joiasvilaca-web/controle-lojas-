@@ -4679,6 +4679,33 @@ async function salvarClienteCadastro(c){
   return !r.error;
 }
 function autorizadoPorNome(u){ return (u&&u.nome)||''; }
+/* 25/11: extrato do cashback do cliente — cada via/pedido que gerou, valor, saldo, quando libera e vence. */
+async function abrirCashbackModal(cli){
+  const fmt = d=> d ? String(d).split('-').reverse().join('/') : '—';
+  openModal(`<h3>Cashback do cliente</h3><p class="muted" style="margin:-8px 0 10px;">${escapeHtml(cli.nome)}</p><div id="cbExtrato"><div class="cad-carregando">Carregando…</div></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="cbExtVoltar">Voltar ao cadastro</button></div>`);
+  document.getElementById('cbExtVoltar').addEventListener('click', ()=>{ closeModal(); openClienteModalCadastro(cli); });
+  let c = cli;
+  try{ const f = await Cashback.buscarCliente(gatewayCall, cli.id); if(f) c = f; }catch(e){}
+  const box = document.getElementById('cbExtrato'); if(!box) return;
+  const hoje = Cashback.hoje();
+  const lotes = ((c.cashback && c.cashback.lotes) || []).slice().sort((a,b)=>String(b.geradoEm||'').localeCompare(String(a.geradoEm||'')));
+  const disp = Cashback.disponivel(c, hoje), lib = Cashback.aLiberar(c, hoje);
+  if(!lotes.length){ box.innerHTML = '<p class="muted">Este cliente ainda não tem cashback. Ele é gerado em compras pagas em dinheiro (10% do valor pago).</p>'; return; }
+  const situ = l=>{
+    if(l.estornado) return ['Estornado','var(--danger)'];
+    if(!(Number(l.saldo)>0.004)) return ['Usado','var(--muted)'];
+    if(l.expiraEm < hoje) return ['Vencido','var(--danger)'];
+    if(l.ativaEm > hoje) return ['A liberar','#b45309'];
+    return ['Disponível','var(--ok)'];
+  };
+  box.innerHTML = `<div class="cad-saldo">Disponível hoje <b style="color:var(--ok);">${cadBrl(disp)}</b>${lib>0?` · a liberar <b>${cadBrl(lib)}</b>`:''}</div>
+    <div style="max-height:50vh;overflow:auto;"><table class="cad-tabela" style="width:100%;"><thead><tr><th>Via / origem</th><th>Compra</th><th style="text-align:right">Gerou</th><th style="text-align:right">Saldo</th><th>Libera</th><th>Vence</th><th>Situação</th></tr></thead><tbody>
+    ${lotes.map(l=>{ const [t,cor] = situ(l); const usos = (l.usos||[]).map(u=>`usou ${cadBrl(u.valor)} em ${escapeHtml(u.via||u.tipo||'')} (${fmt(u.data)})`).join('; ');
+      return `<tr><td><b>${escapeHtml(l.via||'—')}</b><div class="muted" style="font-size:12px;">${escapeHtml(l.tipo||'')}${l.manual?' · lançado manualmente'+(l.lancadoPor?' por '+escapeHtml(l.lancadoPor):''):''}${usos?'<br>'+usos:''}</div></td><td>${fmt(l.geradoEm)}</td><td style="text-align:right">${cadBrl(l.valor)}</td><td style="text-align:right"><b>${cadBrl(l.saldo)}</b></td><td>${fmt(l.ativaEm)}</td><td>${fmt(l.expiraEm)}</td><td style="color:${cor};font-weight:600;">${t}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    <p class="muted" style="font-size:12px;margin-top:8px;">Regras: 10% do valor pago em dinheiro; libera no dia seguinte à compra e vale 60 dias; abate no máximo 50% de uma nova compra.</p>`;
+}
 function abrirCreditoModal(cli){
   const movs=(cli.creditoMovimentos||[]).slice().reverse();
   openModal(`
@@ -4898,7 +4925,7 @@ function openClienteModalCadastro(cli, somenteVer){
   const resumoExtras = cli ? `
     <div class="cad-modal-resumo">
       <button class="btn btn-ghost btn-sm" id="ccBtnCredito">${cadIco('carteira')} Crédito: <b style="color:var(--ok);">${cadBrl(cli.credito||0)}</b></button>
-      <button class="btn btn-ghost btn-sm" id="ccBtnCashback" title="Cashback: 10% do que foi pago em dinheiro. Libera no dia seguinte e vale 60 dias.">${cadIco('carteira')} Cashback: <b style="color:var(--ok);">${cbChipTexto(cli)}</b></button>
+      <button class="btn btn-ghost btn-sm" id="ccBtnCashback" title="Ver as vias que geraram cashback, valores e vencimentos.">${cadIco('carteira')} Cashback: <b style="color:var(--ok);">${cbChipTexto(cli)}</b></button>
       <button class="btn btn-ghost btn-sm" id="ccBtnDebitos">${cadIco('recibo')} Fiado: <b style="color:${saldoDevedorCliente(cli)>0?'var(--danger)':'var(--ok)'};">${cadBrl(saldoDevedorCliente(cli))}</b></button>
       <button class="btn btn-ghost btn-sm" id="ccBtnHistorico">${cadIco('lista')} Histórico de compras e O.S.</button>
     </div>` : '';
@@ -4955,6 +4982,7 @@ function openClienteModalCadastro(cli, somenteVer){
   desenharRedes();
   if(cli){
     document.getElementById('ccBtnCredito').addEventListener('click', ()=>{ closeModal(); abrirCreditoModal(cli); });
+    document.getElementById('ccBtnCashback').addEventListener('click', ()=>{ closeModal(); abrirCashbackModal(cli); });
     document.getElementById('ccBtnDebitos').addEventListener('click', ()=>{ closeModal(); abrirDebitosModal(cli); });
     document.getElementById('ccBtnHistorico').addEventListener('click', ()=>{ closeModal(); abrirHistoricoCliente(cli); });
   }
