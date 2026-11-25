@@ -558,3 +558,8 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Todo balão do Vilacinha (recado, aviso de destaque/atenção do quiz, aula nova, clientes do dia, meta, dicas, pergunta do dia, bem-estar, controles do administrativo) ganhou o botão **Já li, não mostrar mais**.
 - Aviso de destaque: o botão também marca o aviso como lido no servidor (acabou de repetir a cada entrada). Recado/aula/aviso = só aquele item; os demais = o assunto inteiro.
 - Fica gravado no aparelho, por pessoa. No painel do Vilacinha, **Avisos que você silenciou › Voltar a mostrar tudo** desfaz.
+
+## 25/11/2026 — Vilacinha da diretoria: metas das lojas
+- Perfil diretoria não vê mais meta de vendedora nem "Seus números no mês". O painel mostra, por loja, **quanto falta para a meta geral do mês** (meta de Dashboard › Editar metas), por dia restante, % e ritmo de fechamento.
+- Balão da meta, fala e elogio de meta pessoal não aparecem para a diretoria. Vendedoras e gerentes ficam como antes.
+- Servidor: nova função `copiloto-metas` v1 (só diretoria, só leitura). Cliente: copiloto.js.
