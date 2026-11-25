@@ -608,5 +608,6 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 25/11/2026 — Etiqueta com rabo: preço dentro da etiqueta
 - Com o QR Code, o texto de preço agora é medido com folga para negrito (0,7 em por caractere) e o 12x sai sem "R$" ("12x 455"). Mesmo preço de cinco dígitos (R$ 12.350 · 12x 1.235) cabe na metade.
 
-## 25/11/2026 — Pedido: crédito do cliente visível mesmo sem cliente escolhido
-- Na forma de pagamento do Novo pedido, sem cliente escolhido aparece "CRÉDITO CLIENTE (escolha o cliente primeiro)" travado. Com o cliente escolhido e saldo, a opção "CRÉDITO CLIENTE (disp. R$ …)" libera como antes. Nada mudou no cálculo do crédito.
+## 25/11/2026 — Cadastro de produto mais rápido
+- Ao salvar, a tela não recarrega mais todos os produtos do banco (era o maior atraso): só redesenha a lista se ela já estava aberta.
+- O contador do código automático é gravado junto com o produto (em paralelo), e o estoque inicial de todas as lojas é lançado ao mesmo tempo, em vez de uma loja por vez. Cálculos, kardex e preços não mudaram.
