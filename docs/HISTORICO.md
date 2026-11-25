@@ -483,3 +483,11 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Acabamento**: seleção de texto, cursor e barra de rolagem agora seguem a paleta; foco visível (branco) na barra escura do topo; "Carregando vendas…" ganhou a mesma voz dos estados vazios.
 - Detector `impeccable detect vendas.html`: **3 achados + 1 aviso → 0**. Nenhuma função mudou; 188/188 testes passando.
 - Pendente (P2/P3): 35 telas ainda carregam o Inter no `<link>` sem usar (peso extra no primeiro acesso) — tirar na vez de cada módulo; título em serifa nos outros módulos; `.ord-bar` e `busca-vias.js` ainda são corrigidos por CSS local da Venda.
+
+## 25/11 — Vendas: pendências P2/P3 resolvidas (valem para o app todo)
+- **Título em serifa em todas as telas** (`tema.css`, regra `.page-title`: Cormorant Garamond 30px, 25px no celular). A Venda deixou de ter tamanho próprio; "Ações de acompanhamento" subiu de 18 para 22px (`acompanhamento-ui.js`) para a serifa não ficar miúda.
+- **Inter fora de 35 telas**: o `<link>` do Google Fonts baixava o Inter sem uso (a fonte vem do `tema.css`). `index.html` (o shell) passou a usar `var(--t-font)`. `cartao-aniversario.html` ficou de fora de propósito (página própria, não usa o tema).
+- **"Ordenar por"**: as setas ↕/▲ viraram ícones do conjunto do app nas 5 telas que têm a ordenação (Venda, Caixa, Gastos, Orçamentos, Pedidos) e o CSS foi para o `tema.css` (some no computador, 44px no celular). O CSS local da Venda foi removido.
+- **Cartão "Buscar …" (`busca-vias.js`)**: campo e botão com 44px no celular, em todas as telas que usam.
+- Pendente: `dashboard (6).html` (cópia antiga na raiz do repositório, enviada por engano) continua lá — apagar pelo GitHub.
+
