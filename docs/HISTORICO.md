@@ -622,3 +622,6 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Causa: no upsert, o gatilho de INSERT (cashback_insert_limpa) removia o marcador __cashbackWrite antes do gatilho de UPDATE (cashback_preserva) ver; o UPDATE então descartava o cashback gravado. Resultado: nenhum cliente tinha cashback salvo, e ao editar a venda o valor "gerado" era zerado.
 - Correção: migração `cashback_trigger_upsert_corrige` (o INSERT mantém o marcador; o UPDATE remove). Testado com upsert.
 - Reparo de dados: 102 clientes ganharam os lotes (10% do pago em dinheiro; libera no dia seguinte; vale 60 dias da compra), 20 vendas e 11 pedidos com "gerado 0" foram corrigidos (total R$ 7.146,37). Cancelados ficaram de fora; nenhum cashback tinha sido usado. Caso de origem: Danielle Rodrigues da Silva, venda MC127V, R$ 221,00.
+
+## 25/11/2026 — Cashback visível no cadastro do cliente
+- No cadastro do cliente (Cadastro › Clientes), ao lado de Crédito e Fiado, agora aparece "Cashback: R$ X" (disponível hoje, com "+R$ Y a liberar" quando há). O saldo é lido do banco ao abrir, então vale para todos os clientes, os atuais e os futuros.
