@@ -512,3 +512,10 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Celular**: toque de 44px em voltar, botões (Hoje, Atualizar, Pesquisar, Fechar caixa), datas, loja e chips; as caixas de marcar passaram de 15 para 20px.
 - Gráficos de barras continuam com a paleta categórica validada (claro/escuro) — não mexi.
 - Detector 0 achados; nenhuma função mudou; 188/188 testes.
+
+## 25/11 — Gastos repaginado (rodada 5, impeccable)
+- Título em serifada (Cormorant) 30px, cabeçalho com linha de separação; busca com texto "Buscar por nome ou categoria".
+- Filtros em faixa secundária (sem sombra); totais com hierarquia: **A pagar no período** em destaque (24px), demais menores.
+- Selos/contadores/chips saíram da pílula (raio 6–8px); alertas com raio 10px.
+- Celular: toque de 44px em abas, botões, ícones de ação da linha ("Marcar como pago", etiqueta, lápis, lixeira) e navegação da agenda; "Ordenar por" com respiro lateral.
+- Detector 0 achados (antes 0); nenhuma função mudou; 188/188 testes.
