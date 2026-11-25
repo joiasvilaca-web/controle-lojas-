@@ -599,3 +599,8 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Código de barras com largura fixa e centralizada (novo campo "Largura do código de barras", padrão 22 mm), com folga da dobra e das bordas; antes esticava na metade inteira.
 - Preço sem ",00" (À vista R$ 4.550 · 12x R$ 455). À vista = valor de tabela com o desconto do tipo (ex.: joia Vilaça ouro 50%); 12x = à vista + 20% ÷ 12.
 - A prévia agora usa um produto com desconto de verdade, para o valor aparecer certo. A configuração salva da etiqueta já foi ajustada para esse modelo.
+
+## 25/11/2026 — Etiqueta com rabo: QR Code e código de barras mais legível
+- Código de barras só com os números (Code 128 C): PRD003029 vira 003029, com cerca de metade das barras. Barras mais grossas (largura padrão 25 mm), melhores para leitor a laser. A Consulta de preço e as buscas já aceitam só o número.
+- QR Code (celular) na metade dos dados, ao lado de fator, valor à vista e 12x, com o código interno. Com o QR, o valor à vista sai sem a palavra "À vista" (R$ 4.550 · 12x R$ 455) para caber.
+- Novas opções em Impressão e etiquetas: "Código de barras só com os números" e "QR Code na metade dos dados". A configuração salva já foi ajustada.
