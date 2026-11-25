@@ -491,3 +491,10 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Cartão "Buscar …" (`busca-vias.js`)**: campo e botão com 44px no celular, em todas as telas que usam.
 - Pendente: `dashboard (6).html` (cópia antiga na raiz do repositório, enviada por engano) continua lá — apagar pelo GitHub.
 
+
+## 25/11 — Pedidos e O.S.: repaginação visual (impeccable, rodada 2)
+- **Cabeçalho**: botões ENVIAR/RECEBER/Novo pedido agora ficam à direita do título (antes caíam numa linha abaixo), com linha de separação. Filtros viram faixa secundária (fundo mais escuro, sem sombra) e o campo de cima ("Buscar pedido") é o que manda; o de baixo agora diz "Filtrar esta lista…".
+- **Formas**: selos, seletor de status, contador das colunas e o botão Lista/Quadro saíram da pílula (raio 6–8px); só a sigla da loja continua redonda.
+- **Lista (computador)**: a tabela era mais larga que a tela e cortava os ícones de ação. Agora a coluna de ações fica sempre visível (fixa à direita), o nome do cliente não quebra mais em 4 linhas, o seletor de status tem largura fixa e, a partir de 1500px, a área útil sobe para 1440px.
+- **Celular**: tudo com toque de 44px (voltar, ícones do topo, Lista/Quadro, botões, cabeçalho de coluna do quadro, seletor de status); o ícone de WhatsApp do cartão do quadro mantém o visual e ganhou área de toque de 44px.
+- Detector: 1 achado (`<img src="">` do visualizador de fotos) → 0. Nenhuma função mudou; 188/188 testes.
