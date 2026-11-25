@@ -625,3 +625,6 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 
 ## 25/11/2026 — Cashback visível no cadastro do cliente
 - No cadastro do cliente (Cadastro › Clientes), ao lado de Crédito e Fiado, agora aparece "Cashback: R$ X" (disponível hoje, com "+R$ Y a liberar" quando há). O saldo é lido do banco ao abrir, então vale para todos os clientes, os atuais e os futuros.
+
+## 25/11/2026 — Extrato do cashback no cadastro do cliente
+- O botão "Cashback" do cadastro do cliente agora abre o extrato: cada via/pedido que gerou cashback, data da compra, valor gerado, saldo, quando libera, quando vence e a situação (disponível, a liberar, usado, vencido, estornado), com os usos e os lançamentos manuais.
