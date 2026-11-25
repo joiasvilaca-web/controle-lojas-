@@ -7,6 +7,9 @@
  *   uma que a pessoa ainda não viu (máx. 6 balões/dia, 12 min entre eles). BEM-ESTAR — em telas fora de venda/atendimento, em dia com poucas dicas ou
  *   em dia cheio de atendimentos, o Vilacinha pergunta como a pessoa está (resposta clicável, sempre com "prefiro não dizer") e responde com um cuidado
  *   (água, alongar, respirar, sentar um pouco). Só grava com CONSENTIMENTO (perguntado uma vez). A diretoria vê o perfil da equipe no painel.
+ * 25/11 (v7, pedido da diretoria): MENOS balão e MAIS variedade — no máximo 3 dicas por dia, 50 min entre elas (cresce se a pessoa ignora), dica só da
+ *   tela aberta, sem repetir (21 dias) nem dica parecida (10 dias), banco próprio de dicas por tela com ícone; ao iniciar só aparece se tiver algo bom;
+ *   bem-estar: 16 perguntas que rodam entre os dias, nunca a mesma duas vezes seguidas, e param por uns dias se a pessoa não responde.
  * Shell: Copiloto.iniciar({ senha, user, lojaNome }) ao entrar; Copiloto.parar() ao sair. Oficina não tem copiloto. Fora da produção a função não existe → some sozinho. */
 (function(){
   'use strict';
@@ -163,6 +166,7 @@
   +'.cp-balao .cp-x{position:absolute;top:6px;right:6px;width:28px;height:28px;border:0;border-radius:50%;background:transparent;color:var(--t-text-soft,#667);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;} .cp-balao .cp-x:hover{background:var(--t-surface-2,#eef0f3);} .cp-balao b.cp-quem{padding-right:26px;}'
   +'@media(max-width:760px){.cp-balao .cp-x{top:4px;right:4px;width:40px;height:40px;}}'
   +'.cp-balao .cp-acoes{display:flex;gap:6px;justify-content:flex-end;margin-top:8px;flex-wrap:wrap;}'
+  +'.cp-balao .cp-tag{display:inline-flex;gap:5px;align-items:center;font-size:11.5px;font-weight:700;color:#8a3560;background:rgba(138,53,96,.09);border-radius:999px;padding:2px 9px;margin:2px 0 6px;}'
   +'@keyframes cpEntra{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}'
   +'.cp-b{border:1px solid var(--t-line,#dde);background:var(--t-surface,#fff);color:var(--t-text,#14202b);border-radius:9px;padding:6px 11px;font:600 12.5px Inter,sans-serif;cursor:pointer;display:inline-flex;align-items:center;gap:5px;}'
   +'.cp-b.pri{background:#662344;border-color:#662344;color:#fff;} .cp-b.wa{border-color:#1f9a55;color:#1f9a55;} .cp-b:disabled{opacity:.55;cursor:default;}'
@@ -312,18 +316,31 @@
       balao('<div class="cp-txt">' + esc(S.dia.saudacao||'Bom dia!') + ' ' + (S.ctrl.length ? 'Hoje há <b>' + S.ctrl.length + ' controle(s)</b> para conferir' + (ctrlUrgentes() ? ', <b>' + ctrlUrgentes() + ' urgente(s)</b>.' : '.') : 'Controles em dia: nada pendente agora.') + '</div>', '<button type="button" class="cp-b" data-cp="abrir">Ver</button>', true, 25000);
       return;
     }
-    var n = Number(ls(chave('n'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
-    if(n >= 1 || Date.now() - ult < 75*60000 || Date.now() - pausa < 120*60000) return;
-    var itens = [];
-    if(n === 0){ itens.push(esc(S.dia.saudacao) + ' ' + (S.dia.meta && S.dia.meta.metaMes > 0 && S.dia.meta.hoje > 0 ? 'Sua meta de hoje é <b>' + brl0(S.dia.meta.hoje) + '</b>. ' : '') + ((S.dia.vendaAtiva||[]).length ? 'Separei <b>' + S.dia.vendaAtiva.length + ' clientes</b> para você chamar hoje.' : esc((S.dia.dicas||[])[0]||''))); }
-    else {
-      var va = (S.dia.vendaAtiva||[])[n-1], di = (S.dia.dicas||[])[n % Math.max(1,(S.dia.dicas||[]).length)];
-      if(va && n % 2 === 1) itens.push('Que tal chamar <b>' + esc(va.cliente.split(' ')[0]) + '</b> agora? ' + esc(va.motivo) + '.');
-      else if(di) itens.push(esc(di));
+    /* v7 (25/11, pedido da diretoria): ao iniciar o app o Vilacinha só aparece se tiver algo que VALE a pena
+       (clientes para ligar, a meta do dia ou uma dica que a pessoa ainda não viu), e o assunto muda de um dia
+       para o outro. Sem nada bom, não aparece. */
+    if(ls(chave('n'))) return;
+    var d = S.dia, va = d.vendaAtiva || [], m = d.meta || {}, dia = Math.floor(Date.now() / 86400000), op = [];
+    if(va.length){
+      var nome1 = esc(String((va[0] && va[0].cliente) || '').split(' ')[0]);
+      op.push({ tag:['📞','Clientes para hoje'], html: variar([
+        'Separei <b>' + va.length + ' cliente(s)</b> para você ligar hoje.' + (nome1 ? ' Que tal começar por <b>' + nome1 + '</b>?' : ''),
+        'Tem <b>' + va.length + ' cliente(s)</b> esperando um contato seu hoje. Uma ligação curta já reabre a conversa.',
+        (nome1 ? '<b>' + nome1 + '</b> e mais ' + Math.max(0, va.length - 1) + ' cliente(s) estão na sua lista de hoje.' : 'Sua lista de hoje tem <b>' + va.length + ' cliente(s)</b>.') + ' O melhor horário para ligar costuma ser antes do almoço.' ], dia) });
     }
-    if(!itens.length) return;
-    ls(chave('n'), String(n+1)); ls(chave('ult'), String(Date.now()));
-    balao('<div class="cp-txt">' + itens[0] + '</div>');
+    if(m.metaMes > 0 && m.hoje > 0){
+      op.push({ tag:['🎯','Sua meta'], html: variar([
+        'Sua meta de hoje é <b>' + brl0(m.hoje) + '</b>. Uma venda de cada vez. 💪',
+        'Para o mês fechar no alvo, hoje o número é <b>' + brl0(m.hoje) + '</b>. Bora?',
+        'Hoje, <b>' + brl0(m.hoje) + '</b> deixa você no ritmo da meta do mês. ✨' ], dia) });
+    }
+    var boas = dicasNovas('geral');
+    if(boas.length){ var dg = boas[Math.floor(Math.random() * boas.length)]; op.push({ tag: ICONE.geral, dica: dg, html: esc(dg) }); }
+    if(!op.length) return;
+    var e = op[dia % op.length];
+    ls(chave('n'), '1'); ls(chave('ult'), String(Date.now()));
+    if(e.dica) marcarVista(e.dica);
+    balaoDica(tagHtml(e.tag) + '<div class="cp-txt">' + esc(d.saudacao || 'Olá!') + ' ' + e.html + '</div>');
   }
 
   /* ---------- v4: balão por MÓDULO ---------- */
@@ -337,24 +354,128 @@
     return 'outros';
   }
   function hashTxt(t){ var h=0; t=String(t); for(var i=0;i<t.length;i++){ h=(h*31 + t.charCodeAt(i))|0; } return String(h); }
-  function vistas(){ try{ return JSON.parse(ls('copiloto_vistas_'+(S.user&&S.user.id))||'[]'); }catch(e){ return []; } }
-  function marcarVista(t){ var v = vistas(); v.push(hashTxt(t)); ls('copiloto_vistas_'+(S.user&&S.user.id), JSON.stringify(v.slice(-200))); }
+
+  /* ---------- v7 (25/11, pedido da diretoria): MENOS balão e MAIS variedade ----------
+     - no máximo 3 dicas por dia, com pelo menos 50 min entre elas ("Depois" = 3 h de pausa);
+     - se a pessoa fecha/ignora, o intervalo cresce (50 → 100 → 150 → 200 min) e o limite do dia cai;
+     - a dica é SEMPRE da tela que a pessoa abriu (tela sem dica própria não mostra dica genérica);
+     - nunca repete: a mesma dica só volta depois de 21 dias, e dica PARECIDA com outra dos últimos 10 dias é pulada;
+     - além das dicas do servidor (IA), há um banco próprio de dicas por tela, para não girar sempre as mesmas. */
+  var LIM = { porDia:3, gapMin:50, pausaMin:180, repetirDias:21, parecidoDias:10 };
+  function uidK(k){ return 'copiloto_' + k + '_' + (S.user && S.user.id); }
+  function lerJ(k, padrao){ try{ var v = JSON.parse(ls(k) || 'null'); return v == null ? padrao : v; }catch(e){ return padrao; } }
+  function gravarJ(k, v){ ls(k, JSON.stringify(v)); }
+  function variar(lista, n){ return lista[Math.abs(n || 0) % lista.length]; }
+  function palavras(t){ var o = {}; String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]+/g,' ').split(/\s+/).forEach(function(w){ if(w.length > 3) o[w] = 1; }); return Object.keys(o); }
+  function parecido(a, b){ var A = palavras(a), B = palavras(b); if(!A.length || !B.length) return 0; var m = {}, i = 0; B.forEach(function(w){ m[w] = 1; }); A.forEach(function(w){ if(m[w]) i++; }); return i / (A.length + B.length - i); }
+  function histDicas(){ return lerJ(uidK('hist'), []); }
+  function dicaNova(t){
+    var H = histDicas(), ag = Date.now(), h = hashTxt(t);
+    for(var i = H.length - 1; i >= 0; i--){
+      var x = H[i], dias = (ag - x.t) / 86400000;
+      if(x.h === h && dias < LIM.repetirDias) return false;
+      if(dias < LIM.parecidoDias && parecido(t, x.s) >= 0.5) return false;
+    }
+    return true;
+  }
+  function marcarVista(t){ var H = histDicas(); H.push({ h: hashTxt(t), t: Date.now(), s: String(t).slice(0, 180) }); gravarJ(uidK('hist'), H.slice(-250)); }
+  var ICONE = { venda:['💎','Dica de venda'], pedido:['🛠️','Dica de pedido'], orcamento:['📝','Dica de orçamento'], chat:['💬','Dica de atendimento'], agenda:['📅','Dica de agenda'], painel:['📊','Dica do painel'], adm:['🗂️','Dica do dia a dia'], geral:['💡','Dica do dia'] };
+  function tagHtml(i){ i = i || ICONE.geral; return '<div class="cp-tag"><span aria-hidden="true">' + i[0] + '</span> ' + esc(i[1]) + '</div>'; }
+  /* Banco próprio de dicas por tela (só para quem vende; a Oficina recebe só as dicas dela, vindas do servidor). */
+  var BANCO = {
+    venda: [
+      'Antes de falar de preço, pergunte para quem é a joia e qual é a ocasião. Quem entende o motivo vende a peça certa.',
+      'Coloque a peça na mão (ou no dedo) do cliente. Joia se vende no toque, não na vitrine.',
+      'Mostre no máximo três opções. Muita escolha cansa e o cliente sai "para pensar".',
+      'Depois de dizer o preço, faça silêncio. Quem fala primeiro costuma dar o desconto sem ninguém pedir.',
+      'Ofereça o complemento: quem leva o anel pode gostar do brinco do mesmo conjunto.',
+      'Confira telefone e data de aniversário no cadastro antes de fechar. É isso que traz o cliente de volta.',
+      'Cliente indeciso entre duas peças? Pergunte qual ele usaria amanhã. A resposta costuma decidir.',
+      'Conte uma coisa verdadeira sobre a peça: o metal, a pedra, como foi feita. História dá valor.',
+      'Na entrega, mostre como guardar e limpar a joia. Cuidado depois da venda vira indicação.',
+      'Cliente só olhando? Ofereça uma limpeza de cortesia da joia que ele está usando. A conversa começa sozinha.',
+      'Chame o cliente pelo nome pelo menos duas vezes no atendimento. Parece detalhe e muda o clima.',
+      'Presente? Pergunte se quer embalagem especial e cartão. O capricho fecha a venda.' ],
+    pedido: [
+      'Combine a data de entrega com folga. Entregar antes do prazo encanta; atrasar um dia desgasta.',
+      'Escreva na via tudo o que foi combinado: medida, gravação, acabamento. O que está escrito a oficina faz igual.',
+      'Fotografe a peça do cliente na entrada, na frente dele. Evita dúvida na devolução.',
+      'Confirme a medida do aro duas vezes, de preferência no fim do dia, quando o dedo está no tamanho real.',
+      'Explique ao cliente o que vai ser feito e o que NÃO vai. Expectativa certa evita retrabalho.',
+      'Pedido pronto parado na loja é dinheiro parado. Um contato hoje costuma resolver a retirada.',
+      'Antes de enviar para a oficina, releia a descrição como se fosse o ourives. Dá para entender sem perguntar?',
+      'Na retirada, peça para o cliente conferir a peça com calma antes de sair. Ajuste na hora custa menos.',
+      'Anote na via o telefone que o cliente realmente atende. Aviso que não chega atrasa a entrega.',
+      'Serviço entregue é chance de venda: mostre uma peça que combina com a que ficou pronta.' ],
+    orcamento: [
+      'Orçamento sem retorno em 2 dias esfria. Um contato curto perguntando se ficou alguma dúvida reabre a conversa.',
+      'Ao passar o valor, diga primeiro o que está incluído. Preço solto parece caro.',
+      'Pergunte a data em que o cliente precisa da peça. Prazo ajuda a decidir.',
+      'Se o cliente achou caro, ofereça uma segunda opção em vez de desconto: outro peso, outra pedra, outro acabamento.',
+      'Combine com o cliente quando você vai procurá-lo de novo, e procure no dia combinado.',
+      'Orçamento recusado também ensina: anote o motivo. Com o tempo você enxerga o padrão.',
+      'Mande uma foto de peça parecida já pronta. Ver o resultado ajuda a aprovar.',
+      'Antes de enviar, confira nome e telefone. Orçamento que não chega não fecha.',
+      'Cliente comparando com outra loja? Mostre o que é diferente aqui: garantia, acabamento, oficina própria.',
+      'Releia o orçamento em voz alta antes de enviar. Se você tropeça em alguma parte, o cliente também vai.' ],
+    chat: [
+      'Responda rápido, mesmo que seja só para dizer que já está vendo. Quem espera sem resposta procura outra loja.',
+      'Comece pelo nome do cliente e termine com uma pergunta. Pergunta mantém a conversa viva.',
+      'Foto boa vende: fundo limpo, luz natural e a peça em uso, na mão ou no colo.',
+      'Áudio longo cansa. Prefira texto curto e, se precisar explicar muito, ofereça uma ligação.',
+      'Cliente pediu preço? Mande junto uma segunda opção, um pouco acima ou um pouco abaixo.',
+      'Antes de encerrar a conversa, combine o próximo passo: visita, reserva ou data do retorno.',
+      'Releia a mensagem antes de enviar. Erro de digitação em valor ou data vira problema depois.',
+      'Mensagem que chegou fora do horário merece prioridade na manhã seguinte.',
+      'Cliente sumiu no meio da conversa? Retome com uma novidade, não com cobrança.',
+      'Convide para a loja: joia convence mais ao vivo do que na foto.' ],
+    agenda: [
+      'Comece o dia pelas tarefas atrasadas. Tirar a mais antiga da frente alivia o resto.',
+      'Tarefa grande trava. Quebre em passos pequenos e marque o primeiro para hoje.',
+      'Combinou de retornar para um cliente? Anote na hora, com dia certo. A memória falha, a agenda não.',
+      'Antes de sair, olhe o que vence amanhã. Chegar sabendo o que fazer rende mais.',
+      'Tarefa feita, tarefa marcada. A lista limpa mostra o que realmente falta.',
+      'Reserve o começo da manhã para os contatos com clientes. Depois o movimento da loja ocupa tudo.' ],
+    painel: [
+      'Olhe primeiro os avisos em vermelho: quase sempre é algo que um cliente está esperando.',
+      'Compare o seu número de hoje com o da semana passada, não com o da colega. A sua evolução é a que conta.',
+      'Pedido atrasado no painel? Avise o cliente antes que ele pergunte. Atraso avisado desgasta muito menos.',
+      'Uma olhada no painel no começo e outra no fim do dia bastam. No meio, o foco é o cliente.' ],
+  };
+  /** Dicas ainda NÃO vistas para uma tela: as do servidor (IA) primeiro, depois as do banco próprio. */
+  function dicasNovas(k){
+    var dm = (S.dia && S.dia.dicasModulo) || {};
+    var serv = (k === 'geral' ? (dm.geral || (S.dia && S.dia.dicas) || []) : (dm[k] || [])).filter(dicaNova);
+    var loc = (ehOficina() || k === 'geral') ? [] : (BANCO[k] || []).filter(dicaNova);
+    if(serv.length && (!loc.length || Math.random() < 0.6)) return serv;
+    return loc.length ? loc : serv;
+  }
+  function ignoradas(){ return Number(ls(uidK('ign')) || 0); }
+  /** Balão de dica: conta como "ignorado" até a pessoa interagir (Ouvir, Ver, Abrir). Fechar ou deixar sumir mantém a contagem. */
+  function balaoDica(html, acoes){
+    var d = balao(html, acoes);
+    if(!d) return null;
+    ls(uidK('ign'), String(Math.min(6, ignoradas() + 1)));
+    d.addEventListener('click', function(ev){ var b = ev.target && ev.target.closest ? ev.target.closest('[data-cp]') : null; if(b && b.dataset.cp !== 'x' && b.dataset.cp !== 'depois') ls(uidK('ign'), '0'); });
+    return d;
+  }
   function moduloAberto(mod, sub){
     if(!S.dia || S.aberto || document.hidden) return;
     if(ehAdm()) return;   // 23/11: administrativo não recebe dica de venda por tela
     var k = chaveModulo(mod, sub);
-    var n = Number(ls(chave('nm'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0);
-    if(n >= 6 || Date.now() - ult < 12*60000 || Date.now() - pausa < 120*60000) return;
-    if(Math.random() > 0.45) return;   // "algumas vezes", não sempre
-    var dm = S.dia.dicasModulo || {}, lista = (dm[k] && dm[k].length ? dm[k] : (dm.geral || S.dia.dicas || []));
-    var poucas = !(dm[k] && dm[k].length >= 2), cheio = Number(S.dia.hojeAtendimentos||0) >= 8;
-    var podeBE = S.dia.consentimento !== false && Number(ls(chave('be'))||0) < 2 && Date.now() - Number(ls(chave('beUlt'))||0) > 150*60000;
+    var n = Number(ls(chave('nm'))||0), ult = Number(ls(chave('ult'))||0), pausa = Number(ls(chave('pausa'))||0), ign = ignoradas();
+    var gap = LIM.gapMin * (1 + Math.min(3, ign)), porDia = ign >= 3 ? 1 : ign >= 2 ? 2 : LIM.porDia;
+    if(n >= porDia || Date.now() - ult < gap*60000 || Date.now() - pausa < LIM.pausaMin*60000) return;
+    if(Math.random() > 0.5) return;   // "algumas vezes", não sempre
+    var cheio = Number(S.dia.hojeAtendimentos||0) >= 8;
+    var podeBE = S.dia.consentimento !== false && Number(ls(chave('be'))||0) < 1 && Date.now() - Number(ls(uidK('beUlt'))||0) > 20*3600000 && !beEmPausa();
+    if(podeBE && (VENDA_MODS.indexOf(k) < 0 || cheio) && Math.random() < 0.5){ ls(chave('ult'), String(Date.now())); ls(chave('nm'), String(n+1)); return perguntarBemEstar(cheio); }
+    var lista = dicasNovas(k);
+    if(!lista.length) return;   // nada novo para ESTA tela: não aparece (e não gasta a vez do dia)
+    var dica = lista[Math.floor(Math.random() * lista.length)];
     ls(chave('ult'), String(Date.now())); ls(chave('nm'), String(n+1));
-    if(podeBE && (VENDA_MODS.indexOf(k) < 0 || poucas || cheio)) return perguntarBemEstar(cheio);
-    var v = vistas(), nova = lista.filter(function(t){ return v.indexOf(hashTxt(t)) < 0; }), dica = (nova.length ? nova : lista)[Math.floor(Math.random() * (nova.length || lista.length))];
-    if(!dica) return;
     marcarVista(dica);
-    balao('<div class="cp-txt">' + esc(dica) + '</div>');
+    balaoDica(tagHtml(ICONE[k]) + '<div class="cp-txt">' + esc(dica) + '</div>');
   }
 
   /* ---------- v4: BEM-ESTAR (consentimento, perguntas clicáveis, cuidado) ---------- */
@@ -365,7 +486,19 @@
     { id:'sono', txt:'Conseguiu dormir bem esta noite?', ops:[['bem','😴 Dormi bem'],['mais_ou_menos','😐 Mais ou menos'],['mal','😵 Dormi mal']] },
     { id:'vida', txt:'E a vida fora da loja, como anda?', ops:[['tranquila','🌿 Tranquila'],['corrida','🏃 Corrida'],['dificil','🌧️ Difícil']], texto:true },
     { id:'dia', txt:'O que deixaria o seu dia melhor hoje?', ops:[['musica','🎵 Uma música boa'],['cafe','☕ Um café'],['elogio','💛 Um elogio'],['descanso','🪑 Sentar um pouco']] },
+    /* v7 (25/11): mais perguntas, para não serem sempre as mesmas. `alt` = outros jeitos de perguntar a mesma coisa. */
+    { id:'energia', txt:'⚡ De 1 a 3, como está a sua energia agora?', alt:['⚡ Bateria de hoje: cheia, pela metade ou no vermelho?'], ops:[['alta','🔋 Cheia'],['media','🪫 Pela metade'],['baixa','🔴 No vermelho']] },
+    { id:'pausa', txt:'⏸️ Já fez uma pausa de verdade hoje, longe do balcão?', alt:['⏸️ Conseguiu parar uns minutinhos hoje?'], ops:[['sim','✅ Já fiz'],['ainda_nao','⏳ Ainda não']] },
+    { id:'alongar', txt:'🧘 Topa 30 segundos de alongamento comigo? Ombros para trás, pescoço devagar.', alt:['🧘 Hora de soltar os ombros: vamos alongar rapidinho?'], ops:[['fiz','🙌 Fiz agora'],['depois','🕐 Faço depois']] },
+    { id:'respirar', txt:'🌬️ Vamos respirar fundo uma vez? Puxa em 4, segura 4, solta em 6.', alt:['🌬️ Uma respiração funda antes do próximo cliente?'], ops:[['fiz','😌 Respirei'],['depois','🕐 Depois']] },
+    { id:'almoco', txt:'🍽️ Conseguiu almoçar com calma hoje?', alt:['🍽️ E o almoço, foi tranquilo ou correndo?'], ops:[['sim','😋 Com calma'],['correndo','🏃 Correndo'],['nao','🙈 Ainda não almocei']] },
+    { id:'pes', txt:'👟 Muito tempo em pé hoje? Como estão as pernas?', alt:['👟 E os pés, aguentando bem o dia?'], ops:[['bem','💪 Tranquilas'],['pesadas','🦵 Pesadas']] },
+    { id:'olhos', txt:'👀 Muito tempo olhando para a tela? Olhe para longe por 20 segundos. Ajuda mesmo.', ops:[['fiz','✅ Olhei'],['depois','🕐 Depois']] },
+    { id:'melhor', txt:'🌟 Qual foi a melhor parte do seu dia até agora?', alt:['🌟 Teve algo bom no dia de hoje?'], ops:[['cliente','🤝 Um cliente legal'],['venda','💎 Uma venda'],['equipe','👯 A equipe'],['nada','🌥️ Ainda nada']] },
+    { id:'semana', txt:'📅 Como está sendo a sua semana?', alt:['📅 Semana leve ou puxada?'], ops:[['leve','🌤️ Leve'],['normal','🙂 Normal'],['puxada','🌪️ Puxada']] },
+    { id:'ajuda', txt:'🤝 Tem alguma coisa travando o seu trabalho hoje?', alt:['🤝 Precisa de ajuda com alguma coisa hoje?'], ops:[['nao','👍 Está tudo fluindo'],['sim','🧩 Tem, sim']], texto:true },
   ];
+  var PERG_DIA_CHEIO = ['agua','humor','corpo','pausa','respirar','alongar','pes'];
   var CUIDADO = {
     humor:{ otima:'Que bom! Essa energia contagia o cliente. Aproveita! ✨', bem:'Que bom! Bora fazer um dia leve e produtivo.', cansada:'Entendo. Que tal 2 minutos sentada, respirando fundo, e um copo d’água? Você rende mais descansada.', preocupada:'Obrigado por contar. Respira: inspira em 4 tempos, segura 4, solta em 6. Se quiser falar com alguém de confiança, faz bem.', triste:'Sinto muito que o dia esteja pesado. Seja gentil com você hoje. Se precisar conversar, procure alguém de confiança. Você não está sozinha. 💛' },
     agua:{ sim:'Isso aí! Hidratada a gente atende melhor. 💧', nao:'Que tal agora? Um copo d’água já ajuda a cabeça e a voz. Eu espero. 😉' },
@@ -373,27 +506,53 @@
     sono:{ bem:'Que bom! Dia de energia.', mais_ou_menos:'Vai com calma hoje. Água e uma pausa curta à tarde ajudam.', mal:'Puxado, né? Hoje, evite muito café de uma vez e tente dormir mais cedo. Cuida de você.' },
     vida:{ tranquila:'Que bom! Isso aparece no sorriso. 🌿', corrida:'A vida corrida cansa. Tenta reservar um tempinho só seu hoje, nem que sejam 10 minutos.', dificil:'Obrigado por confiar. Momentos difíceis passam. Converse com quem você confia e, se for pesado demais, o CVV atende de graça no 188, 24 horas.' },
     dia:{ musica:'Boa! Coloca aquela música no intervalo. 🎵', cafe:'Um café no intervalo cai bem! ☕', elogio:'Então lá vai, e é verdade:', descanso:'Merecido! Na próxima pausa, senta e desliga 5 minutinhos.' },
+    energia:{ alta:'Bateria cheia! Bom dia para aquele cliente que precisa de atenção. 🔋', media:'Metade ainda rende. Um copo d’água e 2 minutos sentada ajudam a segurar o dia.', baixa:'Dia puxado. Se der, faça uma pausa curta agora e coma alguma coisa. Você importa mais que a meta. 💛' },
+    pausa:{ sim:'Isso! Pausa não é perder tempo, é recarregar. ✅', ainda_nao:'Que tal na próxima folga do movimento? Cinco minutos longe do balcão já mudam o resto do dia.' },
+    alongar:{ fiz:'Boa! O corpo agradece. 🙌', depois:'Combinado. Quando o movimento baixar, solta os ombros por 30 segundos.' },
+    respirar:{ fiz:'Pronto. Cabeça mais leve para o próximo atendimento. 😌', depois:'Tudo bem. Fica a dica para antes do próximo cliente.' },
+    almoco:{ sim:'Ótimo! Comer com calma segura a energia da tarde. 😋', correndo:'Acontece. Se der, um lanche tranquilo à tarde compensa.', nao:'Não deixa passar: saco vazio não para em pé. Combina com a colega e vai almoçar. 🍽️' },
+    pes:{ bem:'Que bom! Trocar o apoio de uma perna para a outra de vez em quando ajuda a manter assim.', pesadas:'Quando sentar, estique as pernas e gire os tornozelos. Em casa, pés para cima por uns minutos aliviam. 🦵' },
+    olhos:{ fiz:'Isso! A cada 20 minutos de tela, 20 segundos olhando longe. 👀', depois:'Sem problema. Piscar bastante também descansa a vista.' },
+    melhor:{ cliente:'Cliente legal muda o dia. E ele também lembra de quem atendeu bem. 🤝', venda:'Venda feita é mérito seu. Parabéns! 💎', equipe:'Equipe unida vende mais e cansa menos. 👯', nada:'Ainda dá tempo: o dia não acabou. Às vezes a parte boa é o próximo cliente. 🌤️' },
+    semana:{ leve:'Que bom! Aproveita o embalo. 🌤️', normal:'Semana normal também é semana boa. 🙂', puxada:'Semana puxada pede cuidado dobrado: água, pausa e dormir cedo quando der. 🌪️' },
+    ajuda:{ nao:'Ótimo saber! 👍', sim:'Obrigado por dizer. Conta o que é e eu levo para a diretoria.' },
   };
   async function enviarBE(pergunta, resposta, detalhe){ if(S.dia && S.dia.consentimento) await (ehOficina()?apiX:api)({ op:'bemestar', pergunta:pergunta, resposta:resposta, detalhe:detalhe||'' }); }
+  /* v7 (25/11, pedido da diretoria): as perguntas rodam ENTRE os dias (antes recomeçavam todo dia e pareciam sempre as
+     mesmas). Sai sempre a que está há mais tempo sem aparecer e nunca a mesma da última vez. Se a pessoa não responde,
+     a próxima é outra; duas seguidas sem resposta = 3 dias sem perguntar; três = 7 dias. No máximo 1 por dia. */
+  function beHist(){ return lerJ(uidK('behist'), []); }
+  function beSemResposta(){ var H = beHist(), n = 0; for(var i = H.length - 1; i >= 0 && H[i].r === 'ign'; i--) n++; return n; }
+  function beEmPausa(){ var H = beHist(), n = beSemResposta(); if(n < 2) return false; return (Date.now() - H[H.length-1].t) / 86400000 < (n >= 3 ? 7 : 3); }
+  function beRespondeu(id){ var H = beHist(); for(var i = H.length - 1; i >= 0; i--){ if(H[i].id === id){ H[i].r = 'resp'; break; } } gravarJ(uidK('behist'), H); }
+  function escolherPergunta(cheio){
+    var H = beHist(), ult = {}, ultima = H.length ? H[H.length-1].id : '';
+    H.forEach(function(x){ ult[x.id] = x.t; });
+    var pool = PERGUNTAS.filter(function(q){ return q.id !== ultima; });
+    if(cheio){ var c = pool.filter(function(q){ return PERG_DIA_CHEIO.indexOf(q.id) >= 0; }); if(c.length) pool = c; }
+    pool.sort(function(a, b){ return (ult[a.id]||0) - (ult[b.id]||0); });   // a que está há mais tempo sem aparecer vem primeiro
+    return pool.length ? pool[Math.floor(Math.random() * Math.min(3, pool.length))] : null;
+  }
   function perguntarBemEstar(cheio){
     if(S.dia.consentimento === null || S.dia.consentimento === undefined) return pedirConsentimento();
-    var feitas = (ls(chave('beFeitas'))||'').split(',');
-    var pool = PERGUNTAS.filter(function(q){ return feitas.indexOf(q.id) < 0; });
-    if(cheio) pool = PERGUNTAS.filter(function(q){ return ['agua','humor','corpo'].indexOf(q.id) >= 0 && feitas.indexOf(q.id) < 0; }).concat(pool);
-    var q = pool[0] ? pool[Math.floor(Math.random()*Math.min(pool.length, cheio ? 2 : pool.length))] : null; if(!q) return;
-    ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now())); ls(chave('beFeitas'), feitas.concat(q.id).join(','));
+    var q = escolherPergunta(cheio); if(!q) return;
+    ls(chave('be'), String(Number(ls(chave('be'))||0)+1));
     mostrarPergunta(q, cheio ? 'Dia cheio hoje, hein? ' : '');
   }
   /** Mostra UMA pergunta de bem-estar no balão, com as respostas clicáveis; a resposta aparece no mesmo balão. */
   function mostrarPergunta(q, intro){
-    var d = balao('<div class="cp-txt">' + esc(intro||'') + esc(q.txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true);
+    var H0 = beHist(), vezes = H0.filter(function(x){ return x.id === q.id; }).length;
+    var txt = q.alt ? variar([q.txt].concat(q.alt), vezes) : q.txt;   // muda o jeito de perguntar a cada vez
+    H0.push({ id:q.id, t:Date.now(), r:'ign' }); gravarJ(uidK('behist'), H0.slice(-60)); ls(uidK('beUlt'), String(Date.now()));   // vira 'resp' quando a pessoa toca numa resposta
+    var d = balao('<div class="cp-tag"><span aria-hidden="true">💛</span> Como você está</div><div class="cp-txt">' + esc(intro||'') + esc(txt) + '</div><div class="cp-ops">' + q.ops.map(function(o){ return '<button type="button" data-be="'+o[0]+'">'+esc(o[1])+'</button>'; }).join('') + '<button type="button" class="neutro" data-be="nao_dizer">Prefiro não dizer</button></div>', '', true);
     if(!d) return;
     d.querySelectorAll('[data-be]').forEach(function(b){ b.onclick = function(){
       var r = b.dataset.be;
+      beRespondeu(q.id);
       if(r === 'nao_dizer'){ enviarBE(q.id, r); balao('<div class="cp-txt">Tudo bem! Se precisar, estou aqui. 😊</div>', '', true, 8000); return; }
       var resp = (CUIDADO[q.id]||{})[r] || 'Obrigado por contar!';
-      if(['otima','bem','sim','tranquila'].indexOf(r) >= 0) resp += ' ' + elogio();
-      if(q.texto && r === 'dificil' || q.texto && r === 'corrida'){
+      if(['otima','bem','sim','tranquila','alta','leve'].indexOf(r) >= 0 && q.id !== 'ajuda') resp += ' ' + elogio();
+      if(q.texto && r === 'dificil' || q.texto && r === 'corrida' || q.id === 'ajuda' && r === 'sim'){
         var d2 = balao('<div class="cp-txt">' + esc(resp) + '</div><p style="margin:6px 0 4px;font-size:12.5px;">Se quiser, conte um pouco mais (opcional):</p><textarea id="cpBeTxt" maxlength="600" style="width:100%;box-sizing:border-box;min-height:60px;border:1px solid #d9b26a;border-radius:8px;padding:6px;font:inherit;"></textarea>', '<button type="button" class="cp-b pri" data-cp="beok">Enviar</button>', true);
         if(d2){ d2.querySelector('[data-cp="beok"]').onclick = function(){ enviarBE(q.id, r, (d2.querySelector('#cpBeTxt')||{}).value||''); balao('<div class="cp-txt">Obrigado pela confiança. 💛</div>', '', true, 12000); }; }
         return;
@@ -404,10 +563,10 @@
     }; });
   }
   function pedirConsentimento(){
-    ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(chave('beUlt'), String(Date.now()));
+    ls(chave('be'), String(Number(ls(chave('be'))||0)+1)); ls(uidK('beUlt'), String(Date.now()));
     var d = balao('<div class="cp-txt">Posso, de vez em quando, perguntar como você está? É rapidinho, com resposta de um toque. Suas respostas ajudam a <b>diretoria</b> a cuidar melhor da equipe e só ela vê. Você pode sempre escolher "prefiro não dizer".</div>', '<button type="button" class="cp-b" data-cp="nao">Não, obrigado</button><button type="button" class="cp-b pri" data-cp="sim">Pode perguntar</button>', true);
     if(!d) return;
-    d.querySelector('[data-cp="sim"]').onclick = async function(){ await (ehOficina()?apiX:api)({ op:'consentir', aceito:true }); S.dia.consentimento = true; ls(chave('beFeitas'), 'agua'); mostrarPergunta(PERGUNTAS[1], 'Combinado! 😊 '); };
+    d.querySelector('[data-cp="sim"]').onclick = async function(){ await (ehOficina()?apiX:api)({ op:'consentir', aceito:true }); S.dia.consentimento = true; mostrarPergunta(PERGUNTAS[1], 'Combinado! 😊 '); };
     d.querySelector('[data-cp="nao"]').onclick = async function(){ await (ehOficina()?apiX:api)({ op:'consentir', aceito:false }); S.dia.consentimento = false; balao('<div class="cp-txt">Sem problema! Vou continuar só com as dicas de vendas. 👍</div>', '', true, 8000); };
   }
 
