@@ -628,3 +628,8 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 
 ## 25/11/2026 — Extrato do cashback no cadastro do cliente
 - O botão "Cashback" do cadastro do cliente agora abre o extrato: cada via/pedido que gerou cashback, data da compra, valor gerado, saldo, quando libera, quando vence e a situação (disponível, a liberar, usado, vencido, estornado), com os usos e os lançamentos manuais.
+
+## 26/11/2026 — Aviso automático de cashback a vencer (WhatsApp + cartão)
+- Todo dia (9h05 e 12h05, horário de Brasília) o sistema procura clientes com cashback que vence em 15 dias e envia pelo WhatsApp oficial o aviso "cashback_vencimento_v1" (Utilidade): valor que vence, data, saldo total e botão "Ver meu cashback". Envia uma vez por cliente/vencimento, respeita a tag MARKETING OFF e telefone inválido é pulado. Só envia depois de a Meta aprovar o modelo.
+- Nova página cashback.html (cartão do cliente): lê os dados reais por um link individual e seguro (mostra só o primeiro nome, valores, vias e datas), com simulação de compra (deslizador), pagamento à vista/12x e o bônus de 10% pagando em dinheiro.
+- Função cashback-aviso (banco), tarefa agendada cashback-aviso-diario e linha "Cashback a vencer" em Modelos WhatsApp.
