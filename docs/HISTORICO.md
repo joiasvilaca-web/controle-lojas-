@@ -633,3 +633,8 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - Todo dia (9h05 e 12h05, horário de Brasília) o sistema procura clientes com cashback que vence em 15 dias e envia pelo WhatsApp oficial o aviso "cashback_vencimento_v1" (Utilidade): valor que vence, data, saldo total e botão "Ver meu cashback". Envia uma vez por cliente/vencimento, respeita a tag MARKETING OFF e telefone inválido é pulado. Só envia depois de a Meta aprovar o modelo.
 - Nova página cashback.html (cartão do cliente): lê os dados reais por um link individual e seguro (mostra só o primeiro nome, valores, vias e datas), com simulação de compra (deslizador), pagamento à vista/12x e o bônus de 10% pagando em dinheiro.
 - Função cashback-aviso (banco), tarefa agendada cashback-aviso-diario e linha "Cashback a vencer" em Modelos WhatsApp.
+
+## 26/11/2026 — Agenda: comentários e anexos nas tarefas
+- Ao abrir uma tarefa já salva, aparece "Comentários e anexos": quem criou e quem recebeu o compartilhamento (e gerente/diretoria nas tarefas de loja) escrevem comentários, anexam foto ou documento (PDF, Word, Excel, PowerPoint, texto) e tiram foto pelo celular. Cada autor e horário ficam registrados; apaga quem escreveu, quem criou a tarefa ou a diretoria.
+- Os arquivos vão para o Google Drive: APP GESTAO › AGENDA › uma subpasta por tarefa ("T-código título"). Ficam arquivados mesmo se a tarefa ou o comentário for apagado. Fotos são reduzidas antes do envio; limite de 6 MB por arquivo, 5 por comentário.
+- O cartão da tarefa mostra quantos comentários e anexos ela tem. Nova função agenda-anexos e tabela agenda_comentarios (agenda-tarefas não foi alterada).
