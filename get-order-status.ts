@@ -81,6 +81,8 @@ Deno.serve(async (req: Request) => {
       data: order.data,
       status: order.status,
       encaixe: !!order.encaixe,
+      // 27/11: data pedida aguardando liberação da Oficina (código de liberação). Enquanto pendente vale a data padrão (`data`).
+      dataPendente: (order.autorizacao && order.autorizacao.status === "pendente" && order.autorizacao.dataSolicitada && order.autorizacao.dataSolicitada !== order.data) ? order.autorizacao.dataSolicitada : null,
       numeroNota: order.numeroNota || null,
       recebidoPor: order.status === "entregue" ? order.recebidoPor : null,
       descricao: order.descricao || null,

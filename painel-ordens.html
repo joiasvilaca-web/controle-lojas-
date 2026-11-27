@@ -2034,15 +2034,19 @@ async function sincronizarAutorizacoesPendentes(){
       const r = lista.find(x=> x.id===o.autorizacao.solicitacaoId);
       if(!r) continue;
       if(r.status==='liberado'){
+        const dsol = o.autorizacao.dataSolicitada;
         o.autorizacao = { ...o.autorizacao, status:'liberado', por:r.liberadoPor||'', em:r.respondidoEm||Date.now() };
+        if(dsol && o.status!=='cancelado') o.data = dsol;   // liberou: passa a valer a data pedida (encaixe)
         o.encaixe = true; o.autorizadoPor = r.liberadoPor || 'OFICINA';
-        showToast('Encaixe do pedido '+(viaTxt(o)||'')+' liberado por '+(r.liberadoPor||'Oficina')+'.');
+        showToast('Encaixe do pedido '+(viaTxt(o)||'')+' liberado por '+(r.liberadoPor||'Oficina')+'. Vale a data '+fmtDate(o.data)+'.');
       } else if(r.status==='recusado'){
-        const nova = (o.status==='cancelado') ? null : proximaDataDisponivel(o.serviceTypeId, o.id);
-        o.autorizacao = { ...o.autorizacao, status:'recusado', por:r.recusadoPor||'', motivoRecusa:r.motivoRecusa||'', dataAnterior:o.data, em:r.respondidoEm||Date.now() };
+        /* recusou: continua valendo a data padrão em que a via já foi lançada (só recalcula se ela já passou) */
+        const passou = o.data && o.data < todayStr();
+        const nova = (o.status==='cancelado' || !passou) ? null : proximaDataDisponivel(o.serviceTypeId, o.id, o.vagas);
+        o.autorizacao = { ...o.autorizacao, status:'recusado', por:r.recusadoPor||'', motivoRecusa:r.motivoRecusa||'', dataAnterior:o.autorizacao.dataSolicitada||o.data, em:r.respondidoEm||Date.now() };
         if(nova) o.data = nova;
         o.encaixe = false; o.autorizadoPor = null;
-        showToast('Pedido '+(viaTxt(o)||'')+': autorização recusada'+(nova?'. Nova data: '+fmtDate(nova):'')+'.');
+        showToast('Pedido '+(viaTxt(o)||'')+': a data pedida não foi liberada. Vale a data padrão '+fmtDate(o.data)+'.');
       } else continue;
       mudou = true;
       const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:o.id, payload:o, updated_at:new Date().toISOString() } } });
@@ -3844,6 +3848,9 @@ function qtdServicosVia(itens){
   const n = (itens||[]).filter(it=> it._modo==='ok' && it.tipoItem==='servico').reduce((a,it)=> a + (itemEhGravacaoDisparo(it) ? 1 : Math.max(1, Number(it.quantidade)||1)), 0);
   return Math.max(1, n);
 }
+/** 27/11 (Felipe): o contador mostra só quantas vagas ainda estão LIVRES ("03 vagas"), sem o máximo. */
+function vagasLivres(res){ return Math.max(0, (Number(res && res.vagas)||0) - (Number(res && res.ocupadas)||0)); }
+function vagasTxt(res){ const n = vagasLivres(res); return n===0 ? 'sem vagas' : String(n).padStart(2,'0') + (n===1 ? ' vaga' : ' vagas'); }
 function checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd){
   const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
   if(!st || !dateStr) return null;
@@ -5681,18 +5688,18 @@ function renderNovaOrdem(main){
     const res = checkSlot(sid, dt, null, qtdVia);
     if(!res){ atualizarBotoesPermissao(); return; }
     if(res.ok){
-      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dt)}${qtdVia>1?'; esta via usa '+qtdVia+' vagas':''}, dentro do prazo mínimo.</div></div>`;
+      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${vagasTxt(res)} em ${fmtDate(dt)}${qtdVia>1?'; esta via usa '+qtdVia+' vagas':''}, dentro do prazo mínimo.</div></div>`;
     } else {
       const motivos = [];
       if(!res.prazoOk) motivos.push('a data está abaixo do prazo mínimo de confecção (' + res.st.prazoMinimoDias + ' dia(s))');
       if(!res.quantidadeOk){
         const livres = Math.max(0, res.vagas - res.ocupadas);
         if(qtdVia>1) motivos.push(livres>0 ? ('neste dia cabem só ' + livres + ' de ' + qtdVia + ' serviços: você pode lançar ' + livres + ' aqui e abrir uma NOVA VIA para os ' + (qtdVia-livres) + ' restantes, ou escolher uma data que comporte os ' + qtdVia) : ('não há vaga neste dia para os ' + qtdVia + ' serviços; escolha outra data'));
-        else motivos.push('a quantidade máxima do dia já foi atingida (' + res.ocupadas + '/' + res.vagas + ')');
+        else motivos.push('não há mais vagas neste dia');
       }
       motivoForaPadrao = motivos.join(' e ');
       foraPadrao = true;
-      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Clique em <b>Solicitar permissão</b>: o pedido é lançado agora e fica com <b>pendência de autorização</b> até a Oficina liberar (vira encaixe) ou recusar (a data volta para a mais próxima aceita). Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
+      banner.innerHTML = `<div class="slot-banner slot-bad" style="background:var(--danger);border-color:var(--danger);color:#fff;"><span class="dot" style="background:#fff;"></span><div><b>Fora do padrão:</b> ${motivoForaPadrao}.<br>Clique em <b>Solicitar permissão</b>: o pedido é lançado agora na primeira data com vaga (<b>${(()=>{ try{ const d=proximaDataDisponivel(sid,null,qtdVia); return d?fmtDate(d):'—'; }catch(e){ return '—'; } })()}</b>) e a data que você pediu fica <b>pendente</b> até a Oficina liberar (vira encaixe) ou recusar (vale a data padrão). Enquanto estiver pendente, o caixa do dia não fecha. Se você já tem o código, clique em <b>Tenho o código</b>.</div></div>`;
       // Busca os códigos mais atuais (podem ter sido gerados agora mesmo em outro
       // dispositivo/sessão) pra validar em tempo real o que a vendedora digitar.
       storageGet('codes', true).then(c=>{ if(c) codes = c; });
@@ -5888,7 +5895,7 @@ function renderNovaOrdem(main){
     }
     if(tempPagHolder.momentoPagamento!=='na_volta'){ const eNe = OuroPag.erroNota(tempPagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
     if(tempPagHolder.momentoPagamento!=='na_volta' && !(await validarOuroAntesDeSalvar(tempPagHolder))) return;
-    const res = checkSlot(sid, dt, null);
+    const res = checkSlot(sid, dt, null, qtdServicosVia(tempItensHolder.itens));
     let encaixe = false;
     let autorizadoPor = null;
     let codeObjParaUsar = null;
@@ -5921,6 +5928,13 @@ function renderNovaOrdem(main){
     }
 
     const st = config.serviceTypes.find(s=>s.id===sid);
+    /* 27/11 (Felipe): via pedida fora do padrão é lançada na PRIMEIRA data com vaga (data padrão); a data pedida fica pendente. */
+    let dataLancada = dt, dataPadraoPend = null;
+    if(pendenciaReq){
+      dataPadraoPend = proximaDataDisponivel(sid, null, qtdServicosVia(tempItensHolder.itens)) || dt;
+      dataLancada = dataPadraoPend;
+      if(pendenciaReq.via) pendenciaReq.via.dataPadrao = dataPadraoPend;
+    }
     // ===== Crédito do cliente / Fiado =====
     // Calculados antes de montar a ordem pra já guardar dentro dela o id do débito de\n    // fiado (fiadoDebitoId) e o crédito usado (creditoUsado) — permite reverter com\n    // precisão em caso de cancelamento.
     const pagsCreditoOS = (tempPagHolder.pagamentos||[]).filter(p=>p.formaId==='__credito');
@@ -5937,10 +5951,10 @@ function renderNovaOrdem(main){
       serviceTypeId: sid,
       vagas: qtdServicosVia(tempItensHolder.itens),
       serviceTypeName: st ? st.nome : '',
-      data: dt,
+      data: dataLancada,
       status: STATUS.AGUARDANDO,
       encaixe, autorizadoPor,
-      autorizacao: pendenciaReq ? { status:'pendente', solicitacaoId: pendenciaReq.id, dataSolicitada: dt, motivo: pendenciaReq.motivo||'', em: Date.now(), por: null } : undefined,
+      autorizacao: pendenciaReq ? { status:'pendente', solicitacaoId: pendenciaReq.id, dataSolicitada: dt, dataPadrao: dataPadraoPend, motivo: pendenciaReq.motivo||'', em: Date.now(), por: null } : undefined,
       valorTotal: tempPagHolder.valorTotal,
       descTotalTipo: tempPagHolder.descTotalTipo||'nenhum', descTotalModo: tempPagHolder.descTotalModo||'percentual', descTotalPerc: tempPagHolder.descTotalPerc||'', descTotalR: tempPagHolder.descTotalR||'',
       pagamentos: carimbarPagamentosOS(tempPagHolder.pagamentos),
@@ -6162,6 +6176,8 @@ function openEditModalCompleto(order, opts){
     <div class="field"><label for="e_data">Data agendada</label><input type="date" id="e_data" value="${order.data}"></div>
     </div>
     <div id="editSlotBanner"></div>
+    ${order.autorizacao && order.autorizacao.status==='pendente' && !somenteLeitura ? `<div class="slot-banner slot-bad" id="boxLiberarPend" style="margin-top:8px;display:block;"><b>Data pedida aguardando liberação.</b> Pedida ${order.autorizacao.dataSolicitada?fmtDate(order.autorizacao.dataSolicitada):'—'}; por enquanto vale ${fmtDate(order.data)}. Se a Oficina responder, a via se ajusta sozinha. Se você já tem o código, digite aqui:
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;"><input id="e_codigoPend" placeholder="Código de liberação" style="text-transform:uppercase;flex:1;min-width:150px;"><button type="button" class="btn btn-accent btn-sm" id="btnAplicarCodigoPend">Aplicar código</button></div></div>` : ''}
     <div id="editCodeArea" style="display:none;">
       <div class="field" style="margin-top:6px;">
         <label for="e_codigo">Código de autorização (encaixe)</label>
@@ -6305,6 +6321,30 @@ function openEditModalCompleto(order, opts){
   try{ atualizarOpcoesServico(servicoSel, editItensHolder.itens, order.serviceTypeId, false); }catch(e){ console.error(e); }
   const dataInp = document.getElementById('e_data');
   const banner = document.getElementById('editSlotBanner');
+  { /* 27/11: digitar o código numa via com data pedida pendente libera na hora (vale a data pedida = encaixe) */
+    const bAp = document.getElementById('btnAplicarCodigoPend');
+    if(bAp) bAp.addEventListener('click', async ()=>{
+      const cod = (document.getElementById('e_codigoPend').value||'').trim().toUpperCase();
+      if(!cod){ showToast('Digite o código de liberação.'); return; }
+      bAp.disabled = true;
+      try{
+        codes = await storageGet('codes', true) || [];
+        const co = codes.find(c=>c.codigo===cod && !c.usado);
+        if(!co){ showToast('Código inválido ou já utilizado.'); return; }
+        if(co.solicitacaoId && co.solicitacaoId!==(order.autorizacao&&order.autorizacao.solicitacaoId) && co.viaNumero!==String(viaTxt(order)||'')){ showToast('Este código foi liberado para outra via ('+(co.viaNumero||'—')+').'); return; }
+        co.usado = true; co.usadoEm = Date.now(); await saveCodes();
+        const dsol = order.autorizacao.dataSolicitada;
+        order.autorizacao = { ...order.autorizacao, status:'liberado', por: co.autorizadoPor||'OFICINA', em: Date.now() };
+        if(dsol) order.data = dsol;
+        order.encaixe = true; order.autorizadoPor = co.autorizadoPor || 'OFICINA';
+        const sid0 = order.autorizacao.solicitacaoId;
+        if(sid0) await autorizacoesMut(l=>{ const r=l.find(x=>x.id===sid0); if(r && r.status==='pendente'){ r.status='liberado'; r.liberadoPor=co.autorizadoPor||''; r.respondidoEm=Date.now(); } });
+        { const rr = await gatewayCall({ op:'upsert', table:'ordens_servico', params:{ row:{ id:order.id, payload:order, updated_at:new Date().toISOString() } } }); if(rr && rr.error){ showToast('Não consegui salvar a liberação. Tente de novo.'); return; } }
+        showToast('Código aplicado. Vale a data '+fmtDate(order.data)+' (encaixe).');
+        closeModal(); try{ renderView(); }catch(e){}
+      } finally { bAp.disabled = false; }
+    });
+  }
   const codeArea = document.getElementById('editCodeArea');
   const statusSel = document.getElementById('e_status');
   const recebidoWrap = document.getElementById('e_recebidoWrap');
@@ -6315,6 +6355,7 @@ function openEditModalCompleto(order, opts){
   statusSel.addEventListener('change', updateRecebidoVisibility);
   updateRecebidoVisibility();
 
+  function qtdEdit(){ return editItensHolder ? qtdServicosVia(editItensHolder.itens) : (Number(order.vagas)||1); }
   function sameAsOriginal(){
     return servicoSel.value===order.serviceTypeId && dataInp.value===order.data;
   }
@@ -6326,17 +6367,17 @@ function openEditModalCompleto(order, opts){
       return;
     }
     if(!servicoSel.value || !dataInp.value) return;
-    if(sameAsOriginal()){
+    if(sameAsOriginal() && qtdEdit() <= (Number(order.vagas)||1)){
       banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div>Mesma vaga que este pedido já ocupa — não precisa de autorização.</div></div>`;
       return;
     }
-    const res = checkSlot(servicoSel.value, dataInp.value, order.id);
+    const res = checkSlot(servicoSel.value, dataInp.value, order.id, qtdEdit());
     if(res.ok){
-      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${res.ocupadas} de ${res.vagas} vagas ocupadas em ${fmtDate(dataInp.value)}.</div></div>`;
+      banner.innerHTML = `<div class="slot-banner slot-ok"><span class="dot"></span><div><b>Tem vaga.</b> ${vagasTxt(res)} em ${fmtDate(dataInp.value)}.</div></div>`;
     } else {
       const motivos = [];
       if(!res.prazoOk) motivos.push('abaixo do prazo mínimo (' + res.st.prazoMinimoDias + ' dia(s))');
-      if(!res.quantidadeOk) motivos.push('quantidade máxima do dia atingida (' + res.ocupadas + '/' + res.vagas + ')');
+      if(!res.quantidadeOk) motivos.push('não há mais vagas neste dia');
       banner.innerHTML = `<div class="slot-banner slot-bad"><span class="dot"></span><div><b>Fora do padrão:</b> ${motivos.join(' e ')}. Digite abaixo o código de autorização.</div></div>`;
       codeArea.style.display = 'block';
       storageGet('codes', true).then(c=>{ if(c) codes = c; });
@@ -6347,7 +6388,7 @@ function openEditModalCompleto(order, opts){
   servicoSel.addEventListener('change', ()=>{
     const sid = servicoSel.value;
     if(sid){
-      const sugerida = proximaDataDisponivel(sid, order.id);
+      const sugerida = proximaDataDisponivel(sid, order.id, qtdEdit());
       if(sugerida) dataInp.value = sugerida;
     }
     updateBanner();
@@ -6358,7 +6399,7 @@ function openEditModalCompleto(order, opts){
   // Via aberta com tipo de ordem já escolhido mas sem data (ex.: rascunho):
   // sugere a primeira data livre na abertura, igual à troca de tipo.
   if(servicoSel.value && !dataInp.value){
-    const sugerida = proximaDataDisponivel(servicoSel.value, order.id);
+    const sugerida = proximaDataDisponivel(servicoSel.value, order.id, qtdEdit());
     if(sugerida) dataInp.value = sugerida;
   }
   updateBanner();
@@ -6469,8 +6510,8 @@ function openEditModalCompleto(order, opts){
     let encaixe = order.encaixe;
     let autorizadoPor = order.autorizadoPor;
 
-    if(status !== 'rascunho' && !sameAsOriginal()){
-      const res = checkSlot(sid, dt, order.id);
+    if(status !== 'rascunho' && (!sameAsOriginal() || qtdEdit() > (Number(order.vagas)||1))){
+      const res = checkSlot(sid, dt, order.id, qtdEdit());
       if(!res.ok){
         const codigoDigitado = document.getElementById('e_codigo').value.trim().toUpperCase();
         if(!codigoDigitado){
@@ -6530,7 +6571,7 @@ function openEditModalCompleto(order, opts){
     Object.assign(order, {
       cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado,
       via, vendedora, vendedoraId: vendedoraIdPorNome(vendedora), descricao, lojaId: loja, status,
-      serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt,
+      serviceTypeId: sid, serviceTypeName: st?st.nome:'', data: dt, vagas: qtdEdit(),
       encaixe, autorizadoPor, recebidoPor, recebidoEm, statusEm: (status!==order.status ? Date.now() : order.statusEm),
       // Itens e pagamento — pegados dos holders se existirem
       itens: editItensHolder ? itensOsParaSalvar(editItensHolder) : order.itens,
@@ -7015,9 +7056,9 @@ function renderPainel(main){
     const marcas = [
       isRascunho ? `<span class="badge rascunho-badge">Rascunho</span>` : '',
       (()=>{ const a = o.autorizacao; if(!a) return o.encaixe ? `<span class="badge badge-encaixe" title="Autorizado por ${escapeHtml(o.autorizadoPor||'')}">Encaixe</span>` : '';
-        if(a.status==='pendente') return `<span class="badge badge-aut-pend" title="Fora do padrão (${escapeHtml(a.motivo||'')}). Aguardando a Oficina liberar o encaixe.">${ico('cadeado',12)} Pendência de autorização</span>`;
+        if(a.status==='pendente') return `<span class="badge badge-aut-pend" title="Fora do padrão (${escapeHtml(a.motivo||'')}). Aguardando a Oficina liberar o encaixe.${a.dataSolicitada&&a.dataPadrao?' Data pedida '+fmtDate(a.dataSolicitada)+'; por enquanto vale '+fmtDate(a.dataPadrao)+'.':''}">${ico('cadeado',12)} Pendência de autorização${a.dataSolicitada&&a.dataPadrao?' · pedida '+fmtDate(a.dataSolicitada):''}</span>`;
         if(a.status==='liberado') return `<span class="badge badge-aut-ok" title="Encaixe liberado por ${escapeHtml(a.por||o.autorizadoPor||'')}">${ico('check',12)} Encaixe autorizado${a.por?' por '+escapeHtml(a.por):''}</span>`;
-        if(a.status==='recusado') return `<span class="badge badge-aut-rec" title="Recusado${a.por?' por '+escapeHtml(a.por):''}${a.motivoRecusa?': '+escapeHtml(a.motivoRecusa):''}. Data original ${a.dataAnterior?fmtDate(a.dataAnterior):''} voltou para a mais próxima aceita.">${ico('alerta',12)} Autorização recusada · data ajustada</span>`;
+        if(a.status==='recusado') return `<span class="badge badge-aut-rec" title="Recusado${a.por?' por '+escapeHtml(a.por):''}${a.motivoRecusa?': '+escapeHtml(a.motivoRecusa):''}. Data pedida ${a.dataAnterior?fmtDate(a.dataAnterior):''} não liberada: vale a data padrão.">${ico('alerta',12)} Autorização recusada · data ajustada</span>`;
         return o.encaixe ? `<span class="badge badge-encaixe">Encaixe</span>` : ''; })(),
       pendObs ? `<span class="badge badge-flag">${ico('sino',12)} Observação pendente</span>` : '',
       semPag && o.status!=='cancelado' && o.status!=='abandonada' ? `<span class="badge badge-flag">Sem pagamento lançado</span>` : '',
@@ -7213,7 +7254,7 @@ function renderAgenda(main){
     <div class="page-head">
       <div>
         <h1 class="page-title">Agenda da oficina</h1>
-        <p class="page-sub">Pedidos agendados em cada dia e as vagas ocupadas por tipo de serviço (ocupadas/máximo). Clique em um dia para ver os pedidos.</p>
+        <p class="page-sub">Pedidos agendados em cada dia e as vagas livres por tipo de serviço. Clique em um dia para ver os pedidos.</p>
       </div>
     </div>
     <div class="card">
@@ -7293,9 +7334,9 @@ function renderAgenda(main){
         const over = !porStatus && st && info.aguardando > st.maxPorDia;
         const rotulo = info.grupoId ? ((config.gruposTipoOrdem||[]).find(g=>g.id===info.grupoId)||{}).nome || 'GRUPO' : (st?st.nome:info.nome);
         const titulo = porStatus ? `${rotulo}: ${info.total} ${info.total===1?'via':'vias'} em ${STATUS_NOMES[agendaFiltroStatus]||''}`
-                                 : `${rotulo}: ${info.aguardando} de ${max} vagas${over?' — acima do máximo':''}`;
+                                 : `${rotulo}: ${(()=>{ const l=Math.max(0,max-info.aguardando); return l===0?'sem vagas':String(l).padStart(2,'0')+(l===1?' vaga':' vagas'); })()}${over?' — acima do máximo':''}`;
         return `<span class="cal-chip ${over?'over':''}" style="background:${serviceColor(info.tipoId)}" title="${escapeHtml(titulo)}">
-          <span>${escapeHtml(String(rotulo||'—').slice(0,10))}</span><span>${porStatus ? info.total : (agendaEscopo==='todas' ? info.aguardando+'/'+max : info.aguardando)}</span>
+          <span>${escapeHtml(String(rotulo||'—').slice(0,10))}</span><span>${porStatus ? info.total : (agendaEscopo==='todas' ? (()=>{ const l=Math.max(0,max-info.aguardando); return l===0?'lotado':String(l).padStart(2,'0')+(l===1?' vaga':' vagas'); })() : info.aguardando)}</span>
         </span>`;
       }).join('');
       const extra = Object.keys(byService).length > 3 ? `<div class="cal-more">+${Object.keys(byService).length-3} ${Object.keys(byService).length-3===1?'serviço':'serviços'}</div>` : '';
@@ -7330,7 +7371,7 @@ function openDayModal(iso){
     const res = checkSlot(s.id, iso, null);
     return `<div class="legend-item" style="font-size:13px;">
       <span class="legend-dot" style="background:${serviceColor(s.id)}"></span>
-      ${escapeHtml(s.nome)}: <b style="margin-left:3px;">${res.ocupadas}/${res.vagas}</b>
+      ${escapeHtml(s.nome)}: <b style="margin-left:3px;">${vagasTxt(res)}</b>
       ${res.ok ? '' : `<span class="badge badge-aviso" style="margin-left:4px;">${!res.quantidadeOk ? 'lotado' : 'fora do prazo'}</span>`}
     </div>`;
   }).join('');
