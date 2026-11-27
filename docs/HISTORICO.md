@@ -652,3 +652,14 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Gasto automático:** a via com ouro lança o gasto "Compra de ouro", já pago, na data e na loja da via. O caixa recebe e paga o mesmo valor (fecha zerado) e a venda inteira continua contando para a comissão e o faturamento. No Dashboard a categoria entra como compra de mercadoria, fora do resultado líquido (o ouro é estoque; vira custo quando a joia for vendida). Cancelou a via, o gasto é cancelado junto.
 - **Fator:** o 24k entrou na lista automática ao lado de 16k, 14k e 10k — todos saem do Valor Balcão do dia (18k) digitado pela diretoria, sem centavos e com final zero.
 - Novos: `ouro-core.js` (teores, preço por grama, arredondamento e nome do produto — um lugar só, usado pelo Cadastro e pela Venda) e função `ouro-api` (produto da peça, entrada, estorno, descompor, compor, saldos). A nota de entrada do ouro continua opcional na via e obrigatória no fechamento do caixa, como já era.
+
+## 27/11/2026 (2) — Termo de compra de ouro por aceite no WhatsApp
+- **Onde fica:** dentro de "Peças do ouro", na Venda e no Pedido. Com o contador zerado aparece **Disparar termo**, o campo do código e **Confirmar**.
+- **Antes de disparar** o sistema confere o cadastro do cliente (celular com DDD, CPF, data de nascimento, endereço e e-mail). Faltando algo, avisa o que falta e não envia. O número do termo é o **mesmo da via**: ele é reservado no disparo e a via é salva com ele.
+- **O cliente recebe** uma mensagem curta ("Olá, Maria. Segue o termo de aceite da compra do seu ouro.") com o botão "Ler e aceitar". Na página (termo-ouro.html) ele vê os dados, as peças, o termo completo, **tira uma foto do rosto** e aceita. O aceite só libera depois de rolar o termo até o fim, tirar a foto e marcar o ciente.
+- **O código de 6 dígitos só aparece depois do aceite.** Vale 30 minutos, serve uma vez e tem 3 tentativas. A atendente digita e confirma; aí o termo fica confirmado.
+- **PDF no Drive:** APP GESTAO › TERMOS DE OURO, com a foto do cliente, data, hora, IP, aparelho, código conferido e um hash do que foi aceito. **O cliente não recebe PDF.**
+- **Nota fiscal depois:** o termo sai com o nº da NF-e de entrada em branco. Quando o número é lançado no fechamento do caixa, o PDF é refeito e sobe de novo — sem reenviar nada ao cliente.
+- **Trava:** a via com pagamento em ouro só salva com o termo confirmado. Um gerente ou a diretoria pode liberar o salvamento sem o termo; fica registrado no LOG e na via.
+- Novos: tabela `termos_ouro`, função `termo-ouro` (dispara, aceite público, confere o código, PDF, nº da nota) e a página pública `termo-ouro.html`. Modelo da Meta `termo_ouro_v1` (Utilidade, 1 variável e botão com link individual) — precisa da aprovação da Meta antes do primeiro disparo.
+- As peças do ouro, o contador e o compor/descompor agora valem igual na Venda e no Pedido: as regras ficam num arquivo só (`ouro-core.js`).
