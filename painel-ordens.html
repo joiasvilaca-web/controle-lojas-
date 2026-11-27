@@ -1135,9 +1135,10 @@ function serviceColor(id){
 }
 let modalOnClose = null;
 function closeModal(){
+  const _estavaAberto = document.getElementById('modalOverlay').classList.contains('show');   // 27/11: fechar duas vezes não volta a página duas vezes
   document.getElementById('modalOverlay').classList.remove('show','tela-cheia');
   document.getElementById('modalBox').innerHTML='';
-  if(history.state && history.state.modalAberto) history.back();
+  if(_estavaAberto && history.state && history.state.modalAberto) history.back();
   if(modalOnClose){ const cb = modalOnClose; modalOnClose = null; cb(); }
 }
 /* Sub-diálogo EMPILHADO: guarda o conteúdo atual (ex.: a via em edição, com tudo digitado) e mostra o diálogo por cima;
@@ -1817,6 +1818,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
     dest = await perguntarDestinoEstorno(recebido, !!cliDest, 'Este pedido');
     if(!dest) return false;
   }
+  closeModal();   // 27/11: a janela fecha assim que o cancelamento é confirmado (antes ficava parada até tudo terminar)
   await reverterFiadoECreditoOrdem(order);
   if(order.cashback && order.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, order.cashback.clienteId, order.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback deste pedido.'); }
   await estornarOuroDaVia(order);
@@ -1866,11 +1868,12 @@ async function abrirCancelarOrdem(order){
   document.getElementById('co_confirmar').addEventListener('click', async ()=>{
     const motivo = maiusc(document.getElementById('co_motivo').value);
     if(!motivo){ showToast('Informe o motivo do cancelamento.'); return; }
-    if(await aplicarCancelamentoOrdem(order, motivo) === false){ closeModal(); return; }
-    await saveOrders();
-    showToast('O.S. cancelada.');
-    closeModal();
-    renderView();
+    let _ok = false;
+    try{
+      _ok = await aplicarCancelamentoOrdem(order, motivo);
+      if(_ok !== false){ await saveOrders(); showToast('O.S. cancelada.'); }
+    }catch(e){ console.error('cancelar pedido', e); showToast('Não consegui concluir o cancelamento: '+((e&&e.message)||e)); }
+    finally{ closeModal(); renderView(); }
   });
 }
 /* ============================================================
