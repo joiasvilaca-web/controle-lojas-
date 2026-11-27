@@ -35,7 +35,7 @@
       var b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-block ' + (o.cor ? '' : 'btn-accent');
       b.style.cssText = 'white-space:normal;min-width:0;height:auto;text-align:left;padding:12px 14px;' + (o.cor ? 'background:'+o.cor+';border-color:'+o.cor+';color:#fff;' : '');
       b.innerHTML = esc(o.rotulo) + (o.desc ? '<span style="display:block;font-weight:500;font-size:12.5px;opacity:.9;margin-top:2px;">' + esc(o.desc) + '</span>' : '');
-      b.addEventListener('click', function(){ fechar(); try{ o.fn(); }catch(e){ console.error('via', e); } });
+      b.addEventListener('click', function(){ try{ o.fn(); }catch(e){ console.error('via', e); } });   // 27/11: não fecha — a vendedora imprime quantas vias quiser; só o X fecha
       box.appendChild(b);
     });
     card.querySelector('#viasPrintX').addEventListener('click', fechar);

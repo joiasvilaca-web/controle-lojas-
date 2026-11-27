@@ -55,24 +55,38 @@
       + '</body></html>';
   }
   function desenharCodigo(win, codigoVia, depois){
-    if(!codigoVia){ setTimeout(depois, 300); return; }
-    setTimeout(function(){
-      try{ if(win.JsBarcode) win.JsBarcode(win.document.getElementById('barcodeSvg'), codigoVia, { format:'CODE128', width:2, height:42, displayValue:false, margin:0 }); }catch(e){}
-      setTimeout(depois, 250);
-    }, 400);
+    if(!codigoVia){ setTimeout(depois, 150); return; }
+    var tent = 0;
+    (function espera(){
+      if(win.JsBarcode || tent++ > 25){
+        try{ if(win.JsBarcode) win.JsBarcode(win.document.getElementById('barcodeSvg'), codigoVia, { format:'CODE128', width:2, height:42, displayValue:false, margin:0 }); }catch(e){}
+        setTimeout(depois, 150);
+      } else setTimeout(espera, 120);
+    })();
   }
+  /* 27/11 (Felipe): imprime direto, sem abrir janela (iframe invisível): clicou, imprimiu. O corte usa a altura EXATA do conteúdo
+   * (antes a janela de 700 px forçava ~185 mm de folha, sobrando branco em cima e embaixo). Para o navegador não tratar cupom curto
+   * como paisagem (saía "virado"), a página nunca fica mais baixa que larga. Sem o diálogo: abrir o Chrome com --kiosk-printing. */
   function imprimir(config, titulo, conteudoHtml, codigoVia, tipo){
     var c = cfg(config, tipo || TIPO_POR_TITULO[titulo] || 'vendas');
-    var w = window.open('', '_blank', 'width=420,height=700');
-    if(!w){ if(!imprimir.silencioso) alert('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return false; }
-    w.document.open(); w.document.write(html(c, titulo, conteudoHtml, codigoVia)); w.document.close(); w.focus();
+    var f = document.createElement('iframe');
+    f.setAttribute('aria-hidden','true'); f.tabIndex = -1;
+    f.style.cssText = 'position:fixed;left:-10000px;top:0;width:'+Math.round(c.larguraBobina*3.78)+'px;height:600px;border:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(f);
+    var w = f.contentWindow;
+    if(!w){ if(!imprimir.silencioso) alert('Não foi possível preparar a impressão.'); f.remove(); return false; }
+    w.document.open(); w.document.write(html(c, titulo, conteudoHtml, codigoVia)); w.document.close();
+    var limpar = function(){ setTimeout(function(){ try{ f.remove(); }catch(e){} }, 1000); };
     desenharCodigo(w, codigoVia, function(){
       try{
         var d = w.document;
-        var mm = c.alturaMm > 0 ? c.alturaMm : Math.ceil(Math.max(d.body.scrollHeight, d.body.getBoundingClientRect().height) * 25.4 / 96) + 1;
-        var st = d.createElement('style'); st.textContent = '@page{ size:'+c.larguraBobina+'mm '+mm+'mm; margin:0; }'; d.head.appendChild(st);
+        var h = Math.max(d.body.getBoundingClientRect().height, d.body.offsetHeight);
+        var mm = c.alturaMm > 0 ? c.alturaMm : Math.ceil(h * 25.4 / 96) + 1;
+        var st = d.createElement('style'); st.textContent = '@page{ size:'+c.larguraBobina+'mm '+mm+'mm; margin:0; } html,body{ height:auto !important; min-height:0 !important; }'; d.head.appendChild(st);
       }catch(e){}
-      try{ w.print(); }catch(e){}
+      try{ w.addEventListener('afterprint', limpar); }catch(e){}
+      try{ w.focus(); w.print(); }catch(e){ console.error('print', e); }
+      setTimeout(function(){ try{ f.remove(); }catch(e){} }, 120000);
     });
     return true;
   }
