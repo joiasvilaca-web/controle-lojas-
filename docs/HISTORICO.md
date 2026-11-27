@@ -690,3 +690,4 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Caixa:** o fechamento do dia fica travado enquanto houver via com pendência (lista na tela); destrava quando a Oficina responde ou o código é digitado.
 - **Vilacinha** (`copiloto-extra` v3): avisa a Oficina/diretoria (vias esperando) e a vendedora (pendente e, por 24 h, a resposta liberou/recusou).
 - **Contador de vagas** agora mostra só as vagas livres ("03 vagas", "sem vagas") no agendamento, banners e agenda. A verificação de vaga e a sugestão de data passam a considerar quantas vagas a via usa (`vagas` salvo na via, também na edição).
+- **Domingo e feriado** nacional (carnaval e sexta-feira santa incluídos; extras em `config.feriados`) não têm vaga: `checkSlot` marca o dia como fechado e `proximaDataDisponivel` pula.
