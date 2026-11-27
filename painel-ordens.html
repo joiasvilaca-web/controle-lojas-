@@ -3850,7 +3850,22 @@ function qtdServicosVia(itens){
 }
 /** 27/11 (Felipe): o contador mostra só quantas vagas ainda estão LIVRES ("03 vagas"), sem o máximo. */
 function vagasLivres(res){ return Math.max(0, (Number(res && res.vagas)||0) - (Number(res && res.ocupadas)||0)); }
-function vagasTxt(res){ const n = vagasLivres(res); return n===0 ? 'sem vagas' : String(n).padStart(2,'0') + (n===1 ? ' vaga' : ' vagas'); }
+function vagasTxt(res){ if(res && res.diaFechado) return 'sem produção ('+res.diaFechado+')'; const n = vagasLivres(res); return n===0 ? 'sem vagas' : String(n).padStart(2,'0') + (n===1 ? ' vaga' : ' vagas'); }
+/** 27/11 (Felipe): domingo e feriado nacional não têm vaga (a agenda pula esses dias). Extras em config.feriados (['AAAA-MM-DD']). */
+function feriadosDoAno(y){
+  const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),mes=Math.floor((h+l-7*m+114)/31),dia=((h+l-7*m+114)%31)+1;
+  const pascoa = new Date(Date.UTC(y,mes-1,dia));
+  const off = n=>{ const x=new Date(pascoa); x.setUTCDate(x.getUTCDate()+n); return x.toISOString().slice(0,10); };
+  const fx = ['01-01','04-21','05-01','09-07','10-12','11-02','11-15','11-20','12-25'].map(x=>y+'-'+x);
+  return fx.concat([off(-48), off(-47), off(-2)]);   // carnaval (seg/ter) e sexta-feira santa
+}
+function diaSemVaga(dateStr){
+  if(!dateStr) return null;
+  const d = new Date(dateStr+'T12:00:00');
+  if(d.getDay()===0) return 'domingo';
+  if(feriadosDoAno(d.getFullYear()).includes(dateStr) || ((config&&config.feriados)||[]).includes(dateStr)) return 'feriado';
+  return null;
+}
 function checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd){
   const st = config.serviceTypes.find(s=>s.id===serviceTypeId);
   if(!st || !dateStr) return null;
@@ -3861,9 +3876,10 @@ function checkSlot(serviceTypeId, dateStr, excludeOrderId, qtd){
   const prazoOk = diffDays >= st.prazoMinimoDias;
   const idsGrupo = idsDoMesmoGrupo(serviceTypeId);
   const countDay = orders.filter(o=> idsGrupo.includes(o.serviceTypeId) && o.data===dateStr && STATUS_OCUPA_VAGA.includes(o.status) && o.id!==excludeOrderId).reduce((a,o)=> a + (Number(o.vagas)||1), 0);
-  const quantidadeOk = countDay + qtd <= st.maxPorDia;
+  const diaFechado = diaSemVaga(dateStr);
+  const quantidadeOk = !diaFechado && countDay + qtd <= st.maxPorDia;
   return {
-    st, prazoOk, quantidadeOk, ok: prazoOk && quantidadeOk,
+    st, prazoOk, quantidadeOk, ok: prazoOk && quantidadeOk, diaFechado,
     ocupadas:countDay, vagas: st.maxPorDia, diffDays, qtd
   };
 }
@@ -5695,7 +5711,7 @@ function renderNovaOrdem(main){
       if(!res.quantidadeOk){
         const livres = Math.max(0, res.vagas - res.ocupadas);
         if(qtdVia>1) motivos.push(livres>0 ? ('neste dia cabem só ' + livres + ' de ' + qtdVia + ' serviços: você pode lançar ' + livres + ' aqui e abrir uma NOVA VIA para os ' + (qtdVia-livres) + ' restantes, ou escolher uma data que comporte os ' + qtdVia) : ('não há vaga neste dia para os ' + qtdVia + ' serviços; escolha outra data'));
-        else motivos.push('não há mais vagas neste dia');
+        else motivos.push(res.diaFechado ? ('o dia é '+res.diaFechado+' (sem produção)') : 'não há mais vagas neste dia');
       }
       motivoForaPadrao = motivos.join(' e ');
       foraPadrao = true;
@@ -6377,7 +6393,7 @@ function openEditModalCompleto(order, opts){
     } else {
       const motivos = [];
       if(!res.prazoOk) motivos.push('abaixo do prazo mínimo (' + res.st.prazoMinimoDias + ' dia(s))');
-      if(!res.quantidadeOk) motivos.push('não há mais vagas neste dia');
+      if(!res.quantidadeOk) motivos.push(res.diaFechado ? ('o dia é '+res.diaFechado+' (sem produção)') : 'não há mais vagas neste dia');
       banner.innerHTML = `<div class="slot-banner slot-bad"><span class="dot"></span><div><b>Fora do padrão:</b> ${motivos.join(' e ')}. Digite abaixo o código de autorização.</div></div>`;
       codeArea.style.display = 'block';
       storageGet('codes', true).then(c=>{ if(c) codes = c; });
