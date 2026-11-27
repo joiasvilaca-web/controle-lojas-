@@ -53,7 +53,8 @@ module.exports = { casos: [
   { nome: 'Dashboard › Custo e margem: resultado líquido desconta os Gastos, menos a compra de mercadoria', bug: 'a margem nunca olhava os Gastos; recompra lançada em Gastos não podia descontar duas vezes', rodar: async ({ t, ler }) => {
     const d = ler('dashboard.html');
     t.ok(/function renderResultadoLiquido\(lucroBruto, vendidoSemCusto\)/.test(d) && /renderResultadoLiquido\(margem, receita - receitaComCusto\)/.test(d), 'bloco ligado ao cálculo da margem');
-    t.ok(/return \["Fornecedores"\];/.test(d) && /cats\.filter\(\(\[c\]\)=> !fora\.has\(c\)\)/.test(d), 'Fornecedores fora por padrão; só as outras categorias descontam');
+    // 27/11: "Compra de ouro" entrou no padrão — o ouro comprado no balcão é estoque, vira custo quando a joia é vendida.
+    t.ok(/return \["Fornecedores","Compra de ouro"\];/.test(d) && /cats\.filter\(\(\[c\]\)=> !fora\.has\(c\)\)/.test(d), 'Fornecedores e Compra de ouro fora por padrão; só as outras categorias descontam');
   } },
   { nome: 'ficha-loja-api do repositório = a publicada (v2, com a ficha GERAL)', bug: 'arquivo antigo (v1) tinha voltado ao repositório', rodar: async ({ t, ler }) => {
     const a = ler('ficha-loja-api.ts');
