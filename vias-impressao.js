@@ -42,11 +42,11 @@
     ov.addEventListener('click', function(e){ if(e.target===ov) fechar(); });
     document.addEventListener('keydown', esc_);
   }
-  /** Conteúdo do cupom da Via Caixa. o: { origem:'VENDA'|'PEDIDO', via, vendedora, pagamentos:[{rotulo, valor}], aviso, fmt } */
+  /** Conteúdo do cupom da Via Caixa. o: { origem:'VENDA'|'PEDIDO', data(dd/mm/aaaa, opcional), via, vendedora, pagamentos:[{rotulo, valor}], aviso, fmt } */
   function cupomCaixaHtml(o){
     var L = [];
     L.push('<div class="titulo">VIA CAIXA</div>');
-    L.push('<div class="sub">' + esc(o.origem||'') + '</div>');
+    L.push('<div class="sub">' + esc(o.origem||'') + ' · ' + esc(o.data || new Date().toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})) + '</div>');
     if(o.aviso) L.push('<div style="text-align:center;margin:5px 0;padding:4px 5px;border:2px solid #000;font-weight:800;font-size:.95em;">' + esc(o.aviso) + '</div>');
     L.push('<div class="linha"></div>');
     L.push('<div class="destaque" style="text-align:center;">VIA ' + esc(o.via || '—') + '</div>');
