@@ -258,12 +258,17 @@
         + '<input id="oiCodigo" inputmode="numeric" maxlength="6" placeholder="Código" ' + (st === 'enviado' ? '' : 'disabled') + '>'
         + '<button type="button" class="btn btn-ghost btn-sm" id="oiConfirmar"' + (st === 'enviado' ? '' : ' disabled') + '>Confirmar</button>'
         + '</div>')
-      + '<div class="oi-aviso" id="oiTermoMsg" style="margin-top:8px;"></div></div>';
+      + '<div class="oi-aviso" id="oiTermoMsg" style="margin-top:8px;">' + (holder.__termoMsg ? '<span class="' + (holder.__termoMsg.ruim ? 'oi-ruim' : 'oi-aj') + '">' + esc(holder.__termoMsg.txt) + '</span>' : '') + '</div></div>';
   }
   function ligarTermo(el, holder, config, redesenhar){
     var bD = el.querySelector('#oiDisparar'), bC = el.querySelector('#oiConfirmar'), inp = el.querySelector('#oiCodigo');
     var msg = el.querySelector('#oiTermoMsg');
-    var diz = function(txt, ruim){ if(msg) msg.innerHTML = '<span class="' + (ruim ? 'oi-ruim' : 'oi-aj') + '">' + esc(txt) + '</span>'; };
+    /* 27/11: a mensagem fica guardada na via — o painel é redesenhado ao fim do clique e antes apagava o erro (ex.: cadastro incompleto), parecendo que nada acontecia. */
+    var diz = function(txt, ruim){
+      holder.__termoMsg = { txt: txt, ruim: !!ruim };
+      if(msg) msg.innerHTML = '<span class="' + (ruim ? 'oi-ruim' : 'oi-aj') + '">' + esc(txt) + '</span>';
+      if(ruim && typeof window.showToast === 'function') window.showToast(txt);
+    };
     if(bD) bD.addEventListener('click', async function(){
       if(typeof window.__ouroDispararTermo !== 'function'){ diz('Recarregue a página (Ctrl+F5) para disparar o termo.', true); return; }
       bD.disabled = true; diz('Enviando o termo…');
