@@ -663,3 +663,7 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Trava:** a via com pagamento em ouro só salva com o termo confirmado. Um gerente ou a diretoria pode liberar o salvamento sem o termo; fica registrado no LOG e na via.
 - Novos: tabela `termos_ouro`, função `termo-ouro` (dispara, aceite público, confere o código, PDF, nº da nota) e a página pública `termo-ouro.html`. Modelo da Meta `termo_ouro_v1` (Utilidade, 1 variável e botão com link individual) — precisa da aprovação da Meta antes do primeiro disparo.
 - As peças do ouro, o contador e o compor/descompor agora valem igual na Venda e no Pedido: as regras ficam num arquivo só (`ouro-core.js`).
+
+## 27/11/2026 — Peças do ouro aparecem ao escolher a forma de ouro
+- O painel "Peças do ouro" abria só depois de a linha de pagamento em ouro ter valor e estar confirmada (✓). Agora abre assim que a forma de ouro (ex.: OURO - TROCA) é escolhida na linha, na Venda e no Pedido.
+- Arquivo: `vilaca-extras.js` (`renderItens`). O contador "faltam R$ …" continua contando só as linhas confirmadas.
