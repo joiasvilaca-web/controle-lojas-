@@ -82,8 +82,13 @@
         var d = w.document;
         var h = Math.max(d.body.getBoundingClientRect().height, d.body.offsetHeight);
         var mm = c.alturaMm > 0 ? c.alturaMm : Math.ceil(h * 25.4 / 96) + 1;
-        if(/^via caixa/i.test(String(titulo||''))) mm = Math.max(mm, c.larguraBobina + 4);   // 27/11: cupom curto e estreito; página nunca mais baixa que larga, para não sair deitada
         var st = d.createElement('style'); st.textContent = '@page{ size:'+c.larguraBobina+'mm '+mm+'mm; margin:0; } html,body{ height:auto !important; min-height:0 !important; }'; d.head.appendChild(st);
+        /* 27/11: o Chrome usa o @page do documento PRINCIPAL ao imprimir um iframe (por isso saía folha grande, com data e endereço no papel).
+           Repete a regra aqui, só durante a impressão. */
+        var pg = document.createElement('style'); pg.setAttribute('data-cupom-page','1'); pg.textContent = '@page{ size:'+c.larguraBobina+'mm '+mm+'mm; margin:0; }'; document.head.appendChild(pg);
+        var tirar = function(){ try{ pg.remove(); }catch(e){} };
+        try{ w.addEventListener('afterprint', function(){ setTimeout(tirar, 500); }); }catch(e){}
+        setTimeout(tirar, 120000);
       }catch(e){}
       try{ w.addEventListener('afterprint', limpar); }catch(e){}
       try{ w.focus(); w.print(); }catch(e){ console.error('print', e); }
