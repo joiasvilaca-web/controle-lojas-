@@ -4161,6 +4161,7 @@ function renderNovaVenda(main){
       notaEntrada: OuroPag.temOuro(tempPagHolder.pagamentos, config) ? { ...(tempPagHolder.notaEntrada||{}) } : null,
       ouroItens: (window.OuroItens && OuroPag.temOuro(tempPagHolder.pagamentos, config)) ? OuroItens.paraSalvar(tempPagHolder, config) : null,
       ouroAjusteAutorizado: tempPagHolder.ouroAjusteAutorizado || null,
+      ouroTermo: tempPagHolder.termo || null,
       fiadoDebitoId: novoFiadoDebitoId,
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
@@ -4173,7 +4174,7 @@ function renderNovaVenda(main){
     if(convRes) venda.reservaId = convRes.reserva.id;
     // Código de barras da via, gerado só agora que a venda realmente vai ser salva
     // (pra não "queimar" números de vendas que a pessoa desistiu de lançar).
-    venda.codigoVia = await bumpCodigoVia('venda', venda.lojaId||'');
+    venda.codigoVia = tempPagHolder.codigoViaReservado || await bumpCodigoVia('venda', venda.lojaId||'');
     addHistorico(venda, 'Venda criada' + (venda.codigoVia?(' — via '+venda.codigoVia):''));
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de gravar a venda
     const cbVal = await cashbackProcessar(venda, 'Venda', (venda.valorAVista ?? venda.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
@@ -4403,77 +4404,32 @@ async function reverterEfeitosVenda(venda, acao){
   if(venda.cashback && venda.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, venda.cashback.clienteId, venda.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback desta venda.'); }
   return clienteCadastro;
 }
-/** Antes de salvar: o contador das peças tem de estar zerado sempre; só o ajuste acima de 5%
- *  pode ser liberado, e só com a senha de um gerente ou da diretoria (fica no LOG). */
-async function validarOuroAntesDeSalvar(holder){
-  if(!window.OuroItens) return true;
-  let e = OuroItens.erro(holder, config);
-  if(e && e.indexOf('ajuste acima') >= 0){
-    const n = OuroItens.foraDoLimite(holder, config).length;
-    const resumo = n + (n===1 ? ' peça de ouro com valor ajustado acima de 5% da tabela' : ' peças de ouro com valor ajustado acima de 5% da tabela');
-    if(!window.Autorizacao){ Destaque.marcar('#pagOuroItens', 'Recarregue a página (Ctrl+F5) para pedir a autorização do ajuste.'); return false; }
-    const r = await Autorizacao.pedir({ sessao: __gatewaySenha, acao:'ouro_ajuste_acima_limite', modulo:'Vendas', resumo,
-      titulo:'Ajuste do valor do ouro', texto: resumo + '. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
-    if(!r){ Destaque.marcar('#pagOuroItens', 'Sem autorização, deixe o ajuste dentro de 5%.'); return false; }
-    holder.ouroAjusteAutorizado = { por: r.nome||'', nivel: r.nivel||'', em: new Date().toISOString() };
-    e = OuroItens.erro(holder, config);
-  }
-  if(e){ Destaque.marcar('#pagOuroItens', e); return false; }
-  return true;
-}
-
 /* ===================== OURO RECEBIDO NA VIA (27/11/2026, Felipe) =====================
- * Ao salvar a via com pagamento em ouro: cada peça vira (ou reaproveita) um produto
- * "18 K ANEL PEDRA NATURAL F1,0" e o peso entra no estoque dele, na loja da via. O valor
- * pago em ouro também vira um gasto "Compra de ouro" já pago — ao mesmo tempo que a loja
- * vende, ela compra o metal, então o caixa recebe e paga o mesmo valor e fica zerado.
- * A venda inteira continua contando para a comissão e para o faturamento, como sempre. */
-const OURO_URL_V = (window.SUPABASE_URL||'') + '/functions/v1/ouro-api';
-async function ouroApi(body){
-  try{
-    const r = await fetch(OURO_URL_V, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
-    return await r.json();
-  }catch(e){ return { error:'Falha de conexão' }; }
-}
-async function registrarOuroDaVia(venda){
-  const itens = Array.isArray(venda && venda.ouroItens) ? venda.ouroItens.filter(i=>Number(i.gramas)>0) : [];
-  if(!itens.length) return;
-  const lojaId = venda.lojaId || (window.__lojaAtual && window.__lojaAtual.id) || '';
-  if(!lojaId){ showToast('Venda lançada, mas não achei a loja para dar entrada no ouro.'); return; }
-  try{
-    const prontos = [];
-    for(const it of itens){
-      const r = await ouroApi({ op:'produto', teor:it.teor, tipo:it.tipo, pedra:it.pedra||'', fator:it.gramas });
-      if(!r || r.error || !r.id){ showToast('Venda lançada, mas não consegui criar o produto do ouro: ' + ((r&&r.error)||'')); return; }
-      it.produtoId = r.id; it.nome = r.nome;
-      prontos.push({ produtoId:r.id, nome:r.nome, gramas:it.gramas, valor:it.valor });
-    }
-    const e = await ouroApi({ op:'entrada', lojaId, via: venda.codigoVia||'', viaId: venda.id, itens: prontos,
-      venda: { id: venda.id, codigoVia: venda.codigoVia||'', cliente: venda.cliente||'', data: venda.data||'' } });
-    if(!e || e.error){ showToast('Venda lançada, mas o ouro não entrou no estoque: ' + ((e&&e.error)||'')); return; }
-    venda.ouroEntradaEm = new Date().toISOString();
-    if(e.gastoId) venda.ouroGastoId = e.gastoId;
-    else showToast('Ouro deu entrada no estoque, mas o gasto da compra não foi lançado.');
-  }catch(err){ console.error('ouro da via', err); showToast('Venda lançada, mas deu erro ao dar entrada no ouro.'); }
-}
-/** Cancelou ou refez a via: tira o ouro do estoque e cancela o gasto da compra. */
-async function estornarOuroDaVia(venda){
-  if(!venda || !Array.isArray(venda.ouroItens) || !venda.ouroItens.length || !venda.ouroEntradaEm) return;
-  try{
-    const r = await ouroApi({ op:'estorno', via: venda.id });
-    if(r && r.error){ showToast('Atenção: o ouro desta via continua no estoque — ' + r.error); return; }
-    venda.ouroEstornadoEm = new Date().toISOString();   // a ouro-api também cancela o gasto da compra
-  }catch(e){ console.error('estorno ouro', e); showToast('Atenção: não consegui tirar o ouro desta via do estoque.'); }
-}
-
-/** Edição da via: desfaz a entrada anterior do ouro (se houve) e lança de novo o que está agora. */
-async function refazerOuroDaVia(venda){
-  const tinha = !!venda.ouroEntradaEm && !venda.ouroEstornadoEm;
-  const temAgora = Array.isArray(venda.ouroItens) && venda.ouroItens.some(i=>Number(i.gramas)>0);
-  if(!tinha && !temAgora) return;
-  if(tinha){ await estornarOuroDaVia(venda); venda.ouroEntradaEm = null; }
-  if(temAgora){ venda.ouroEstornadoEm = null; venda.ouroGastoId = null; await registrarOuroDaVia(venda); }
-}
+ * As regras são do ouro-core.js (OuroVia), as mesmas do Pedido: conferir antes de salvar,
+ * dar entrada no estoque em gramas depois de salvar e desfazer tudo no cancelamento.
+ * O gasto "Compra de ouro" é lançado pelo servidor (a vendedora não tem o módulo Gastos). */
+OuroVia.ligar({ senha: ()=>__gatewaySenha, cfg: ()=>config, toast: m=>showToast(m) });
+/* Termo do ouro: a tela diz como achar o cliente, a loja e como reservar o nº da via. */
+OuroTermo.ligarTela({
+  viaTipo: 'venda',
+  atendente: ()=> (currentUser && currentUser.nome) || '',
+  lojaId: ()=>{ const e = document.getElementById('ed_loja') || document.getElementById('v_loja'); return (e && e.value) || (window.__lojaAtual && window.__lojaAtual.id) || ''; },
+  cliente: async ()=>{
+    const el = id=> document.getElementById(id);
+    const nome = ((el('ed_cliente') || el('v_cliente') || {}).value || '').trim();
+    const tel  = ((el('ed_telefone') || el('v_telefone') || {}).value || '').trim();
+    if(!nome && !tel) return null;
+    return await acharClienteDaVenda({ cliente: nome, telefone: tel });
+  },
+  reservarCodigo: async ()=>{
+    const e = document.getElementById('ed_loja') || document.getElementById('v_loja');
+    return await bumpCodigoVia('venda', (e && e.value) || '');
+  },
+});
+const validarOuroAntesDeSalvar = h=> OuroVia.validar(h);
+const registrarOuroDaVia = v=> OuroVia.registrar(v);
+const estornarOuroDaVia = v=> OuroVia.estornar(v);
+const refazerOuroDaVia = v=> OuroVia.refazer(v);
 
 async function executarCancelamentoVenda(venda, motivo, dest){
   const recebido = valorRecebidoDe(venda);
@@ -5618,6 +5574,8 @@ function abrirFormularioEdicaoCompleta(v){
     lojaSaidaId: '', lojaPagamentoId: '', lojaNotaId: '', lojaBaixaEstoqueId: '',
     notaEntrada: v.notaEntrada ? { ...v.notaEntrada } : undefined,
     ouroItens: Array.isArray(v.ouroItens) ? v.ouroItens.map(i=>({ ...i, manual:true })) : [],
+    termo: v.ouroTermo ? { ...v.ouroTermo } : (v.codigoVia ? { viaCodigo: v.codigoVia } : {}),
+    codigoViaReservado: v.codigoVia || '',
   };
   if(v.emissaoNota==='sim'){
     const nomeLojaAnterior = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l ? l.abreviacao : '—'; };
@@ -5842,6 +5800,7 @@ function abrirFormularioEdicaoCompleta(v){
     v.notaEntrada = OuroPag.temOuro(pagHolder.pagamentos, config) ? { ...(pagHolder.notaEntrada||{}) } : null;
     v.ouroItens = (window.OuroItens && OuroPag.temOuro(pagHolder.pagamentos, config)) ? OuroItens.paraSalvar(pagHolder, config) : null;
     if(pagHolder.ouroAjusteAutorizado) v.ouroAjusteAutorizado = pagHolder.ouroAjusteAutorizado;
+    if(pagHolder.termo) v.ouroTermo = pagHolder.termo;
     v.fiadoDebitoId = novoFiadoDebitoId;
     const _cbAntV = v.cashback || null;
     const _cbE = v.status!=='cancelada' ? await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'validar', _cbAntV, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };

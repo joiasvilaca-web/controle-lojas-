@@ -14,6 +14,7 @@
 <script src="cadastro-incompleto.js"></script>
 <script src="cupom.js"></script>
 <script src="condicoes-pagamento.js"></script>
+<script src="ouro-core.js"></script>
 <script src="vilaca-extras.js"></script>
 <script src="acompanhamento-ui.js"></script>
 <script>
@@ -1772,6 +1773,35 @@ function perguntarDestinoEstorno(recebido, temCliente, quem){
     });
   });
 }
+/* ===================== OURO RECEBIDO NO PEDIDO (27/11/2026, Felipe) =====================
+ * Mesmas regras da Venda — ficam no ouro-core.js (OuroVia) para as duas telas nunca divergirem. */
+OuroVia.ligar({ senha: ()=>__gatewaySenha, cfg: ()=>config, toast: m=>showToast(m) });
+/* Termo do ouro: no Pedido o cliente vem dos campos do formulário (ou da ordem em edição). */
+OuroTermo.ligarTela({
+  viaTipo: 'pedido',
+  atendente: ()=> (currentUser && currentUser.nome) || '',
+  lojaId: (holder)=>{
+    if(holder && holder.__ordem && holder.__ordem.lojaId) return holder.__ordem.lojaId;
+    const e = document.getElementById('f_loja') || document.querySelector('[data-loja-sel]');
+    return (e && e.value) || (window.__lojaAtual && window.__lojaAtual.id) || '';
+  },
+  cliente: async (holder)=>{
+    if(holder && holder.__ordem) return await localizarClienteDaOrdem(holder.__ordem);
+    const c = (typeof collectClienteFields === 'function') ? collectClienteFields() : null;
+    const tel = c && c.telefone;
+    if(!tel) return null;
+    return await buscarClientePorTelefoneOuCpf(tel, '');
+  },
+  reservarCodigo: async (holder)=>{
+    const loja = (holder && holder.__ordem && holder.__ordem.lojaId) || (document.getElementById('f_loja') || {}).value || '';
+    return await bumpCodigoVia('pedido', loja);
+  },
+});
+const validarOuroAntesDeSalvar = h=> OuroVia.validar(h);
+const registrarOuroDaVia = v=> OuroVia.registrar(v);
+const estornarOuroDaVia = v=> OuroVia.estornar(v);
+const refazerOuroDaVia = v=> OuroVia.refazer(v);
+
 /** Retorna false se a pessoa voltou atrás na escolha do destino (nada foi alterado). */
 async function aplicarCancelamentoOrdem(order, motivo){
   if(await bloqueadoPorCaixaFechado(order.lojaId)) return false;
@@ -1784,6 +1814,7 @@ async function aplicarCancelamentoOrdem(order, motivo){
   }
   await reverterFiadoECreditoOrdem(order);
   if(order.cashback && order.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, order.cashback.clienteId, order.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback deste pedido.'); }
+  await estornarOuroDaVia(order);
   order.status = 'cancelado';
   order.motivoCancelamento = motivo;
   order.canceladoPor = currentUser.nome;
@@ -3076,6 +3107,13 @@ function mountPagamentos(container, holder, getLojaVendaId){
       if(_d) _d.textContent = fmtMoeda(total + _ac);
       if(_s) _s.textContent = fmtMoeda(total + _ac); }
     { let neEl = container.querySelector('#pagNotaEntrada'); if(!neEl){ neEl = document.createElement('div'); neEl.id = 'pagNotaEntrada'; hint.parentNode.insertBefore(neEl, hint.nextSibling); } OuroPag.renderNota(neEl, holder, config, currentUser && currentUser.nome); }
+    /* Peças do ouro (27/11): mesma caixa da Venda. A trava evita o vai-e-volta render → updateHint → render. */
+    if(window.OuroItens && !window.__oiRenderizando){
+      let oiEl = container.querySelector('#pagOuroItens');
+      if(!oiEl){ oiEl = document.createElement('div'); oiEl.id = 'pagOuroItens'; const _ne = container.querySelector('#pagNotaEntrada'); _ne.parentNode.insertBefore(oiEl, _ne); }
+      window.__oiRenderizando = true;
+      try{ OuroItens.render(oiEl, holder, config, updateHint); } finally { window.__oiRenderizando = false; }
+    }
     const exOuro = (saldo < -0.009) ? OuroPag.excesso(holder.pagamentos, total, config) : null;
     if(exOuro && exOuro.ok){
       hint.innerHTML = `<div class="aviso-linha completo">${ico('check')}<span>Ouro passou do total em ${fmtMoeda(exOuro.ex)} — fica de CRÉDITO para o cliente (usa na próxima compra; cliente precisa estar cadastrado).</span></div>`;
@@ -3293,8 +3331,6 @@ function opcoesFormaPagamentoHtml(formaIdAtual, permitirCredito){
   let html = formas.map(pt=>`<option value="${pt.id}" ${formaIdAtual===pt.id?'selected':''}>${escapeHtml(pt.nome)}</option>`).join('');
   const legado = { '__credito':'CRÉDITO CLIENTE', '__fiado':'Saldo a pagar depois', '__sem_custo':'Sem custo' };
   if(permitirCredito && window.__credCli.valor>0 && formaIdAtual!=='__credito') html += `<option value="__credito">CRÉDITO CLIENTE (disp. ${fmtMoeda(window.__credCli.valor)})</option>`;
-  /* 25/11: sem cliente escolhido o crédito não tem de onde sair — mostra a opção travada, para não parecer que sumiu. */
-  if(permitirCredito && !window.__credCli.id && formaIdAtual!=='__credito') html += `<option value="" disabled>CRÉDITO CLIENTE (escolha o cliente primeiro)</option>`;
   html += cbOpcaoHtml(formaIdAtual);
   if(legado[formaIdAtual]) html += `<option value="${formaIdAtual}" selected>${legado[formaIdAtual]}</option>`;
   return html;
@@ -5795,6 +5831,7 @@ function renderNovaOrdem(main){
       return;
     }
     if(tempPagHolder.momentoPagamento!=='na_volta'){ const eNe = OuroPag.erroNota(tempPagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
+    if(tempPagHolder.momentoPagamento!=='na_volta' && !(await validarOuroAntesDeSalvar(tempPagHolder))) return;
     const res = checkSlot(sid, dt, null);
     let encaixe = false;
     let autorizadoPor = null;
@@ -5864,6 +5901,9 @@ function renderNovaOrdem(main){
       creditoUsado: totalCredOS,
       creditoGerado: creditoGeradoOS || 0,
       notaEntrada: (tempPagHolder.momentoPagamento!=='na_volta' && OuroPag.temOuro(tempPagHolder.pagamentos, config)) ? { ...(tempPagHolder.notaEntrada||{}) } : null,
+      ouroItens: (window.OuroItens && tempPagHolder.momentoPagamento!=='na_volta' && OuroPag.temOuro(tempPagHolder.pagamentos, config)) ? OuroItens.paraSalvar(tempPagHolder, config) : null,
+      ouroAjusteAutorizado: tempPagHolder.ouroAjusteAutorizado || null,
+      ouroTermo: tempPagHolder.termo || null,
       fiadoDebitoId: novoFiadoDebitoIdOS,
       itens: itensNova,
       criadoEm: Date.now()
@@ -5874,7 +5914,7 @@ function renderNovaOrdem(main){
     if(orcamentoOrigem){ novaOrdem.orcamentoOrigemId = orcamentoOrigem.id; novaOrdem.orcamentoId = orcamentoOrigem.id; }
     // Código de barras da via, gerado só agora que a O.S. realmente vai ser lançada
     // (rascunho não gera código — só quando vira uma O.S. de verdade).
-    novaOrdem.codigoVia = await bumpCodigoVia('pedido', novaOrdem.lojaId||'');
+    novaOrdem.codigoVia = tempPagHolder.codigoViaReservado || await bumpCodigoVia('pedido', novaOrdem.lojaId||'');
     addHistorico(novaOrdem, 'Pedido criado' + (novaOrdem.codigoVia?(' — via '+novaOrdem.codigoVia):''));
     // Cashback: confere o uso (saldo do dia e limite de 50%) antes de lançar
     const cbValO = await cashbackProcessar(novaOrdem, 'Pedido', (novaOrdem.valorAVista ?? novaOrdem.valorTotal), 'validar', null, window.__credCli.id || (window.__cbCli && window.__cbCli.id));
@@ -5937,6 +5977,7 @@ function renderNovaOrdem(main){
       if(!okReq) showToast('Pedido lançado, mas não consegui avisar a Oficina. Avise por outro meio.');
     }
     await upsertClienteFromOrder(cli);
+    await registrarOuroDaVia(novaOrdem);
     if(novaOrdem.cashback){ const _cb = await cashbackProcessar(novaOrdem, 'Pedido', novaOrdem.valorTotal, 'gravar', null, novaOrdem.cashback.clienteId); if(!_cb.ok) showToast('Pedido lançado, mas o cashback não foi gravado: '+_cb.erro); }
     if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'os', id:novaOrdem.id, senha:__gatewaySenha, usuario:(currentUser&&currentUser.nome)||'' }); if(_rt && _rt.error) showToast('Pedido lançado, mas a retirada por terceiros não foi liberada: '+_rt.error); }
     let avisoEnviado = false;   // 11/11: se a mensagem automática saiu (ou ficou na fila do WhatsApp), não pergunta de novo
@@ -6119,6 +6160,10 @@ function openEditModalCompleto(order, opts){
     valorTotal: (order.valorAVista != null ? order.valorAVista : order.valorTotal), pagamentos: (order.pagamentos||[]).map(p=>{ const q = {...p, data: p.data || dataLocalDeMs(order.criadoEm)}; if(q.noTotal){ delete q.noTotal; q.valorBase = CondPag.r2((Number(q.valor)||0) / CondPag.FATOR); } return q; }),
     momentoPagamento: order.momentoPagamento||'', emissaoNota: order.emissaoNota||'', numeroNota: order.numeroNota||'',
     notaEntrada: order.notaEntrada ? { ...order.notaEntrada } : undefined,
+    ouroItens: Array.isArray(order.ouroItens) ? order.ouroItens.map(i=>({ ...i, manual:true })) : [],
+    termo: order.ouroTermo ? { ...order.ouroTermo } : (order.codigoVia ? { viaCodigo: order.codigoVia } : {}),
+    codigoViaReservado: order.codigoVia || '',
+    __ordem: order,
     permitirPagarDepois: true,   // 04/11: incluir pagamento numa via "Pagar depois"
     lojaSaidaId: order.lojaSaidaId||'', lojaPagamentoId: order.lojaPagamentoId||'',
     lojaNotaId: order.lojaNotaId||'', lojaBaixaEstoqueId: order.lojaBaixaEstoqueId||'',
@@ -6402,6 +6447,7 @@ function openEditModalCompleto(order, opts){
     if(editPagHolder && editPagHolder.momentoPagamento!=='na_volta' && status!=='rascunho' && status!=='cancelado'){
       const _eNe = OuroPag.erroNota(editPagHolder, config);
       if(_eNe){ Destaque.marcar('#neEmitir', _eNe); return; }
+      if(!(await validarOuroAntesDeSalvar(editPagHolder))) return;
       _exOuroEd = OuroPag.excesso(editPagHolder.pagamentos, Number(editPagHolder.valorTotal)||0, config);
     }
     const _credNovoEd = (_exOuroEd.ex > 0.009 && _exOuroEd.ok) ? _exOuroEd.ex : 0;
@@ -6434,6 +6480,9 @@ function openEditModalCompleto(order, opts){
       valorTotal: editPagHolder ? editPagHolder.valorTotal : order.valorTotal,
       pagamentos: carimbarPagamentosOS(editPagHolder ? editPagHolder.pagamentos : order.pagamentos),
       creditoGerado: editPagHolder ? _credNovoEd : (order.creditoGerado||0),
+      ouroItens: (window.OuroItens && editPagHolder && editPagHolder.momentoPagamento!=='na_volta' && OuroPag.temOuro(editPagHolder.pagamentos, config)) ? OuroItens.paraSalvar(editPagHolder, config) : (editPagHolder ? null : (order.ouroItens||null)),
+      ouroAjusteAutorizado: (editPagHolder && editPagHolder.ouroAjusteAutorizado) || order.ouroAjusteAutorizado || null,
+      ouroTermo: (editPagHolder && editPagHolder.termo) || order.ouroTermo || null,
       notaEntrada: (editPagHolder && editPagHolder.momentoPagamento!=='na_volta' && OuroPag.temOuro(editPagHolder.pagamentos, config)) ? { ...(editPagHolder.notaEntrada||{}) } : null,
       momentoPagamento: editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento,
       emissaoNota: (editPagHolder ? editPagHolder.momentoPagamento : order.momentoPagamento)==='na_volta' && !((editPagHolder ? editPagHolder.pagamentos : order.pagamentos)||[]).some(p=>Number(p.valor)>0) ? 'nao' : (editPagHolder ? editPagHolder.emissaoNota : order.emissaoNota),
@@ -6474,6 +6523,7 @@ function openEditModalCompleto(order, opts){
       planoEdit = pl;
       sincronizarDepois = true;
     }
+    await refazerOuroDaVia(order);   // peças mudaram: tira o ouro antigo do estoque e lança o novo
     await saveOrders();
     await upsertClienteFromOrder({ cliente, telefone, email, cpf, dataNascimento, cep, endereco, numero, complemento, bairro, cidade, estado });
     if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }

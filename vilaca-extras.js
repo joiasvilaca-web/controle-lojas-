@@ -135,6 +135,7 @@
       : 'As peças do ouro passam ' + oiMoeda(-dif) + ' do valor pago em ouro. Ajuste as peças ou o pagamento.';
     var fora = foraDoLimite(holder, config);
     if(fora.length && !holder.ouroAjusteAutorizado) return 'Há peça com ajuste acima de ' + ((window.OuroCore && window.OuroCore.LIMITE_AJUSTE_PCT) || 5) + '% do valor calculado. Precisa de autorização de gerente.';
+    if(window.OuroTermo){ var et = window.OuroTermo.erro(holder, config); if(et) return et; }
     return null;
   }
   function oiSel(valor, lista, idKey, nomeKey){
@@ -185,7 +186,9 @@
       + (base == null ? ' <b style="color:#C62828;">Falta o Valor Balcão do dia (18k) em Cadastro › Fator › Compra de metal.</b>' : '') + '</div>'
       + '<div class="oi-linhas">' + linhas + '</div>'
       + '<button type="button" class="btn btn-ghost btn-sm" id="oiAdd">+ Adicionar peça</button>'
-      + '<div class="oi-cont ' + cls + '" id="oiCont">' + txt + '</div></div>';
+      + '<div class="oi-cont ' + cls + '" id="oiCont">' + txt + '</div>'
+      + caixaTermo(holder, Math.abs(dif) <= OI_TOL && soma > 0)
+      + '</div>';
     function mexeu(){ renderItens(el, holder, config, onChange); if(typeof onChange === 'function') onChange(); }
     el.querySelectorAll('[data-oi-teor]').forEach(function(sel){
       sel.addEventListener('change', function(){ var i = Number(sel.dataset.oiTeor); itens[i].teor = sel.value; recalcLinha(itens[i], config); mexeu(); });
@@ -203,6 +206,47 @@
     });
     var add = el.querySelector('#oiAdd');
     if(add) add.addEventListener('click', function(){ itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' }); mexeu(); });
+    ligarTermo(el, holder, config, mexeu);
+  }
+
+  /* ---- Termo de compra de ouro: disparar, digitar o código e confirmar ---- */
+  function caixaTermo(holder, pronto){
+    var t = holder.termo || (holder.termo = {});
+    var st = t.status || '';
+    var linha = '';
+    if(st === 'confirmado') linha = '<span class="oi-ok" style="color:#1f6b3d;font-weight:700;">Termo confirmado' + (t.em ? ' às ' + esc(t.em) : '') + '. PDF guardado no Drive.</span>';
+    else if(t.dispensado) linha = '<span class="oi-aj">Salvo sem termo, autorizado por ' + esc(t.dispensado.por || 'gerente') + '.</span>';
+    else if(st === 'enviado') linha = '<span class="oi-aj">Termo enviado' + (t.em ? ' às ' + esc(t.em) : '') + '. Aguardando o aceite do cliente — peça o código a ele.</span>';
+    else linha = pronto ? '<span class="oi-aj">Valores conferem. Dispare o termo para o cliente.</span>' : '<span class="oi-ok">Zere o contador acima para liberar o termo.</span>';
+    var trava = (st === 'confirmado' || t.dispensado);
+    return '<div class="oi-termo"><b>Termo de compra de ouro</b>'
+      + '<div class="oi-aviso" style="margin:4px 0 8px;">' + linha + '</div>'
+      + (trava ? '' :
+        '<div class="oi-termo-lin">'
+        + '<button type="button" class="btn btn-accent btn-sm" id="oiDisparar"' + (pronto ? '' : ' disabled') + '>' + (st === 'enviado' ? 'Disparar de novo' : 'Disparar termo') + '</button>'
+        + '<input id="oiCodigo" inputmode="numeric" maxlength="6" placeholder="Código" ' + (st === 'enviado' ? '' : 'disabled') + '>'
+        + '<button type="button" class="btn btn-ghost btn-sm" id="oiConfirmar"' + (st === 'enviado' ? '' : ' disabled') + '>Confirmar</button>'
+        + '</div>')
+      + '<div class="oi-aviso" id="oiTermoMsg" style="margin-top:8px;"></div></div>';
+  }
+  function ligarTermo(el, holder, config, redesenhar){
+    var bD = el.querySelector('#oiDisparar'), bC = el.querySelector('#oiConfirmar'), inp = el.querySelector('#oiCodigo');
+    var msg = el.querySelector('#oiTermoMsg');
+    var diz = function(txt, ruim){ if(msg) msg.innerHTML = '<span class="' + (ruim ? 'oi-ruim' : 'oi-aj') + '">' + esc(txt) + '</span>'; };
+    if(bD) bD.addEventListener('click', async function(){
+      if(typeof window.__ouroDispararTermo !== 'function'){ diz('Recarregue a página (Ctrl+F5) para disparar o termo.', true); return; }
+      bD.disabled = true; diz('Enviando o termo…');
+      try{ await window.__ouroDispararTermo(holder, itensParaSalvar(holder, config), diz); }
+      finally { bD.disabled = false; redesenhar(); }
+    });
+    if(bC) bC.addEventListener('click', async function(){
+      var cod = String(inp.value || '').replace(/\D/g, '');
+      if(cod.length !== 6){ diz('O código tem 6 números.', true); return; }
+      if(typeof window.__ouroConferirTermo !== 'function'){ diz('Recarregue a página (Ctrl+F5) para conferir o código.', true); return; }
+      bC.disabled = true; diz('Conferindo…');
+      try{ await window.__ouroConferirTermo(holder, cod, diz); }
+      finally { bC.disabled = false; redesenhar(); }
+    });
   }
   /** Peso ou teor mudou: o valor volta a ser o da tabela (um ajuste manual anterior valia para o peso antigo). */
   function recalcLinha(item, config){
@@ -231,7 +275,10 @@
     + '.oi-box .oi-aviso{grid-column:1/3;font-size:12px;}'
     + '.oi-box .oi-ok{color:var(--ink-soft,#667);} .oi-box .oi-aj{color:#8a5a00;} .oi-box .oi-ruim{color:#C62828;font-weight:600;}'
     + '.oi-box .oi-cont{margin-top:10px;padding:10px 12px;border-radius:10px;text-align:center;font-weight:700;}'
-    + '.oi-box .oi-cont-ok{background:#e3f3e8;color:#1f6b3d;} .oi-box .oi-cont-falta{background:#fff1d6;color:#8a5a00;} .oi-box .oi-cont-passa{background:#fde4e4;color:#a33;}';
+    + '.oi-box .oi-cont-ok{background:#e3f3e8;color:#1f6b3d;} .oi-box .oi-cont-falta{background:#fff1d6;color:#8a5a00;} .oi-box .oi-cont-passa{background:#fde4e4;color:#a33;}'
+    + '.oi-box .oi-termo{margin-top:12px;padding-top:10px;border-top:1px solid var(--line,#ddd);}'
+    + '.oi-box .oi-termo-lin{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}'
+    + '.oi-box .oi-termo-lin input{width:120px;padding:9px 10px;border:1px solid var(--line,#ccc);border-radius:8px;font:inherit;letter-spacing:.18em;background:var(--surface,#fff);color:var(--ink,#111);}';
   try{ var oiSt = document.createElement('style'); oiSt.textContent = oiCss; document.head.appendChild(oiSt); }catch(e){}
 
   window.Destaque = Destaque;
