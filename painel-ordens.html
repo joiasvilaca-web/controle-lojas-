@@ -1006,9 +1006,12 @@ function ehOficina(){ return !!currentUser && currentUser.nivel==='oficina'; }
 function dataExibicaoVia(iso){ return ehOficina() ? diaMenosUm(iso) : iso; }
 /** Via que envolve cravação — destaque na via da fábrica (serviço delicado, pede atenção). */
 function viaEnvolveCravacao(o){
+  /* 27/11 (Felipe): só vale o tipo escolhido no AGENDAMENTO — Fabricação, Aliança ou Serviço COM cravação.
+   * Descrição e itens não contam mais. */
   if(!o) return false;
-  const txt = [o.serviceTypeName, o.descricao, ...((o.itens||[]).map(it=>it&&it.produto))].filter(Boolean).join(' ');
-  return /CRAVA/.test(semAcento(txt));
+  let nome = o.serviceTypeName;
+  if(!nome && o.serviceTypeId){ const st = (config.serviceTypes||[]).find(s=>s.id===o.serviceTypeId); nome = st ? st.nome : ''; }
+  return /COM CRAVACAO/.test(semAcento(nome||''));
 }
 /* 23/11: via fora do prazo/vaga lançada com pendência NÃO anda na produção até a Oficina liberar. */
 function viaTravadaPorAutorizacao(o){ return !!(o && o.autorizacao && o.autorizacao.status==='pendente'); }
@@ -3925,8 +3928,45 @@ function nomeLojaOrder(o){
 }
 /** 07/11: tipos de serviço em ORDEM ALFABÉTICA nas listas/seletores/legenda da agenda (a ordem gravada e as cores não mudam). */
 function tiposServicoOrdenados(){ return (config.serviceTypes||[]).slice().sort((a,b)=> String(a.nome||'').localeCompare(String(b.nome||''), 'pt-BR', { sensitivity:'base', numeric:true })); }
-function servicoOptionsHtml(selected){
-  return tiposServicoOrdenados().map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
+/* 27/11 (Felipe): o tipo de agendamento depende do que foi lançado nos itens.
+ *  Produto → Aliança/Fabricação com ou sem cravação · Serviço → Serviço com/sem cravação e Gravação copo/joia ·
+ *  Serviço relógio (assistência técnica) → Relógio assistência autorizada · Serviço relógio (Juiz de Fora) → Relógio assistência Juiz de Fora. */
+function classeTipoAgenda(nome){
+  const n = semAcento(nome);
+  if(n.includes('RELOGIO')) return n.includes('JUIZ DE FORA') ? 'rel_jf' : 'rel_aut';
+  if(n.startsWith('GRAVACAO') || n.startsWith('SERVIC')) return 'servico';
+  if(n.startsWith('ALIANCA') || n.startsWith('FABRICA')) return 'produto';
+  return null;   // tipo criado depois pelo cadastro: continua aparecendo sempre
+}
+function classeItemAgenda(it){
+  const n = semAcento(it && it.produto);
+  if(it && it.tipoItem==='servico' && n.includes('RELOGIO')) return n.includes('JUIZ DE FORA') ? 'rel_jf' : 'rel_aut';
+  return (it && it.tipoItem==='servico') ? 'servico' : 'produto';
+}
+/** Ids dos tipos de agendamento que valem para os itens; null = sem itens ainda (mostra todos). */
+function idsAgendaPermitidos(itens){
+  const com = (itens||[]).filter(it=> it && it._modo!=='editar' && itemOsPreenchido(it) && String(it.produto||'').trim());
+  if(!com.length) return null;
+  const classes = new Set(com.map(classeItemAgenda));
+  const rel = ['rel_jf','rel_aut'].filter(c=>classes.has(c));
+  const vale = rel.length ? new Set(rel) : classes;
+  return (config.serviceTypes||[]).filter(s=>{ const c = classeTipoAgenda(s.nome); return c===null || vale.has(c); }).map(s=>s.id);
+}
+/** Refaz as opções do seletor. `manter` = tipo que nunca some da lista (o da via em edição). Devolve true se o valor foi trocado. */
+function atualizarOpcoesServico(sel, itens, manter, autoUnico){
+  if(!sel) return false;
+  const ids = idsAgendaPermitidos(itens);
+  const atual = sel.value;
+  const lista = ids ? tiposServicoOrdenados().filter(s=> ids.includes(s.id) || s.id===manter) : tiposServicoOrdenados();
+  const novo = (atual && lista.some(s=>s.id===atual)) ? atual : '';
+  sel.innerHTML = '<option value="">Selecione</option>' + servicoOptionsHtml(novo, lista.map(s=>s.id));
+  let final = novo;
+  if(!final && autoUnico && lista.length===1){ final = lista[0].id; }
+  sel.value = final;
+  return final !== atual;
+}
+function servicoOptionsHtml(selected, ids){
+  return tiposServicoOrdenados().filter(s=>!ids || ids.includes(s.id)).map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${escapeHtml(s.nome)} — máx ${s.maxPorDia}/dia, prazo mín. ${s.prazoMinimoDias}d</option>`).join('');
 }
 /** Cargos de um funcionário do cadastro central, sempre como array (aceita registros antigos com 'area'). */
 function cargosDoFuncionario(f){
@@ -4083,8 +4123,12 @@ function printOrder(order, tipoVia){
   linhas.push(`<div class="destaque" style="text-align:center;">Loja ${escapeHtml(nomeLojaOrder(order))}</div>`);
   if(fabrica){
     // 24/11 (Felipe): data de entrega e aviso de pedras unificados numa única tarja preta com texto branco, texto simplificado.
-    const textoFaixa = viaEnvolveCravacao(order) ? `ORDEM COM PEDRAS - ENTREGA ${fmtDate(dataEntrega)}` : `ENTREGA ${fmtDate(dataEntrega)}`;
-    linhas.push(`<div style="text-align:center;margin:4px 0;padding:7px 6px;background:#000;color:#fff;font-weight:800;font-size:1.1em;letter-spacing:.03em;">${textoFaixa}</div>`);
+    // 27/11 (Felipe): a tarja preta só sai nos tipos COM cravação; nos outros fica só a data (sempre 1 dia antes da combinada com o cliente).
+    if(viaEnvolveCravacao(order)){
+      linhas.push(`<div style="text-align:center;margin:4px 0;padding:7px 6px;background:#000;color:#fff;font-weight:800;font-size:1.1em;letter-spacing:.03em;">ORDEM COM PEDRAS - ENTREGA ${fmtDate(dataEntrega)}</div>`);
+    } else {
+      linhas.push(`<div class="destaque" style="text-align:center;">ENTREGA ${fmtDate(dataEntrega)}</div>`);
+    }
   } else {
     linhas.push(`<div class="destaque" style="text-align:center;">Entrega prevista: ${fmtDate(dataEntrega)}</div>`);
   }
@@ -5650,7 +5694,7 @@ function renderNovaOrdem(main){
   // livre (respeitando prazo mínimo e quantidade máxima cadastrados em Tipos de
   // Ordem). A vendedora pode trocar a data manualmente depois se precisar.
   let dataAuto = true;
-  window.__agendaItensMudou = ()=>{ try{ aoTrocarServico(); }catch(e){ console.error(e); } };
+  window.__agendaItensMudou = ()=>{ try{ atualizarOpcoesServico(servicoSel, tempItensHolder.itens, '', true); aoTrocarServico(); }catch(e){ console.error(e); } };
   function aoTrocarServico(){
     const sid = servicoSel.value;
     if(sid && (!dataInp.value || dataAuto)){
@@ -5679,6 +5723,7 @@ function renderNovaOrdem(main){
   // Roda uma vez já na montagem: cobre o caso raro do navegador restaurar
   // um valor no <select> sem disparar 'change' (acontece ao recriar o
   // formulário via innerHTML logo após um "Limpar", por exemplo).
+  try{ atualizarOpcoesServico(servicoSel, tempItensHolder.itens, '', true); }catch(e){ console.error(e); }
   aoTrocarServico();
 
   document.getElementById('btnLimparOrdem').addEventListener('click', ()=>{ novaOrdemPrefill = null; renderView(); });
@@ -6152,7 +6197,7 @@ function openEditModalCompleto(order, opts){
   window.__itensHolder = editItensHolder;
   let itensApiEdit = null;
   if(!somenteLeitura){
-    try { itensApiEdit = mountItens(document.getElementById('itensContainerEdit'), editItensHolder, ()=>order.lojaId||'', { excluirOrigemId: order.id }); } catch(e){ console.error('mountItens edit:', e); }
+    try { itensApiEdit = mountItens(document.getElementById('itensContainerEdit'), editItensHolder, ()=>order.lojaId||'', { excluirOrigemId: order.id, onChange: ()=>{ try{ const _s=document.getElementById('e_servico'); if(_s && atualizarOpcoesServico(_s, editItensHolder.itens, order.serviceTypeId, false)) _s.dispatchEvent(new Event('change')); }catch(e){} } }); } catch(e){ console.error('mountItens edit:', e); }
   }
   // ── PAGAMENTO COMPLETO (com desconto/acréscimo e nota fiscal) ──
   const editPagHolder = {
@@ -6246,6 +6291,7 @@ function openEditModalCompleto(order, opts){
   }
 
   const servicoSel = document.getElementById('e_servico');
+  try{ atualizarOpcoesServico(servicoSel, editItensHolder.itens, order.serviceTypeId, false); }catch(e){ console.error(e); }
   const dataInp = document.getElementById('e_data');
   const banner = document.getElementById('editSlotBanner');
   const codeArea = document.getElementById('editCodeArea');
