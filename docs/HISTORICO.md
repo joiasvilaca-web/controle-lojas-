@@ -667,3 +667,6 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 27/11/2026 — Peças do ouro aparecem ao escolher a forma de ouro
 - O painel "Peças do ouro" abria só depois de a linha de pagamento em ouro ter valor e estar confirmada (✓). Agora abre assim que a forma de ouro (ex.: OURO - TROCA) é escolhida na linha, na Venda e no Pedido.
 - Arquivo: `vilaca-extras.js` (`renderItens`). O contador "faltam R$ …" continua contando só as linhas confirmadas.
+
+## 27/11/2026 — Peças do ouro no Pedido e no Serviço
+- No Pedido (e no Serviço, que usa a mesma tela) a forma de pagamento fica em `config.paymentTypes` e o Fator não vem na config dessa tela, então o painel "Peças do ouro" não reconhecia OURO - TROCA nem o Valor Balcão do dia. `vilaca-extras.js` passa a aceitar `paymentTypes` e `ouro-core.js` lê o Fator do bruto quando a config não o traz. Isso também corrige a nota de entrada e o crédito por excesso de ouro no Pedido.
