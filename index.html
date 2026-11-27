@@ -6581,7 +6581,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
             <input type="text" id="pe_fator" placeholder="Livre" value="${d.fator!=null?escapeHtml(String(d.fator)):''}">
           </div>
           <div class="field"><label>Referência de compra</label>
-            <select id="pe_referenciaCompra">${CAMPOS_COMPRA_METAL.map(c=>`<option value="${c.id}" ${d.referenciaCompra===c.id?'selected':''}>${escapeHtml(c.label)}</option>`).join('')}</select>
+            <select id="pe_referenciaCompra">${listaReferenciasCompra().map(c=>`<option value="${c.id}" ${d.referenciaCompra===c.id?'selected':''}>${escapeHtml(c.label)}</option>`).join('')}</select>
           </div>
         </div>
         <p class="cad-dica" style="margin:-6px 0 10px;">Padrão: DTVM do metal da categoria/subcategoria (troca sozinha se o metal mudar). Para ouro, dá para escolher Cooperativa ou Compra Vilaça.</p>
@@ -7404,9 +7404,32 @@ async function buscarCotacaoDolarDia(){ return buscarCotacaoMercado('dolar'); }
 const CAMPOS_COMPRA_METAL = [
   { id:'ouroDtvm',    label:'Valor do Ouro 1000 DTVM',          ativo:'ouro',  teor:1,    rotuloAtivo:'Ouro 1000' },
   { id:'ouroGarimpo', label:'Valor do Ouro 1000 Cooperativa',   ativo:'ouro',  teor:1,    rotuloAtivo:'Ouro 1000' },
-  { id:'ouroBalcao',  label:'Valor do Ouro 750 Compra Vilaça',  ativo:'ouro',  teor:1,    rotuloAtivo:'Ouro 1000' },  // parte da cotação do ouro 1000; a correção de teor é feita no deságio
+  { id:'ouroBalcao',  label:'Valor sugerido Balcão (750) — só referência',  ativo:'ouro',  teor:1,    rotuloAtivo:'Ouro 1000' },  // parte da cotação do ouro 1000; a correção de teor é feita no deságio
   { id:'prataDtvm',   label:'Valor Prata 1000 DTVM',            ativo:'prata', teor:1,    rotuloAtivo:'Prata 1000' },
 ];
+/** Ouro Balcão do dia: 18k/750 digitado à mão (Cadastro → Fator → Compra de metal). Os outros teores partem dele. */
+const TEORES_BALCAO = [
+  { id:'ouroBalcao16', k:16, mil:666, label:'Valor Balcão do dia — 16k' },
+  { id:'ouroBalcao14', k:14, mil:585, label:'Valor Balcão do dia — 14k' },
+  { id:'ouroBalcao10', k:10, mil:417, label:'Valor Balcão do dia — 10k' },
+];
+function valorBalcaoDia(){
+  const v = Number(((config.fator||{}).compraMetal||{}).ouroBalcaoDia);
+  return v>0 ? v : null;
+}
+/** Regra A: sem centavos; arredonda ao real e o último dígito vira zero (0 a 5 desce, 6 a 9 sobe para a dezena de cima). */
+function arredondarBalcao(v){
+  const n = Math.round(Number(v)); if(isNaN(n)) return null;
+  const u = n % 10;
+  return u<=5 ? n-u : n-u+10;
+}
+/** Opções de "Referência de compra" do produto (o Balcão aponta para o valor do dia digitado). */
+function listaReferenciasCompra(){
+  const base = CAMPOS_COMPRA_METAL.map(c=> c.id==='ouroBalcao' ? { id:c.id, label:'Valor Balcão do dia — 18k (750)' } : { id:c.id, label:c.label });
+  const i = base.findIndex(c=>c.id==='ouroBalcao');
+  base.splice(i+1, 0, ...TEORES_BALCAO.map(t=>({id:t.id,label:t.label})));
+  return base;
+}
 /** Cotação oficial do dia (R$/g) × teor do campo. Sem arredondar. null se a cotação ainda não foi buscada. */
 function refCompraMetal(campo){
   const q = campo && (campo.ativo==='prata' ? (config.fator||{}).prata : (config.fator||{}).ouro);
@@ -7416,6 +7439,14 @@ function refCompraMetal(campo){
 /** Valor de compra efetivo de um campo: cotação oficial × teor × (1 − deságio). Sem deságio salvo (ou sem cotação),
  *  usa o valor antigo digitado, se existir. Quem precisa do valor de compra do metal deve chamar esta função. */
 function valorCompraMetal(id){
+  garantirConfigFator();
+  // Balcão: o valor que a diretoria realmente paga é o digitado à mão (18k/750). Sem ele, cai no sugerido (cotação × deságio).
+  if(id==='ouroBalcao'){ const m = valorBalcaoDia(); return m!=null ? m : valorCompraMetalCalc('ouroBalcao'); }
+  const t = TEORES_BALCAO.find(x=>x.id===id);
+  if(t){ const base = valorCompraMetal('ouroBalcao'); return base!=null ? arredondarBalcao(base*t.mil/750) : null; }
+  return valorCompraMetalCalc(id);
+}
+function valorCompraMetalCalc(id){
   garantirConfigFator();
   const campo = CAMPOS_COMPRA_METAL.find(c=>c.id===id);
   const cm = config.fator.compraMetal || {};
@@ -7519,7 +7550,16 @@ async function renderFatorTab(main){
 
   // ---- Compra Metal: deságio sobre a cotação oficial do dia (ouro → "Ouro do dia", prata → "Prata do dia") ----
   const compraWrap = document.getElementById('compraMetalFields');
-  compraWrap.innerHTML = CAMPOS_COMPRA_METAL.map(c=>{
+  const _cmUI = config.fator.compraMetal;
+  const blocoBalcao = `
+    <div class="cad-item-bloco" style="border:1.5px solid var(--accent);">
+      <div class="cad-item-titulo">Valor Balcão do dia — 18k (750) · o que você realmente paga</div>
+      <div class="field" style="margin-bottom:8px;"><label>Valor (R$/g) — digite à mão</label><input type="text" inputmode="decimal" id="cmBalcaoDia" placeholder="0,00" value="${_cmUI.ouroBalcaoDia>0?String(_cmUI.ouroBalcaoDia).replace('.',','):''}"></div>
+      <div class="muted" id="cmBalcaoMsg" style="font-size:12px;margin-bottom:10px;"></div>
+      <div class="grid-2 pe-calc">${TEORES_BALCAO.map(t=>`<div class="field" style="margin-bottom:0;"><label>${t.k}k (R$/g) — automático</label><input type="text" id="cmv_${t.id}" disabled></div>`).join('')}</div>
+      <div class="muted" style="font-size:12px;margin-top:6px;">Os outros teores seguem o 18k (16k = 666/750, 14k = 585/750, 10k = 417/750), sem centavos e com final zero. Este valor alimenta o custo dos produtos e o termo de compra de ouro.</div>
+    </div>`;
+  compraWrap.innerHTML = blocoBalcao + CAMPOS_COMPRA_METAL.map(c=>{
     const des = config.fator.compraMetal[c.id+'Desagio'];
     return `
     <div class="cad-item-bloco">
@@ -7534,7 +7574,19 @@ async function renderFatorTab(main){
   function fmtPct(n){ return (Math.round(n*100)/100).toString().replace('.',','); }
   function fmtBR2(n){ return cadBrl(n); }
   /** Recalcula, ao vivo, a referência do dia e o valor aplicado de cada campo. */
+  function lerBalcaoDiaInput(){ const t = (document.getElementById('cmBalcaoDia')||{value:''}).value.trim().replace(/\./g,'').replace(',','.'); const n = t===''?null:parseFloat(t); return (n!=null && !isNaN(n) && n>0) ? n : null; }
+  function atualizarBalcaoDia(){
+    const inp = document.getElementById('cmBalcaoDia'); if(!inp) return;
+    const v = lerBalcaoDiaInput();
+    TEORES_BALCAO.forEach(t=>{ const el = document.getElementById('cmv_'+t.id); if(el) el.value = v!=null ? ('R$ '+arredondarBalcao(v*t.mil/750).toLocaleString('pt-BR')+',00') : ''; });
+    const msg = document.getElementById('cmBalcaoMsg'); const cm = config.fator.compraMetal; const partes = [];
+    if(cm.ouroBalcaoDiaData){ const hoje = hojeSaoPaulo(); const dt = cm.ouroBalcaoDiaData.split('-').reverse().join('/'); partes.push(cm.ouroBalcaoDiaData===hoje ? 'Atualizado hoje' : `<span style="color:var(--danger);">Valor de ${dt} — não é de hoje</span>`); }
+    else partes.push('<span style="color:var(--danger);">Ainda não digitado — enquanto isso vale o valor sugerido</span>');
+    const sug = valorCompraMetalCalc('ouroBalcao'); if(v!=null && sug>0){ const dif=(v/sug-1)*100; partes.push(`Sugerido: ${cadBrl(sug)} (${dif>=0?'+':''}${(Math.round(dif*10)/10).toString().replace('.',',')}% em relação a ele)`); }
+    msg.innerHTML = partes.join(' · ');
+  }
   function atualizarCompraMetalRefs(){
+    atualizarBalcaoDia();
     if(!document.getElementById('compraMetalFields')) return;
     CAMPOS_COMPRA_METAL.forEach(c=>{
       const inpDes = document.getElementById('cmd_'+c.id), inpApl = document.getElementById('cmv_'+c.id), msg = document.getElementById('cmr_'+c.id);
@@ -7562,6 +7614,7 @@ async function renderFatorTab(main){
   CAMPOS_COMPRA_METAL.forEach(c=>{
     document.getElementById('cmd_'+c.id).addEventListener('input', atualizarCompraMetalRefs);
   });
+  document.getElementById('cmBalcaoDia').addEventListener('input', atualizarBalcaoDia);
   atualizarCompraMetalRefs();
   document.getElementById('btnSalvarCompraMetal').addEventListener('click', async ()=>{
     const novos = {};
@@ -7572,6 +7625,15 @@ async function renderFatorTab(main){
       novos[c.id+'Desagio'] = dn;
       if(dn!=null) novos[c.id] = null;   // com deságio, o valor antigo digitado sai de cena
     }
+    // Valor Balcão do dia (digitado): grava com data e histórico quando mudar
+    const bd = lerBalcaoDiaInput(); const antes = valorBalcaoDia();
+    if((document.getElementById('cmBalcaoDia').value.trim()!=='') && bd==null){ showToast('Valor Balcão do dia inválido.'); return; }
+    if(bd!=null && bd!==antes){
+      novos.ouroBalcaoDia = bd; novos.ouroBalcaoDiaData = hojeSaoPaulo();
+      const h = Array.isArray(config.fator.compraMetal.ouroBalcaoHist) ? config.fator.compraMetal.ouroBalcaoHist.slice(-199) : [];
+      h.push({ valor:bd, anterior:antes, em:new Date().toISOString(), por:(currentUser && (currentUser.nome||currentUser.login||currentUser.id)) || '' });
+      novos.ouroBalcaoHist = h;
+    } else if(bd!=null && !config.fator.compraMetal.ouroBalcaoDiaData){ novos.ouroBalcaoDiaData = hojeSaoPaulo(); }
     Object.assign(config.fator.compraMetal, novos);
     const ok = await configSave();
     if(ok){ showToast('Compra de metal salva.'); atualizarCompraMetalRefs(); }
