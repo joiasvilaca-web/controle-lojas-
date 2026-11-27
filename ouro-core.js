@@ -257,9 +257,68 @@
     if(!viaCodigo || !numero) return null;
     return await apiTermo({ op: "nota", viaId: viaCodigo, numero: numero });
   }
+  /* ===== VER O TERMO (27/11): log de assinatura + PDF + foto do aceite, a partir da via ===== */
+  function escV(x){ return String(x == null ? "" : x).replace(/[&<>"']/g, function(c){ return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]; }); }
+  async function apiVer(body){
+    try{
+      var r = await fetch((window.SUPABASE_URL || "") + "/functions/v1/termo-ouro-ver", { method:"POST", headers:{ "Content-Type":"application/json", apikey: window.SUPABASE_ANON_KEY, Authorization:"Bearer " + window.SUPABASE_ANON_KEY },
+        body: JSON.stringify(Object.assign({ senha: dep.senha() }, body)) });
+      return await r.json();
+    }catch(e){ return { error:"Falha de conexão" }; }
+  }
+  function hora(iso){ try{ return new Date(iso).toLocaleString("pt-BR", { timeZone:"America/Sao_Paulo", dateStyle:"short", timeStyle:"medium" }); }catch(e){ return ""; } }
+  async function abrirArquivo(viaId, tipo, btn){
+    var rot = btn.textContent; btn.disabled = true; btn.textContent = "Abrindo…";
+    var w = window.open("", "_blank");   // abre já (clique do usuário) e preenche depois
+    var r = await apiVer({ op:"arquivo", viaId: viaId, tipo: tipo });
+    btn.disabled = false; btn.textContent = rot;
+    if(!r || r.error || !r.base64){ if(w) w.close(); alert((r && r.error) || "Não consegui abrir o arquivo."); return; }
+    var bin = atob(r.base64), u = new Uint8Array(bin.length); for(var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    var url = URL.createObjectURL(new Blob([u], { type: r.mime || (tipo === "foto" ? "image/jpeg" : "application/pdf") }));
+    if(w) w.location.href = url; else window.open(url, "_blank");
+  }
+  async function verTermo(viaId){
+    viaId = String(viaId || "").trim();
+    if(!viaId){ alert("Esta via ainda não tem termo de ouro."); return; }
+    var ov = document.createElement("div");
+    ov.style.cssText = "position:fixed;inset:0;z-index:99998;background:rgba(20,10,14,.55);display:flex;align-items:center;justify-content:center;padding:14px;";
+    ov.innerHTML = '<div style="position:relative;background:var(--surface,#fff);color:var(--ink,#222);border-radius:16px;padding:20px 18px;width:100%;max-width:520px;max-height:90vh;overflow:auto;box-shadow:0 20px 50px rgba(0,0,0,.35);">'
+      + '<button type="button" data-x aria-label="Fechar" style="position:absolute;top:6px;right:10px;border:0;background:transparent;font-size:26px;cursor:pointer;color:var(--muted,#666);">&times;</button>'
+      + '<h3 style="margin:0 28px 10px 0;">Termo de compra de ouro</h3><div data-corpo class="muted">Carregando…</div></div>';
+    document.body.appendChild(ov);
+    var fechar = function(){ ov.remove(); };
+    ov.addEventListener("click", function(e){ if(e.target === ov) fechar(); });
+    ov.querySelector("[data-x]").addEventListener("click", fechar);
+    var corpo = ov.querySelector("[data-corpo]");
+    var r = await apiVer({ op:"ver", viaId: viaId });
+    if(!r || r.error){ corpo.textContent = (r && r.error) || "Não consegui carregar o termo."; return; }
+    var t = r.termo;
+    if(!t){ corpo.textContent = "Esta via não tem termo de ouro disparado."; return; }
+    var ac = t.aceite || {};
+    var rotSt = { enviado:"Enviado, aguardando o aceite do cliente", aceito:"Aceito pelo cliente, falta conferir o código", confirmado:"Confirmado" }[t.status] || t.status;
+    var lin = function(k, v){ return v ? '<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--line,#eee);font-size:13.5px;"><span style="min-width:150px;color:var(--muted,#666);">' + k + '</span><span style="flex:1;word-break:break-word;">' + escV(v) + '</span></div>' : ""; };
+    corpo.className = "";
+    corpo.innerHTML = '<div style="font-weight:800;margin-bottom:8px;">' + escV(rotSt) + '</div>'
+      + lin("Via / termo nº", t.viaCodigo) + lin("Cliente", t.cliente)
+      + lin("Enviado por", t.criadoPor) + lin("Enviado em", t.envioData ? (t.envioData + " às " + t.envioHora) : hora(t.criadoEm))
+      + lin("Aceite do cliente em", ac.data ? (ac.data + " às " + ac.hora) : "") + lin("IP do aceite", ac.ip) + lin("Aparelho", ac.aparelho)
+      + lin("Código mostrado ao cliente", ac.codigoMostrado)
+      + lin("Código conferido por", ac.conferidoPor) + lin("Conferido em", ac.conferidoData ? (ac.conferidoData + " às " + ac.conferidoHora) : "")
+      + lin("Código errado (tentativas)", t.tentativas ? String(t.tentativas) : "")
+      + lin("NF-e de entrada", t.notaNumero) + lin("Nota informada por", t.notaPor)
+      + lin("PDF gerado em", t.pdfEm ? hora(t.pdfEm) : "") + lin("Impressão digital (SHA-256)", t.hash)
+      + (Array.isArray(t.itens) && t.itens.length ? '<div style="margin-top:10px;font-weight:700;font-size:13.5px;">Peças</div>' + t.itens.map(function(i){ return '<div style="font-size:13px;">' + escV(i.descricao) + ' · ' + escV(i.gramas) + ' g · R$ ' + escV(Number(i.valor).toLocaleString("pt-BR", { minimumFractionDigits:2 })) + '</div>'; }).join("") : "")
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">'
+      + (t.temPdf ? '<button type="button" class="btn btn-accent btn-sm" data-pdf>Abrir PDF do termo</button>' : '<span class="muted" style="font-size:12.5px;">O PDF aparece depois que o código é conferido.</span>')
+      + (t.temFoto ? '<button type="button" class="btn btn-ghost btn-sm" data-foto>Ver foto do aceite</button>' : '')
+      + (t.pdfLink ? '<a class="btn btn-ghost btn-sm" href="' + escV(t.pdfLink) + '" target="_blank" rel="noopener">Abrir no Drive</a>' : '')
+      + '</div>';
+    var bp = corpo.querySelector("[data-pdf]"); if(bp) bp.addEventListener("click", function(){ abrirArquivo(viaId, "pdf", bp); });
+    var bf = corpo.querySelector("[data-foto]"); if(bf) bf.addEventListener("click", function(){ abrirArquivo(viaId, "foto", bf); });
+  }
   window.__ouroDispararTermo = dispararTermo;
   window.__ouroConferirTermo = conferirTermo;
-  window.OuroTermo = { api: apiTermo, faltaNoCadastro: faltaNoCadastro, erro: erroTermo, ligarTela: ligarTela, nota: notaNoTermo, descricaoPeca: descricaoPeca };
+  window.OuroTermo = { ver: verTermo, api: apiTermo, faltaNoCadastro: faltaNoCadastro, erro: erroTermo, ligarTela: ligarTela, nota: notaNoTermo, descricaoPeca: descricaoPeca };
 
   window.OuroVia = { ligar: ligar, api: api, validar: validar, registrar: registrar, estornar: estornar, refazer: refazer };
 

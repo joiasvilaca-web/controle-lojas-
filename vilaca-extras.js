@@ -245,9 +245,9 @@
     var t = holder.termo || (holder.termo = {});
     var st = t.status || '';
     var linha = '';
-    if(st === 'confirmado') linha = '<span class="oi-ok" style="color:#1f6b3d;font-weight:700;">Termo confirmado' + (t.em ? ' às ' + esc(t.em) : '') + '. PDF guardado no Drive.</span>';
+    if(st === 'confirmado') linha = '<span class="oi-ok" style="color:#1f6b3d;font-weight:700;">Termo confirmado' + (t.em ? ' às ' + esc(t.em) : '') + '. PDF guardado no Drive.</span> <button type="button" class="btn btn-ghost btn-sm" data-oi-vertermo="' + esc(t.viaCodigo || '') + '">Ver termo e assinatura</button>';
     else if(t.dispensado) linha = '<span class="oi-aj">Salvo sem termo, autorizado por ' + esc(t.dispensado.por || 'gerente') + '.</span>';
-    else if(st === 'enviado') linha = '<span class="oi-aj">Termo enviado' + (t.em ? ' às ' + esc(t.em) : '') + '. Aguardando o aceite do cliente — peça o código a ele.</span>';
+    else if(st === 'enviado') linha = '<span class="oi-aj">Termo enviado' + (t.em ? ' às ' + esc(t.em) : '') + '. Aguardando o aceite do cliente — peça o código a ele.</span> <button type="button" class="btn btn-ghost btn-sm" data-oi-vertermo="' + esc(t.viaCodigo || '') + '">Ver andamento</button>';
     else linha = pronto ? '<span class="oi-aj">Valores conferem. Dispare o termo para o cliente.</span>' : '<span class="oi-ok">Zere o contador acima para liberar o termo.</span>';
     var trava = (st === 'confirmado' || t.dispensado);
     return '<div class="oi-termo"><b>Termo de compra de ouro</b>'
@@ -261,6 +261,7 @@
       + '<div class="oi-aviso" id="oiTermoMsg" style="margin-top:8px;">' + (holder.__termoMsg ? '<span class="' + (holder.__termoMsg.ruim ? 'oi-ruim' : 'oi-aj') + '">' + esc(holder.__termoMsg.txt) + '</span>' : '') + '</div></div>';
   }
   function ligarTermo(el, holder, config, redesenhar){
+    el.querySelectorAll('[data-oi-vertermo]').forEach(function(b){ b.addEventListener('click', function(){ if(window.OuroTermo && window.OuroTermo.ver) window.OuroTermo.ver(b.dataset.oiVertermo); }); });
     var bD = el.querySelector('#oiDisparar'), bC = el.querySelector('#oiConfirmar'), inp = el.querySelector('#oiCodigo');
     var msg = el.querySelector('#oiTermoMsg');
     /* 27/11: a mensagem fica guardada na via — o painel é redesenhado ao fim do clique e antes apagava o erro (ex.: cadastro incompleto), parecendo que nada acontecia. */
