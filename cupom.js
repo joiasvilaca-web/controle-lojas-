@@ -49,7 +49,7 @@
       + '.barcode-wrap{ text-align:center; margin-top:6px; } .barcode-wrap svg{ max-width:100%; }'
       + 'html{ margin:0; padding:0; height:auto; background:#fff; } body > :first-child{ margin-top:0 !important; } body > :last-child{ margin-bottom:0 !important; }'
       + '@media print{ html{ height:auto !important; } }</style></head><body>'
-      + (c.logo ? '<div style="text-align:center; margin:0 0 4px;"><img src="'+LOGO_IMP+'" alt="Vilaça App" style="width:'+Math.round(areaImpressaoMm(c.larguraBobina)*0.55)+'mm; height:auto;"></div>' : '')
+      + (c.logo && !/^via caixa/i.test(String(titulo||'')) ? '<div style="text-align:center; margin:0 0 4px;"><img src="'+LOGO_IMP+'" alt="Vilaça App" style="width:'+Math.round(areaImpressaoMm(c.larguraBobina)*0.55)+'mm; height:auto;"></div>' : '')
       + codigoHtml + conteudoHtml + (rodape ? '<div class="linha"></div><div class="rodape">'+esc(rodape)+'</div>' : '')
       + (viaCliente ? '<div class="linha"></div><div class="rodape" style="margin-top:4px;"><b>Fale com a gente no WhatsApp</b><br>(32) 98830-7617<br>Mande um &quot;oi&quot; para receber novidades.</div>' : '')
       + '</body></html>';
@@ -64,7 +64,7 @@
   function imprimir(config, titulo, conteudoHtml, codigoVia, tipo){
     var c = cfg(config, tipo || TIPO_POR_TITULO[titulo] || 'vendas');
     var w = window.open('', '_blank', 'width=420,height=700');
-    if(!w){ alert('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return; }
+    if(!w){ if(!imprimir.silencioso) alert('Não foi possível abrir a janela de impressão. Verifique o bloqueador de pop-ups do navegador.'); return false; }
     w.document.open(); w.document.write(html(c, titulo, conteudoHtml, codigoVia)); w.document.close(); w.focus();
     desenharCodigo(w, codigoVia, function(){
       try{
@@ -74,6 +74,7 @@
       }catch(e){}
       try{ w.print(); }catch(e){}
     });
+    return true;
   }
   /* Prévia dentro de um iframe (Configurações › Impressão › Ver cupom). */
   function previa(iframe, c, titulo, conteudoHtml, codigoVia){

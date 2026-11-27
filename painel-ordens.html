@@ -13,6 +13,7 @@
 <script src="busca-vias.js"></script>
 <script src="cadastro-incompleto.js"></script>
 <script src="cupom.js"></script>
+<script src="vias-impressao.js"></script>
 <script src="condicoes-pagamento.js"></script>
 <script src="ouro-core.js"></script>
 <script src="vilaca-extras.js"></script>
@@ -4130,6 +4131,32 @@ function escolherViaEImprimir(order){
   document.getElementById('viaPrintCliente').addEventListener('click', ()=>{ closeModal(); printOrder(order, 'cliente'); });
   document.getElementById('viaPrintFabrica').addEventListener('click', ()=>{ closeModal(); printOrder(order, 'fabrica'); });
 }
+/* ===== 27/11 (Felipe): vias ao salvar =====
+ * Pedido novo: imprime sozinho a VIA DA OFICINA e pergunta Via do Cliente / Via Caixa (só com pagamento feito) / X.
+ * Pagamento de via "pagar depois": pergunta se quer a Via Caixa (com o aviso). */
+function imprimirViaCaixaOS(order, pags, aviso){
+  const mapa = {}; (config.paymentTypes||[]).forEach(pt=>{ mapa[pt.id] = String(pt.nome||'').toUpperCase(); });
+  mapa['__credito'] = 'CRÉDITO CLIENTE'; mapa['__cashback'] = 'CASHBACK';
+  const lista = (pags && pags.length ? pags : ViasPrint.pagos(order)).map(p=>({ rotulo: CondPag.rotuloPag(p, mapa[p.formaId]||'—', config, fmtMoeda), valor: p.valor }));
+  const html = ViasPrint.cupomCaixaHtml({ origem:'PEDIDO', via: viaTxt(order)||'', vendedora: order.vendedora||'', pagamentos: lista, aviso: aviso||'', fmt: fmtMoeda });
+  return abrirImpressaoBobina('Via Caixa', html, 80, '');
+}
+function posSalvarPedido(order){
+  if(!window.ViasPrint || !order) return;
+  let oficinaOk = true;
+  try{ Cupom.imprimir.silencioso = true; oficinaOk = printOrder(order, 'fabrica') !== false; } catch(e){ oficinaOk = false; console.error('via oficina', e); } finally { Cupom.imprimir.silencioso = false; }
+  const ops = [{ rotulo:'VIA DO CLIENTE', desc:'A via padrão do pedido', fn:()=> printOrder(order, 'cliente') }];
+  if(ViasPrint.temPagamento(order)) ops.push({ rotulo:'VIA CAIXA', desc:'Cupom pequeno: nº da via, vendedora e pagamentos', cor:'#0B63D6', fn:()=> imprimirViaCaixaOS(order) });
+  if(!oficinaOk) ops.push({ rotulo:'VIA DA OFICINA', desc:'O navegador bloqueou a impressão automática. Toque para imprimir.', cor:'#444', fn:()=> printOrder(order, 'fabrica') });
+  ViasPrint.perguntar('Pedido salvo. Imprimir mais alguma via?', 'Via '+escapeHtml(viaTxt(order)||'—')+' · '+escapeHtml(order.cliente||'')+(oficinaOk?' · <b>via da oficina já enviada à impressora</b>':''), ops);
+}
+function posPagamentoPendenteOS(order, pagAntes, saldoAntes){
+  if(!window.ViasPrint || !order || !(saldoAntes > 0.009)) return;
+  const novos = ViasPrint.novosPagamentos(pagAntes, order.pagamentos);
+  if(!novos.length) return;
+  ViasPrint.perguntar('Pagamento recebido. Imprimir a Via Caixa?', 'Via '+escapeHtml(viaTxt(order)||'—')+' · pagamento de via <b>pagar depois</b>', [
+    { rotulo:'VIA CAIXA', desc:'Cupom com o aviso de pagamento de via pagar depois', cor:'#0B63D6', fn:()=> imprimirViaCaixaOS(order, novos, 'PAGAMENTO DE VIA PAGAR DEPOIS') }]);
+}
 function printOrder(order, tipoVia){
   const paymentTypesMap = {};
   (config.paymentTypes||[]).forEach(pt=>{ paymentTypesMap[pt.id] = pt.nome; });
@@ -4212,7 +4239,7 @@ function printOrder(order, tipoVia){
   if(imp.valores !== false) linhas.push(CondPag.cupomHtml(order.itens, (order.valorAVista != null ? order.valorAVista : order.valorTotal), fmtMoeda));
 
   const extraCupom = window.Cashback ? Cashback.cupomHtml(order, escapeHtml) : '';
-  abrirImpressaoBobina(fabrica ? 'Via Fábrica' : 'Ordem de Serviço', linhas.join('') + extraCupom, larguraMm, order.codigoVia);
+  return abrirImpressaoBobina(fabrica ? 'Via Fábrica' : 'Ordem de Serviço', linhas.join('') + extraCupom, larguraMm, order.codigoVia);
 }
 
 /** Abre uma janela de impressão em formato de bobina (recibo térmico), com a largura
@@ -6078,6 +6105,7 @@ function renderNovaOrdem(main){
     modoNovaOrdem = false;
     renderTabs(); renderView();
     renderAlerts();
+    try{ posSalvarPedido(novaOrdem); }catch(e){ console.error('vias do pedido', e); }   // 27/11: via da oficina automática + pergunta das outras
     if(!avisoEnviado && !avisoNaFila) openNotifyModal(novaOrdem, !!novaOrdem.telefone);   // só pergunta se a mensagem automática falhou (ou não há telefone)
     if(window.CadastroIncompleto) CadastroIncompleto.avisar({ ...cli, nome: cliente }, 'Pedido lançado.');   // 22/11
   }
@@ -6423,6 +6451,7 @@ function openEditModalCompleto(order, opts){
   document.getElementById('editCancel').addEventListener('click', closeModal);
   document.getElementById('editSave').addEventListener('click', async (ev)=>{
     { const __b=ev.currentTarget; if(__b.dataset.salvando) return; __b.dataset.salvando='1'; setTimeout(()=>{ delete __b.dataset.salvando; }, 2500); }
+    const __pagAntesVia = JSON.parse(JSON.stringify(order.pagamentos||[])), __saldoAntesVia = valorAReceberDe(order);   // 27/11: p/ perguntar a Via Caixa de pagamento pendente
     const cliente = maiusc(document.getElementById('e_cliente').value);
     const telefone = combinarTelefoneValidado('e');
     if(telefone === null) return;
@@ -6643,6 +6672,7 @@ function openEditModalCompleto(order, opts){
     if(_cbEO.resumo){ const _r = await cashbackProcessar(order, 'Pedido', (order.valorAVista ?? order.valorTotal), 'gravar', _cbAntO, order.cashback.clienteId); if(!_r.ok) showToast('Pedido salvo, mas o cashback não foi gravado: '+_r.erro); }
     closeModal();
     showToast('Pedido atualizado.');
+    try{ posPagamentoPendenteOS(order, __pagAntesVia, __saldoAntesVia); }catch(e){ console.error('via caixa', e); }
     if(sincronizarDepois) await sincronizarReservasOrdem(order, planoEdit);
     renderView();
   });

@@ -56,6 +56,7 @@
 <script src="busca-vias.js"></script>
 <script src="cadastro-incompleto.js"></script>
 <script src="cupom.js"></script>
+<script src="vias-impressao.js"></script>
 <script>/* condicoes-pagamento (embutido em vendas.html) */
 /* Condições de pagamento — à vista x parcelado no cartão (Venda, Pedido, Reserva, Orçamento).
  * Regra (Felipe, 01/nov):
@@ -4226,6 +4227,7 @@ function renderNovaVenda(main){
       if(lojaEstoque) carregarReservadas(lojaEstoque);
       if(window.RetiradaTerceiro){ const _rt = await RetiradaTerceiro.habilitarSeMarcado({ tipo:'venda', id:venda.id, senha:__gatewaySenha, usuario:currentUser.nome }); if(_rt && _rt.error) showToast('Venda lançada, mas a retirada por terceiros não foi liberada: '+_rt.error); }
       showToast('Venda lançada com sucesso.');
+      try{ posSalvarVenda(venda); }catch(e){ console.error('vias da venda', e); }   // 27/11
       /* 12/11: venda nova com telefone manda a via sozinha ao salvar (falha só avisa; o botão continua para reenviar) */
       if(venda.telefone && !venda.rascunho){ try{ await enviarViaWhatsApp(venda, true); }catch(_){} }
       { const _cs = window.__cliSelReserva;   // cliente escolhido/cadastrado nesta venda
@@ -5782,6 +5784,7 @@ function abrirFormularioEdicaoCompleta(v){
     v.valorTotal = pagHolder.valorTotal;
     v.descTotalTipo = pagHolder.descTotalTipo||'nenhum'; v.descTotalModo = pagHolder.descTotalModo||'percentual'; v.descTotalPerc = pagHolder.descTotalPerc||''; v.descTotalR = pagHolder.descTotalR||'';
     const tinhaSaldo = valorAReceberDe(v) > 0.009;   // v.pagamentos ainda são os de antes da edição
+    const __pagAntesVia = JSON.parse(JSON.stringify(v.pagamentos||[]));   // 27/11: p/ perguntar a Via Caixa de pagamento pendente
     v.pagamentos = carimbarPagamentos(pagHolder.pagamentos, data, dataAntigaV, tinhaSaldo ? hoje() : null);
     OuroPag.liquidar(v.pagamentos, creditoGeradoEd, config);
     v.creditoOuroUsado = window.CreditoOuro ? CreditoOuro.distribuir(v.pagamentos, ouroEd) : 0;   // 12/11
@@ -5813,6 +5816,7 @@ function abrirFormularioEdicaoCompleta(v){
     if(ok){
       if(_cbE.resumo){ const _r = await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'gravar', _cbAntV, v.cashback.clienteId); if(!_r.ok) showToast('Venda salva, mas o cashback não foi gravado: '+_r.erro); }
       showToast('Venda atualizada.');
+      try{ posPagamentoPendenteVenda(v, __pagAntesVia, tinhaSaldo ? 1 : 0); }catch(e){ console.error('via caixa', e); }
       closeModal();
       renderTabs(); renderView();
     }
@@ -5899,6 +5903,27 @@ function abrirImpressaoBobina(titulo, conteudoHtml, larguraMm, codigoVia){
   showToast('Não foi possível carregar o cupom. Recarregue a página.');
 }
 
+/* ===== 27/11 (Felipe): vias ao salvar =====
+ * Venda salva: pergunta Via do Cliente / Via Caixa / X. Pagamento de via "pagar depois": pergunta a Via Caixa (com o aviso). */
+function imprimirViaCaixaVenda(v, pags, aviso){
+  const mapa = {}; (config.formasPagamento||[]).forEach(pt=>{ mapa[pt.id] = String(pt.nome||'').toUpperCase(); }); mapa['__credito'] = 'CRÉDITO CLIENTE'; mapa['__cashback'] = 'CASHBACK';
+  const lista = (pags && pags.length ? pags : ViasPrint.pagos(v)).map(p=>({ rotulo: CondPag.rotuloPag(p, mapa[p.formaId]||'—', config, fmtMoeda), valor: p.valor }));
+  const html = ViasPrint.cupomCaixaHtml({ origem:'VENDA', via: v.codigoVia||'', vendedora: v.vendedora||'', pagamentos: lista, aviso: aviso||'', fmt: fmtMoeda });
+  return abrirImpressaoBobina('Via Caixa', html, 80, '');
+}
+function posSalvarVenda(v){
+  if(!window.ViasPrint || !v || v.rascunho) return;
+  const ops = [{ rotulo:'VIA DO CLIENTE', desc:'A via padrão da venda', fn:()=> printVenda(v) }];
+  if(ViasPrint.temPagamento(v)) ops.push({ rotulo:'VIA CAIXA', desc:'Cupom pequeno: nº da via, vendedora e pagamentos', cor:'#0B63D6', fn:()=> imprimirViaCaixaVenda(v) });
+  ViasPrint.perguntar('Venda lançada. Imprimir qual via?', 'Via '+escapeHtml(v.codigoVia||'—')+' · '+escapeHtml(v.cliente||''), ops);
+}
+function posPagamentoPendenteVenda(v, pagAntes, saldoAntes){
+  if(!window.ViasPrint || !v || !(saldoAntes > 0.009)) return;
+  const novos = ViasPrint.novosPagamentos(pagAntes, v.pagamentos);
+  if(!novos.length) return;
+  ViasPrint.perguntar('Pagamento recebido. Imprimir a Via Caixa?', 'Via '+escapeHtml(v.codigoVia||'—')+' · pagamento de via <b>pagar depois</b>', [
+    { rotulo:'VIA CAIXA', desc:'Cupom com o aviso de pagamento de via pagar depois', cor:'#0B63D6', fn:()=> imprimirViaCaixaVenda(v, novos, 'PAGAMENTO DE VIA PAGAR DEPOIS') }]);
+}
 function printVenda(v){
   const paymentTypesMap = {}; (config.formasPagamento||[]).forEach(pt=>{ paymentTypesMap[pt.id]=String(pt.nome||'').toUpperCase(); }); paymentTypesMap['__credito']='CRÉDITO CLIENTE'; paymentTypesMap['__cashback']='CASHBACK'; paymentTypesMap['__fiado']='Fiado';
   const imp = (config.impressao && config.impressao.vendas) || {};
