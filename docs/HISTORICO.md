@@ -670,3 +670,7 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 
 ## 27/11/2026 — Peças do ouro no Pedido e no Serviço
 - No Pedido (e no Serviço, que usa a mesma tela) a forma de pagamento fica em `config.paymentTypes` e o Fator não vem na config dessa tela, então o painel "Peças do ouro" não reconhecia OURO - TROCA nem o Valor Balcão do dia. `vilaca-extras.js` passa a aceitar `paymentTypes` e `ouro-core.js` lê o Fator do bruto quando a config não o traz. Isso também corrige a nota de entrada e o crédito por excesso de ouro no Pedido.
+
+## 27/11/2026 — Peça do ouro vira uma linha ao clicar em Adicionar
+- No painel "Peças do ouro" (Venda, Pedido e Serviço), a peça é preenchida (teor, tipo, pedra, peso, valor) e, ao clicar em **✓ Adicionar**, vira uma linha só: nome do produto (ex.: 18 K ANEL F1,2), peso e valor, com lápis para editar e × para remover.
+- Só as peças já adicionadas entram na soma, no contador, no termo e na gravação. Salvar com uma peça preenchida e sem Adicionar mostra o aviso para clicar em Adicionar. Se ainda faltar peça para cobrir o valor em ouro, a próxima linha já abre pronta.
