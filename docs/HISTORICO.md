@@ -691,3 +691,9 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 - **Vilacinha** (`copiloto-extra` v3): avisa a Oficina/diretoria (vias esperando) e a vendedora (pendente e, por 24 h, a resposta liberou/recusou).
 - **Contador de vagas** agora mostra só as vagas livres ("03 vagas", "sem vagas") no agendamento, banners e agenda. A verificação de vaga e a sugestão de data passam a considerar quantas vagas a via usa (`vagas` salvo na via, também na edição).
 - **Domingo e feriado** nacional (carnaval e sexta-feira santa incluídos; extras em `config.feriados`) não têm vaga: `checkSlot` marca o dia como fechado e `proximaDataDisponivel` pula.
+
+## 27/11/2026 — Vias de impressão (Venda e Pedido)
+- Novo `vias-impressao.js` (usado em `vendas.html` e `painel-ordens.html`): janelinha "qual via imprimir" com X e a **Via Caixa** (cupom pequeno: nº da via, vendedora e formas de pagamento; sem logo, sem cliente/itens/total). `cupom.js`: Via Caixa sem logo; `Cupom.imprimir` devolve se abriu a janela.
+- **Venda salva:** pergunta Via do Cliente · Via Caixa · X.
+- **Pedido salvo:** imprime sozinho a Via da Oficina (se o navegador bloquear, o botão aparece na pergunta) e pergunta Via do Cliente · Via Caixa (só se há pagamento feito; "pagar depois" sem pagamento não mostra) · X.
+- **Pagamento de via "pagar depois"** (venda ou pedido, ao salvar a edição/pagamento): pergunta a Via Caixa só com o(s) pagamento(s) novo(s) e o aviso "PAGAMENTO DE VIA PAGAR DEPOIS".
