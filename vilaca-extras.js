@@ -107,8 +107,12 @@
       .reduce(function(a, p){ return a + (Number(p.valorEntregue != null ? p.valorEntregue : p.valor) || 0); }, 0));
   }
   function itensDe(holder){ if(!Array.isArray(holder.ouroItens)) holder.ouroItens = []; return holder.ouroItens; }
-  function somaItens(holder){ return r2(itensDe(holder).reduce(function(a, i){ return a + (Number(i.valor) || 0); }, 0)); }
-  function somaGramas(holder){ return Math.round(itensDe(holder).reduce(function(a, i){ return a + (Number(i.gramas) || 0); }, 0) * 1000) / 1000; }
+  /* Peça ainda sendo lançada (antes do "Adicionar"): não conta em soma, peso, termo nem gravação. */
+  function emEdicao(i){ return !!(i && i._modo === 'editar'); }
+  function itensOk(holder){ return itensDe(holder).filter(function(i){ return !emEdicao(i); }); }
+  function novaPeca(){ return { teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '', _modo: 'editar' }; }
+  function somaItens(holder){ return r2(itensOk(holder).reduce(function(a, i){ return a + (Number(i.valor) || 0); }, 0)); }
+  function somaGramas(holder){ return Math.round(itensOk(holder).reduce(function(a, i){ return a + (Number(i.gramas) || 0); }, 0) * 1000) / 1000; }
   /** Valor que o sistema calculou para a peça (R$/g do teor × peso), sem o ajuste da vendedora. */
   function valorCalculado(item, config){
     var pg = window.OuroCore ? window.OuroCore.precoGrama(config, item.teor) : null;
@@ -118,7 +122,7 @@
   /** Peças com ajuste manual acima do limite — precisam de autorização de gerente. */
   function foraDoLimite(holder, config){
     var lim = (window.OuroCore && window.OuroCore.LIMITE_AJUSTE_PCT) || 5;
-    return itensDe(holder).filter(function(i){
+    return itensOk(holder).filter(function(i){
       var calc = valorCalculado(i, config);
       var d = window.OuroCore ? window.OuroCore.desvioPct(i.valor, calc) : null;
       return d != null && Math.abs(d) > lim + 1e-9;
@@ -127,7 +131,8 @@
   /** Mensagem de impedimento para salvar a via; null quando está tudo certo. */
   function erroItensOuro(holder, config){
     if(!temOuro(holder.pagamentos, config)) return null;
-    var itens = itensDe(holder).filter(function(i){ return Number(i.gramas) > 0 && Number(i.valor) > 0; });
+    if(itensDe(holder).some(function(i){ return emEdicao(i) && (Number(i.gramas) > 0 || Number(i.valor) > 0); })) return 'Clique em Adicionar na peça do ouro que está sendo lançada.';
+    var itens = itensOk(holder).filter(function(i){ return Number(i.gramas) > 0 && Number(i.valor) > 0; });
     if(!itens.length) return 'Lance as peças do ouro (teor, tipo e peso) antes de salvar.';
     var dif = r2(ouroPago(holder.pagamentos, config) - somaItens(holder));
     if(Math.abs(dif) > OI_TOL) return dif > 0
@@ -153,7 +158,7 @@
     if(!window.OuroCore){ el.innerHTML = '<div class="ne-box"><b>Peças do ouro</b><div class="muted" style="font-size:12px;">Não consegui carregar a tabela de teores. Recarregue a página.</div></div>'; return; }
     var O = window.OuroCore;
     var itens = itensDe(holder);
-    if(!itens.length) itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' });
+    if(!itens.length) itens.push(novaPeca());
     var base = O.valorBalcaoDia(config);
     var linhas = itens.map(function(it, i){
       var pg = O.precoGrama(config, it.teor);
@@ -166,6 +171,15 @@
         else if(Math.abs(dv) <= lim + 1e-9) aviso = '<span class="oi-aj">Ajustado ' + (dv > 0 ? '+' : '') + dv.toFixed(1).replace('.', ',') + '% (permitido até ' + lim + '%)</span>';
         else aviso = '<span class="oi-ruim">Ajuste de ' + dv.toFixed(1).replace('.', ',') + '% — passa de ' + lim + '%, precisa de autorização de gerente</span>';
       }
+      if(!emEdicao(it)){
+        return '<div class="oi-resumo" data-oi="' + i + '">'
+          + '<div class="oi-nome">' + esc(O.nomeProduto(it.teor, it.tipo, it.pedra || '', it.gramas)) + '</div>'
+          + '<div class="oi-meta"><span>' + oiGramas(it.gramas) + ' g</span><b>' + oiMoeda(it.valor) + '</b></div>'
+          + (aviso && !/oi-ok/.test(aviso) ? '<div class="oi-aviso">' + aviso + '</div>' : '')
+          + '<button type="button" class="oi-ed" data-oi-edit="' + i + '" aria-label="Editar peça" title="Editar">&#9998;</button>'
+          + '<button type="button" class="oi-x" data-oi-del="' + i + '" aria-label="Remover peça">&times;</button>'
+          + '</div>';
+      }
       return '<div class="oi-linha" data-oi="' + i + '">'
         + '<select data-oi-teor="' + i + '" aria-label="Teor">' + oiSel(it.teor, O.TEORES.map(function(t){ var p = O.precoGrama(config, t.k); return { k: t.k, nome: t.label + (p ? ' · ' + oiMoeda(p) + '/g' : ' · sem valor') }; }), 'k', 'nome') + '</select>'
         + '<select data-oi-tipo="' + i + '" aria-label="Tipo da peça">' + oiSel(it.tipo, O.TIPOS, 'id', 'nome') + '</select>'
@@ -173,6 +187,7 @@
         + '<select class="oi-pedra" data-oi-pedra="' + i + '" aria-label="Pedra">' + oiSel(it.pedra, O.PEDRAS, 'id', 'nome') + '</select>'
         + '<input data-oi-g="' + i + '" inputmode="decimal" placeholder="Peso (g)" value="' + esc(it.gramas) + '" aria-label="Peso em gramas">'
         + '<input data-oi-v="' + i + '" inputmode="decimal" placeholder="Valor R$" value="' + esc(it.valor) + '" aria-label="Valor da peça">'
+        + '<button type="button" class="btn btn-accent btn-sm oi-addbtn" data-oi-ok="' + i + '">&#10003; Adicionar</button>'
         + '<div class="oi-aviso">' + aviso + (pg == null ? '<span class="oi-ruim">Sem Valor Balcão do dia — peça para a diretoria lançar em Cadastro › Fator.</span>' : '') + '</div>'
         + '</div>';
     }).join('');
@@ -204,10 +219,25 @@
       inp.addEventListener('change', function(){ var i = Number(inp.dataset.oiV); itens[i].valor = r2(oiNumLivre(inp.value)) || ''; itens[i].manual = true; mexeu(); });
     });
     el.querySelectorAll('[data-oi-del]').forEach(function(b){
-      b.addEventListener('click', function(){ itens.splice(Number(b.dataset.oiDel), 1); if(!itens.length) itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' }); mexeu(); });
+      b.addEventListener('click', function(){ itens.splice(Number(b.dataset.oiDel), 1); if(!itens.length) itens.push(novaPeca()); mexeu(); });
+    });
+    el.querySelectorAll('[data-oi-edit]').forEach(function(b){
+      b.addEventListener('click', function(){ itens[Number(b.dataset.oiEdit)]._modo = 'editar'; mexeu(); });
+    });
+    el.querySelectorAll('[data-oi-ok]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var it = itens[Number(b.dataset.oiOk)];
+        if(!(Number(it.gramas) > 0)){ var g = el.querySelector('[data-oi-g="' + b.dataset.oiOk + '"]'); if(g) g.focus(); return; }
+        if(!(Number(it.valor) > 0)){ recalcLinha(it, config); }
+        if(!(Number(it.valor) > 0)){ var v = el.querySelector('[data-oi-v="' + b.dataset.oiOk + '"]'); if(v) v.focus(); return; }
+        it._modo = 'ok';
+        /* ainda falta peça para cobrir o ouro? já deixa a próxima linha pronta */
+        if(r2(ouroPago(holder.pagamentos, config) - somaItens(holder)) > OI_TOL && !itens.some(emEdicao)) itens.push(novaPeca());
+        mexeu();
+      });
     });
     var add = el.querySelector('#oiAdd');
-    if(add) add.addEventListener('click', function(){ itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' }); mexeu(); });
+    if(add) add.addEventListener('click', function(){ if(!itens.some(emEdicao)) itens.push(novaPeca()); mexeu(); });
     ligarTermo(el, holder, config, mexeu);
   }
 
@@ -258,7 +288,7 @@
   }
   /** Limpa o que vai gravado na via (sem campos de tela). */
   function itensParaSalvar(holder, config){
-    return itensDe(holder).filter(function(i){ return Number(i.gramas) > 0 && Number(i.valor) > 0; }).map(function(i){
+    return itensOk(holder).filter(function(i){ return Number(i.gramas) > 0 && Number(i.valor) > 0; }).map(function(i){
       var calc = valorCalculado(i, config);
       var dv = window.OuroCore ? window.OuroCore.desvioPct(i.valor, calc) : null;
       return {
@@ -273,7 +303,11 @@
   var oiCss = '.oi-box .oi-linha{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;padding:0 26px 8px 0;border-bottom:1px dashed var(--line,#ddd);}'
     + '.oi-box .oi-linha select,.oi-box .oi-linha input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line,#ccc);border-radius:8px;min-width:0;font:inherit;background:var(--surface,#fff);color:var(--ink,#111);}'
     + '.oi-box .oi-x{position:absolute;top:2px;right:0;width:24px;border:0;background:none;color:#a33;font-size:20px;line-height:1;cursor:pointer;padding:0;}'
-    + '.oi-box .oi-pedra{grid-column:1/3;}'
+    + '.oi-box .oi-pedra{grid-column:1/3;} .oi-box .oi-addbtn{grid-column:1/3;justify-self:start;}'
+    + '.oi-box .oi-resumo{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-bottom:8px;padding:9px 56px 9px 12px;border:1px solid var(--line,#ddd);border-radius:10px;background:var(--surface,#fff);}'
+    + '.oi-box .oi-nome{flex:1 1 100%;font-weight:700;font-size:13px;}'
+    + '.oi-box .oi-meta{display:flex;gap:12px;font-size:13px;} .oi-box .oi-meta b{font-variant-numeric:tabular-nums;}'
+    + '.oi-box .oi-resumo .oi-x{top:50%;transform:translateY(-50%);right:6px;} .oi-box .oi-ed{position:absolute;top:50%;transform:translateY(-50%);right:32px;width:24px;border:0;background:none;color:var(--ink-soft,#667);font-size:15px;cursor:pointer;padding:0;}'
     + '.oi-box .oi-aviso{grid-column:1/3;font-size:12px;}'
     + '.oi-box .oi-ok{color:var(--ink-soft,#667);} .oi-box .oi-aj{color:#8a5a00;} .oi-box .oi-ruim{color:#C62828;font-weight:600;}'
     + '.oi-box .oi-cont{margin-top:10px;padding:10px 12px;border-radius:10px;text-align:center;font-weight:700;}'
