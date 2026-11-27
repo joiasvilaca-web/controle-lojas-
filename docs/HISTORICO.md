@@ -683,3 +683,10 @@ Relatório longo no doc "Auditoria Técnica — Vilaça App". Resumo do que foi 
 ## 27/11/2026 — Produto e serviço não podem ficar na mesma via
 - No Pedido (novo e edição), ao adicionar um item de tipo diferente do que já está na via (produto × serviço × serviço de relógio Juiz de Fora × serviço de relógio assistência técnica), aparece o aviso "Não pode na mesma via" e o item é retirado; só dá para continuar abrindo uma via separada. Antes dava para escolher "Manter na mesma via".
 - Ao lançar, uma via vinda de orçamento com tipos misturados também é barrada. A regra de 1 produto por via continua como estava.
+
+## 27/11/2026 — Código de liberação: via salva com data padrão e data pedida pendente
+- Via fora do prazo/vaga: ao clicar **Solicitar permissão** a via é lançada já, na primeira data com vaga (data padrão); a data pedida fica **pendente** (`autorizacao.dataSolicitada` / `dataPadrao`). Liberada pela Oficina (ou código digitado na via, no modal de edição) = vale a data pedida (encaixe); recusada = vale a data padrão.
+- **Cartão do cliente** (`get-order-status` v6 + `acompanhar.html`): mostra a data prevista e o aviso "data pedida aguardando liberação da oficina".
+- **Caixa:** o fechamento do dia fica travado enquanto houver via com pendência (lista na tela); destrava quando a Oficina responde ou o código é digitado.
+- **Vilacinha** (`copiloto-extra` v3): avisa a Oficina/diretoria (vias esperando) e a vendedora (pendente e, por 24 h, a resposta liberou/recusou).
+- **Contador de vagas** agora mostra só as vagas livres ("03 vagas", "sem vagas") no agendamento, banners e agenda. A verificação de vaga e a sugestão de data passam a considerar quantas vagas a via usa (`vagas` salvo na via, também na edição).
