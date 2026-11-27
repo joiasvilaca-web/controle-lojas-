@@ -34,13 +34,18 @@
     return u <= 5 ? n - u : n - u + 10;
   }
   /** Valor Balcão do dia (18k/750) digitado em Cadastro › Fator; null enquanto ninguém digitou. */
+  /* A Venda lê config.fator; o Pedido usa uma config "legada" sem o fator — aí vale o bruto. */
+  function compraMetalDe(config){
+    var f = (config && config.fator) || (typeof window !== 'undefined' && window.__configUnificadoBruto && window.__configUnificadoBruto.fator) || null;
+    return (f && f.compraMetal) || {};
+  }
   function valorBalcaoDia(config){
-    var cm = (config && config.fator && config.fator.compraMetal) || {};
+    var cm = compraMetalDe(config);
     var v = Number(cm.ouroBalcaoDia);
     return v > 0 ? v : null;
   }
   function dataBalcaoDia(config){
-    var cm = (config && config.fator && config.fator.compraMetal) || {};
+    var cm = compraMetalDe(config);
     return cm.ouroBalcaoDiaData || '';
   }
   /** R$/g de um teor. 18k é o valor digitado; os outros, proporcionais e arredondados. */

@@ -36,7 +36,7 @@
       return false;
     }
   };
-  function formaDe(id, config){ return ((config && config.formasPagamento) || []).filter(function(x){ return x.id === id; })[0]; }
+  function formaDe(id, config){ return ((config && (config.formasPagamento || config.paymentTypes)) || []).filter(function(x){ return x.id === id; })[0]; }
   function ehOuro(formaId, config){
     if(!formaId || String(formaId).indexOf('__') === 0) return false;
     var f = formaDe(formaId, config);
