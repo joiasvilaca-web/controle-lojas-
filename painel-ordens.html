@@ -1791,6 +1791,7 @@ OuroTermo.ligarTela({
   },
   cliente: async (holder)=>{
     if(holder && holder.__ordem) return await localizarClienteDaOrdem(holder.__ordem);
+    if(window.__clientePedidoSel && window.__clientePedidoSel.nome && document.getElementById('f_clienteAcWrap')) return window.__clientePedidoSel;
     const c = (typeof collectClienteFields === 'function') ? collectClienteFields() : null;
     const tel = c && c.telefone;
     if(!tel) return null;
@@ -4122,14 +4123,16 @@ function escolherViaEImprimir(order){
     <h3>${ico('impressora',18)} Qual via você vai imprimir?</h3>
     <p class="muted" style="margin:-4px 0 14px;">Cliente ${escapeHtml(order.cliente||'—')} · via ${escapeHtml(viaTxt(order)||'—')}${crav?' · <b>envolve cravação</b>':''}</p>
     <div style="display:grid;gap:10px;">
-      <button class="btn btn-accent btn-block" id="viaPrintCliente" style="white-space:normal;min-width:0;height:auto;text-align:left;">VIA DO CLIENTE<span style="display:block;font-weight:500;font-size:12.5px;opacity:.9;white-space:normal;">Entrega ${fmtDate(order.data)}</span></button>
-      <button class="btn btn-block" id="viaPrintFabrica" style="background:#0B63D6;border-color:#0B63D6;color:#fff;white-space:normal;min-width:0;height:auto;text-align:left;">VIA FÁBRICA<span style="display:block;font-weight:500;font-size:12.5px;opacity:.9;white-space:normal;">Igual à do cliente, com entrega ${fmtDate(diaMenosUm(order.data))}${crav ? ' e aviso de cravação' : ''}</span></button>
+      <button class="btn btn-block" id="viaPrintCliente" style="background:#7A1F3D;border-color:#7A1F3D;color:#fff;">VIA CLIENTE</button>
+      <button class="btn btn-block" id="viaPrintFabrica" style="background:#C26A00;border-color:#C26A00;color:#fff;">VIA FÁBRICA</button>
+      ${(window.ViasPrint && ViasPrint.temPagamento(order)) ? '<button class="btn btn-block" id="viaPrintCaixa" style="background:#1B7F4B;border-color:#1B7F4B;color:#fff;">VIA CAIXA</button>' : ''}
     </div>
     <div class="modal-actions"><button class="btn btn-ghost" id="viaPrintCancelar">Cancelar</button></div>
   `);
   document.getElementById('viaPrintCancelar').addEventListener('click', closeModal);
   document.getElementById('viaPrintCliente').addEventListener('click', ()=>{ closeModal(); printOrder(order, 'cliente'); });
   document.getElementById('viaPrintFabrica').addEventListener('click', ()=>{ closeModal(); printOrder(order, 'fabrica'); });
+  { const bc = document.getElementById('viaPrintCaixa'); if(bc) bc.addEventListener('click', ()=>{ closeModal(); imprimirViaCaixaOS(order); }); }
 }
 /* ===== 27/11 (Felipe): vias ao salvar =====
  * Pedido novo: imprime sozinho a VIA DA OFICINA e pergunta Via do Cliente / Via Caixa (só com pagamento feito) / X.
@@ -4138,24 +4141,24 @@ function imprimirViaCaixaOS(order, pags, aviso){
   const mapa = {}; (config.paymentTypes||[]).forEach(pt=>{ mapa[pt.id] = String(pt.nome||'').toUpperCase(); });
   mapa['__credito'] = 'CRÉDITO CLIENTE'; mapa['__cashback'] = 'CASHBACK';
   const lista = (pags && pags.length ? pags : ViasPrint.pagos(order)).map(p=>({ rotulo: CondPag.rotuloPag(p, mapa[p.formaId]||'—', config, fmtMoeda), valor: p.valor }));
-  const html = ViasPrint.cupomCaixaHtml({ origem:'PEDIDO', via: viaTxt(order)||'', vendedora: order.vendedora||'', pagamentos: lista, aviso: aviso||'', fmt: fmtMoeda });
+  const html = ViasPrint.cupomCaixaHtml({ origem:'PEDIDO', via: viaTxt(order)||'', vendedora: order.vendedora||'', cliente: order.cliente||'', pagamentos: lista, aviso: aviso||'', fmt: fmtMoeda });
   return abrirImpressaoBobina('Via Caixa', html, 80, '');
 }
 function posSalvarPedido(order){
   if(!window.ViasPrint || !order) return;
   let oficinaOk = true;
   try{ Cupom.imprimir.silencioso = true; oficinaOk = printOrder(order, 'fabrica') !== false; } catch(e){ oficinaOk = false; console.error('via oficina', e); } finally { Cupom.imprimir.silencioso = false; }
-  const ops = [{ rotulo:'VIA DO CLIENTE', desc:'A via padrão do pedido', fn:()=> printOrder(order, 'cliente') }];
-  if(ViasPrint.temPagamento(order)) ops.push({ rotulo:'VIA CAIXA', desc:'Cupom pequeno: nº da via, vendedora e pagamentos', cor:'#0B63D6', fn:()=> imprimirViaCaixaOS(order) });
-  if(!oficinaOk) ops.push({ rotulo:'VIA DA OFICINA', desc:'O navegador bloqueou a impressão automática. Toque para imprimir.', cor:'#444', fn:()=> printOrder(order, 'fabrica') });
-  ViasPrint.perguntar('Pedido salvo. Imprimir mais alguma via?', 'Via '+escapeHtml(viaTxt(order)||'—')+' · '+escapeHtml(order.cliente||'')+(oficinaOk?' · <b>via da oficina já enviada à impressora</b>':''), ops);
+  const ops = [{ rotulo:'VIA CLIENTE', cor:'#7A1F3D', fn:()=> printOrder(order, 'cliente') },
+    { rotulo:'VIA FÁBRICA', cor:'#C26A00', fn:()=> printOrder(order, 'fabrica') }];
+  if(ViasPrint.temPagamento(order)) ops.push({ rotulo:'VIA CAIXA', cor:'#1B7F4B', fn:()=> imprimirViaCaixaOS(order) });
+  ViasPrint.perguntar('Pedido salvo. Imprimir qual via?', 'Via '+escapeHtml(viaTxt(order)||'—')+' · '+escapeHtml(order.cliente||''), ops);
 }
 function posPagamentoPendenteOS(order, pagAntes, saldoAntes){
   if(!window.ViasPrint || !order || !(saldoAntes > 0.009)) return;
   const novos = ViasPrint.novosPagamentos(pagAntes, order.pagamentos);
   if(!novos.length) return;
   ViasPrint.perguntar('Pagamento recebido. Imprimir a Via Caixa?', 'Via '+escapeHtml(viaTxt(order)||'—')+' · pagamento de via <b>pagar depois</b>', [
-    { rotulo:'VIA CAIXA', desc:'Cupom com o aviso de pagamento de via pagar depois', cor:'#0B63D6', fn:()=> imprimirViaCaixaOS(order, novos, 'PAGAMENTO DE VIA PAGAR DEPOIS') }]);
+    { rotulo:'VIA CAIXA', cor:'#1B7F4B', fn:()=> imprimirViaCaixaOS(order, novos, 'PAGAMENTO DE VIA PAGAR DEPOIS') }]);
 }
 function printOrder(order, tipoVia){
   const paymentTypesMap = {};
@@ -5581,12 +5584,14 @@ function renderNovaOrdem(main){
     Object.keys(map).forEach(c=>{const el=document.getElementById('f_'+c);if(el)el.value=map[c]||'';});
   }
   const clienteInicialPrefill = prefill && prefill.cliente && prefill.cliente.nome ? prefill.cliente : null;
+  window.__clientePedidoSel = clienteInicialPrefill;
   if(clienteInicialPrefill) preencherClienteHidden(clienteInicialPrefill);
 
   // ── CLIENTE (sempre primeiro — não pode falhar) ──
   montarClienteAutocomplete(
     document.getElementById('f_clienteAcWrap'),
     (clienteFinal)=>{
+      window.__clientePedidoSel = clienteFinal || null;
       const map=clienteFinal
         ?{cliente:clienteFinal.nome,telefone:clienteFinal.telefone,email:clienteFinal.email,
           cpf:clienteFinal.cpf,nascimento:clienteFinal.dataNascimento,cep:clienteFinal.cep,

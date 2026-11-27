@@ -400,7 +400,17 @@ function mensagemConfiavel(ev){
   }
   /* 06/11: a conta vive em caixa-calc.js (a MESMA do Dashboard). Aqui só entrega os dados desta tela. */
   function movimentosCaixa(de, ate, lojaId){
-    return CaixaCalc.movimentos({ vendas, ordens: caixaOrdens, gastos: caixaGastos, formas: config.formasPagamento, lojas: config.lojas }, de, ate, lojaId);
+    const mv = CaixaCalc.movimentos({ vendas, ordens: caixaOrdens, gastos: caixaGastos, formas: config.formasPagamento, lojas: config.lojas }, de, ate, lojaId);
+    /* 27/11 (Felipe): contas pagas lançadas pelo administrativo ou pela diretoria são gasto do ESCRITÓRIO — saem da leitura do caixa da loja
+       (ficam numa lista à parte). O que vendedoras e gerentes lançam continua no caixa. */
+    const sn = x=> String(x||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const escr = new Set(); (config.funcionarios||[]).forEach(f=>{
+      const cargos = (f.cargos||[]).map(sn);
+      if(f.nivel==='diretoria' || f.nivel==='administrativo' || cargos.some(c=> c==='administrativo' || c==='adm' || c==='diretoria' || c==='diretor' || c==='diretora')){ [f.nome, f.apelido, f.nomeExibicao].forEach(n=>{ if(sn(n)) escr.add(sn(n)); }); } });
+    mv.saidasEscritorio = mv.saidas.filter(m=> m.tipo==='Conta paga' && m.reg && escr.has(sn(m.reg.responsavel)));
+    if(mv.saidasEscritorio.length){ const f = new Set(mv.saidasEscritorio); mv.saidas = mv.saidas.filter(m=> !f.has(m)); mv.totSaidas = mv.saidas.reduce((a,m)=>a+m.valor,0); }
+    mv.totEscritorio = (mv.saidasEscritorio||[]).reduce((a,m)=>a+m.valor,0);
+    return mv;
   }
   function dataDeTimestamp(ts){
     if(!ts) return '';
@@ -710,6 +720,7 @@ function mensagemConfiavel(ev){
       ${d.mv.entradas.map(m=> linhaMov(m, 1)).join('')}
       ${d.mv.saidas.map(m=> linhaMov(m, -1)).join('')}
       </tbody><tfoot><tr><td colspan="${4+(multiDia?1:0)+(comLoja?1:0)}">Saldo do período (${d.mv.entradas.length} entrada(s), ${d.mv.saidas.length} saída(s))</td><td class="r" colspan="2">${fmtMoeda(d.saldo)}</td></tr></tfoot></table></div>`;
+    const escrHtml = (d.mv.saidasEscritorio||[]).length ? `<div class="fc-graf"><h4>Saídas do escritório (administrativo e diretoria) — fora do saldo do caixa</h4><p class="muted" style="margin:-4px 0 8px;font-size:12.5px;">Contas pagas lançadas pelo administrativo ou pela diretoria. Total: <b>${fmtMoeda(d.mv.totEscritorio)}</b></p><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela fc-movs">${cab}<tbody>${d.mv.saidasEscritorio.map(m=> linhaMov(m, -1)).join('')}</tbody></table></div></div>` : '';
     const credGer = (d.mv.creditosGerados||[]).length ? `<div class="fc-graf"><h4>Ouro entregue a mais: a sobra ficou de crédito do cliente</h4><p class="muted" style="margin:-4px 0 8px;font-size:12.5px;">No dia da entrega entra no caixa (e na comissão) só a parte do ouro usada na via. A sobra fica guardada como crédito no cadastro do cliente e <b>só entra no caixa e na comissão quando o crédito for usado</b> (aparece como "OURO (CRÉDITO USADO)" no dia do uso).</p><div style="overflow-x:auto;"><table class="tabela-cartoes fc-tabela"><thead><tr>${multiDia?'<th>Dia</th>':''}${comLoja?'<th>Loja</th>':''}<th>Via</th><th>Cliente</th><th class="r">Ouro entregue (entrou no caixa)</th><th class="r">Usado na via</th><th class="r">Ficou de crédito</th></tr></thead><tbody>
       ${d.mv.creditosGerados.map(m=> `<tr>${multiDia?celula('Dia', fmtDate(m.dia)):''}${comLoja?celula('Loja', escapeHtml(nomeLojaCaixa(m.lojaId)||'—')):''}${celula('Via', escapeHtml(m.via||'—'))}${celula('Cliente', escapeHtml(m.cliente||'—'))}${celula('Ouro entregue', fmtMoeda((Number(m.usado)||0)+(Number(m.creditoSobra)||0)), 'r')}${celula('Usado na via', fmtMoeda(m.usado), 'r')}${celula('Ficou de crédito', '<b>'+fmtMoeda(m.creditoSobra)+'</b>', 'r')}</tr>`).join('')}
       </tbody></table></div></div>` : '';
@@ -726,7 +737,7 @@ function mensagemConfiavel(ev){
       <div class="fc-graf"><h4>Entradas por forma de pagamento, por loja</h4>${tabela}</div>
       <div class="fc-graf"><h4>Saldo por forma de pagamento</h4>${tabelaSaldo}</div>
       <div class="fc-graf"><h4>Todos os movimentos de dinheiro, via a via</h4>${lista}</div>
-      ${credGer}
+      ${escrHtml}${credGer}
       ${naoDin}
       ${d.recebido ? `<div class="fc-graf"><h4>Recebido por loja</h4>${d.formas.length>1?legenda:''}${barrasLoja}</div>
       <div class="fc-graf"><h4>Recebido por forma de pagamento</h4>${barrasForma}</div>` : ''}

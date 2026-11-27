@@ -45,11 +45,12 @@
   /** Conteúdo do cupom da Via Caixa. o: { origem:'VENDA'|'PEDIDO', data(dd/mm/aaaa, opcional), via, vendedora, pagamentos:[{rotulo, valor}], aviso, fmt } */
   function cupomCaixaHtml(o){
     var L = [];
-    L.push('<div class="titulo">VIA CAIXA</div>');
+    L.push('<div class="titulo" style="background:#000;color:#fff;padding:5px 0;margin-bottom:3px;">VIA CAIXA</div>');
     L.push('<div class="sub">' + esc(o.origem||'') + ' · ' + esc(o.data || new Date().toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'})) + '</div>');
     if(o.aviso) L.push('<div style="text-align:center;margin:5px 0;padding:4px 5px;border:2px solid #000;font-weight:800;font-size:.95em;">' + esc(o.aviso) + '</div>');
     L.push('<div class="linha"></div>');
     L.push('<div class="destaque" style="text-align:center;">VIA ' + esc(o.via || '—') + '</div>');
+    if(o.cliente) L.push('<div style="text-align:center;"><b>Cliente:</b> ' + esc(o.cliente) + '</div>');
     L.push('<div style="text-align:center;"><b>Vendedora:</b> ' + esc(o.vendedora || '—') + '</div>');
     L.push('<div class="linha"></div>');
     (o.pagamentos||[]).forEach(function(p){ L.push('<div>' + esc(p.rotulo) + ': <b>' + esc(o.fmt ? o.fmt(p.valor) : p.valor) + '</b></div>'); });

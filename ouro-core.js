@@ -114,17 +114,8 @@
       e = window.OuroItens.erro(holder, cfg);
     }
     if(e && e.indexOf("termo de compra de ouro") >= 0){
-      // Sem termo confirmado a via não fecha — a não ser que um gerente libere (fica no LOG).
-      if(!window.Autorizacao){ marcar('#pagOuroItens', e); return false; }
-      var ok = confirm(e + "\n\nQuer salvar assim mesmo, com autorização de um gerente?");
-      if(!ok){ marcar('#pagOuroItens', e); return false; }
-      var r2 = await window.Autorizacao.pedir({ sessao: dep.senha(), acao:'ouro_sem_termo', modulo:'Ouro',
-        resumo:'Salvar via com pagamento em ouro SEM o termo confirmado',
-        titulo:'Salvar sem o termo do ouro', texto:'Salvar via com pagamento em ouro sem o termo confirmado. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
-      if(!r2){ marcar('#pagOuroItens', 'Sem autorização, confirme o termo antes de salvar.'); return false; }
-      holder.termo = holder.termo || {};
-      holder.termo.dispensado = { por: r2.nome || '', nivel: r2.nivel || '', em: new Date().toISOString() };
-      e = window.OuroItens.erro(holder, cfg);
+      // Sem o código do cliente a via NÃO fecha — sem exceção, nem com gerente (Felipe, 27/11).
+      marcar('#pagOuroItens', e); return false;
     }
     if(e){ marcar('#pagOuroItens', e); return false; }
     return true;

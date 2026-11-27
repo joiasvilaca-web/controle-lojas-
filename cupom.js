@@ -42,7 +42,7 @@
     return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>'+esc(titulo)+'</title>'
       + (codigoVia ? '<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>' : '')
       + '<style>@page{ margin:0; } *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }'
-      + 'body{ font-family:"Courier New", monospace; box-sizing:border-box; width:'+areaImpressaoMm(c.larguraBobina)+'mm; margin:0 auto; padding:'+c.margemSupMm+'mm 0 '+c.margemInfMm+'mm; '+alturaCss+' color:#000; font-weight:'+peso+'; font-size:'+px.base+'px; line-height:1.42; -webkit-font-smoothing:none; '+reforco+' }'
+      + 'body{ font-family:"Courier New", monospace; box-sizing:border-box; width:'+(/^via caixa/i.test(String(titulo||'')) ? Math.min(54, areaImpressaoMm(c.larguraBobina)) : areaImpressaoMm(c.larguraBobina))+'mm; margin:0 auto; padding:'+c.margemSupMm+'mm 0 '+c.margemInfMm+'mm; '+alturaCss+' color:#000; font-weight:'+peso+'; font-size:'+px.base+'px; line-height:1.42; -webkit-font-smoothing:none; '+reforco+' }'
       + '.titulo{ font-size:'+px.titulo+'px; font-weight:800; text-align:center; letter-spacing:.02em; } .sub{ font-size:'+px.sub+'px; color:#000; text-align:center; }'
       + 'hr{ border:0; border-top:1px dashed #000; margin:6px 0; } .linha{ border-top:1px dashed #000; margin:6px 0; } .rodape{ text-align:center; margin-top:10px; font-size:'+px.sub+'px; } b{ font-weight:800; }'
       + '.assinatura{ border-top:1px solid #000; margin-top:26px; } .destaque{ font-weight:800; font-size:'+Math.round(px.base*1.25)+'px; }'
@@ -82,6 +82,7 @@
         var d = w.document;
         var h = Math.max(d.body.getBoundingClientRect().height, d.body.offsetHeight);
         var mm = c.alturaMm > 0 ? c.alturaMm : Math.ceil(h * 25.4 / 96) + 1;
+        if(/^via caixa/i.test(String(titulo||''))) mm = Math.max(mm, c.larguraBobina + 4);   // 27/11: cupom curto e estreito; página nunca mais baixa que larga, para não sair deitada
         var st = d.createElement('style'); st.textContent = '@page{ size:'+c.larguraBobina+'mm '+mm+'mm; margin:0; } html,body{ height:auto !important; min-height:0 !important; }'; d.head.appendChild(st);
       }catch(e){}
       try{ w.addEventListener('afterprint', limpar); }catch(e){}
