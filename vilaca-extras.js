@@ -152,9 +152,8 @@
   /** Desenha o painel das peças. `onChange` avisa a tela para recalcular o resumo do pagamento. */
   function renderItens(el, holder, config, onChange){
     if(!el) return;
-    /* Aparece assim que a forma de ouro é escolhida na linha, mesmo antes do valor e do ✓. */
-    var _temLinhaOuro = (holder.pagamentos || []).some(function(p){ return p && p.formaId && ehOuro(p.formaId, config); });
-    if(!_temLinhaOuro){ el.innerHTML = ''; return; }
+    /* 27/11 (Felipe): só abre os campos da declaração do ouro depois que o valor foi ADICIONADO (✓ Adicionar na linha de pagamento). */
+    if(!temOuro(holder.pagamentos, config)){ el.innerHTML = ''; return; }
     if(!window.OuroCore){ el.innerHTML = '<div class="ne-box"><b>Peças do ouro</b><div class="muted" style="font-size:12px;">Não consegui carregar a tabela de teores. Recarregue a página.</div></div>'; return; }
     var O = window.OuroCore;
     var itens = itensDe(holder);
