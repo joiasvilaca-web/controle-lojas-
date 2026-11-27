@@ -125,6 +125,14 @@
   async function registrar(via){
     var itens = Array.isArray(via && via.ouroItens) ? via.ouroItens.filter(function(i){ return Number(i.gramas) > 0; }) : [];
     if(!itens.length) return;
+    /* 27/11: nº da nota de entrada digitado na via entra no termo (o link do cliente e o PDF passam a mostrar o número). */
+    try{
+      var nn = via.notaEntrada && String(via.notaEntrada.numero || '').trim();
+      if(nn && via.codigoVia && via.notaTermoEnviada !== nn){
+        var rn = await notaNoTermo(via.codigoVia, nn);
+        if(rn && !rn.error) via.notaTermoEnviada = nn;
+      }
+    }catch(e){ console.error('nota no termo', e); }
     var lojaId = via.lojaId || (window.__lojaAtual && window.__lojaAtual.id) || '';
     if(!lojaId){ aviso('Via salva, mas não achei a loja para dar entrada no ouro.'); return; }
     try{
