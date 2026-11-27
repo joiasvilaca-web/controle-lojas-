@@ -8,6 +8,7 @@
 <script src="icones.js"></script>
 <script src="cupom.js"></script>
 <script src="formato.js"></script>
+<script src="ouro-core.js"></script>
 <script src="busca.js"></script>
 <script src="marketing-off.js"></script>
 <script src="cadastro-rapido-cliente.js"></script>
@@ -1029,6 +1030,20 @@ function mensagemConfiavel(ev){
 const SUPABASE_URL = window.SUPABASE_URL;        // vem de supabase-config.js
 const SUPABASE_ANON_KEY = window.SUPABASE_ANON_KEY;  // vem de supabase-config.js
 const GATEWAY_URL = SUPABASE_URL + "/functions/v1/db-gateway";
+const OURO_URL = SUPABASE_URL + "/functions/v1/ouro-api";
+/* Compra de ouro no balcão e compor/descompor insumos de metal (função ouro-api). */
+async function ouroApi(body){
+  try{
+    const r = await fetch(OURO_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
+    return await r.json();
+  }catch(e){ return { error:'Falha de conexão' }; }
+}
+/* Compor/descompor é da ADM (módulo do CAIXA) e da diretoria — a ouro-api confere de novo no servidor. */
+function podeComporDescompor(){
+  if(!currentUser) return false;
+  if(currentUser.nivel==='diretoria') return true;
+  return !!(currentPermissoes && currentPermissoes.caixa && currentPermissoes.caixa.ativo);
+}
 
 /**
  * A partir daqui o app NÃO fala mais direto com o banco usando a anon key.
@@ -7049,6 +7064,7 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
         composicao.push({ insumoId: '', quantidade: '' });
         renderComposicaoRows();
       });
+      renderDescomporBox(body);
     }
     else if(peTabAtiva==='valores'){
       const lojas = config.lojas||[];
@@ -7114,6 +7130,78 @@ function abrirProdutoEstoqueModal(produto, clonarDe){
       }
     }
   }
+
+  /* 27/11 (Felipe): Descompor zera as gramas deste produto e joga o metal nos insumos da
+   * composição (ouro 24k, prata 1000, cobre). Compor faz o contrário: tira dos insumos e
+   * devolve aqui. Só ADM e diretoria; a ouro-api confere a permissão e os saldos de novo
+   * no servidor e nunca deixa saldo negativo pela metade. */
+  function renderDescomporBox(body){
+    if(!editando || !podeComporDescompor()) return;
+    const compOk = composicao.filter(c=> c.insumoId && Number(c.quantidade) > 0);
+    if(compOk.length===0) return;
+    const lojas = lojasPermitidasParaUsuario().map(id=> (config.lojas||[]).find(l=>l.id===id)).filter(Boolean);
+    if(lojas.length===0) return;
+    const lojaIni = lojas.some(l=>l.id===lojaAtual) ? lojaAtual : lojas[0].id;
+    const box = document.createElement('div');
+    box.className = 'cad-card';
+    box.style.cssText = 'margin:18px 0 0;border:1px solid var(--line);';
+    box.innerHTML = `
+      <div class="section-label" style="margin-top:0;">Descompor e compor</div>
+      <p class="muted" style="margin:-4px 0 12px;font-size:12.5px;">Descompor tira as gramas deste produto e distribui o metal nos insumos da composição. Compor faz o contrário. Cada operação fica no histórico de estoque (Kardex) com data, hora e quem fez.</p>
+      <div class="grid-3" style="align-items:end;">
+        <div class="field" style="margin-bottom:0;"><label for="dc_loja">Loja</label><select id="dc_loja">${lojas.map(l=>`<option value="${escapeHtml(l.id)}" ${l.id===lojaIni?'selected':''}>${escapeHtml(l.nome||l.id)}</option>`).join('')}</select></div>
+        <div class="field" style="margin-bottom:0;"><label for="dc_gramas">Gramas</label><input type="number" step="0.001" min="0" id="dc_gramas" placeholder="0,000"></div>
+        <div class="field" style="margin-bottom:0;"><label>Saldo na loja</label><input type="text" id="dc_saldo" disabled></div>
+      </div>
+      <div class="muted" id="dc_previa" style="font-size:12.5px;margin-top:10px;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button type="button" class="btn btn-accent" id="dc_descompor">Descompor</button>
+        <button type="button" class="btn btn-ghost" id="dc_compor">Compor</button>
+      </div>
+      <div id="dc_msg" style="margin-top:10px;font-size:13px;"></div>`;
+    body.appendChild(box);
+    const el = id=> document.getElementById(id);
+    const nomeIns = id=>{ const p = produtosEstoque.find(x=>x.id===id); return p ? p.nome : id; };
+    const saldoDe = (pid, loja)=>{ const p = pid===idAtual ? d : produtosEstoque.find(x=>x.id===pid); return Number(((p&&p.estoquePorLoja)||{})[loja])||0; };
+    function pinta(){
+      const loja = el('dc_loja').value;
+      const g = parseFloat(String(el('dc_gramas').value).replace(',','.'));
+      el('dc_saldo').value = cadNum(saldoDe(idAtual, loja)) + ' g';
+      el('dc_previa').innerHTML = (!isFinite(g) || g<=0)
+        ? 'Informe as gramas para ver como fica a divisão.'
+        : compOk.map(c=>{
+            const q = Math.round(Number(c.quantidade)*g*1000)/1000;
+            return `${escapeHtml(nomeIns(c.insumoId))}: <b>${cadNum(q)} g</b> <span class="muted">(tem ${cadNum(saldoDe(c.insumoId, loja))} g)</span>`;
+          }).join(' · ');
+    }
+    el('dc_loja').addEventListener('change', pinta);
+    el('dc_gramas').addEventListener('input', pinta);
+    pinta();
+    async function roda(op){
+      const loja = el('dc_loja').value;
+      const g = parseFloat(String(el('dc_gramas').value).replace(',','.'));
+      if(!isFinite(g) || g<=0){ Destaque2('#dc_gramas'); el('dc_msg').innerHTML = '<span style="color:var(--danger);">Informe quantas gramas.</span>'; return; }
+      const rotulo = op==='descompor' ? 'Descompor' : 'Compor';
+      if(!confirm(`${rotulo} ${cadNum(g)} g de "${d.nome}" nesta loja?`)) return;
+      el('dc_descompor').disabled = true; el('dc_compor').disabled = true;
+      el('dc_msg').textContent = 'Lançando…';
+      const r = await ouroApi({ op, produtoId: idAtual, lojaId: loja, gramas: g });
+      el('dc_descompor').disabled = false; el('dc_compor').disabled = false;
+      if(!r || r.error){ el('dc_msg').innerHTML = `<span style="color:var(--danger);">${escapeHtml((r&&r.error)||'Não consegui lançar.')}</span>`; return; }
+      // Atualiza os saldos que já estão na tela, sem precisar recarregar a lista inteira.
+      if(!d.estoquePorLoja) d.estoquePorLoja = {};
+      d.estoquePorLoja[loja] = r.produto.saldo;
+      const noCache = produtosEstoque.find(x=>x.id===idAtual); if(noCache){ noCache.estoquePorLoja = noCache.estoquePorLoja||{}; noCache.estoquePorLoja[loja] = r.produto.saldo; }
+      (r.partes||[]).forEach(pt=>{ const p = produtosEstoque.find(x=>x.id===pt.id); if(p){ p.estoquePorLoja = p.estoquePorLoja||{}; p.estoquePorLoja[loja] = pt.saldo; } });
+      el('dc_gramas').value = '';
+      el('dc_msg').innerHTML = `<span style="color:var(--ok,#1E8E5A);">${rotulo==='Descompor'?'Descomposto':'Composto'}: ${(r.partes||[]).map(pt=>`${escapeHtml(pt.nome)} ${pt.gramas>0?'+':''}${cadNum(pt.gramas)} g`).join(' · ')}. Saldo deste produto: ${cadNum(r.produto.saldo)} g.</span>`;
+      pinta();
+      showToast(rotulo + ' feito.');
+    }
+    el('dc_descompor').addEventListener('click', ()=> roda('descompor'));
+    el('dc_compor').addEventListener('click', ()=> roda('compor'));
+  }
+  function Destaque2(sel){ const e=document.querySelector(sel); if(e){ try{ e.focus(); }catch(_){ } } }
 
   function renderComposicaoRows(){
     const wrap = document.getElementById('pe_composicaoRows');
@@ -7408,21 +7496,10 @@ const CAMPOS_COMPRA_METAL = [
   { id:'prataDtvm',   label:'Valor Prata 1000 DTVM',            ativo:'prata', teor:1,    rotuloAtivo:'Prata 1000' },
 ];
 /** Ouro Balcão do dia: 18k/750 digitado à mão (Cadastro → Fator → Compra de metal). Os outros teores partem dele. */
-const TEORES_BALCAO = [
-  { id:'ouroBalcao16', k:16, mil:666, label:'Valor Balcão do dia — 16k' },
-  { id:'ouroBalcao14', k:14, mil:585, label:'Valor Balcão do dia — 14k' },
-  { id:'ouroBalcao10', k:10, mil:417, label:'Valor Balcão do dia — 10k' },
-];
-function valorBalcaoDia(){
-  const v = Number(((config.fator||{}).compraMetal||{}).ouroBalcaoDia);
-  return v>0 ? v : null;
-}
-/** Regra A: sem centavos; arredonda ao real e o último dígito vira zero (0 a 5 desce, 6 a 9 sobe para a dezena de cima). */
-function arredondarBalcao(v){
-  const n = Math.round(Number(v)); if(isNaN(n)) return null;
-  const u = n % 10;
-  return u<=5 ? n-u : n-u+10;
-}
+// Os teores, o arredondamento e o preço por grama ficam no ouro-core.js (mesmo arquivo que a Venda usa).
+const TEORES_BALCAO = OuroCore.TEORES.filter(t=>t.mil!==750).map(t=>({ id:'ouroBalcao'+t.k, k:Number(t.k), mil:t.mil, label:'Valor Balcão do dia — '+t.label }));
+function valorBalcaoDia(){ return OuroCore.valorBalcaoDia(config); }
+function arredondarBalcao(v){ return OuroCore.arredondar(v); }
 /** Opções de "Referência de compra" do produto (o Balcão aponta para o valor do dia digitado). */
 function listaReferenciasCompra(){
   const base = CAMPOS_COMPRA_METAL.map(c=> c.id==='ouroBalcao' ? { id:c.id, label:'Valor Balcão do dia — 18k (750)' } : { id:c.id, label:c.label });

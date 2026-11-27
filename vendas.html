@@ -13,6 +13,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><!-- 25/11: as fontes (Instrument Sans + Cormorant Garamond) vêm do tema.css, iguais em todas as telas -->
 <link rel="stylesheet" href="tema.css">
 <script src="icones.js"></script>
+<script src="ouro-core.js"></script>
 <script src="vilaca-extras.js"></script>
 <script src="marketing-off.js"></script><!-- 24/11 (varredura): a Venda chamava window.MarketingOff sem nunca carregar o arquivo; o aviso de MARKETING OFF não aparecia aqui -->
 <script src="acompanhamento-ui.js"></script>
@@ -2346,6 +2347,14 @@ function mountPagamentos(container, holder, getLojaVendaId){
     if(holder.pagamentos.length === 0 && total <= 0){ hint.textContent = ''; return; }
     const saldo = total - soma;
     { let neEl = container.querySelector('#pagNotaEntrada'); if(!neEl){ neEl = document.createElement('div'); neEl.id = 'pagNotaEntrada'; hint.parentNode.insertBefore(neEl, hint.nextSibling); } OuroPag.renderNota(neEl, holder, config, currentUser && currentUser.nome); }
+    /* Peças do ouro (27/11): fica acima da nota de entrada. A trava evita o vai-e-volta
+       render → updateHint → render quando a atendente mexe numa linha. */
+    if(window.OuroItens && !window.__oiRenderizando){
+      let oiEl = container.querySelector('#pagOuroItens');
+      if(!oiEl){ oiEl = document.createElement('div'); oiEl.id = 'pagOuroItens'; const _ne = container.querySelector('#pagNotaEntrada'); _ne.parentNode.insertBefore(oiEl, _ne); }
+      window.__oiRenderizando = true;
+      try{ OuroItens.render(oiEl, holder, config, updateHint); } finally { window.__oiRenderizando = false; }
+    }
     const exOuro = saldo < -0.009 ? OuroPag.excesso(holder.pagamentos, total, config) : null;
     if(exOuro && exOuro.ok){
       hint.innerHTML = `<div class="aviso aviso-ok">${ic('check')}<div><b>Ouro passou do total em ${fmtMoeda(exOuro.ex)} — fica de CRÉDITO para o cliente</b><small>O crédito pode ser usado inteiro na próxima compra. O cliente precisa estar cadastrado.</small></div></div>`;
@@ -4077,6 +4086,7 @@ function renderNovaVenda(main){
     const creditoGerado = (exOuroSv.ex > 0.009 && exOuroSv.ok) ? exOuroSv.ex : 0;
     if(totalVenda>0 && Math.abs(totalPago-totalVenda)>0.009 && !creditoGerado){ Destaque.marcar(['#pagRows','#pagSomaHint'], totalVenda>totalPago ? `Pagamento incompleto — falta cobrir ${fmtMoeda(totalVenda-totalPago)}.` : `As formas de pagamento passam do total em ${fmtMoeda(totalPago-totalVenda)}. Ajuste os valores.`); return; }
     { const eNe = OuroPag.erroNota(tempPagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
+    if(!(await validarOuroAntesDeSalvar(tempPagHolder))) return;
     const erroNota = notaEmpresasErro(tempPagHolder, lojaId);
     if(erroNota){ Destaque.marcar('.pag-nota-bloco',erroNota); return; }
 
@@ -4149,6 +4159,8 @@ function renderNovaVenda(main){
       creditoUsado: totalCredito,
       creditoGerado: creditoGerado || 0,   // ouro passou do valor da compra: a sobra fica de crédito do cliente (04/11)
       notaEntrada: OuroPag.temOuro(tempPagHolder.pagamentos, config) ? { ...(tempPagHolder.notaEntrada||{}) } : null,
+      ouroItens: (window.OuroItens && OuroPag.temOuro(tempPagHolder.pagamentos, config)) ? OuroItens.paraSalvar(tempPagHolder, config) : null,
+      ouroAjusteAutorizado: tempPagHolder.ouroAjusteAutorizado || null,
       fiadoDebitoId: novoFiadoDebitoId,
       criadoPor: currentUser.nome,
       criadoEm: Date.now(),
@@ -4204,6 +4216,7 @@ function renderNovaVenda(main){
         if(totalCredito>0 || totalFiado>0 || creditoGerado>0) await salvarUmCliente(clienteCadastro);
       }
       await aplicarConsumosEstoque(reservas, lojaEstoque, venda.id);
+      await registrarOuroDaVia(venda);
       vendas.unshift(venda);
       if(venda.orcamentoId) await marcarOrcamentoConvertidoEmVenda(venda.orcamentoId, venda);
       if(convRes){ const rc = await reservasApi('converter', { id: convRes.reserva.id, vendaId: venda.id, vendaCodigoVia: venda.codigoVia||'' }); if(rc && rc.error) showToast('Venda lançada, mas a reserva não foi marcada como convertida: ' + rc.error); __conversaoReserva = null; window.__excluirOrigemEstoque = null; }
@@ -4390,6 +4403,78 @@ async function reverterEfeitosVenda(venda, acao){
   if(venda.cashback && venda.cashback.clienteId && window.Cashback){ const _ok = await Cashback.estornar(gatewayCall, venda.cashback.clienteId, venda.id); if(!_ok) showToast('Atenção: não consegui estornar o cashback desta venda.'); }
   return clienteCadastro;
 }
+/** Antes de salvar: o contador das peças tem de estar zerado sempre; só o ajuste acima de 5%
+ *  pode ser liberado, e só com a senha de um gerente ou da diretoria (fica no LOG). */
+async function validarOuroAntesDeSalvar(holder){
+  if(!window.OuroItens) return true;
+  let e = OuroItens.erro(holder, config);
+  if(e && e.indexOf('ajuste acima') >= 0){
+    const n = OuroItens.foraDoLimite(holder, config).length;
+    const resumo = n + (n===1 ? ' peça de ouro com valor ajustado acima de 5% da tabela' : ' peças de ouro com valor ajustado acima de 5% da tabela');
+    if(!window.Autorizacao){ Destaque.marcar('#pagOuroItens', 'Recarregue a página (Ctrl+F5) para pedir a autorização do ajuste.'); return false; }
+    const r = await Autorizacao.pedir({ sessao: __gatewaySenha, acao:'ouro_ajuste_acima_limite', modulo:'Vendas', resumo,
+      titulo:'Ajuste do valor do ouro', texto: resumo + '. Precisa da senha de um gerente ou da diretoria — fica registrado no LOG.' });
+    if(!r){ Destaque.marcar('#pagOuroItens', 'Sem autorização, deixe o ajuste dentro de 5%.'); return false; }
+    holder.ouroAjusteAutorizado = { por: r.nome||'', nivel: r.nivel||'', em: new Date().toISOString() };
+    e = OuroItens.erro(holder, config);
+  }
+  if(e){ Destaque.marcar('#pagOuroItens', e); return false; }
+  return true;
+}
+
+/* ===================== OURO RECEBIDO NA VIA (27/11/2026, Felipe) =====================
+ * Ao salvar a via com pagamento em ouro: cada peça vira (ou reaproveita) um produto
+ * "18 K ANEL PEDRA NATURAL F1,0" e o peso entra no estoque dele, na loja da via. O valor
+ * pago em ouro também vira um gasto "Compra de ouro" já pago — ao mesmo tempo que a loja
+ * vende, ela compra o metal, então o caixa recebe e paga o mesmo valor e fica zerado.
+ * A venda inteira continua contando para a comissão e para o faturamento, como sempre. */
+const OURO_URL_V = (window.SUPABASE_URL||'') + '/functions/v1/ouro-api';
+async function ouroApi(body){
+  try{
+    const r = await fetch(OURO_URL_V, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY }, body: JSON.stringify({ senha: __gatewaySenha, ...body }) });
+    return await r.json();
+  }catch(e){ return { error:'Falha de conexão' }; }
+}
+async function registrarOuroDaVia(venda){
+  const itens = Array.isArray(venda && venda.ouroItens) ? venda.ouroItens.filter(i=>Number(i.gramas)>0) : [];
+  if(!itens.length) return;
+  const lojaId = venda.lojaId || (window.__lojaAtual && window.__lojaAtual.id) || '';
+  if(!lojaId){ showToast('Venda lançada, mas não achei a loja para dar entrada no ouro.'); return; }
+  try{
+    const prontos = [];
+    for(const it of itens){
+      const r = await ouroApi({ op:'produto', teor:it.teor, tipo:it.tipo, pedra:it.pedra||'', fator:it.gramas });
+      if(!r || r.error || !r.id){ showToast('Venda lançada, mas não consegui criar o produto do ouro: ' + ((r&&r.error)||'')); return; }
+      it.produtoId = r.id; it.nome = r.nome;
+      prontos.push({ produtoId:r.id, nome:r.nome, gramas:it.gramas, valor:it.valor });
+    }
+    const e = await ouroApi({ op:'entrada', lojaId, via: venda.codigoVia||'', viaId: venda.id, itens: prontos,
+      venda: { id: venda.id, codigoVia: venda.codigoVia||'', cliente: venda.cliente||'', data: venda.data||'' } });
+    if(!e || e.error){ showToast('Venda lançada, mas o ouro não entrou no estoque: ' + ((e&&e.error)||'')); return; }
+    venda.ouroEntradaEm = new Date().toISOString();
+    if(e.gastoId) venda.ouroGastoId = e.gastoId;
+    else showToast('Ouro deu entrada no estoque, mas o gasto da compra não foi lançado.');
+  }catch(err){ console.error('ouro da via', err); showToast('Venda lançada, mas deu erro ao dar entrada no ouro.'); }
+}
+/** Cancelou ou refez a via: tira o ouro do estoque e cancela o gasto da compra. */
+async function estornarOuroDaVia(venda){
+  if(!venda || !Array.isArray(venda.ouroItens) || !venda.ouroItens.length || !venda.ouroEntradaEm) return;
+  try{
+    const r = await ouroApi({ op:'estorno', via: venda.id });
+    if(r && r.error){ showToast('Atenção: o ouro desta via continua no estoque — ' + r.error); return; }
+    venda.ouroEstornadoEm = new Date().toISOString();   // a ouro-api também cancela o gasto da compra
+  }catch(e){ console.error('estorno ouro', e); showToast('Atenção: não consegui tirar o ouro desta via do estoque.'); }
+}
+
+/** Edição da via: desfaz a entrada anterior do ouro (se houve) e lança de novo o que está agora. */
+async function refazerOuroDaVia(venda){
+  const tinha = !!venda.ouroEntradaEm && !venda.ouroEstornadoEm;
+  const temAgora = Array.isArray(venda.ouroItens) && venda.ouroItens.some(i=>Number(i.gramas)>0);
+  if(!tinha && !temAgora) return;
+  if(tinha){ await estornarOuroDaVia(venda); venda.ouroEntradaEm = null; }
+  if(temAgora){ venda.ouroEstornadoEm = null; venda.ouroGastoId = null; await registrarOuroDaVia(venda); }
+}
+
 async function executarCancelamentoVenda(venda, motivo, dest){
   const recebido = valorRecebidoDe(venda);
   const clienteCadastro = await reverterEfeitosVenda(venda, 'Cancelamento');
@@ -4412,6 +4497,7 @@ async function executarCancelamentoVenda(venda, motivo, dest){
       }
     }
   }
+  await estornarOuroDaVia(venda);
   await vendaSalvar(venda);
   showToast('Venda cancelada.');
   renderTabs(); renderView();
@@ -5531,6 +5617,7 @@ function abrirFormularioEdicaoCompleta(v){
     momentoPagamento: v.momentoPagamento, emissaoNota: v.emissaoNota, numeroNota: v.numeroNota,
     lojaSaidaId: '', lojaPagamentoId: '', lojaNotaId: '', lojaBaixaEstoqueId: '',
     notaEntrada: v.notaEntrada ? { ...v.notaEntrada } : undefined,
+    ouroItens: Array.isArray(v.ouroItens) ? v.ouroItens.map(i=>({ ...i, manual:true })) : [],
   };
   if(v.emissaoNota==='sim'){
     const nomeLojaAnterior = (id)=>{ const l=(config.lojas||[]).find(x=>x.id===id); return l ? l.abreviacao : '—'; };
@@ -5562,6 +5649,7 @@ function abrirFormularioEdicaoCompleta(v){
     const erroNota = notaEmpresasErro(pagHolder, lojaId);
     if(erroNota){ showToast(erroNota); return; }
     { const eNe = OuroPag.erroNota(pagHolder, config); if(eNe){ Destaque.marcar('#neEmitir', eNe); return; } }
+    if(!(await validarOuroAntesDeSalvar(pagHolder))) return;
 
     /* ===== 0) CONFERE ANTES DE DESFAZER (24/11, varredura) =====
        Antes, o passo 1 (devolver o estoque e o crédito/fiado da venda original) rodava ANTES das
@@ -5752,6 +5840,8 @@ function abrirFormularioEdicaoCompleta(v){
     v.creditoUsado = totalCredito;
     v.creditoGerado = creditoGeradoEd || 0;
     v.notaEntrada = OuroPag.temOuro(pagHolder.pagamentos, config) ? { ...(pagHolder.notaEntrada||{}) } : null;
+    v.ouroItens = (window.OuroItens && OuroPag.temOuro(pagHolder.pagamentos, config)) ? OuroItens.paraSalvar(pagHolder, config) : null;
+    if(pagHolder.ouroAjusteAutorizado) v.ouroAjusteAutorizado = pagHolder.ouroAjusteAutorizado;
     v.fiadoDebitoId = novoFiadoDebitoId;
     const _cbAntV = v.cashback || null;
     const _cbE = v.status!=='cancelada' ? await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'validar', _cbAntV, window.__credCli.id || (window.__cbCli && window.__cbCli.id)) : { ok:true };
@@ -5759,6 +5849,7 @@ function abrirFormularioEdicaoCompleta(v){
     if(_cbE.resumo) v.cashback = _cbE.resumo;
 
     addHistorico(v, 'Venda editada');
+    await refazerOuroDaVia(v);   // peças mudaram: tira o ouro antigo do estoque e lança o novo
     const ok = await vendaSalvar(v);
     if(ok){
       if(_cbE.resumo){ const _r = await cashbackProcessar(v, 'Venda', (v.valorAVista ?? v.valorTotal), 'gravar', _cbAntV, v.cashback.clienteId); if(!_r.ok) showToast('Venda salva, mas o cashback não foi gravado: '+_r.erro); }

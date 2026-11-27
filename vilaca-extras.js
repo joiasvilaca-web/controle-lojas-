@@ -89,8 +89,154 @@
     (pags || []).forEach(function(p){ if(p && p.valorEntregue != null){ p.valor = p.valorEntregue; delete p.valorEntregue; } });
     return pags;
   }
+  /* ===================== PEÇAS DO OURO (27/11/2026, Felipe) =====================
+   * Quando a via tem pagamento em Ouro, a atendente lança peça por peça: teor, tipo,
+   * pedra (só descrição) e peso. O valor sai sozinho pelo R$/g do teor (Cadastro › Fator ›
+   * Valor Balcão do dia) e pode ser ajustado à mão em até 5%; acima disso precisa de gerente.
+   * Um contador mostra a diferença entre as peças e o valor pago em ouro — a via só salva
+   * com ele zerado. Cada peça vira (ou reaproveita) um produto "18 K ANEL ... F1,0", e o peso
+   * entra no estoque desse produto, na loja da via, quando a via é salva. */
+  var OI_TOL = 0.009;
+  function oiNum(v){ var n = parseFloat(String(v == null ? '' : v).replace(/\./g, '').replace(',', '.')); return isFinite(n) ? n : 0; }
+  function oiNumLivre(v){ var n = parseFloat(String(v == null ? '' : v).replace(',', '.')); return isFinite(n) ? n : 0; }
+  function oiMoeda(v){ return 'R$ ' + (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function oiGramas(v){ return (Math.round((Number(v) || 0) * 1000) / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 3 }); }
+  /** Soma do que foi lançado como OURO nas formas de pagamento (é com isso que as peças têm de bater). */
+  function ouroPago(pags, config){
+    return r2(confirmados(pags).filter(function(p){ return ehOuro(p.formaId, config); })
+      .reduce(function(a, p){ return a + (Number(p.valorEntregue != null ? p.valorEntregue : p.valor) || 0); }, 0));
+  }
+  function itensDe(holder){ if(!Array.isArray(holder.ouroItens)) holder.ouroItens = []; return holder.ouroItens; }
+  function somaItens(holder){ return r2(itensDe(holder).reduce(function(a, i){ return a + (Number(i.valor) || 0); }, 0)); }
+  function somaGramas(holder){ return Math.round(itensDe(holder).reduce(function(a, i){ return a + (Number(i.gramas) || 0); }, 0) * 1000) / 1000; }
+  /** Valor que o sistema calculou para a peça (R$/g do teor × peso), sem o ajuste da vendedora. */
+  function valorCalculado(item, config){
+    var pg = window.OuroCore ? window.OuroCore.precoGrama(config, item.teor) : null;
+    if(pg == null || !(Number(item.gramas) > 0)) return null;
+    return r2(pg * Number(item.gramas));
+  }
+  /** Peças com ajuste manual acima do limite — precisam de autorização de gerente. */
+  function foraDoLimite(holder, config){
+    var lim = (window.OuroCore && window.OuroCore.LIMITE_AJUSTE_PCT) || 5;
+    return itensDe(holder).filter(function(i){
+      var calc = valorCalculado(i, config);
+      var d = window.OuroCore ? window.OuroCore.desvioPct(i.valor, calc) : null;
+      return d != null && Math.abs(d) > lim + 1e-9;
+    });
+  }
+  /** Mensagem de impedimento para salvar a via; null quando está tudo certo. */
+  function erroItensOuro(holder, config){
+    if(!temOuro(holder.pagamentos, config)) return null;
+    var itens = itensDe(holder).filter(function(i){ return Number(i.gramas) > 0 && Number(i.valor) > 0; });
+    if(!itens.length) return 'Lance as peças do ouro (teor, tipo e peso) antes de salvar.';
+    var dif = r2(ouroPago(holder.pagamentos, config) - somaItens(holder));
+    if(Math.abs(dif) > OI_TOL) return dif > 0
+      ? 'As peças do ouro somam ' + oiMoeda(somaItens(holder)) + ' e o pagamento em ouro é ' + oiMoeda(ouroPago(holder.pagamentos, config)) + '. Faltam ' + oiMoeda(dif) + ' em peças.'
+      : 'As peças do ouro passam ' + oiMoeda(-dif) + ' do valor pago em ouro. Ajuste as peças ou o pagamento.';
+    var fora = foraDoLimite(holder, config);
+    if(fora.length && !holder.ouroAjusteAutorizado) return 'Há peça com ajuste acima de ' + ((window.OuroCore && window.OuroCore.LIMITE_AJUSTE_PCT) || 5) + '% do valor calculado. Precisa de autorização de gerente.';
+    return null;
+  }
+  function oiSel(valor, lista, idKey, nomeKey){
+    return lista.map(function(o){
+      var id = o[idKey], nm = o[nomeKey];
+      return '<option value="' + esc(id) + '"' + (String(id) === String(valor) ? ' selected' : '') + '>' + esc(nm) + '</option>';
+    }).join('');
+  }
+  /** Desenha o painel das peças. `onChange` avisa a tela para recalcular o resumo do pagamento. */
+  function renderItens(el, holder, config, onChange){
+    if(!el) return;
+    if(!temOuro(holder.pagamentos, config)){ el.innerHTML = ''; return; }
+    if(!window.OuroCore){ el.innerHTML = '<div class="ne-box"><b>Peças do ouro</b><div class="muted" style="font-size:12px;">Não consegui carregar a tabela de teores. Recarregue a página.</div></div>'; return; }
+    var O = window.OuroCore;
+    var itens = itensDe(holder);
+    if(!itens.length) itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' });
+    var base = O.valorBalcaoDia(config);
+    var linhas = itens.map(function(it, i){
+      var pg = O.precoGrama(config, it.teor);
+      var calc = valorCalculado(it, config);
+      var dv = O.desvioPct(it.valor, calc);
+      var lim = O.LIMITE_AJUSTE_PCT;
+      var aviso = '';
+      if(dv != null){
+        if(Math.abs(dv) < 0.05) aviso = '<span class="oi-ok">Valor da tabela</span>';
+        else if(Math.abs(dv) <= lim + 1e-9) aviso = '<span class="oi-aj">Ajustado ' + (dv > 0 ? '+' : '') + dv.toFixed(1).replace('.', ',') + '% (permitido até ' + lim + '%)</span>';
+        else aviso = '<span class="oi-ruim">Ajuste de ' + dv.toFixed(1).replace('.', ',') + '% — passa de ' + lim + '%, precisa de autorização de gerente</span>';
+      }
+      return '<div class="oi-linha" data-oi="' + i + '">'
+        + '<select data-oi-teor="' + i + '" aria-label="Teor">' + oiSel(it.teor, O.TEORES.map(function(t){ var p = O.precoGrama(config, t.k); return { k: t.k, nome: t.label + (p ? ' · ' + oiMoeda(p) + '/g' : ' · sem valor') }; }), 'k', 'nome') + '</select>'
+        + '<select data-oi-tipo="' + i + '" aria-label="Tipo da peça">' + oiSel(it.tipo, O.TIPOS, 'id', 'nome') + '</select>'
+        + '<button type="button" class="oi-x" data-oi-del="' + i + '" aria-label="Remover peça">&times;</button>'
+        + '<select class="oi-pedra" data-oi-pedra="' + i + '" aria-label="Pedra">' + oiSel(it.pedra, O.PEDRAS, 'id', 'nome') + '</select>'
+        + '<input data-oi-g="' + i + '" inputmode="decimal" placeholder="Peso (g)" value="' + esc(it.gramas) + '" aria-label="Peso em gramas">'
+        + '<input data-oi-v="' + i + '" inputmode="decimal" placeholder="Valor R$" value="' + esc(it.valor) + '" aria-label="Valor da peça">'
+        + '<div class="oi-aviso">' + aviso + (pg == null ? '<span class="oi-ruim">Sem Valor Balcão do dia — peça para a diretoria lançar em Cadastro › Fator.</span>' : '') + '</div>'
+        + '</div>';
+    }).join('');
+    var pago = ouroPago(holder.pagamentos, config);
+    var soma = somaItens(holder);
+    var dif = r2(pago - soma);
+    var cls = Math.abs(dif) <= OI_TOL ? 'oi-cont-ok' : (dif > 0 ? 'oi-cont-falta' : 'oi-cont-passa');
+    var txt = Math.abs(dif) <= OI_TOL
+      ? '✓ Confere: ' + oiMoeda(soma) + (somaGramas(holder) ? ' · ' + oiGramas(somaGramas(holder)) + ' g' : '')
+      : (dif > 0 ? 'Faltam ' + oiMoeda(dif) + ' em peças' : 'Peças passam ' + oiMoeda(-dif) + ' do valor em ouro');
+    el.innerHTML = '<div class="ne-box oi-box"><b>Peças do ouro</b>'
+      + '<div class="muted" style="font-size:12px;">Escolha o teor e digite o peso: o valor sai sozinho. Dá para ajustar à mão em até ' + O.LIMITE_AJUSTE_PCT + '%.'
+      + (base == null ? ' <b style="color:#C62828;">Falta o Valor Balcão do dia (18k) em Cadastro › Fator › Compra de metal.</b>' : '') + '</div>'
+      + '<div class="oi-linhas">' + linhas + '</div>'
+      + '<button type="button" class="btn btn-ghost btn-sm" id="oiAdd">+ Adicionar peça</button>'
+      + '<div class="oi-cont ' + cls + '" id="oiCont">' + txt + '</div></div>';
+    function mexeu(){ renderItens(el, holder, config, onChange); if(typeof onChange === 'function') onChange(); }
+    el.querySelectorAll('[data-oi-teor]').forEach(function(sel){
+      sel.addEventListener('change', function(){ var i = Number(sel.dataset.oiTeor); itens[i].teor = sel.value; recalcLinha(itens[i], config); mexeu(); });
+    });
+    el.querySelectorAll('[data-oi-tipo]').forEach(function(sel){ sel.addEventListener('change', function(){ itens[Number(sel.dataset.oiTipo)].tipo = sel.value; mexeu(); }); });
+    el.querySelectorAll('[data-oi-pedra]').forEach(function(sel){ sel.addEventListener('change', function(){ itens[Number(sel.dataset.oiPedra)].pedra = sel.value; mexeu(); }); });
+    el.querySelectorAll('[data-oi-g]').forEach(function(inp){
+      inp.addEventListener('change', function(){ var i = Number(inp.dataset.oiG); itens[i].gramas = oiNumLivre(inp.value) || ''; recalcLinha(itens[i], config); mexeu(); });
+    });
+    el.querySelectorAll('[data-oi-v]').forEach(function(inp){
+      inp.addEventListener('change', function(){ var i = Number(inp.dataset.oiV); itens[i].valor = r2(oiNumLivre(inp.value)) || ''; itens[i].manual = true; mexeu(); });
+    });
+    el.querySelectorAll('[data-oi-del]').forEach(function(b){
+      b.addEventListener('click', function(){ itens.splice(Number(b.dataset.oiDel), 1); if(!itens.length) itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' }); mexeu(); });
+    });
+    var add = el.querySelector('#oiAdd');
+    if(add) add.addEventListener('click', function(){ itens.push({ teor: '18', tipo: 'ANEL', pedra: '', gramas: '', valor: '' }); mexeu(); });
+  }
+  /** Peso ou teor mudou: o valor volta a ser o da tabela (um ajuste manual anterior valia para o peso antigo). */
+  function recalcLinha(item, config){
+    var calc = valorCalculado(item, config);
+    if(calc == null) return;
+    item.valor = calc; item.manual = false;
+  }
+  /** Limpa o que vai gravado na via (sem campos de tela). */
+  function itensParaSalvar(holder, config){
+    return itensDe(holder).filter(function(i){ return Number(i.gramas) > 0 && Number(i.valor) > 0; }).map(function(i){
+      var calc = valorCalculado(i, config);
+      var dv = window.OuroCore ? window.OuroCore.desvioPct(i.valor, calc) : null;
+      return {
+        teor: String(i.teor), tipo: String(i.tipo), pedra: String(i.pedra || ''),
+        gramas: Math.round(Number(i.gramas) * 1000) / 1000, valor: r2(i.valor),
+        valorCalculado: calc, ajustePct: dv == null ? null : Math.round(dv * 10) / 10,
+        nome: window.OuroCore ? window.OuroCore.nomeProduto(i.teor, i.tipo, i.pedra || '', i.gramas) : '',
+        produtoId: i.produtoId || null
+      };
+    });
+  }
+  var oiCss = '.oi-box .oi-linha{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;padding:0 26px 8px 0;border-bottom:1px dashed var(--line,#ddd);}'
+    + '.oi-box .oi-linha select,.oi-box .oi-linha input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line,#ccc);border-radius:8px;min-width:0;font:inherit;background:var(--surface,#fff);color:var(--ink,#111);}'
+    + '.oi-box .oi-x{position:absolute;top:2px;right:0;width:24px;border:0;background:none;color:#a33;font-size:20px;line-height:1;cursor:pointer;padding:0;}'
+    + '.oi-box .oi-pedra{grid-column:1/3;}'
+    + '.oi-box .oi-aviso{grid-column:1/3;font-size:12px;}'
+    + '.oi-box .oi-ok{color:var(--ink-soft,#667);} .oi-box .oi-aj{color:#8a5a00;} .oi-box .oi-ruim{color:#C62828;font-weight:600;}'
+    + '.oi-box .oi-cont{margin-top:10px;padding:10px 12px;border-radius:10px;text-align:center;font-weight:700;}'
+    + '.oi-box .oi-cont-ok{background:#e3f3e8;color:#1f6b3d;} .oi-box .oi-cont-falta{background:#fff1d6;color:#8a5a00;} .oi-box .oi-cont-passa{background:#fde4e4;color:#a33;}';
+  try{ var oiSt = document.createElement('style'); oiSt.textContent = oiCss; document.head.appendChild(oiSt); }catch(e){}
+
   window.Destaque = Destaque;
   window.OuroPag = { ehOuro: ehOuro, temOuro: temOuro, excesso: excesso, renderNota: renderNota, erroNota: erroNota, liquidar: liquidar, restaurar: restaurar };
+  window.OuroItens = { render: renderItens, erro: erroItensOuro, paraSalvar: itensParaSalvar, soma: somaItens, somaGramas: somaGramas, ouroPago: ouroPago, foraDoLimite: foraDoLimite };
 })();
 
 /* ===== WhatsApp automático (05/11): o ícone do WhatsApp dispara a via/mensagem direto pelo número da loja (função enviar-via).
