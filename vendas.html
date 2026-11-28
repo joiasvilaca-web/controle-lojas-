@@ -1291,6 +1291,23 @@ async function clientesGet(){
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar clientes', e); return []; }
 }
+
+/** 28/11: soma crédito no cadastro do cliente LENDO O CADASTRO ATUAL do servidor (evita gravar por cima de crédito que mudou
+ *  em outra tela) e confirma que gravou. Devolve true/false; em false o crédito NÃO entrou. */
+async function creditarCliente(cli, valor, mov){
+  try{
+    let atual = cli;
+    try{ const r = await gatewayCall({ op:'selectOne', table:'clientes_cadastro', params:{ column:'id', value: cli.id } });
+      if(r && !r.error && r.data && r.data.payload) atual = r.data.payload; }catch(_){}
+    atual.credito = (Number(atual.credito)||0) + Number(valor);
+    if(!Array.isArray(atual.creditoMovimentos)) atual.creditoMovimentos = [];
+    atual.creditoMovimentos.push(mov);
+    const w = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id: atual.id, payload: atual } } });
+    if(w && w.error) throw new Error(w.error);
+    if(atual !== cli){ cli.credito = atual.credito; cli.creditoMovimentos = atual.creditoMovimentos; }
+    return true;
+  }catch(e){ console.error('creditarCliente', e); showToast('Não consegui gravar o crédito do cliente: '+((e&&e.message)||e)+'. Lance o crédito à mão no cadastro.'); return false; }
+}
 async function salvarUmCliente(cliente){
   try{
     const { error } = await supabaseClient.from('clientes_cadastro').upsert({ id: cliente.id, payload: cliente });
@@ -4449,11 +4466,11 @@ async function executarCancelamentoVenda(venda, motivo, dest){
     if(dest.tipo === 'credito'){
       const cli = clienteCadastro || await localizarClienteDaVenda(venda);
       if(cli){
-        cli.credito = (Number(cli.credito)||0) + recebido;
-        if(!cli.creditoMovimentos) cli.creditoMovimentos = [];
-        cli.creditoMovimentos.push({ data: hoje(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento venda ${String(venda.id).slice(-8)}` });
-        await salvarUmCliente(cli);
-        venda.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
+        const _okC = await creditarCliente(cli, recebido, { data: hoje(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento venda ${String(venda.id).slice(-8)}` });
+        if(_okC) venda.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
+        else { venda.cancelamentoDestino = { tipo:'devolver', valor: recebido }; addHistorico(venda, 'Crédito NÃO gravado — valor segue como saída do caixa; lançar o crédito à mão'); }
+      } else {
+        venda.cancelamentoDestino = { tipo:'devolver', valor: recebido }; showToast('Cliente não encontrado no cadastro: o valor ficou como devolução, não como crédito.');
       }
     }
   }
@@ -4812,13 +4829,11 @@ function abrirDevolucaoItem(venda){
           - trocas.filter(t=>t.diferenca<0 && t.formaDiferenca!=='__credito').reduce((a,t)=>a+Math.abs(t.diferenca),0);
         if(valor > recebidoLiquido + 0.005 && !confirm(`Esta venda recebeu só ${fmtMoeda(Math.max(0,recebidoLiquido))} em dinheiro/PIX/cartão (o resto foi fiado ou crédito), mas a devolução é de ${fmtMoeda(valor)}.\n\nDevolver mesmo assim?`)) return;
       }
-      await devolverEstoqueDoItem(venda, item, lojaEstoqueDev);
       if(cliente){
-        cliente.credito = (Number(cliente.credito)||0) + valor;
-        if(!cliente.creditoMovimentos) cliente.creditoMovimentos = [];
-        cliente.creditoMovimentos.push({ data: hoje(), valor, tipo:'estorno', obs:`Devolução de item — venda ${String(venda.id).slice(-8)}` });
-        await salvarUmCliente(cliente);
+        const _okD = await creditarCliente(cliente, valor, { data: hoje(), valor, tipo:'estorno', obs:`Devolução de item — venda ${String(venda.id).slice(-8)}` });
+        if(!_okD){ return; }   // nada foi alterado na venda: o crédito não gravou, então a devolução não segue
       }
+      await devolverEstoqueDoItem(venda, item, lojaEstoqueDev);
       const reg = {
         id: uid('troca'), tipoMov:'devolucao', motivo,
         itemAntigoDescricao: `${item.quantidade}x ${item.produto}${item.metal?' ('+item.metal+')':''}`, itemAntigoValor: valor,

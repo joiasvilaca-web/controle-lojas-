@@ -1833,11 +1833,11 @@ async function aplicarCancelamentoOrdem(order, motivo){
     if(dest.tipo === 'credito'){
       const cli = await localizarClienteDaOrdem(order);
       if(cli){
-        cli.credito = (Number(cli.credito)||0) + recebido;
-        if(!cli.creditoMovimentos) cli.creditoMovimentos = [];
-        cli.creditoMovimentos.push({ data: hojeStr(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento O.S. ${viaTxt(order)||''}` });
-        await salvarUmCliente(cli);
-        order.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
+        const _okC = await creditarCliente(cli, recebido, { data: hojeStr(), valor: recebido, tipo:'cancelamento', obs:`Cancelamento O.S. ${viaTxt(order)||''}` });
+        if(_okC) order.caixaSaidaCancelamento = 0;   // o dinheiro fica na loja como crédito do cliente
+        else { order.cancelamentoDestino = { tipo:'devolver', valor: recebido }; addHistorico(order, 'Crédito NÃO gravado — valor segue como saída do caixa; lançar o crédito à mão'); }
+      } else {
+        order.cancelamentoDestino = { tipo:'devolver', valor: recebido }; showToast('Cliente não encontrado no cadastro: o valor ficou como devolução, não como crédito.');
       }
     }
   }
@@ -2072,6 +2072,23 @@ async function clientesGet(){
     if(error) throw error;
     return (data||[]).map(r=>r.payload);
   }catch(e){ console.error('erro ao carregar clientes', e); return []; }
+}
+
+/** 28/11: soma crédito no cadastro do cliente LENDO O CADASTRO ATUAL do servidor (evita gravar por cima de crédito que mudou
+ *  em outra tela) e confirma que gravou. Devolve true/false; em false o crédito NÃO entrou. */
+async function creditarCliente(cli, valor, mov){
+  try{
+    let atual = cli;
+    try{ const r = await gatewayCall({ op:'selectOne', table:'clientes_cadastro', params:{ column:'id', value: cli.id } });
+      if(r && !r.error && r.data && r.data.payload) atual = r.data.payload; }catch(_){}
+    atual.credito = (Number(atual.credito)||0) + Number(valor);
+    if(!Array.isArray(atual.creditoMovimentos)) atual.creditoMovimentos = [];
+    atual.creditoMovimentos.push(mov);
+    const w = await gatewayCall({ op:'upsert', table:'clientes_cadastro', params:{ row:{ id: atual.id, payload: atual } } });
+    if(w && w.error) throw new Error(w.error);
+    if(atual !== cli){ cli.credito = atual.credito; cli.creditoMovimentos = atual.creditoMovimentos; }
+    return true;
+  }catch(e){ console.error('creditarCliente', e); showToast('Não consegui gravar o crédito do cliente: '+((e&&e.message)||e)+'. Lance o crédito à mão no cadastro.'); return false; }
 }
 async function salvarUmCliente(cliente){
   try{
